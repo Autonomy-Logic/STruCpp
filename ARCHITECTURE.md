@@ -1,34 +1,90 @@
 # STruC++ Architecture
 
-This document describes the detailed architecture of the STruC++ compiler, including the compilation pipeline, data structures, and design decisions.
+This document describes the architecture of the STruC++ compiler, including the translation pipeline, data structures, and design decisions.
 
 ## Table of Contents
 
-1. [Overview](#overview)
-2. [Compilation Pipeline](#compilation-pipeline)
-3. [Data Structures](#data-structures)
-4. [Frontend: Lexical Analysis and Parsing](#frontend-lexical-analysis-and-parsing)
-5. [Symbol Table Building](#symbol-table-building)
-6. [Semantic Analysis](#semantic-analysis)
-7. [Intermediate Representation](#intermediate-representation)
-8. [Backend: C++ Code Generation](#backend-c-code-generation)
-9. [Line Mapping and Debug Support](#line-mapping-and-debug-support)
-10. [C++ Runtime Library](#c-runtime-library)
-11. [Design Patterns and Principles](#design-patterns-and-principles)
+1. [Design Philosophy](#design-philosophy)
+2. [Overview](#overview)
+3. [Translation Pipeline](#translation-pipeline)
+4. [Data Structures](#data-structures)
+5. [Frontend: Lexical Analysis and Parsing](#frontend-lexical-analysis-and-parsing)
+6. [Symbol Table Building](#symbol-table-building)
+7. [Semantic Analysis](#semantic-analysis)
+8. [Intermediate Representation](#intermediate-representation)
+9. [Backend: C++ Code Generation](#backend-c-code-generation)
+10. [Line Mapping and Debug Support](#line-mapping-and-debug-support)
+11. [C++ Runtime Library](#c-runtime-library)
+12. [Design Patterns and Principles](#design-patterns-and-principles)
+
+## Design Philosophy
+
+### STruC++ as a Structured Translator
+
+**STruC++ is fundamentally a "smart syntax translator," not a heavy optimizing compiler.**
+
+The goal is to transform IEC 61131-3 Structured Text to C++ while:
+- **Preserving structure**: IF/CASE/FOR/WHILE map directly to C++ equivalents
+- **Maintaining line correspondence**: One ST statement → one C++ statement (where possible)
+- **Keeping it readable**: Generated C++ should be understandable by humans
+- **Avoiding complexity**: No heavy transformations, optimizations, or obscure IRs
+
+### Why Not Just Textual Substitution?
+
+Since ST and C++ are structurally similar (both have if/else, for loops, etc.), you might wonder: "Why not just do regex-based syntax shifting?"
+
+**The answer**: Your specific requirements push us past pure textual substitution:
+
+1. **IEC Type Wrappers with Forcing**
+   - Every IEC variable must be wrapped in `IEC_INT`, `IEC_BOOL`, etc. with get/set methods
+   - We need to know which identifiers are variables (need wrappers) vs literals vs temporaries
+   - This requires: **Symbol table to track declarations**
+
+2. **Standard Function Overloading**
+   - `MAX(a, b, c)` works for INT, REAL, TIME, etc.
+   - We need to know types to select the right C++ overload
+   - This requires: **Type checking pass**
+
+3. **Name Resolution**
+   - Is `TON1` a function block instance, a function call, or a type name?
+   - IEC allows the same identifier to mean different things in different contexts
+   - This requires: **Symbol table + name resolution**
+
+4. **ST-Level Error Messages**
+   - Without type checking, you get C++ template errors instead of clear ST errors
+   - This requires: **Type checking before code generation**
+
+### What We're Actually Building
+
+**Minimal structure to make the translator correct and debuggable:**
+
+```
+Parser → Symbol Table → Type Checker → Code Generator
+```
+
+**Not building:**
+- ❌ Complex optimizations
+- ❌ Control flow transformations
+- ❌ SSA form or register allocation
+- ❌ Heavy analysis passes
+- ❌ Anything that obscures the ST→C++ mapping
+
+### Core Principles
+
+1. **Structural Preservation** - Keep the same program structure (nesting, control flow, etc.)
+2. **Line-by-Line Mapping** - Maintain 1:1 correspondence between ST and C++ lines where possible
+3. **Minimal Machinery** - Only add compiler infrastructure where requirements demand it
+4. **Testability** - Each pass can be tested independently with clear inputs and outputs
+5. **Maintainability** - Code is organized into logical modules with clear interfaces
+6. **Pragmatic Approach** - Start simple (Phase 1), add complexity only when needed (later phases)
 
 ## Overview
 
-STruC++ follows a multi-pass compilation architecture that clearly separates concerns and maintains explicit data structures at each stage. The compiler transforms IEC 61131-3 Structured Text source code through several intermediate representations before generating C++ code.
-
-### Design Philosophy
-
-1. **Explicit over Implicit** - All data structures and transformations are explicit, avoiding hidden state
-2. **Separation of Concerns** - Each compilation pass has a single, well-defined responsibility
-3. **Testability** - Each pass can be tested independently with clear inputs and outputs
-4. **Maintainability** - Code is organized into logical modules with clear interfaces
-5. **Extensibility** - New features and optimizations can be added without major refactoring
+STruC++ uses a straightforward translation pipeline that clearly separates concerns. The translator transforms IEC 61131-3 Structured Text source code to C++ code through a few focused passes.
 
 ### High-Level Architecture
+
+**Simplified Pipeline (Phase 1 approach):**
 
 ```
 ┌─────────────────┐
@@ -38,48 +94,39 @@ STruC++ follows a multi-pass compilation architecture that clearly separates con
          │
          ▼
 ┌─────────────────┐
-│  Frontend       │
-│  (Lexer+Parser) │
+│     Parser      │
+│  (Lark LALR)    │
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│   Raw AST       │
-│  (Syntax Tree)  │
+│   Syntax Tree   │
+│   (Simple AST)  │
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
 │ Symbol Table    │
 │    Builder      │
+│  (One pass)     │
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│  Semantic       │
-│   Analysis      │
+│ Type Checker    │
+│  (One pass)     │
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
 │  Typed AST      │
-│ (with metadata) │
+│ (with types)    │
 └────────┬────────┘
          │
          ▼
 ┌─────────────────┐
-│  IR Generator   │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  Statement IR   │
-│ (C++-oriented)  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  C++ Generator  │
+│ C++ Generator   │
+│ (Direct emit)   │
 └────────┬────────┘
          │
          ▼
@@ -89,35 +136,37 @@ STruC++ follows a multi-pass compilation architecture that clearly separates con
 └─────────────────┘
 ```
 
-## Compilation Pipeline
+**Note**: The "IR" layer shown in later sections is optional and can be introduced in later phases if needed. For Phase 1, we generate C++ directly from the typed AST.
 
-### Pass 1: Frontend (Lexical Analysis and Parsing)
+## Translation Pipeline
+
+### Pass 1: Parsing
 
 **Input**: ST source code (text)  
-**Output**: Raw Abstract Syntax Tree (AST)  
+**Output**: Syntax Tree (AST)  
 **Responsibility**: Convert source text into a structured tree representation
 
-The frontend uses the Lark parser library in LALR mode to:
-- Tokenize the input (lexical analysis)
-- Parse tokens according to IEC 61131-3 grammar (syntax analysis)
-- Build an AST that mirrors the grammar structure
+The parser uses the Lark library in LALR mode to:
+- Tokenize the input
+- Parse tokens according to IEC 61131-3 grammar
+- Build a simple AST that mirrors the ST structure
 - Attach source location metadata (file, line, column) to each node
 
 **Key Features**:
-- Pure syntax analysis - no type information or semantic checks
+- Pure syntax analysis - no type information or semantic checks yet
 - Preserves all source location information for error reporting and line mapping
 - Handles all IEC 61131-3 v3 syntax including nested comments and references
 
 ### Pass 2: Symbol Table Building
 
-**Input**: Raw AST  
-**Output**: Global symbol tables + annotated AST  
-**Responsibility**: Index all globally-visible declarations
+**Input**: Syntax Tree  
+**Output**: Symbol tables  
+**Responsibility**: Index all declarations so we know what each identifier refers to
 
 This pass walks the AST once to build symbol tables for:
-- **Function declarations** - All globally declared functions
-- **Function block type declarations** - All FB types
-- **Program type declarations** - All program types
+- **Functions** - All globally declared functions
+- **Function Blocks** - All FB types
+- **Programs** - All program types
 - **User-defined types** - Structures, enumerations, arrays, subranges
 - **Enumerated values** - All enum identifiers
 - **Global constants** - Named constants
@@ -133,74 +182,74 @@ class SymbolTables:
     constants: Dict[str, ConstantDecl]
 ```
 
-This resolves the identifier ambiguity problem that MatIEC describes in their documentation - by the time we enter semantic analysis, we know whether an identifier refers to a type, variable, function, etc.
+**Why we need this**: IEC allows the same identifier to mean different things in different contexts (e.g., `TON` could be a type or a variable). The symbol table lets us resolve these ambiguities.
 
-### Pass 3: Semantic Analysis
+### Pass 3: Type Checking
 
-**Input**: Raw AST + Symbol Tables  
-**Output**: Typed AST with semantic annotations  
-**Responsibility**: Type checking, overload resolution, semantic validation
+**Input**: Syntax Tree + Symbol Tables  
+**Output**: Typed AST (AST with type annotations)  
+**Responsibility**: Verify IEC semantics and determine types
 
-Semantic analysis consists of multiple sub-passes:
+Type checking consists of a few focused sub-passes:
 
 #### 3.1: Type Inference
 
-Walk the AST to determine the possible types of each expression:
+Determine the type of each expression:
 - Literal types (42 → INT, TRUE → BOOL, etc.)
-- Variable types (from declarations)
+- Variable types (from declarations in symbol table)
 - Expression types (from operators and operands)
 - Function call return types
 - Array element types
 - Structure field types
 
-**Output**: Each AST node gains a `candidate_types` attribute listing possible types.
+**Output**: Each AST node gains a `resolved_type` attribute.
 
-#### 3.2: Type Narrowing
-
-Resolve ambiguous types using context:
-- Assignment target types constrain source types
-- Function parameter types constrain argument types
-- Operator overloading resolution
-- Implicit type conversions per IEC 61131-3 rules
-
-**Output**: Each AST node gains a `resolved_type` attribute with the final type.
-
-#### 3.3: Overload Resolution
+#### 3.2: Overload Resolution
 
 For overloaded functions and operators:
 - Match argument types to parameter types
-- Select the most specific overload
+- Select the correct overload (e.g., `MAX` for INT vs REAL)
 - Handle extensible functions (variable argument count)
 
 **Output**: Function call nodes gain `resolved_function` attribute.
 
-#### 3.4: Semantic Validation
+#### 3.3: Semantic Validation
 
-Check semantic rules:
+Check IEC 61131-3 semantic rules:
 - Variable declarations are unique within scope
 - Variables are declared before use
-- Assignment compatibility
+- Assignment compatibility (can't assign BOOL to INT)
 - Array bounds are valid
 - CASE statement coverage
-- Flow control validity (IL only)
 - Reference validity (REF_TO, DREF)
-- Access rights (READ_ONLY, etc.)
 
-**Output**: Error messages for violations, or validated AST.
+**Output**: Clear error messages for violations, or validated typed AST.
 
-### Pass 4: IR Generation
+**Why we need this**: To give helpful ST-level error messages instead of cryptic C++ template errors.
+
+### Pass 4: C++ Code Generation
 
 **Input**: Typed AST  
-**Output**: Statement-level Intermediate Representation (IR)  
-**Responsibility**: Lower high-level constructs to C++-oriented statements
+**Output**: C++ source code (.cpp and .h files)  
+**Responsibility**: Emit readable C++ code that mirrors ST structure
 
-The IR is a linear sequence of statement nodes that:
-- Map 1:1 to ST source statements (where possible)
-- Are tagged with source location spans
-- Represent operations in a C++-friendly form
-- Maintain enough structure for code generation
+The code generator walks the typed AST and emits C++ code that:
+- Maps 1:1 to ST source statements (where possible)
+- Preserves line correspondence for debugging
+- Uses C++ runtime library types (IEC_INT, IEC_BOOL, etc.)
+- Maintains readability (no heavy macros)
 
-**IR Node Types**:
+**Note on IR**: The detailed IR layer described below is optional and can be skipped for Phase 1. We can generate C++ directly from the typed AST. The IR becomes useful in later phases for handling complex v3 features (references, namespaces) that don't map 1:1 to C++ syntax.
+
+### Optional: Intermediate Representation (IR)
+
+For later phases, we may introduce an optional IR layer between the typed AST and C++ generation. This IR would be:
+- A linear sequence of statement nodes
+- Tagged with source location spans
+- Representing operations in a C++-friendly form
+- Still maintaining 1:1 mapping to ST statements where possible
+
+**IR Node Types (if used):**
 ```python
 class IRNode:
     source_span: SourceSpan  # (file, start_line, end_line, start_col, end_col)
@@ -236,19 +285,15 @@ class IRForLoop(IRNode):
 # ... more IR node types
 ```
 
-**Lowering Rules**:
+**Lowering Rules (if IR is used)**:
 - Simple statements (assignments, calls) → single IR nodes
 - Compound statements (IF, FOR, WHILE) → structured IR nodes with nested blocks
 - Complex expressions → temporary variables if needed for C++ compatibility
 - FB invocations → explicit input/output parameter passing
 
-### Pass 5: C++ Code Generation
+## C++ Code Generation Details
 
-**Input**: Statement IR  
-**Output**: C++ source code (.cpp and .h files)  
-**Responsibility**: Emit readable, efficient C++ code
-
-The code generator walks the IR and emits C++ code:
+The code generator walks the typed AST (or optional IR) and emits C++ code:
 
 #### 5.1: Header Generation
 
