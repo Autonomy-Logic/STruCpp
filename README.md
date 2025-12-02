@@ -45,7 +45,7 @@ STruC++ follows a multi-pass compilation pipeline:
 4. **IR Generation** - Lowering to a statement-level Intermediate Representation
 5. **Code Generation** - Emission of C++ code with line mapping metadata
 
-For detailed architecture information, see [ARCHITECTURE.md](ARCHITECTURE.md).
+For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## IEC 61131-3 Compliance
 
@@ -61,7 +61,7 @@ STruC++ targets full compliance with IEC 61131-3 Edition 3.0 **Structured Text (
 - All standard data types and functions
 - Full project structure (CONFIGURATION, RESOURCE, TASK, program instances)
 
-For detailed compliance information, see [IEC61131_COMPLIANCE.md](IEC61131_COMPLIANCE.md).
+For detailed compliance information, see [docs/IEC61131_COMPLIANCE.md](docs/IEC61131_COMPLIANCE.md).
 
 ## Implementation Status
 
@@ -74,21 +74,41 @@ STruC++ is currently in the **design phase**. This repository contains comprehen
 - ✅ Implementation roadmap
 - ⏳ Initial implementation (pending)
 
-For the complete implementation roadmap, see [IMPLEMENTATION_PHASES.md](IMPLEMENTATION_PHASES.md).
+For the complete implementation roadmap, see [docs/implementation-phases/](docs/implementation-phases/).
 
 ## Documentation
 
-- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed compiler architecture and design decisions
-- [IMPLEMENTATION_PHASES.md](IMPLEMENTATION_PHASES.md) - Phased development plan with milestones
-- [IEC61131_COMPLIANCE.md](IEC61131_COMPLIANCE.md) - IEC 61131-3 v3 compliance details
-- [MATIEC_COMPARISON.md](MATIEC_COMPARISON.md) - Comparison with MatIEC and improvement analysis
-- [PARSER_SELECTION.md](PARSER_SELECTION.md) - Parser library evaluation and selection rationale
-- [CPP_RUNTIME.md](CPP_RUNTIME.md) - C++ runtime library design
+All documentation is organized in the `docs/` folder:
+
+### Design Documents
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed compiler architecture and design decisions
+- [docs/CPP_RUNTIME.md](docs/CPP_RUNTIME.md) - C++ runtime library design
+- [docs/IEC61131_COMPLIANCE.md](docs/IEC61131_COMPLIANCE.md) - IEC 61131-3 v3 compliance details
+- [docs/MATIEC_COMPARISON.md](docs/MATIEC_COMPARISON.md) - Comparison with MatIEC and improvement analysis
+- [docs/PARSER_SELECTION.md](docs/PARSER_SELECTION.md) - Parser library evaluation and selection rationale
+
+### Implementation Phases
+- [docs/implementation-phases/](docs/implementation-phases/) - Phased development plan with detailed sub-phases
+  - [Phase 0: Design and Planning](docs/implementation-phases/phase-0-design.md) - COMPLETED
+  - [Phase 1: IEC Types, Runtime, and Library Architecture](docs/implementation-phases/) - Expanded into 6 sub-phases:
+    - [Phase 1.1: Core IEC Type Wrappers](docs/implementation-phases/phase-1.1-core-types.md)
+    - [Phase 1.2: Type Categories and Traits](docs/implementation-phases/phase-1.2-type-traits.md)
+    - [Phase 1.3: Time and Date Types](docs/implementation-phases/phase-1.3-time-types.md)
+    - [Phase 1.4: String Types](docs/implementation-phases/phase-1.4-string-types.md)
+    - [Phase 1.5: Composite Types](docs/implementation-phases/phase-1.5-composite-types.md)
+    - [Phase 1.6: Standard Functions and Library](docs/implementation-phases/phase-1.6-standard-functions.md)
+  - [Phase 2: Project Structure and Scheduling Model](docs/implementation-phases/phase-2-project-structure.md)
+  - [Phase 3: Core ST Translation](docs/implementation-phases/phase-3-st-translation.md)
+  - [Phase 4: Functions and Function Calls](docs/implementation-phases/phase-4-functions.md)
+  - [Phase 5: Function Blocks and Classes](docs/implementation-phases/phase-5-function-blocks.md)
+  - [Phase 6: Located Variables and OpenPLC Integration](docs/implementation-phases/phase-6-openplc-integration.md)
+  - [Phase 7: IEC v3 Features and Full Coverage](docs/implementation-phases/phase-7-iec-v3-features.md)
+  - [Phase 8: Optimizations and Advanced Debug Support](docs/implementation-phases/phase-8-optimizations.md)
 
 ## Technology Stack
 
 - **Implementation Language**: TypeScript 5.0+
-- **Parser**: Chevrotain - see [PARSER_SELECTION.md](PARSER_SELECTION.md) for rationale
+- **Parser**: Chevrotain - see [docs/PARSER_SELECTION.md](docs/PARSER_SELECTION.md) for rationale
 - **Target Language**: C++17 or later
 - **Build System**: npm/pnpm for compiler, CMake for C++ runtime
 - **Testing**: Vitest for compiler tests, Google Test for C++ runtime tests
@@ -150,28 +170,44 @@ console.log(result.lineMap);
 ```
 strucpp/
 ├── README.md                    # This file
-├── ARCHITECTURE.md              # Detailed architecture documentation
-├── IMPLEMENTATION_PHASES.md     # Phased development plan
-├── IEC61131_COMPLIANCE.md       # IEC 61131-3 v3 compliance details
-├── MATIEC_COMPARISON.md         # MatIEC comparison and improvements
-├── PARSER_SELECTION.md          # Parser library selection rationale
-├── CPP_RUNTIME.md               # C++ runtime library design
 ├── LICENSE                      # License file
 ├── package.json                 # Node.js package configuration
 ├── tsconfig.json                # TypeScript configuration
-├── src/                         # Main compiler source
+├── docs/                        # All documentation
+│   ├── ARCHITECTURE.md          # Detailed architecture documentation
+│   ├── CPP_RUNTIME.md           # C++ runtime library design
+│   ├── IEC61131_COMPLIANCE.md   # IEC 61131-3 v3 compliance details
+│   ├── MATIEC_COMPARISON.md     # MatIEC comparison and improvements
+│   ├── PARSER_SELECTION.md      # Parser library selection rationale
+│   └── implementation-phases/   # Phased development plan
+│       ├── README.md            # Implementation phases overview
+│       ├── phase-0-design.md    # Phase 0: Design (completed)
+│       ├── phase-1.1-core-types.md    # Phase 1.1: Core IEC Type Wrappers
+│       ├── phase-1.2-type-traits.md   # Phase 1.2: Type Categories and Traits
+│       ├── phase-1.3-time-types.md    # Phase 1.3: Time and Date Types
+│       ├── phase-1.4-string-types.md  # Phase 1.4: String Types
+│       ├── phase-1.5-composite-types.md # Phase 1.5: Composite Types
+│       ├── phase-1.6-standard-functions.md # Phase 1.6: Standard Functions
+│       ├── phase-2-project-structure.md   # Phase 2: Project Structure
+│       ├── phase-3-st-translation.md      # Phase 3: Core ST Translation
+│       ├── phase-4-functions.md           # Phase 4: Functions
+│       ├── phase-5-function-blocks.md     # Phase 5: Function Blocks
+│       ├── phase-6-openplc-integration.md # Phase 6: OpenPLC Integration
+│       ├── phase-7-iec-v3-features.md     # Phase 7: IEC v3 Features
+│       └── phase-8-optimizations.md       # Phase 8: Optimizations
+├── src/                         # Main compiler source (future)
 │   ├── index.ts                 # Main entry point
 │   ├── frontend/                # Lexer and parser
 │   ├── semantic/                # Semantic analysis passes
 │   ├── ir/                      # Intermediate representation
 │   ├── backend/                 # C++ code generation
 │   └── runtime/                 # C++ runtime library templates
-├── tests/                       # Test suite
+├── tests/                       # Test suite (future)
 │   ├── frontend/
 │   ├── semantic/
 │   ├── backend/
 │   └── integration/
-└── examples/                    # Example ST programs
+└── examples/                    # Example ST programs (future)
 ```
 
 ## Contributing
@@ -196,4 +232,4 @@ For questions, issues, or contributions, please use the GitHub issue tracker or 
 
 ---
 
-**Note**: This is a design document repository. Implementation is planned in phases as described in [IMPLEMENTATION_PHASES.md](IMPLEMENTATION_PHASES.md).
+**Note**: This is a design document repository. Implementation is planned in phases as described in [docs/implementation-phases/](docs/implementation-phases/).
