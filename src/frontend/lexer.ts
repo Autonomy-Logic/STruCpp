@@ -158,10 +158,11 @@ export const NULL = createToken({ name: "NULL", pattern: /NULL/i });
 // =============================================================================
 
 // Time literal: T#1s, T#100ms, TIME#1h2m3s
+// Note: Longer suffixes (ms, us, ns) must come before shorter ones (m, s) in the alternation
 export const TimeLiteral = createToken({
   name: "TimeLiteral",
   pattern:
-    /(?:T|TIME)#[0-9_]+(?:d|h|m|s|ms|us|ns)?(?:[0-9_]+(?:d|h|m|s|ms|us|ns)?)*(?:\.[0-9_]+)?/i,
+    /(?:T|TIME)#[0-9_]+(?:ms|us|ns|d|h|m|s)?(?:[0-9_]+(?:ms|us|ns|d|h|m|s)?)*(?:\.[0-9_]+)?/i,
 });
 
 // Date literal: D#2024-01-15
