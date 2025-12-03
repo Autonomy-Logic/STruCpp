@@ -47,6 +47,9 @@ output/
 !src/runtime/include/*.hpp
 !src/runtime/include/*.h
 
+# Allow runtime test files (these are source code, not generated)
+!src/runtime/tests/*.cpp
+
 # Test outputs
 test_output/
 golden_output/

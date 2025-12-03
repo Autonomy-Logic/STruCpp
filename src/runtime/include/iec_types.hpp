@@ -90,6 +90,30 @@ using TOD_t = int64_t;
 /** IEC DATE_AND_TIME - Combined date and time */
 using DT_t = int64_t;
 
+// IEC v3 Long variants (extended precision/range)
+
+/** IEC LTIME - Long duration in nanoseconds (IEC v3) */
+using LTIME_t = int64_t;
+
+/** IEC LDATE - Long calendar date (days since epoch, IEC v3) */
+using LDATE_t = int64_t;
+
+/** IEC LTOD - Long time of day in nanoseconds since midnight (IEC v3) */
+using LTOD_t = int64_t;
+
+/** IEC LDT - Long combined date and time (IEC v3) */
+using LDT_t = int64_t;
+
+// =============================================================================
+// Elementary Types - Characters
+// =============================================================================
+
+/** IEC CHAR - Single-byte character */
+using CHAR_t = char;
+
+/** IEC WCHAR - Wide character (UTF-16) */
+using WCHAR_t = char16_t;
+
 // =============================================================================
 // Type Category Tags
 // =============================================================================
@@ -122,34 +146,37 @@ struct AnyStringTag {};
 template<typename T>
 struct IECTypeCategory;
 
-// Bit string types
-template<> struct IECTypeCategory<BOOL_t> { using type = AnyBitTag; };
-template<> struct IECTypeCategory<BYTE_t> { using type = AnyBitTag; };
-template<> struct IECTypeCategory<WORD_t> { using type = AnyBitTag; };
-template<> struct IECTypeCategory<DWORD_t> { using type = AnyBitTag; };
-template<> struct IECTypeCategory<LWORD_t> { using type = AnyBitTag; };
+// Note: Some IEC types share the same underlying C++ type, so we only define
+// one specialization per unique C++ type. The type category is determined by
+// the primary use case of that underlying type.
 
-// Signed integer types
-template<> struct IECTypeCategory<SINT_t> { using type = AnyIntTag; };
-template<> struct IECTypeCategory<INT_t> { using type = AnyIntTag; };
-template<> struct IECTypeCategory<DINT_t> { using type = AnyIntTag; };
-template<> struct IECTypeCategory<LINT_t> { using type = AnyIntTag; };
+// Boolean type
+template<> struct IECTypeCategory<bool> { using type = AnyBitTag; };
 
-// Unsigned integer types
-template<> struct IECTypeCategory<USINT_t> { using type = AnyIntTag; };
-template<> struct IECTypeCategory<UINT_t> { using type = AnyIntTag; };
-template<> struct IECTypeCategory<UDINT_t> { using type = AnyIntTag; };
-template<> struct IECTypeCategory<ULINT_t> { using type = AnyIntTag; };
+// 8-bit types (BYTE_t/USINT_t are both uint8_t, SINT_t is int8_t)
+template<> struct IECTypeCategory<uint8_t> { using type = AnyBitTag; };
+template<> struct IECTypeCategory<int8_t> { using type = AnyIntTag; };
+
+// 16-bit types (WORD_t/UINT_t are both uint16_t, INT_t is int16_t)
+template<> struct IECTypeCategory<uint16_t> { using type = AnyBitTag; };
+template<> struct IECTypeCategory<int16_t> { using type = AnyIntTag; };
+
+// 32-bit types (DWORD_t/UDINT_t are both uint32_t, DINT_t is int32_t)
+template<> struct IECTypeCategory<uint32_t> { using type = AnyBitTag; };
+template<> struct IECTypeCategory<int32_t> { using type = AnyIntTag; };
+
+// 64-bit types (LWORD_t/ULINT_t are both uint64_t)
+// Note: LINT_t, TIME_t, DATE_t, TOD_t, DT_t, LTIME_t, LDATE_t, LTOD_t, LDT_t are all int64_t
+template<> struct IECTypeCategory<uint64_t> { using type = AnyBitTag; };
+template<> struct IECTypeCategory<int64_t> { using type = AnyIntTag; };
 
 // Real types
-template<> struct IECTypeCategory<REAL_t> { using type = AnyRealTag; };
-template<> struct IECTypeCategory<LREAL_t> { using type = AnyRealTag; };
+template<> struct IECTypeCategory<float> { using type = AnyRealTag; };
+template<> struct IECTypeCategory<double> { using type = AnyRealTag; };
 
-// Date/Time types
-template<> struct IECTypeCategory<TIME_t> { using type = AnyDateTag; };
-template<> struct IECTypeCategory<DATE_t> { using type = AnyDateTag; };
-template<> struct IECTypeCategory<TOD_t> { using type = AnyDateTag; };
-template<> struct IECTypeCategory<DT_t> { using type = AnyDateTag; };
+// Character types
+template<> struct IECTypeCategory<char> { using type = AnyStringTag; };
+template<> struct IECTypeCategory<char16_t> { using type = AnyStringTag; };
 
 // =============================================================================
 // C++20 Concepts (when available)
