@@ -30,7 +30,7 @@ export interface CompileOptions {
 /**
  * Severity level for compiler messages.
  */
-export type Severity = 'error' | 'warning' | 'info';
+export type Severity = "error" | "warning" | "info";
 
 /**
  * A compiler error or warning message.

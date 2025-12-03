@@ -10,8 +10,8 @@
  * complex v3 features (references, namespaces) that don't map 1:1 to C++.
  */
 
-import type { SourceSpan } from '../types.js';
-import type { IECType } from '../frontend/ast.js';
+import type { SourceSpan } from "../types.js";
+import type { IECType } from "../frontend/ast.js";
 
 // =============================================================================
 // Base Types
@@ -36,7 +36,7 @@ export interface IRNode {
  * IR variable reference.
  */
 export interface IRVariable extends IRNode {
-  irKind: 'Variable';
+  irKind: "Variable";
   name: string;
   type: IECType;
   isTemporary: boolean;
@@ -46,7 +46,7 @@ export interface IRVariable extends IRNode {
  * IR literal value.
  */
 export interface IRLiteral extends IRNode {
-  irKind: 'Literal';
+  irKind: "Literal";
   type: IECType;
   value: string | number | boolean;
 }
@@ -55,7 +55,7 @@ export interface IRLiteral extends IRNode {
  * IR binary operation.
  */
 export interface IRBinaryOp extends IRNode {
-  irKind: 'BinaryOp';
+  irKind: "BinaryOp";
   operator: string;
   left: IRExpression;
   right: IRExpression;
@@ -66,7 +66,7 @@ export interface IRBinaryOp extends IRNode {
  * IR unary operation.
  */
 export interface IRUnaryOp extends IRNode {
-  irKind: 'UnaryOp';
+  irKind: "UnaryOp";
   operator: string;
   operand: IRExpression;
   resultType: IECType;
@@ -76,7 +76,7 @@ export interface IRUnaryOp extends IRNode {
  * IR array access.
  */
 export interface IRArrayAccess extends IRNode {
-  irKind: 'ArrayAccess';
+  irKind: "ArrayAccess";
   array: IRExpression;
   indices: IRExpression[];
   elementType: IECType;
@@ -86,7 +86,7 @@ export interface IRArrayAccess extends IRNode {
  * IR field access.
  */
 export interface IRFieldAccess extends IRNode {
-  irKind: 'FieldAccess';
+  irKind: "FieldAccess";
   object: IRExpression;
   fieldName: string;
   fieldType: IECType;
@@ -96,7 +96,7 @@ export interface IRFieldAccess extends IRNode {
  * IR dereference operation (for references).
  */
 export interface IRDereference extends IRNode {
-  irKind: 'Dereference';
+  irKind: "Dereference";
   reference: IRExpression;
   resultType: IECType;
 }
@@ -121,7 +121,7 @@ export type IRExpression =
  * IR assignment statement.
  */
 export interface IRAssignment extends IRNode {
-  irKind: 'Assignment';
+  irKind: "Assignment";
   target: IRExpression;
   value: IRExpression;
 }
@@ -130,7 +130,7 @@ export interface IRAssignment extends IRNode {
  * IR function call.
  */
 export interface IRFunctionCall extends IRNode {
-  irKind: 'FunctionCall';
+  irKind: "FunctionCall";
   functionName: string;
   arguments: IRExpression[];
   resultVar?: IRVariable | undefined;
@@ -140,7 +140,7 @@ export interface IRFunctionCall extends IRNode {
  * IR function block call.
  */
 export interface IRFBCall extends IRNode {
-  irKind: 'FBCall';
+  irKind: "FBCall";
   fbInstance: IRVariable;
   fbTypeName: string;
   inputs: Map<string, IRExpression>;
@@ -151,7 +151,7 @@ export interface IRFBCall extends IRNode {
  * IR if statement.
  */
 export interface IRIfStatement extends IRNode {
-  irKind: 'IfStatement';
+  irKind: "IfStatement";
   condition: IRExpression;
   thenBlock: IRStatement[];
   elsifBlocks: Array<{ condition: IRExpression; block: IRStatement[] }>;
@@ -162,7 +162,7 @@ export interface IRIfStatement extends IRNode {
  * IR case statement.
  */
 export interface IRCaseStatement extends IRNode {
-  irKind: 'CaseStatement';
+  irKind: "CaseStatement";
   selector: IRExpression;
   cases: Array<{
     labels: Array<{ start: IRExpression; end?: IRExpression }>;
@@ -175,7 +175,7 @@ export interface IRCaseStatement extends IRNode {
  * IR for loop.
  */
 export interface IRForLoop extends IRNode {
-  irKind: 'ForLoop';
+  irKind: "ForLoop";
   controlVar: IRVariable;
   start: IRExpression;
   end: IRExpression;
@@ -187,7 +187,7 @@ export interface IRForLoop extends IRNode {
  * IR while loop.
  */
 export interface IRWhileLoop extends IRNode {
-  irKind: 'WhileLoop';
+  irKind: "WhileLoop";
   condition: IRExpression;
   body: IRStatement[];
 }
@@ -196,7 +196,7 @@ export interface IRWhileLoop extends IRNode {
  * IR repeat loop.
  */
 export interface IRRepeatLoop extends IRNode {
-  irKind: 'RepeatLoop';
+  irKind: "RepeatLoop";
   body: IRStatement[];
   condition: IRExpression;
 }
@@ -205,14 +205,14 @@ export interface IRRepeatLoop extends IRNode {
  * IR exit statement (break from loop).
  */
 export interface IRExitStatement extends IRNode {
-  irKind: 'ExitStatement';
+  irKind: "ExitStatement";
 }
 
 /**
  * IR return statement.
  */
 export interface IRReturnStatement extends IRNode {
-  irKind: 'ReturnStatement';
+  irKind: "ReturnStatement";
   value?: IRExpression;
 }
 
@@ -239,7 +239,7 @@ export type IRStatement =
  * IR function definition.
  */
 export interface IRFunction extends IRNode {
-  irKind: 'Function';
+  irKind: "Function";
   name: string;
   returnType: IECType;
   parameters: IRVariable[];
@@ -251,7 +251,7 @@ export interface IRFunction extends IRNode {
  * IR function block definition.
  */
 export interface IRFunctionBlock extends IRNode {
-  irKind: 'FunctionBlock';
+  irKind: "FunctionBlock";
   name: string;
   inputs: IRVariable[];
   outputs: IRVariable[];
@@ -264,7 +264,7 @@ export interface IRFunctionBlock extends IRNode {
  * IR program definition.
  */
 export interface IRProgram extends IRNode {
-  irKind: 'Program';
+  irKind: "Program";
   name: string;
   variables: IRVariable[];
   body: IRStatement[];
@@ -274,7 +274,7 @@ export interface IRProgram extends IRNode {
  * IR compilation unit.
  */
 export interface IRCompilationUnit extends IRNode {
-  irKind: 'CompilationUnit';
+  irKind: "CompilationUnit";
   functions: IRFunction[];
   functionBlocks: IRFunctionBlock[];
   programs: IRProgram[];
@@ -296,7 +296,7 @@ export class IRBuilder {
    */
   createTemp(type: IECType, sourceSpan: SourceSpan): IRVariable {
     return {
-      irKind: 'Variable',
+      irKind: "Variable",
       name: `__temp_${this.tempCounter++}`,
       type,
       isTemporary: true,
@@ -310,10 +310,10 @@ export class IRBuilder {
   createVariable(
     name: string,
     type: IECType,
-    sourceSpan: SourceSpan
+    sourceSpan: SourceSpan,
   ): IRVariable {
     return {
-      irKind: 'Variable',
+      irKind: "Variable",
       name,
       type,
       isTemporary: false,
@@ -327,10 +327,10 @@ export class IRBuilder {
   createLiteral(
     value: string | number | boolean,
     type: IECType,
-    sourceSpan: SourceSpan
+    sourceSpan: SourceSpan,
   ): IRLiteral {
     return {
-      irKind: 'Literal',
+      irKind: "Literal",
       value,
       type,
       sourceSpan,
@@ -345,10 +345,10 @@ export class IRBuilder {
     left: IRExpression,
     right: IRExpression,
     resultType: IECType,
-    sourceSpan: SourceSpan
+    sourceSpan: SourceSpan,
   ): IRBinaryOp {
     return {
-      irKind: 'BinaryOp',
+      irKind: "BinaryOp",
       operator,
       left,
       right,
@@ -363,10 +363,10 @@ export class IRBuilder {
   createAssignment(
     target: IRExpression,
     value: IRExpression,
-    sourceSpan: SourceSpan
+    sourceSpan: SourceSpan,
   ): IRAssignment {
     return {
-      irKind: 'Assignment',
+      irKind: "Assignment",
       target,
       value,
       sourceSpan,
@@ -380,10 +380,10 @@ export class IRBuilder {
     functionName: string,
     args: IRExpression[],
     sourceSpan: SourceSpan,
-    resultVar?: IRVariable
+    resultVar?: IRVariable,
   ): IRFunctionCall {
     return {
-      irKind: 'FunctionCall',
+      irKind: "FunctionCall",
       functionName,
       arguments: args,
       resultVar,
@@ -399,10 +399,10 @@ export class IRBuilder {
     thenBlock: IRStatement[],
     elsifBlocks: Array<{ condition: IRExpression; block: IRStatement[] }>,
     elseBlock: IRStatement[],
-    sourceSpan: SourceSpan
+    sourceSpan: SourceSpan,
   ): IRIfStatement {
     return {
-      irKind: 'IfStatement',
+      irKind: "IfStatement",
       condition,
       thenBlock,
       elsifBlocks,
@@ -420,10 +420,10 @@ export class IRBuilder {
     end: IRExpression,
     body: IRStatement[],
     sourceSpan: SourceSpan,
-    step?: IRExpression
+    step?: IRExpression,
   ): IRForLoop {
     return {
-      irKind: 'ForLoop',
+      irKind: "ForLoop",
       controlVar,
       start,
       end,

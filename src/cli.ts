@@ -16,10 +16,10 @@
  *   -h, --help             Show help
  */
 
-import { readFileSync, writeFileSync } from 'fs';
-import { resolve, basename } from 'path';
-import { compile, getVersion } from './index.js';
-import type { CompileOptions } from './types.js';
+import { readFileSync, writeFileSync } from "fs";
+import { resolve, basename } from "path";
+import { compile, getVersion } from "./index.js";
+import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
   input?: string;
@@ -48,31 +48,31 @@ function parseArgs(args: string[]): CLIOptions {
   while (i < args.length) {
     const arg = args[i];
 
-    if (arg === '-h' || arg === '--help') {
+    if (arg === "-h" || arg === "--help") {
       options.showHelp = true;
-    } else if (arg === '-v' || arg === '--version') {
+    } else if (arg === "-v" || arg === "--version") {
       options.showVersion = true;
-    } else if (arg === '-d' || arg === '--debug') {
+    } else if (arg === "-d" || arg === "--debug") {
       options.debug = true;
-    } else if (arg === '--no-line-mapping') {
+    } else if (arg === "--no-line-mapping") {
       options.lineMapping = false;
-    } else if (arg === '--line-directives') {
+    } else if (arg === "--line-directives") {
       options.lineDirectives = true;
-    } else if (arg === '--source-comments') {
+    } else if (arg === "--source-comments") {
       options.sourceComments = true;
-    } else if (arg === '-o' || arg === '--output') {
+    } else if (arg === "-o" || arg === "--output") {
       i++;
       const nextArg = args[i];
       if (nextArg !== undefined) {
         options.output = nextArg;
       }
-    } else if (arg === '-O' || arg === '--optimize') {
+    } else if (arg === "-O" || arg === "--optimize") {
       i++;
-      const level = parseInt(args[i] ?? '0', 10);
+      const level = parseInt(args[i] ?? "0", 10);
       if (level >= 0 && level <= 2) {
         options.optimizationLevel = level as 0 | 1 | 2;
       }
-    } else if (arg !== undefined && !arg.startsWith('-')) {
+    } else if (arg !== undefined && !arg.startsWith("-")) {
       options.input = arg;
     }
 
@@ -123,7 +123,7 @@ function main(): void {
   }
 
   if (!options.input) {
-    console.error('Error: No input file specified');
+    console.error("Error: No input file specified");
     console.error('Run "strucpp --help" for usage information');
     process.exit(1);
   }
@@ -131,11 +131,11 @@ function main(): void {
   const inputPath = resolve(options.input);
   const outputPath = options.output
     ? resolve(options.output)
-    : inputPath.replace(/\.st$/i, '.cpp');
+    : inputPath.replace(/\.st$/i, ".cpp");
 
   let source: string;
   try {
-    source = readFileSync(inputPath, 'utf-8');
+    source = readFileSync(inputPath, "utf-8");
   } catch (err) {
     console.error(`Error: Cannot read input file: ${inputPath}`);
     process.exit(1);
@@ -154,7 +154,7 @@ function main(): void {
   const result = compile(source, compileOptions);
 
   if (!result.success) {
-    console.error('\nCompilation failed:');
+    console.error("\nCompilation failed:");
     for (const error of result.errors) {
       const location = error.file
         ? `${error.file}:${error.line}:${error.column}`
@@ -175,12 +175,12 @@ function main(): void {
   }
 
   try {
-    writeFileSync(outputPath, result.cppCode, 'utf-8');
+    writeFileSync(outputPath, result.cppCode, "utf-8");
     console.log(`Output written to ${outputPath}`);
 
     if (result.headerCode) {
-      const headerPath = outputPath.replace(/\.cpp$/i, '.hpp');
-      writeFileSync(headerPath, result.headerCode, 'utf-8');
+      const headerPath = outputPath.replace(/\.cpp$/i, ".hpp");
+      writeFileSync(headerPath, result.headerCode, "utf-8");
       console.log(`Header written to ${headerPath}`);
     }
   } catch (err) {
@@ -188,7 +188,7 @@ function main(): void {
     process.exit(1);
   }
 
-  console.log('Compilation successful!');
+  console.log("Compilation successful!");
 }
 
 main();

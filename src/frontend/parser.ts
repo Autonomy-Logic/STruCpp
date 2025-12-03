@@ -5,8 +5,8 @@
  * Uses Chevrotain's embedded DSL for grammar definition.
  */
 
-import { CstParser } from 'chevrotain';
-import * as tokens from './lexer.js';
+import { CstParser } from "chevrotain";
+import * as tokens from "./lexer.js";
 
 /**
  * STruC++ Parser for IEC 61131-3 Structured Text.
@@ -31,7 +31,7 @@ export class STParser extends CstParser {
   /**
    * Entry point: A compilation unit contains one or more POUs or type definitions.
    */
-  public compilationUnit = this.RULE('compilationUnit', () => {
+  public compilationUnit = this.RULE("compilationUnit", () => {
     this.MANY(() => {
       this.OR([
         { ALT: () => this.SUBRULE(this.programDeclaration) },
@@ -50,7 +50,7 @@ export class STParser extends CstParser {
   /**
    * PROGRAM declaration
    */
-  public programDeclaration = this.RULE('programDeclaration', () => {
+  public programDeclaration = this.RULE("programDeclaration", () => {
     this.CONSUME(tokens.PROGRAM);
     this.CONSUME(tokens.Identifier);
     this.MANY(() => {
@@ -65,7 +65,7 @@ export class STParser extends CstParser {
   /**
    * FUNCTION declaration
    */
-  public functionDeclaration = this.RULE('functionDeclaration', () => {
+  public functionDeclaration = this.RULE("functionDeclaration", () => {
     this.CONSUME(tokens.FUNCTION);
     this.CONSUME(tokens.Identifier);
     this.CONSUME(tokens.Colon);
@@ -82,17 +82,20 @@ export class STParser extends CstParser {
   /**
    * FUNCTION_BLOCK declaration
    */
-  public functionBlockDeclaration = this.RULE('functionBlockDeclaration', () => {
-    this.CONSUME(tokens.FUNCTION_BLOCK);
-    this.CONSUME(tokens.Identifier);
-    this.MANY(() => {
-      this.SUBRULE(this.varBlock);
-    });
-    this.OPTION(() => {
-      this.SUBRULE(this.statementList);
-    });
-    this.CONSUME(tokens.END_FUNCTION_BLOCK);
-  });
+  public functionBlockDeclaration = this.RULE(
+    "functionBlockDeclaration",
+    () => {
+      this.CONSUME(tokens.FUNCTION_BLOCK);
+      this.CONSUME(tokens.Identifier);
+      this.MANY(() => {
+        this.SUBRULE(this.varBlock);
+      });
+      this.OPTION(() => {
+        this.SUBRULE(this.statementList);
+      });
+      this.CONSUME(tokens.END_FUNCTION_BLOCK);
+    },
+  );
 
   // ==========================================================================
   // Variable declarations
@@ -101,7 +104,7 @@ export class STParser extends CstParser {
   /**
    * Variable block (VAR, VAR_INPUT, VAR_OUTPUT, etc.)
    */
-  public varBlock = this.RULE('varBlock', () => {
+  public varBlock = this.RULE("varBlock", () => {
     this.OR([
       { ALT: () => this.CONSUME(tokens.VAR) },
       { ALT: () => this.CONSUME(tokens.VAR_INPUT) },
@@ -126,7 +129,7 @@ export class STParser extends CstParser {
   /**
    * Single variable declaration
    */
-  public varDeclaration = this.RULE('varDeclaration', () => {
+  public varDeclaration = this.RULE("varDeclaration", () => {
     this.AT_LEAST_ONE_SEP({
       SEP: tokens.Comma,
       DEF: () => this.CONSUME(tokens.Identifier),
@@ -151,7 +154,7 @@ export class STParser extends CstParser {
   /**
    * TYPE declaration block
    */
-  public typeDeclaration = this.RULE('typeDeclaration', () => {
+  public typeDeclaration = this.RULE("typeDeclaration", () => {
     this.CONSUME(tokens.TYPE);
     this.MANY(() => {
       this.SUBRULE(this.singleTypeDeclaration);
@@ -162,7 +165,7 @@ export class STParser extends CstParser {
   /**
    * Single type definition
    */
-  public singleTypeDeclaration = this.RULE('singleTypeDeclaration', () => {
+  public singleTypeDeclaration = this.RULE("singleTypeDeclaration", () => {
     this.CONSUME(tokens.Identifier);
     this.CONSUME(tokens.Colon);
     this.OR([
@@ -177,7 +180,7 @@ export class STParser extends CstParser {
   /**
    * Structure type definition
    */
-  public structType = this.RULE('structType', () => {
+  public structType = this.RULE("structType", () => {
     this.CONSUME(tokens.STRUCT);
     this.MANY(() => {
       this.SUBRULE(this.varDeclaration);
@@ -188,7 +191,7 @@ export class STParser extends CstParser {
   /**
    * Enumeration type definition
    */
-  public enumType = this.RULE('enumType', () => {
+  public enumType = this.RULE("enumType", () => {
     this.CONSUME(tokens.LParen);
     this.AT_LEAST_ONE_SEP({
       SEP: tokens.Comma,
@@ -204,7 +207,7 @@ export class STParser extends CstParser {
   /**
    * Array type definition
    */
-  public arrayType = this.RULE('arrayType', () => {
+  public arrayType = this.RULE("arrayType", () => {
     this.CONSUME(tokens.ARRAY);
     this.CONSUME(tokens.LBracket);
     this.SUBRULE(this.arrayDimension);
@@ -220,27 +223,21 @@ export class STParser extends CstParser {
   /**
    * Array dimension (start..end)
    */
-  public arrayDimension = this.RULE('arrayDimension', () => {
+  public arrayDimension = this.RULE("arrayDimension", () => {
     this.SUBRULE(this.expression);
     this.CONSUME(tokens.DoubleDot);
     this.SUBRULE2(this.expression);
   });
 
   /**
-   * Data type reference
+   * Data type reference (simple type or REF_TO type)
+   * Note: arrayType is handled separately in singleTypeDeclaration to avoid ambiguity
    */
-  public dataType = this.RULE('dataType', () => {
-    this.OR([
-      { ALT: () => this.SUBRULE(this.arrayType) },
-      {
-        ALT: () => {
-          this.OPTION(() => {
-            this.CONSUME(tokens.REF_TO);
-          });
-          this.CONSUME(tokens.Identifier);
-        },
-      },
-    ]);
+  public dataType = this.RULE("dataType", () => {
+    this.OPTION(() => {
+      this.CONSUME(tokens.REF_TO);
+    });
+    this.CONSUME(tokens.Identifier);
   });
 
   // ==========================================================================
@@ -250,22 +247,25 @@ export class STParser extends CstParser {
   /**
    * CONFIGURATION declaration
    */
-  public configurationDeclaration = this.RULE('configurationDeclaration', () => {
-    this.CONSUME(tokens.CONFIGURATION);
-    this.CONSUME(tokens.Identifier);
-    this.MANY(() => {
-      this.OR([
-        { ALT: () => this.SUBRULE(this.varBlock) },
-        { ALT: () => this.SUBRULE(this.resourceDeclaration) },
-      ]);
-    });
-    this.CONSUME(tokens.END_CONFIGURATION);
-  });
+  public configurationDeclaration = this.RULE(
+    "configurationDeclaration",
+    () => {
+      this.CONSUME(tokens.CONFIGURATION);
+      this.CONSUME(tokens.Identifier);
+      this.MANY(() => {
+        this.OR([
+          { ALT: () => this.SUBRULE(this.varBlock) },
+          { ALT: () => this.SUBRULE(this.resourceDeclaration) },
+        ]);
+      });
+      this.CONSUME(tokens.END_CONFIGURATION);
+    },
+  );
 
   /**
    * RESOURCE declaration
    */
-  public resourceDeclaration = this.RULE('resourceDeclaration', () => {
+  public resourceDeclaration = this.RULE("resourceDeclaration", () => {
     this.CONSUME(tokens.RESOURCE);
     this.CONSUME(tokens.Identifier);
     this.CONSUME(tokens.ON);
@@ -282,7 +282,7 @@ export class STParser extends CstParser {
   /**
    * TASK declaration
    */
-  public taskDeclaration = this.RULE('taskDeclaration', () => {
+  public taskDeclaration = this.RULE("taskDeclaration", () => {
     this.CONSUME(tokens.TASK);
     this.CONSUME(tokens.Identifier);
     this.CONSUME(tokens.LParen);
@@ -301,7 +301,7 @@ export class STParser extends CstParser {
   /**
    * Program instance declaration
    */
-  public programInstance = this.RULE('programInstance', () => {
+  public programInstance = this.RULE("programInstance", () => {
     this.CONSUME(tokens.PROGRAM);
     this.CONSUME(tokens.Identifier);
     this.OPTION(() => {
@@ -320,7 +320,7 @@ export class STParser extends CstParser {
   /**
    * List of statements
    */
-  public statementList = this.RULE('statementList', () => {
+  public statementList = this.RULE("statementList", () => {
     this.MANY(() => {
       this.SUBRULE(this.statement);
     });
@@ -329,7 +329,7 @@ export class STParser extends CstParser {
   /**
    * Single statement
    */
-  public statement = this.RULE('statement', () => {
+  public statement = this.RULE("statement", () => {
     this.OR([
       { ALT: () => this.SUBRULE(this.assignmentStatement) },
       { ALT: () => this.SUBRULE(this.ifStatement) },
@@ -346,7 +346,7 @@ export class STParser extends CstParser {
   /**
    * Assignment statement
    */
-  public assignmentStatement = this.RULE('assignmentStatement', () => {
+  public assignmentStatement = this.RULE("assignmentStatement", () => {
     this.SUBRULE(this.variable);
     this.CONSUME(tokens.Assign);
     this.SUBRULE(this.expression);
@@ -356,7 +356,7 @@ export class STParser extends CstParser {
   /**
    * IF statement
    */
-  public ifStatement = this.RULE('ifStatement', () => {
+  public ifStatement = this.RULE("ifStatement", () => {
     this.CONSUME(tokens.IF);
     this.SUBRULE(this.expression);
     this.CONSUME(tokens.THEN);
@@ -380,7 +380,7 @@ export class STParser extends CstParser {
   /**
    * CASE statement
    */
-  public caseStatement = this.RULE('caseStatement', () => {
+  public caseStatement = this.RULE("caseStatement", () => {
     this.CONSUME(tokens.CASE);
     this.SUBRULE(this.expression);
     this.CONSUME(tokens.OF);
@@ -400,7 +400,7 @@ export class STParser extends CstParser {
   /**
    * CASE element (one or more case labels with statements)
    */
-  public caseElement = this.RULE('caseElement', () => {
+  public caseElement = this.RULE("caseElement", () => {
     this.AT_LEAST_ONE_SEP({
       SEP: tokens.Comma,
       DEF: () => this.SUBRULE(this.caseLabel),
@@ -412,7 +412,7 @@ export class STParser extends CstParser {
   /**
    * Case label (single value or range)
    */
-  public caseLabel = this.RULE('caseLabel', () => {
+  public caseLabel = this.RULE("caseLabel", () => {
     this.SUBRULE(this.expression);
     this.OPTION(() => {
       this.CONSUME(tokens.DoubleDot);
@@ -423,7 +423,7 @@ export class STParser extends CstParser {
   /**
    * FOR statement
    */
-  public forStatement = this.RULE('forStatement', () => {
+  public forStatement = this.RULE("forStatement", () => {
     this.CONSUME(tokens.FOR);
     this.CONSUME(tokens.Identifier);
     this.CONSUME(tokens.Assign);
@@ -445,7 +445,7 @@ export class STParser extends CstParser {
   /**
    * WHILE statement
    */
-  public whileStatement = this.RULE('whileStatement', () => {
+  public whileStatement = this.RULE("whileStatement", () => {
     this.CONSUME(tokens.WHILE);
     this.SUBRULE(this.expression);
     this.CONSUME(tokens.DO);
@@ -459,7 +459,7 @@ export class STParser extends CstParser {
   /**
    * REPEAT statement
    */
-  public repeatStatement = this.RULE('repeatStatement', () => {
+  public repeatStatement = this.RULE("repeatStatement", () => {
     this.CONSUME(tokens.REPEAT);
     this.SUBRULE(this.statementList);
     this.CONSUME(tokens.UNTIL);
@@ -473,7 +473,7 @@ export class STParser extends CstParser {
   /**
    * EXIT statement
    */
-  public exitStatement = this.RULE('exitStatement', () => {
+  public exitStatement = this.RULE("exitStatement", () => {
     this.CONSUME(tokens.EXIT);
     this.CONSUME(tokens.Semicolon);
   });
@@ -481,7 +481,7 @@ export class STParser extends CstParser {
   /**
    * RETURN statement
    */
-  public returnStatement = this.RULE('returnStatement', () => {
+  public returnStatement = this.RULE("returnStatement", () => {
     this.CONSUME(tokens.RETURN);
     this.CONSUME(tokens.Semicolon);
   });
@@ -489,7 +489,7 @@ export class STParser extends CstParser {
   /**
    * Function/FB call as statement
    */
-  public functionCallStatement = this.RULE('functionCallStatement', () => {
+  public functionCallStatement = this.RULE("functionCallStatement", () => {
     this.SUBRULE(this.functionCall);
     this.CONSUME(tokens.Semicolon);
   });
@@ -501,14 +501,14 @@ export class STParser extends CstParser {
   /**
    * Expression (entry point for expression parsing)
    */
-  public expression = this.RULE('expression', () => {
+  public expression = this.RULE("expression", () => {
     this.SUBRULE(this.orExpression);
   });
 
   /**
    * OR expression
    */
-  public orExpression = this.RULE('orExpression', () => {
+  public orExpression = this.RULE("orExpression", () => {
     this.SUBRULE(this.xorExpression);
     this.MANY(() => {
       this.CONSUME(tokens.OR);
@@ -519,7 +519,7 @@ export class STParser extends CstParser {
   /**
    * XOR expression
    */
-  public xorExpression = this.RULE('xorExpression', () => {
+  public xorExpression = this.RULE("xorExpression", () => {
     this.SUBRULE(this.andExpression);
     this.MANY(() => {
       this.CONSUME(tokens.XOR);
@@ -530,7 +530,7 @@ export class STParser extends CstParser {
   /**
    * AND expression
    */
-  public andExpression = this.RULE('andExpression', () => {
+  public andExpression = this.RULE("andExpression", () => {
     this.SUBRULE(this.comparisonExpression);
     this.MANY(() => {
       this.OR([
@@ -544,7 +544,7 @@ export class STParser extends CstParser {
   /**
    * Comparison expression
    */
-  public comparisonExpression = this.RULE('comparisonExpression', () => {
+  public comparisonExpression = this.RULE("comparisonExpression", () => {
     this.SUBRULE(this.addExpression);
     this.OPTION(() => {
       this.OR([
@@ -562,7 +562,7 @@ export class STParser extends CstParser {
   /**
    * Addition/subtraction expression
    */
-  public addExpression = this.RULE('addExpression', () => {
+  public addExpression = this.RULE("addExpression", () => {
     this.SUBRULE(this.mulExpression);
     this.MANY(() => {
       this.OR([
@@ -576,7 +576,7 @@ export class STParser extends CstParser {
   /**
    * Multiplication/division expression
    */
-  public mulExpression = this.RULE('mulExpression', () => {
+  public mulExpression = this.RULE("mulExpression", () => {
     this.SUBRULE(this.powerExpression);
     this.MANY(() => {
       this.OR([
@@ -591,7 +591,7 @@ export class STParser extends CstParser {
   /**
    * Power expression
    */
-  public powerExpression = this.RULE('powerExpression', () => {
+  public powerExpression = this.RULE("powerExpression", () => {
     this.SUBRULE(this.unaryExpression);
     this.OPTION(() => {
       this.CONSUME(tokens.Power);
@@ -602,7 +602,7 @@ export class STParser extends CstParser {
   /**
    * Unary expression
    */
-  public unaryExpression = this.RULE('unaryExpression', () => {
+  public unaryExpression = this.RULE("unaryExpression", () => {
     this.OPTION(() => {
       this.OR([
         { ALT: () => this.CONSUME(tokens.NOT) },
@@ -616,7 +616,7 @@ export class STParser extends CstParser {
   /**
    * Primary expression
    */
-  public primaryExpression = this.RULE('primaryExpression', () => {
+  public primaryExpression = this.RULE("primaryExpression", () => {
     this.OR([
       { ALT: () => this.SUBRULE(this.literal) },
       { ALT: () => this.SUBRULE(this.functionCall) },
@@ -634,7 +634,7 @@ export class STParser extends CstParser {
   /**
    * Variable reference (with optional array subscripts and field access)
    */
-  public variable = this.RULE('variable', () => {
+  public variable = this.RULE("variable", () => {
     this.CONSUME(tokens.Identifier);
     this.MANY(() => {
       this.OR([
@@ -666,7 +666,7 @@ export class STParser extends CstParser {
   /**
    * Function or FB call
    */
-  public functionCall = this.RULE('functionCall', () => {
+  public functionCall = this.RULE("functionCall", () => {
     this.CONSUME(tokens.Identifier);
     this.CONSUME(tokens.LParen);
     this.OPTION(() => {
@@ -678,7 +678,7 @@ export class STParser extends CstParser {
   /**
    * Argument list for function calls
    */
-  public argumentList = this.RULE('argumentList', () => {
+  public argumentList = this.RULE("argumentList", () => {
     this.AT_LEAST_ONE_SEP({
       SEP: tokens.Comma,
       DEF: () => this.SUBRULE(this.argument),
@@ -688,7 +688,7 @@ export class STParser extends CstParser {
   /**
    * Single argument (positional or named)
    */
-  public argument = this.RULE('argument', () => {
+  public argument = this.RULE("argument", () => {
     this.OPTION(() => {
       this.CONSUME(tokens.Identifier);
       this.OR([
@@ -702,7 +702,7 @@ export class STParser extends CstParser {
   /**
    * Literal value
    */
-  public literal = this.RULE('literal', () => {
+  public literal = this.RULE("literal", () => {
     this.OR([
       { ALT: () => this.CONSUME(tokens.TRUE) },
       { ALT: () => this.CONSUME(tokens.FALSE) },

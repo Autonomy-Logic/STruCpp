@@ -5,10 +5,10 @@
  * Builds symbol tables, performs type checking, and validates IEC semantics.
  */
 
-import type { CompilationUnit, ElementaryType } from '../frontend/ast.js';
-import type { CompileError } from '../types.js';
-import { SymbolTables } from './symbol-table.js';
-import { TypeChecker } from './type-checker.js';
+import type { CompilationUnit, ElementaryType } from "../frontend/ast.js";
+import type { CompileError } from "../types.js";
+import { SymbolTables } from "./symbol-table.js";
+import { TypeChecker } from "./type-checker.js";
 
 // =============================================================================
 // Analysis Result
@@ -91,16 +91,24 @@ export class SemanticAnalyzer {
     // Register type declarations
     for (const typeDecl of ast.types) {
       try {
-        const resolvedType: ElementaryType = { typeKind: 'elementary', name: typeDecl.name, sizeBits: 0 };
+        const resolvedType: ElementaryType = {
+          typeKind: "elementary",
+          name: typeDecl.name,
+          sizeBits: 0,
+        };
         this.symbolTables.globalScope.define({
           name: typeDecl.name,
-          kind: 'type',
+          kind: "type",
           declaration: typeDecl,
           resolvedType,
         });
       } catch (err) {
         if (err instanceof Error) {
-          this.addError(err.message, typeDecl.sourceSpan.startLine, typeDecl.sourceSpan.startCol);
+          this.addError(
+            err.message,
+            typeDecl.sourceSpan.startLine,
+            typeDecl.sourceSpan.startCol,
+          );
         }
       }
     }
@@ -108,10 +116,14 @@ export class SemanticAnalyzer {
     // Register function declarations
     for (const funcDecl of ast.functions) {
       try {
-        const returnType: ElementaryType = { typeKind: 'elementary', name: funcDecl.returnType.name, sizeBits: 0 };
+        const returnType: ElementaryType = {
+          typeKind: "elementary",
+          name: funcDecl.returnType.name,
+          sizeBits: 0,
+        };
         this.symbolTables.globalScope.define({
           name: funcDecl.name,
-          kind: 'function',
+          kind: "function",
           declaration: funcDecl,
           returnType,
           parameters: [],
@@ -122,7 +134,11 @@ export class SemanticAnalyzer {
         this.buildVarBlockSymbols(funcDecl.varBlocks, scope);
       } catch (err) {
         if (err instanceof Error) {
-          this.addError(err.message, funcDecl.sourceSpan.startLine, funcDecl.sourceSpan.startCol);
+          this.addError(
+            err.message,
+            funcDecl.sourceSpan.startLine,
+            funcDecl.sourceSpan.startCol,
+          );
         }
       }
     }
@@ -132,7 +148,7 @@ export class SemanticAnalyzer {
       try {
         this.symbolTables.globalScope.define({
           name: fbDecl.name,
-          kind: 'functionBlock',
+          kind: "functionBlock",
           declaration: fbDecl,
           inputs: [],
           outputs: [],
@@ -145,7 +161,11 @@ export class SemanticAnalyzer {
         this.buildVarBlockSymbols(fbDecl.varBlocks, scope);
       } catch (err) {
         if (err instanceof Error) {
-          this.addError(err.message, fbDecl.sourceSpan.startLine, fbDecl.sourceSpan.startCol);
+          this.addError(
+            err.message,
+            fbDecl.sourceSpan.startLine,
+            fbDecl.sourceSpan.startCol,
+          );
         }
       }
     }
@@ -155,7 +175,7 @@ export class SemanticAnalyzer {
       try {
         this.symbolTables.globalScope.define({
           name: progDecl.name,
-          kind: 'program',
+          kind: "program",
           declaration: progDecl,
           variables: [],
         });
@@ -165,7 +185,11 @@ export class SemanticAnalyzer {
         this.buildVarBlockSymbols(progDecl.varBlocks, scope);
       } catch (err) {
         if (err instanceof Error) {
-          this.addError(err.message, progDecl.sourceSpan.startLine, progDecl.sourceSpan.startCol);
+          this.addError(
+            err.message,
+            progDecl.sourceSpan.startLine,
+            progDecl.sourceSpan.startCol,
+          );
         }
       }
     }
@@ -175,39 +199,47 @@ export class SemanticAnalyzer {
    * Build symbols from variable blocks.
    */
   private buildVarBlockSymbols(
-    varBlocks: CompilationUnit['programs'][0]['varBlocks'],
-    scope: ReturnType<typeof this.symbolTables.createProgramScope>
+    varBlocks: CompilationUnit["programs"][0]["varBlocks"],
+    scope: ReturnType<typeof this.symbolTables.createProgramScope>,
   ): void {
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           try {
-            const varType: ElementaryType = { typeKind: 'elementary', name: decl.type.name, sizeBits: 0 };
+            const varType: ElementaryType = {
+              typeKind: "elementary",
+              name: decl.type.name,
+              sizeBits: 0,
+            };
             if (block.isConstant) {
               scope.define({
                 name,
-                kind: 'constant',
+                kind: "constant",
                 declaration: decl,
                 type: varType,
               });
             } else {
               scope.define({
                 name,
-                kind: 'variable',
+                kind: "variable",
                 declaration: decl,
                 type: varType,
-                isInput: block.blockType === 'VAR_INPUT',
-                isOutput: block.blockType === 'VAR_OUTPUT',
-                isInOut: block.blockType === 'VAR_IN_OUT',
-                isExternal: block.blockType === 'VAR_EXTERNAL',
-                isGlobal: block.blockType === 'VAR_GLOBAL',
+                isInput: block.blockType === "VAR_INPUT",
+                isOutput: block.blockType === "VAR_OUTPUT",
+                isInOut: block.blockType === "VAR_IN_OUT",
+                isExternal: block.blockType === "VAR_EXTERNAL",
+                isGlobal: block.blockType === "VAR_GLOBAL",
                 isRetain: block.isRetain,
                 address: decl.address,
               });
             }
           } catch (err) {
             if (err instanceof Error) {
-              this.addError(err.message, decl.sourceSpan.startLine, decl.sourceSpan.startCol);
+              this.addError(
+                err.message,
+                decl.sourceSpan.startLine,
+                decl.sourceSpan.startCol,
+              );
             }
           }
         }
@@ -236,7 +268,7 @@ export class SemanticAnalyzer {
       message,
       line,
       column,
-      severity: 'error',
+      severity: "error",
     });
   }
 
@@ -249,7 +281,7 @@ export class SemanticAnalyzer {
       message,
       line,
       column,
-      severity: 'warning',
+      severity: "warning",
     });
   }
 }

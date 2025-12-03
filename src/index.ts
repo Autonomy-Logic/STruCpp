@@ -5,7 +5,7 @@
  * This module exports the public API for programmatic usage.
  */
 
-import { CompileOptions, CompileResult } from './types.js';
+import { CompileOptions, CompileResult } from "./types.js";
 
 /**
  * Default compilation options
@@ -41,7 +41,7 @@ export const defaultOptions: CompileOptions = {
  */
 export function compile(
   _source: string,
-  options: Partial<CompileOptions> = {}
+  options: Partial<CompileOptions> = {},
 ): CompileResult {
   // Merge options with defaults (will be used in Phase 3+)
   void { ...defaultOptions, ...options };
@@ -54,15 +54,15 @@ export function compile(
 
   return {
     success: false,
-    cppCode: '',
-    headerCode: '',
+    cppCode: "",
+    headerCode: "",
     lineMap: new Map(),
     errors: [
       {
-        message: 'Compiler not yet implemented - Phase 0 setup only',
+        message: "Compiler not yet implemented - Phase 0 setup only",
         line: 0,
         column: 0,
-        severity: 'error',
+        severity: "error",
       },
     ],
     warnings: [],
@@ -78,15 +78,15 @@ export function compile(
  */
 export function parse(_source: string): unknown {
   // TODO: Implement in Phase 3
-  return { error: 'Parser not yet implemented' };
+  return { error: "Parser not yet implemented" };
 }
 
 /**
  * Get the version of the STruC++ compiler.
  */
 export function getVersion(): string {
-  return '0.1.0-dev';
+  return "0.1.0-dev";
 }
 
 // Re-export types
-export type { CompileOptions, CompileResult, CompileError } from './types.js';
+export type { CompileOptions, CompileResult, CompileError } from "./types.js";

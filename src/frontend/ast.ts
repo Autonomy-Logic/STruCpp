@@ -5,7 +5,7 @@
  * The AST is produced by the CST visitor from the parser output.
  */
 
-import type { SourceSpan } from '../types.js';
+import type { SourceSpan } from "../types.js";
 
 // =============================================================================
 // Base Types
@@ -48,7 +48,7 @@ export interface IECType {
  * Elementary type (BOOL, INT, REAL, etc.)
  */
 export interface ElementaryType extends IECType {
-  typeKind: 'elementary';
+  typeKind: "elementary";
   name: string;
   sizeBits: number;
 }
@@ -57,7 +57,7 @@ export interface ElementaryType extends IECType {
  * Array type
  */
 export interface ArrayType extends IECType {
-  typeKind: 'array';
+  typeKind: "array";
   elementType: IECType;
   dimensions: Array<{ start: number; end: number }>;
 }
@@ -66,7 +66,7 @@ export interface ArrayType extends IECType {
  * Structure type
  */
 export interface StructType extends IECType {
-  typeKind: 'struct';
+  typeKind: "struct";
   name: string;
   fields: Map<string, IECType>;
 }
@@ -75,7 +75,7 @@ export interface StructType extends IECType {
  * Enumeration type
  */
 export interface EnumType extends IECType {
-  typeKind: 'enum';
+  typeKind: "enum";
   name: string;
   values: string[];
 }
@@ -84,7 +84,7 @@ export interface EnumType extends IECType {
  * Reference type (REF_TO)
  */
 export interface ReferenceType extends IECType {
-  typeKind: 'reference';
+  typeKind: "reference";
   referencedType: IECType;
 }
 
@@ -92,7 +92,7 @@ export interface ReferenceType extends IECType {
  * Function block type
  */
 export interface FunctionBlockType extends IECType {
-  typeKind: 'functionBlock';
+  typeKind: "functionBlock";
   name: string;
   inputVars: Map<string, IECType>;
   outputVars: Map<string, IECType>;
@@ -107,7 +107,7 @@ export interface FunctionBlockType extends IECType {
  * Root node representing a complete compilation unit.
  */
 export interface CompilationUnit extends ASTNode {
-  kind: 'CompilationUnit';
+  kind: "CompilationUnit";
   programs: ProgramDeclaration[];
   functions: FunctionDeclaration[];
   functionBlocks: FunctionBlockDeclaration[];
@@ -123,7 +123,7 @@ export interface CompilationUnit extends ASTNode {
  * PROGRAM declaration
  */
 export interface ProgramDeclaration extends ASTNode {
-  kind: 'ProgramDeclaration';
+  kind: "ProgramDeclaration";
   name: string;
   varBlocks: VarBlock[];
   body: Statement[];
@@ -133,7 +133,7 @@ export interface ProgramDeclaration extends ASTNode {
  * FUNCTION declaration
  */
 export interface FunctionDeclaration extends ASTNode {
-  kind: 'FunctionDeclaration';
+  kind: "FunctionDeclaration";
   name: string;
   returnType: TypeReference;
   varBlocks: VarBlock[];
@@ -144,7 +144,7 @@ export interface FunctionDeclaration extends ASTNode {
  * FUNCTION_BLOCK declaration
  */
 export interface FunctionBlockDeclaration extends ASTNode {
-  kind: 'FunctionBlockDeclaration';
+  kind: "FunctionBlockDeclaration";
   name: string;
   varBlocks: VarBlock[];
   body: Statement[];
@@ -158,19 +158,19 @@ export interface FunctionBlockDeclaration extends ASTNode {
  * Variable block type
  */
 export type VarBlockType =
-  | 'VAR'
-  | 'VAR_INPUT'
-  | 'VAR_OUTPUT'
-  | 'VAR_IN_OUT'
-  | 'VAR_EXTERNAL'
-  | 'VAR_GLOBAL'
-  | 'VAR_TEMP';
+  | "VAR"
+  | "VAR_INPUT"
+  | "VAR_OUTPUT"
+  | "VAR_IN_OUT"
+  | "VAR_EXTERNAL"
+  | "VAR_GLOBAL"
+  | "VAR_TEMP";
 
 /**
  * Variable block (VAR, VAR_INPUT, etc.)
  */
 export interface VarBlock extends ASTNode {
-  kind: 'VarBlock';
+  kind: "VarBlock";
   blockType: VarBlockType;
   isConstant: boolean;
   isRetain: boolean;
@@ -181,7 +181,7 @@ export interface VarBlock extends ASTNode {
  * Single variable declaration
  */
 export interface VarDeclaration extends ASTNode {
-  kind: 'VarDeclaration';
+  kind: "VarDeclaration";
   names: string[];
   type: TypeReference;
   initialValue?: Expression;
@@ -196,7 +196,7 @@ export interface VarDeclaration extends ASTNode {
  * TYPE declaration block
  */
 export interface TypeDeclaration extends ASTNode {
-  kind: 'TypeDeclaration';
+  kind: "TypeDeclaration";
   name: string;
   definition: TypeDefinition;
 }
@@ -214,7 +214,7 @@ export type TypeDefinition =
  * Structure definition
  */
 export interface StructDefinition extends ASTNode {
-  kind: 'StructDefinition';
+  kind: "StructDefinition";
   fields: VarDeclaration[];
 }
 
@@ -222,7 +222,7 @@ export interface StructDefinition extends ASTNode {
  * Enumeration definition
  */
 export interface EnumDefinition extends ASTNode {
-  kind: 'EnumDefinition';
+  kind: "EnumDefinition";
   values: string[];
   defaultValue?: string;
 }
@@ -231,7 +231,7 @@ export interface EnumDefinition extends ASTNode {
  * Array definition
  */
 export interface ArrayDefinition extends ASTNode {
-  kind: 'ArrayDefinition';
+  kind: "ArrayDefinition";
   dimensions: ArrayDimension[];
   elementType: TypeReference;
 }
@@ -240,7 +240,7 @@ export interface ArrayDefinition extends ASTNode {
  * Array dimension
  */
 export interface ArrayDimension extends ASTNode {
-  kind: 'ArrayDimension';
+  kind: "ArrayDimension";
   start: Expression;
   end: Expression;
 }
@@ -249,7 +249,7 @@ export interface ArrayDimension extends ASTNode {
  * Type reference (name of a type)
  */
 export interface TypeReference extends ASTNode {
-  kind: 'TypeReference';
+  kind: "TypeReference";
   name: string;
   isReference: boolean;
 }
@@ -262,7 +262,7 @@ export interface TypeReference extends ASTNode {
  * CONFIGURATION declaration
  */
 export interface ConfigurationDeclaration extends ASTNode {
-  kind: 'ConfigurationDeclaration';
+  kind: "ConfigurationDeclaration";
   name: string;
   varBlocks: VarBlock[];
   resources: ResourceDeclaration[];
@@ -272,7 +272,7 @@ export interface ConfigurationDeclaration extends ASTNode {
  * RESOURCE declaration
  */
 export interface ResourceDeclaration extends ASTNode {
-  kind: 'ResourceDeclaration';
+  kind: "ResourceDeclaration";
   name: string;
   onType: string;
   tasks: TaskDeclaration[];
@@ -283,7 +283,7 @@ export interface ResourceDeclaration extends ASTNode {
  * TASK declaration
  */
 export interface TaskDeclaration extends ASTNode {
-  kind: 'TaskDeclaration';
+  kind: "TaskDeclaration";
   name: string;
   properties: Map<string, Expression>;
 }
@@ -292,7 +292,7 @@ export interface TaskDeclaration extends ASTNode {
  * Program instance
  */
 export interface ProgramInstance extends ASTNode {
-  kind: 'ProgramInstance';
+  kind: "ProgramInstance";
   instanceName: string;
   taskName?: string;
   programType: string;
@@ -320,7 +320,7 @@ export type Statement =
  * Assignment statement
  */
 export interface AssignmentStatement extends ASTNode {
-  kind: 'AssignmentStatement';
+  kind: "AssignmentStatement";
   target: Expression;
   value: Expression;
 }
@@ -329,7 +329,7 @@ export interface AssignmentStatement extends ASTNode {
  * IF statement
  */
 export interface IfStatement extends ASTNode {
-  kind: 'IfStatement';
+  kind: "IfStatement";
   condition: Expression;
   thenStatements: Statement[];
   elsifClauses: ElsifClause[];
@@ -340,7 +340,7 @@ export interface IfStatement extends ASTNode {
  * ELSIF clause
  */
 export interface ElsifClause extends ASTNode {
-  kind: 'ElsifClause';
+  kind: "ElsifClause";
   condition: Expression;
   statements: Statement[];
 }
@@ -349,7 +349,7 @@ export interface ElsifClause extends ASTNode {
  * CASE statement
  */
 export interface CaseStatement extends ASTNode {
-  kind: 'CaseStatement';
+  kind: "CaseStatement";
   selector: Expression;
   cases: CaseElement[];
   elseStatements: Statement[];
@@ -359,7 +359,7 @@ export interface CaseStatement extends ASTNode {
  * CASE element
  */
 export interface CaseElement extends ASTNode {
-  kind: 'CaseElement';
+  kind: "CaseElement";
   labels: CaseLabel[];
   statements: Statement[];
 }
@@ -368,7 +368,7 @@ export interface CaseElement extends ASTNode {
  * Case label (single value or range)
  */
 export interface CaseLabel extends ASTNode {
-  kind: 'CaseLabel';
+  kind: "CaseLabel";
   start: Expression;
   end?: Expression;
 }
@@ -377,7 +377,7 @@ export interface CaseLabel extends ASTNode {
  * FOR statement
  */
 export interface ForStatement extends ASTNode {
-  kind: 'ForStatement';
+  kind: "ForStatement";
   controlVariable: string;
   start: Expression;
   end: Expression;
@@ -389,7 +389,7 @@ export interface ForStatement extends ASTNode {
  * WHILE statement
  */
 export interface WhileStatement extends ASTNode {
-  kind: 'WhileStatement';
+  kind: "WhileStatement";
   condition: Expression;
   body: Statement[];
 }
@@ -398,7 +398,7 @@ export interface WhileStatement extends ASTNode {
  * REPEAT statement
  */
 export interface RepeatStatement extends ASTNode {
-  kind: 'RepeatStatement';
+  kind: "RepeatStatement";
   body: Statement[];
   condition: Expression;
 }
@@ -407,21 +407,21 @@ export interface RepeatStatement extends ASTNode {
  * EXIT statement
  */
 export interface ExitStatement extends ASTNode {
-  kind: 'ExitStatement';
+  kind: "ExitStatement";
 }
 
 /**
  * RETURN statement
  */
 export interface ReturnStatement extends ASTNode {
-  kind: 'ReturnStatement';
+  kind: "ReturnStatement";
 }
 
 /**
  * Function call as statement
  */
 export interface FunctionCallStatement extends ASTNode {
-  kind: 'FunctionCallStatement';
+  kind: "FunctionCallStatement";
   call: FunctionCallExpression;
 }
 
@@ -444,27 +444,27 @@ export type Expression =
  * Binary operator
  */
 export type BinaryOperator =
-  | '+'
-  | '-'
-  | '*'
-  | '/'
-  | 'MOD'
-  | '**'
-  | 'AND'
-  | 'OR'
-  | 'XOR'
-  | '='
-  | '<>'
-  | '<'
-  | '>'
-  | '<='
-  | '>=';
+  | "+"
+  | "-"
+  | "*"
+  | "/"
+  | "MOD"
+  | "**"
+  | "AND"
+  | "OR"
+  | "XOR"
+  | "="
+  | "<>"
+  | "<"
+  | ">"
+  | "<="
+  | ">=";
 
 /**
  * Binary expression
  */
 export interface BinaryExpression extends TypedNode {
-  kind: 'BinaryExpression';
+  kind: "BinaryExpression";
   operator: BinaryOperator;
   left: Expression;
   right: Expression;
@@ -473,13 +473,13 @@ export interface BinaryExpression extends TypedNode {
 /**
  * Unary operator
  */
-export type UnaryOperator = 'NOT' | '-' | '+';
+export type UnaryOperator = "NOT" | "-" | "+";
 
 /**
  * Unary expression
  */
 export interface UnaryExpression extends TypedNode {
-  kind: 'UnaryExpression';
+  kind: "UnaryExpression";
   operator: UnaryOperator;
   operand: Expression;
 }
@@ -488,7 +488,7 @@ export interface UnaryExpression extends TypedNode {
  * Function or FB call expression
  */
 export interface FunctionCallExpression extends TypedNode {
-  kind: 'FunctionCallExpression';
+  kind: "FunctionCallExpression";
   functionName: string;
   arguments: Argument[];
 }
@@ -497,7 +497,7 @@ export interface FunctionCallExpression extends TypedNode {
  * Function argument
  */
 export interface Argument extends ASTNode {
-  kind: 'Argument';
+  kind: "Argument";
   name?: string;
   isOutput: boolean;
   value: Expression;
@@ -507,7 +507,7 @@ export interface Argument extends ASTNode {
  * Variable reference expression
  */
 export interface VariableExpression extends TypedNode {
-  kind: 'VariableExpression';
+  kind: "VariableExpression";
   name: string;
   subscripts: Expression[];
   fieldAccess: string[];
@@ -518,7 +518,7 @@ export interface VariableExpression extends TypedNode {
  * Literal expression
  */
 export interface LiteralExpression extends TypedNode {
-  kind: 'LiteralExpression';
+  kind: "LiteralExpression";
   literalType: LiteralType;
   value: string | number | boolean;
   rawValue: string;
@@ -528,22 +528,22 @@ export interface LiteralExpression extends TypedNode {
  * Literal type
  */
 export type LiteralType =
-  | 'BOOL'
-  | 'INT'
-  | 'REAL'
-  | 'STRING'
-  | 'WSTRING'
-  | 'TIME'
-  | 'DATE'
-  | 'TIME_OF_DAY'
-  | 'DATE_AND_TIME'
-  | 'NULL';
+  | "BOOL"
+  | "INT"
+  | "REAL"
+  | "STRING"
+  | "WSTRING"
+  | "TIME"
+  | "DATE"
+  | "TIME_OF_DAY"
+  | "DATE_AND_TIME"
+  | "NULL";
 
 /**
  * Parenthesized expression
  */
 export interface ParenthesizedExpression extends TypedNode {
-  kind: 'ParenthesizedExpression';
+  kind: "ParenthesizedExpression";
   expression: Expression;
 }
 
@@ -556,7 +556,7 @@ export interface ParenthesizedExpression extends TypedNode {
  */
 export function createDefaultSourceSpan(): SourceSpan {
   return {
-    file: '',
+    file: "",
     startLine: 0,
     endLine: 0,
     startCol: 0,
@@ -569,7 +569,7 @@ export function createDefaultSourceSpan(): SourceSpan {
  */
 export function createCompilationUnit(): CompilationUnit {
   return {
-    kind: 'CompilationUnit',
+    kind: "CompilationUnit",
     sourceSpan: createDefaultSourceSpan(),
     programs: [],
     functions: [],

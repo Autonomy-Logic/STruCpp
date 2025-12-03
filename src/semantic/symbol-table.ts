@@ -12,7 +12,7 @@ import type {
   TypeDeclaration,
   VarDeclaration,
   IECType,
-} from '../frontend/ast.js';
+} from "../frontend/ast.js";
 
 // =============================================================================
 // Symbol Types
@@ -22,13 +22,13 @@ import type {
  * Kind of symbol
  */
 export type SymbolKind =
-  | 'variable'
-  | 'constant'
-  | 'function'
-  | 'functionBlock'
-  | 'program'
-  | 'type'
-  | 'enumValue';
+  | "variable"
+  | "constant"
+  | "function"
+  | "functionBlock"
+  | "program"
+  | "type"
+  | "enumValue";
 
 /**
  * Base interface for all symbols
@@ -48,7 +48,7 @@ export interface BaseSymbol {
  * Variable symbol
  */
 export interface VariableSymbol extends BaseSymbol {
-  kind: 'variable';
+  kind: "variable";
   declaration: VarDeclaration;
   isInput: boolean;
   isOutput: boolean;
@@ -63,7 +63,7 @@ export interface VariableSymbol extends BaseSymbol {
  * Constant symbol
  */
 export interface ConstantSymbol extends BaseSymbol {
-  kind: 'constant';
+  kind: "constant";
   declaration: VarDeclaration;
   value?: unknown;
 }
@@ -72,7 +72,7 @@ export interface ConstantSymbol extends BaseSymbol {
  * Function symbol
  */
 export interface FunctionSymbol extends BaseSymbol {
-  kind: 'function';
+  kind: "function";
   declaration: FunctionDeclaration;
   returnType: IECType;
   parameters: VariableSymbol[];
@@ -82,7 +82,7 @@ export interface FunctionSymbol extends BaseSymbol {
  * Function block symbol
  */
 export interface FunctionBlockSymbol extends BaseSymbol {
-  kind: 'functionBlock';
+  kind: "functionBlock";
   declaration: FunctionBlockDeclaration;
   inputs: VariableSymbol[];
   outputs: VariableSymbol[];
@@ -94,7 +94,7 @@ export interface FunctionBlockSymbol extends BaseSymbol {
  * Program symbol
  */
 export interface ProgramSymbol extends BaseSymbol {
-  kind: 'program';
+  kind: "program";
   declaration: ProgramDeclaration;
   variables: VariableSymbol[];
 }
@@ -103,7 +103,7 @@ export interface ProgramSymbol extends BaseSymbol {
  * Type symbol
  */
 export interface TypeSymbol extends BaseSymbol {
-  kind: 'type';
+  kind: "type";
   declaration: TypeDeclaration;
   resolvedType: IECType;
 }
@@ -112,7 +112,7 @@ export interface TypeSymbol extends BaseSymbol {
  * Enum value symbol
  */
 export interface EnumValueSymbol extends BaseSymbol {
-  kind: 'enumValue';
+  kind: "enumValue";
   enumType: string;
   value: number;
 }
@@ -139,10 +139,10 @@ export type AnySymbol =
 export class SymbolNotFoundError extends Error {
   constructor(
     public readonly symbolName: string,
-    public readonly scope: string
+    public readonly scope: string,
   ) {
     super(`Symbol '${symbolName}' not found in scope '${scope}'`);
-    this.name = 'SymbolNotFoundError';
+    this.name = "SymbolNotFoundError";
   }
 }
 
@@ -152,10 +152,10 @@ export class SymbolNotFoundError extends Error {
 export class DuplicateSymbolError extends Error {
   constructor(
     public readonly symbolName: string,
-    public readonly scope: string
+    public readonly scope: string,
   ) {
     super(`Symbol '${symbolName}' already defined in scope '${scope}'`);
-    this.name = 'DuplicateSymbolError';
+    this.name = "DuplicateSymbolError";
   }
 }
 
@@ -167,7 +167,7 @@ export class Scope {
 
   constructor(
     public readonly name: string,
-    public readonly parent?: Scope
+    public readonly parent?: Scope,
   ) {}
 
   /**
@@ -229,10 +229,10 @@ export class Scope {
    * Get all symbols of a specific kind.
    */
   getSymbolsByKind<K extends SymbolKind>(
-    kind: K
+    kind: K,
   ): Extract<AnySymbol, { kind: K }>[] {
     return this.getAllSymbols().filter(
-      (s): s is Extract<AnySymbol, { kind: K }> => s.kind === kind
+      (s): s is Extract<AnySymbol, { kind: K }> => s.kind === kind,
     );
   }
 }
@@ -254,7 +254,7 @@ export class SymbolTables {
   private programScopes: Map<string, Scope> = new Map();
 
   constructor() {
-    this.globalScope = new Scope('global');
+    this.globalScope = new Scope("global");
     this.initializeBuiltinTypes();
   }
 
@@ -263,37 +263,37 @@ export class SymbolTables {
    */
   private initializeBuiltinTypes(): void {
     const builtinTypes = [
-      'BOOL',
-      'BYTE',
-      'WORD',
-      'DWORD',
-      'LWORD',
-      'SINT',
-      'INT',
-      'DINT',
-      'LINT',
-      'USINT',
-      'UINT',
-      'UDINT',
-      'ULINT',
-      'REAL',
-      'LREAL',
-      'TIME',
-      'DATE',
-      'TIME_OF_DAY',
-      'TOD',
-      'DATE_AND_TIME',
-      'DT',
-      'STRING',
-      'WSTRING',
+      "BOOL",
+      "BYTE",
+      "WORD",
+      "DWORD",
+      "LWORD",
+      "SINT",
+      "INT",
+      "DINT",
+      "LINT",
+      "USINT",
+      "UINT",
+      "UDINT",
+      "ULINT",
+      "REAL",
+      "LREAL",
+      "TIME",
+      "DATE",
+      "TIME_OF_DAY",
+      "TOD",
+      "DATE_AND_TIME",
+      "DT",
+      "STRING",
+      "WSTRING",
     ];
 
     for (const typeName of builtinTypes) {
       this.globalScope.define({
         name: typeName,
-        kind: 'type',
+        kind: "type",
         declaration: undefined as unknown as TypeDeclaration,
-        resolvedType: { typeKind: 'elementary', name: typeName, sizeBits: 0 },
+        resolvedType: { typeKind: "elementary", name: typeName, sizeBits: 0 },
       } as TypeSymbol);
     }
   }
@@ -351,7 +351,7 @@ export class SymbolTables {
    */
   lookupType(name: string): TypeSymbol | undefined {
     const symbol = this.globalScope.lookup(name);
-    if (symbol?.kind === 'type') {
+    if (symbol?.kind === "type") {
       return symbol;
     }
     return undefined;
@@ -362,7 +362,7 @@ export class SymbolTables {
    */
   lookupFunction(name: string): FunctionSymbol | undefined {
     const symbol = this.globalScope.lookup(name);
-    if (symbol?.kind === 'function') {
+    if (symbol?.kind === "function") {
       return symbol;
     }
     return undefined;
@@ -373,7 +373,7 @@ export class SymbolTables {
    */
   lookupFunctionBlock(name: string): FunctionBlockSymbol | undefined {
     const symbol = this.globalScope.lookup(name);
-    if (symbol?.kind === 'functionBlock') {
+    if (symbol?.kind === "functionBlock") {
       return symbol;
     }
     return undefined;
@@ -384,7 +384,7 @@ export class SymbolTables {
    */
   lookupProgram(name: string): ProgramSymbol | undefined {
     const symbol = this.globalScope.lookup(name);
-    if (symbol?.kind === 'program') {
+    if (symbol?.kind === "program") {
       return symbol;
     }
     return undefined;
