@@ -65,14 +65,20 @@ For detailed compliance information, see [docs/IEC61131_COMPLIANCE.md](docs/IEC6
 
 ## Implementation Status
 
-STruC++ is currently in the **design phase**. This repository contains comprehensive design documentation to guide implementation.
+STruC++ is currently in **Phase 0 - Repository Setup**. The foundation is in place with a working lexer, parser, and test infrastructure.
 
-### Current Phase: Phase 0 - Design and Planning
+### Current Phase: Phase 0 - Repository Setup (Complete)
 
 - ✅ Architecture design
-- ✅ Parser library selection
+- ✅ Parser library selection (Chevrotain)
 - ✅ Implementation roadmap
-- ⏳ Initial implementation (pending)
+- ✅ Project structure and build system
+- ✅ Chevrotain-based lexer with all IEC 61131-3 tokens
+- ✅ Parser with grammar rules for POUs, statements, and expressions
+- ✅ Symbol table with scope management
+- ✅ Test infrastructure (66 passing tests)
+- ✅ CI/CD pipeline (GitHub Actions)
+- ⏳ Phase 1: IEC Types and Runtime (next)
 
 For the complete implementation roadmap, see [docs/implementation-phases/](docs/implementation-phases/).
 
@@ -119,38 +125,72 @@ All documentation is organized in the `docs/` folder:
 ### Prerequisites
 
 - Node.js 18 or later
-- C++17 compatible compiler (for testing generated code)
+- npm (comes with Node.js)
 - Git
+- C++17 compatible compiler (optional, for testing generated code)
 
-### Installation (Future)
+### Installation
 
 ```bash
 # Clone the repository
-git clone https://github.com/Autonomy-Logic/strucpp.git
-cd strucpp
+git clone https://github.com/Autonomy-Logic/STruCpp.git
+cd STruCpp
 
 # Install dependencies
-npm install
+npm ci
 
 # Build the compiler
 npm run build
 ```
 
-### Usage (Future)
+### Development Commands
 
 ```bash
-# Compile an ST program to C++ (CLI)
+# Run tests
+npm test
+
+# Run tests with coverage
+npm run test:coverage
+
+# Run linting
+npm run lint
+
+# Fix linting issues
+npm run lint:fix
+
+# Check code formatting
+npm run format:check
+
+# Format code
+npm run format
+
+# Type check without building
+npm run typecheck
+
+# Watch mode for development
+npm run dev
+
+# Clean build artifacts
+npm run clean
+```
+
+### Usage (Future - Not Yet Implemented)
+
+The compiler CLI and programmatic API are scaffolded but not yet functional. Full compilation will be available in Phase 3+.
+
+```bash
+# Compile an ST program to C++ (CLI) - FUTURE
 npx strucpp input.st -o output.cpp
 
-# Compile with debug information
+# Compile with debug information - FUTURE
 npx strucpp input.st -o output.cpp --debug --line-mapping
 
-# Show help
+# Show help - FUTURE
 npx strucpp --help
 ```
 
 ```typescript
-// Programmatic usage (Browser or Node.js)
+// Programmatic usage (Browser or Node.js) - FUTURE
 import { compile } from 'strucpp';
 
 const stSource = `
@@ -168,11 +208,18 @@ console.log(result.lineMap);
 ## Project Structure
 
 ```
-strucpp/
+STruCpp/
 ├── README.md                    # This file
-├── LICENSE                      # License file
+├── LICENSE                      # License file (GPL-3.0)
 ├── package.json                 # Node.js package configuration
 ├── tsconfig.json                # TypeScript configuration
+├── vitest.config.ts             # Test configuration
+├── .eslintrc.cjs                # ESLint configuration
+├── .prettierrc                  # Prettier configuration
+├── .github/                     # GitHub configuration
+│   └── workflows/               # CI/CD workflows
+│       ├── ci.yml               # Main CI pipeline (lint, test, build)
+│       └── release.yml          # Release workflow
 ├── docs/                        # All documentation
 │   ├── ARCHITECTURE.md          # Detailed architecture documentation
 │   ├── CPP_RUNTIME.md           # C++ runtime library design
@@ -195,19 +242,45 @@ strucpp/
 │       ├── phase-6-openplc-integration.md # Phase 6: OpenPLC Integration
 │       ├── phase-7-iec-v3-features.md     # Phase 7: IEC v3 Features
 │       └── phase-8-optimizations.md       # Phase 8: Optimizations
-├── src/                         # Main compiler source (future)
-│   ├── index.ts                 # Main entry point
+├── src/                         # Main compiler source
+│   ├── index.ts                 # Main entry point and public API
+│   ├── cli.ts                   # Command-line interface (placeholder)
+│   ├── types.ts                 # Core type definitions
 │   ├── frontend/                # Lexer and parser
+│   │   ├── lexer.ts             # Chevrotain-based lexer
+│   │   ├── parser.ts            # Chevrotain-based parser
+│   │   └── ast.ts               # AST type definitions
 │   ├── semantic/                # Semantic analysis passes
+│   │   ├── symbol-table.ts      # Symbol table and scope management
+│   │   ├── type-checker.ts      # Type checking (placeholder)
+│   │   └── analyzer.ts          # Semantic analyzer (placeholder)
 │   ├── ir/                      # Intermediate representation
+│   │   └── ir.ts                # IR definitions (placeholder)
 │   ├── backend/                 # C++ code generation
-│   └── runtime/                 # C++ runtime library templates
-├── tests/                       # Test suite (future)
-│   ├── frontend/
-│   ├── semantic/
-│   ├── backend/
-│   └── integration/
-└── examples/                    # Example ST programs (future)
+│   │   └── codegen.ts           # Code generator (placeholder)
+│   └── runtime/                 # C++ runtime library
+│       ├── CMakeLists.txt       # CMake build configuration
+│       └── include/             # C++ header files
+│           ├── iec_types.hpp    # IEC type definitions
+│           ├── iec_var.hpp      # Variable wrapper classes
+│           └── iec_std_lib.hpp  # Standard library stubs
+├── tests/                       # Test suite (66 tests)
+│   ├── frontend/                # Lexer and parser tests
+│   │   ├── lexer.test.ts
+│   │   └── parser.test.ts
+│   ├── semantic/                # Semantic analysis tests
+│   │   ├── symbol-table.test.ts
+│   │   └── type-checker.test.ts
+│   ├── backend/                 # Code generation tests
+│   │   └── codegen.test.ts
+│   └── integration/             # Integration tests
+│       └── compile.test.ts
+└── examples/                    # Example ST programs
+    ├── README.md                # Examples documentation
+    ├── blink.st                 # Simple blink program
+    ├── counter.st               # Counter with reset
+    ├── motor_control.st         # Motor control with interlocks
+    └── pid_controller.st        # PID controller function block
 ```
 
 ## Contributing
@@ -232,4 +305,4 @@ For questions, issues, or contributions, please use the GitHub issue tracker or 
 
 ---
 
-**Note**: This is a design document repository. Implementation is planned in phases as described in [docs/implementation-phases/](docs/implementation-phases/).
+**Note**: Phase 0 (repository setup) is complete. The compiler infrastructure is in place with a working lexer, parser, and test suite. Actual compilation functionality will be implemented in subsequent phases as described in [docs/implementation-phases/](docs/implementation-phases/).
