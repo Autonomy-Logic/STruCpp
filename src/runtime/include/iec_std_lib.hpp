@@ -140,6 +140,33 @@ inline T ATAN(T value) noexcept {
     return T(std::atan(static_cast<double>(value.get())));
 }
 
+/**
+ * ATAN2 - Arc tangent of y/x (two-argument form)
+ * Returns angle in radians between -PI and PI
+ */
+template<typename T>
+inline T ATAN2(T y, T x) noexcept {
+    return T(std::atan2(static_cast<double>(y.get()), static_cast<double>(x.get())));
+}
+
+/**
+ * TRUNC - Truncate toward zero
+ * Returns the integer part of a real number
+ */
+template<typename T>
+inline T TRUNC(T value) noexcept {
+    return T(std::trunc(static_cast<double>(value.get())));
+}
+
+/**
+ * ROUND - Round to nearest integer
+ * Rounds half away from zero (banker's rounding not used)
+ */
+template<typename T>
+inline T ROUND(T value) noexcept {
+    return T(std::round(static_cast<double>(value.get())));
+}
+
 // =============================================================================
 // Selection Functions
 // =============================================================================
@@ -338,6 +365,289 @@ inline int64_t TIME_TO_MS(IEC_TIME t) noexcept {
  */
 inline double TIME_TO_S(IEC_TIME t) noexcept {
     return static_cast<double>(t.get()) / 1000000000.0;
+}
+
+// =============================================================================
+// Variadic Arithmetic Functions
+// =============================================================================
+
+/**
+ * NEG - Negation (unary minus)
+ */
+template<typename T>
+inline T NEG(T value) noexcept {
+    return T(-value.get());
+}
+
+/**
+ * ADD - Addition (variadic)
+ * Adds two or more values together
+ */
+template<typename T>
+inline T ADD(T a, T b) noexcept {
+    return T(a.get() + b.get());
+}
+
+template<typename T, typename... Args>
+inline T ADD(T first, T second, Args... rest) noexcept {
+    return ADD(T(first.get() + second.get()), rest...);
+}
+
+/**
+ * MUL - Multiplication (variadic)
+ * Multiplies two or more values together
+ */
+template<typename T>
+inline T MUL(T a, T b) noexcept {
+    return T(a.get() * b.get());
+}
+
+template<typename T, typename... Args>
+inline T MUL(T first, T second, Args... rest) noexcept {
+    return MUL(T(first.get() * second.get()), rest...);
+}
+
+/**
+ * SUB - Subtraction
+ * Subtracts second value from first
+ */
+template<typename T>
+inline T SUB(T a, T b) noexcept {
+    return T(a.get() - b.get());
+}
+
+/**
+ * DIV - Division
+ * Divides first value by second
+ */
+template<typename T>
+inline T DIV(T a, T b) noexcept {
+    return T(a.get() / b.get());
+}
+
+/**
+ * MOD - Modulo
+ * Returns remainder of integer division
+ */
+template<typename T>
+inline T MOD(T a, T b) noexcept {
+    if constexpr (std::is_floating_point_v<typename T::value_type>) {
+        return T(std::fmod(static_cast<double>(a.get()), static_cast<double>(b.get())));
+    } else {
+        return T(a.get() % b.get());
+    }
+}
+
+// =============================================================================
+// Variadic Bitwise Functions
+// =============================================================================
+
+/**
+ * NOT - Bitwise NOT (one's complement)
+ */
+template<typename T>
+inline T NOT(T value) noexcept {
+    return T(~value.get());
+}
+
+/**
+ * AND - Bitwise AND (variadic)
+ */
+template<typename T>
+inline T AND(T a, T b) noexcept {
+    return T(a.get() & b.get());
+}
+
+template<typename T, typename... Args>
+inline T AND(T first, T second, Args... rest) noexcept {
+    return AND(T(first.get() & second.get()), rest...);
+}
+
+/**
+ * OR - Bitwise OR (variadic)
+ */
+template<typename T>
+inline T OR(T a, T b) noexcept {
+    return T(a.get() | b.get());
+}
+
+template<typename T, typename... Args>
+inline T OR(T first, T second, Args... rest) noexcept {
+    return OR(T(first.get() | second.get()), rest...);
+}
+
+/**
+ * XOR - Bitwise XOR (variadic)
+ */
+template<typename T>
+inline T XOR(T a, T b) noexcept {
+    return T(a.get() ^ b.get());
+}
+
+template<typename T, typename... Args>
+inline T XOR(T first, T second, Args... rest) noexcept {
+    return XOR(T(first.get() ^ second.get()), rest...);
+}
+
+// =============================================================================
+// Variadic Selection Functions
+// =============================================================================
+
+/**
+ * MAX - Maximum (variadic)
+ * Returns the maximum of two or more values
+ */
+template<typename T, typename... Args>
+inline T MAX(T first, T second, Args... rest) noexcept {
+    T current_max = first.get() > second.get() ? first : second;
+    if constexpr (sizeof...(rest) > 0) {
+        return MAX(current_max, rest...);
+    } else {
+        return current_max;
+    }
+}
+
+/**
+ * MIN - Minimum (variadic)
+ * Returns the minimum of two or more values
+ */
+template<typename T, typename... Args>
+inline T MIN(T first, T second, Args... rest) noexcept {
+    T current_min = first.get() < second.get() ? first : second;
+    if constexpr (sizeof...(rest) > 0) {
+        return MIN(current_min, rest...);
+    } else {
+        return current_min;
+    }
+}
+
+/**
+ * MUX - Multiplexer (variadic)
+ * Selects one of multiple inputs based on selector k
+ * k=0 returns first input, k=1 returns second, etc.
+ */
+template<typename T>
+inline T MUX_V(IEC_INT k, T in0) noexcept {
+    return in0;
+}
+
+template<typename T, typename... Args>
+inline T MUX_V(IEC_INT k, T in0, Args... rest) noexcept {
+    if (k.get() == 0) return in0;
+    return MUX_V(IEC_INT(k.get() - 1), rest...);
+}
+
+/**
+ * MOVE - Copy value (identity function)
+ * Used for explicit value copying in ST
+ */
+template<typename T>
+inline T MOVE(T value) noexcept {
+    return value;
+}
+
+// =============================================================================
+// Variadic Comparison Functions (Chain Support)
+// =============================================================================
+
+/**
+ * GT_CHAIN - Greater than chain
+ * Returns TRUE if all values are in strictly decreasing order
+ * GT_CHAIN(a, b, c) = (a > b) AND (b > c)
+ */
+template<typename T>
+inline IEC_BOOL GT_CHAIN(T a, T b) noexcept {
+    return IEC_BOOL(a.get() > b.get());
+}
+
+template<typename T, typename... Args>
+inline IEC_BOOL GT_CHAIN(T first, T second, Args... rest) noexcept {
+    if (first.get() <= second.get()) return IEC_BOOL(false);
+    if constexpr (sizeof...(rest) > 0) {
+        return GT_CHAIN(second, rest...);
+    } else {
+        return IEC_BOOL(true);
+    }
+}
+
+/**
+ * GE_CHAIN - Greater than or equal chain
+ * Returns TRUE if all values are in non-increasing order
+ * GE_CHAIN(a, b, c) = (a >= b) AND (b >= c)
+ */
+template<typename T>
+inline IEC_BOOL GE_CHAIN(T a, T b) noexcept {
+    return IEC_BOOL(a.get() >= b.get());
+}
+
+template<typename T, typename... Args>
+inline IEC_BOOL GE_CHAIN(T first, T second, Args... rest) noexcept {
+    if (first.get() < second.get()) return IEC_BOOL(false);
+    if constexpr (sizeof...(rest) > 0) {
+        return GE_CHAIN(second, rest...);
+    } else {
+        return IEC_BOOL(true);
+    }
+}
+
+/**
+ * EQ_CHAIN - Equality chain
+ * Returns TRUE if all values are equal
+ * EQ_CHAIN(a, b, c) = (a == b) AND (b == c)
+ */
+template<typename T>
+inline IEC_BOOL EQ_CHAIN(T a, T b) noexcept {
+    return IEC_BOOL(a.get() == b.get());
+}
+
+template<typename T, typename... Args>
+inline IEC_BOOL EQ_CHAIN(T first, T second, Args... rest) noexcept {
+    if (first.get() != second.get()) return IEC_BOOL(false);
+    if constexpr (sizeof...(rest) > 0) {
+        return EQ_CHAIN(second, rest...);
+    } else {
+        return IEC_BOOL(true);
+    }
+}
+
+/**
+ * LE_CHAIN - Less than or equal chain
+ * Returns TRUE if all values are in non-decreasing order
+ * LE_CHAIN(a, b, c) = (a <= b) AND (b <= c)
+ */
+template<typename T>
+inline IEC_BOOL LE_CHAIN(T a, T b) noexcept {
+    return IEC_BOOL(a.get() <= b.get());
+}
+
+template<typename T, typename... Args>
+inline IEC_BOOL LE_CHAIN(T first, T second, Args... rest) noexcept {
+    if (first.get() > second.get()) return IEC_BOOL(false);
+    if constexpr (sizeof...(rest) > 0) {
+        return LE_CHAIN(second, rest...);
+    } else {
+        return IEC_BOOL(true);
+    }
+}
+
+/**
+ * LT_CHAIN - Less than chain
+ * Returns TRUE if all values are in strictly increasing order
+ * LT_CHAIN(a, b, c) = (a < b) AND (b < c)
+ */
+template<typename T>
+inline IEC_BOOL LT_CHAIN(T a, T b) noexcept {
+    return IEC_BOOL(a.get() < b.get());
+}
+
+template<typename T, typename... Args>
+inline IEC_BOOL LT_CHAIN(T first, T second, Args... rest) noexcept {
+    if (first.get() >= second.get()) return IEC_BOOL(false);
+    if constexpr (sizeof...(rest) > 0) {
+        return LT_CHAIN(second, rest...);
+    } else {
+        return IEC_BOOL(true);
+    }
 }
 
 } // namespace strucpp

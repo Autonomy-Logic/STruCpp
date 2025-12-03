@@ -18,6 +18,18 @@ namespace strucpp {
 // Forward declarations
 template<typename T> class IECVar;
 
+// Forward declarations for composite types
+template<int64_t Lower, int64_t Upper> struct ArrayBounds;
+template<typename T, typename Bounds> class IEC_ARRAY_1D;
+template<typename T, typename Bounds1, typename Bounds2> class IEC_ARRAY_2D;
+template<typename T, typename Bounds1, typename Bounds2, typename Bounds3> class IEC_ARRAY_3D;
+class IEC_STRUCT_Base;
+template<typename EnumType> class IEC_ENUM_Value;
+template<typename EnumType> class IEC_ENUM_Var;
+template<typename BaseType, auto Lower, auto Upper> class IEC_SUBRANGE_Value;
+template<typename BaseType, auto Lower, auto Upper> class IEC_SUBRANGE_Var;
+template<typename T> class IEC_REF_TO;
+
 // =============================================================================
 // Primary Type Traits (default to false)
 // =============================================================================
@@ -350,6 +362,80 @@ template<typename T>
 struct iec_limits<IECVar<T>> : iec_limits<T> {};
 
 // =============================================================================
+// Composite Type Traits
+// =============================================================================
+
+/** Check if T is an IEC array type */
+template<typename T> struct is_iec_array : std::false_type {};
+
+template<typename T, typename B>
+struct is_iec_array<IEC_ARRAY_1D<T, B>> : std::true_type {};
+
+template<typename T, typename B1, typename B2>
+struct is_iec_array<IEC_ARRAY_2D<T, B1, B2>> : std::true_type {};
+
+template<typename T, typename B1, typename B2, typename B3>
+struct is_iec_array<IEC_ARRAY_3D<T, B1, B2, B3>> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_iec_array_v = is_iec_array<T>::value;
+
+/** Check if T is an IEC struct type */
+// Uses std::is_base_of to detect types derived from IEC_STRUCT_Base
+// Note: Generated structs inherit from IEC_STRUCT_Base
+template<typename T>
+struct is_iec_struct : std::bool_constant<std::is_base_of_v<IEC_STRUCT_Base, T>> {};
+
+template<typename T>
+inline constexpr bool is_iec_struct_v = is_iec_struct<T>::value;
+
+/** Check if T is an IEC enumeration type */
+template<typename T> struct is_iec_enum : std::false_type {};
+
+template<typename E>
+struct is_iec_enum<IEC_ENUM_Value<E>> : std::true_type {};
+
+template<typename E>
+struct is_iec_enum<IEC_ENUM_Var<E>> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_iec_enum_v = is_iec_enum<T>::value;
+
+/** Check if T is an IEC subrange type */
+template<typename T> struct is_iec_subrange : std::false_type {};
+
+template<typename B, auto L, auto U>
+struct is_iec_subrange<IEC_SUBRANGE_Value<B, L, U>> : std::true_type {};
+
+template<typename B, auto L, auto U>
+struct is_iec_subrange<IEC_SUBRANGE_Var<B, L, U>> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_iec_subrange_v = is_iec_subrange<T>::value;
+
+/** Check if T is an IEC pointer type (REF_TO) */
+template<typename T> struct is_iec_pointer : std::false_type {};
+
+template<typename T>
+struct is_iec_pointer<IEC_REF_TO<T>> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_iec_pointer_v = is_iec_pointer<T>::value;
+
+/** Check if T is ANY_DERIVED (composite types: arrays, structs, enums, subranges, pointers) */
+template<typename T>
+struct is_any_derived : std::bool_constant<
+    is_iec_array<T>::value ||
+    is_iec_struct<T>::value ||
+    is_iec_enum<T>::value ||
+    is_iec_subrange<T>::value ||
+    is_iec_pointer<T>::value
+> {};
+
+template<typename T>
+inline constexpr bool is_any_derived_v = is_any_derived<T>::value;
+
+// =============================================================================
 // C++17 SFINAE Helpers
 // =============================================================================
 
@@ -376,6 +462,24 @@ using enable_if_any_time = std::enable_if_t<is_any_time_v<T>, int>;
 
 template<typename T>
 using enable_if_any_magnitude = std::enable_if_t<is_any_magnitude_v<T>, int>;
+
+template<typename T>
+using enable_if_iec_array = std::enable_if_t<is_iec_array_v<T>, int>;
+
+template<typename T>
+using enable_if_iec_struct = std::enable_if_t<is_iec_struct_v<T>, int>;
+
+template<typename T>
+using enable_if_iec_enum = std::enable_if_t<is_iec_enum_v<T>, int>;
+
+template<typename T>
+using enable_if_iec_subrange = std::enable_if_t<is_iec_subrange_v<T>, int>;
+
+template<typename T>
+using enable_if_any_derived = std::enable_if_t<is_any_derived_v<T>, int>;
+
+template<typename T>
+using enable_if_iec_pointer = std::enable_if_t<is_iec_pointer_v<T>, int>;
 
 // =============================================================================
 // C++20 Concepts (when available)
@@ -436,6 +540,30 @@ concept AnyMagnitude = is_any_magnitude_v<T>;
 /** Concept for ANY_ELEMENTARY types */
 template<typename T>
 concept AnyElementary = is_any_elementary_v<T>;
+
+/** Concept for IEC array types */
+template<typename T>
+concept IECArray = is_iec_array_v<T>;
+
+/** Concept for IEC struct types */
+template<typename T>
+concept IECStruct = is_iec_struct_v<T>;
+
+/** Concept for IEC enum types */
+template<typename T>
+concept IECEnum = is_iec_enum_v<T>;
+
+/** Concept for IEC subrange types */
+template<typename T>
+concept IECSubrange = is_iec_subrange_v<T>;
+
+/** Concept for ANY_DERIVED types (composite types) */
+template<typename T>
+concept AnyDerived = is_any_derived_v<T>;
+
+/** Concept for IEC pointer types (REF_TO) */
+template<typename T>
+concept IECPointer = is_iec_pointer_v<T>;
 
 #endif // C++20
 
