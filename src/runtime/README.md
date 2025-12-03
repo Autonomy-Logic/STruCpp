@@ -46,19 +46,19 @@ All 62 tests should pass:
 
 ## Header Files
 
-| Header | Description |
-|--------|-------------|
-| `iec_types.hpp` | Base type definitions (BOOL, INT, REAL, TIME, etc.) |
-| `iec_var.hpp` | IECVar template with forcing support for debugging |
-| `iec_traits.hpp` | Type traits (is_any_int, is_any_real, is_any_bit, etc.) |
-| `iec_time.hpp` | TIME/LTIME value classes with duration arithmetic |
-| `iec_date.hpp` | DATE/LDATE value classes for calendar dates |
-| `iec_tod.hpp` | TOD/LTOD value classes for time-of-day |
-| `iec_dt.hpp` | DT/LDT value classes for combined date-time |
-| `iec_string.hpp` | STRING template with fixed-length storage |
-| `iec_wstring.hpp` | WSTRING template for wide strings (UTF-16) |
-| `iec_char.hpp` | CHAR/WCHAR types with character functions |
-| `iec_std_lib.hpp` | Standard library functions (math, conversions, etc.) |
+| Header            | Description                                             |
+| ----------------- | ------------------------------------------------------- |
+| `iec_types.hpp`   | Base type definitions (BOOL, INT, REAL, TIME, etc.)     |
+| `iec_var.hpp`     | IECVar template with forcing support for debugging      |
+| `iec_traits.hpp`  | Type traits (is_any_int, is_any_real, is_any_bit, etc.) |
+| `iec_time.hpp`    | TIME/LTIME value classes with duration arithmetic       |
+| `iec_date.hpp`    | DATE/LDATE value classes for calendar dates             |
+| `iec_tod.hpp`     | TOD/LTOD value classes for time-of-day                  |
+| `iec_dt.hpp`      | DT/LDT value classes for combined date-time             |
+| `iec_string.hpp`  | STRING template with fixed-length storage               |
+| `iec_wstring.hpp` | WSTRING template for wide strings (UTF-16)              |
+| `iec_char.hpp`    | CHAR/WCHAR types with character functions               |
+| `iec_std_lib.hpp` | Standard library functions (math, conversions, etc.)    |
 
 ## Variable Forcing
 
@@ -87,6 +87,7 @@ assert(myVar.get() == 300);  // Now returns the set value
 ## Type Aliasing Note
 
 Some IEC types share the same underlying C++ type due to language limitations:
+
 - `BYTE_t` and `USINT_t` are both `uint8_t`
 - `WORD_t` and `UINT_t` are both `uint16_t`
 - `TIME_t`, `DATE_t`, `LINT_t` are all `int64_t`
