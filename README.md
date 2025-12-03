@@ -7,118 +7,10 @@
 The name **STruC++** is a portmanteau that reflects the compiler's purpose and design philosophy:
 
 - **ST** - Structured Text, the primary IEC 61131-3 programming language this compiler targets
-- **ru** - From the root word "stru" meaning "to build" or "construct," found in English words like "structure," "construct," and "instruct"
+- **stru** - The root word "stru" means "to build" or "construct," found in English words like "structure," "construct," and "instruct"
 - **C++** - The target language for code generation
 
-The name embodies the compiler's mission: to bridge Structured Text and C++, two powerful tools for building industrial automation systems. Just as "structure" and "construct" relate to building and arranging things systematically, STruC++ builds a bridge between the high-level expressiveness of ST and the performance and flexibility of C++.
-
-## Project Goals
-
-STruC++ aims to overcome the limitations of MatIEC while maintaining compatibility with the OpenPLC ecosystem:
-
-### Primary Objectives
-
-1. **Modern Architecture** - Clean, maintainable TypeScript codebase with clear separation of concerns
-2. **IEC 61131-3 v3 Compliance** - Full support for version 3 features including references, nested comments, and modern type system
-3. **Line-by-Line Mapping** - Generate C++ code that maintains 1:1 correspondence with ST source for debugging
-4. **C++ Native** - Generate idiomatic C++ code leveraging classes, inheritance, and polymorphism
-5. **Real-Time Performance** - Produce efficient, deterministic code suitable for PLC applications
-6. **Maintainability** - Straightforward implementation that is easy to understand, extend, and debug
-7. **Browser-Ready** - Designed to run in both Node.js and browser environments for seamless editor integration
-
-### Key Improvements Over MatIEC
-
-- **Simpler Architecture** - Multi-pass pipeline with explicit data structures instead of complex visitor patterns
-- **Better Type System** - C++ wrapper classes for IEC types instead of heavy macro-based access
-- **Modern Language** - TypeScript implementation enabling type-safe development, browser compatibility, and seamless integration with OpenPLC Editor
-- **Enhanced Debugging** - Built-in support for source-level debugging with line mapping
-- **Cleaner Output** - Readable C++ code without excessive macro usage
-- **Extensibility** - Modular design allowing easy addition of new features and optimizations
-
-## Architecture Overview
-
-STruC++ follows a multi-pass compilation pipeline:
-
-1. **Frontend** - Lexical analysis and parsing to produce an Abstract Syntax Tree (AST)
-2. **Symbol Table Building** - Global indexing of POUs, types, and constants
-3. **Semantic Analysis** - Type checking, overload resolution, and semantic validation
-4. **IR Generation** - Lowering to a statement-level Intermediate Representation
-5. **Code Generation** - Emission of C++ code with line mapping metadata
-
-For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## IEC 61131-3 Compliance
-
-STruC++ targets full compliance with IEC 61131-3 Edition 3.0 **Structured Text (ST) language**, including:
-
-- **Structured Text (ST) only** - STruC++ compiles ST programs exclusively
-  - Other IEC languages (IL, FBD, LD, SFC) are supported via OpenPLC Editor's translation to ST
-  - The editor converts graphical and other textual languages to ST before compilation
-- Modern type system with references (REF_TO, REF, DREF, ^, NULL)
-- Nested comments
-- Function blocks, functions, and programs
-- User-defined types (structures, enumerations, arrays)
-- All standard data types and functions
-- Full project structure (CONFIGURATION, RESOURCE, TASK, program instances)
-
-For detailed compliance information, see [docs/IEC61131_COMPLIANCE.md](docs/IEC61131_COMPLIANCE.md).
-
-## Implementation Status
-
-STruC++ is currently in **Phase 0 - Repository Setup**. The foundation is in place with a working lexer, parser, and test infrastructure.
-
-### Current Phase: Phase 0 - Repository Setup (Complete)
-
-- ✅ Architecture design
-- ✅ Parser library selection (Chevrotain)
-- ✅ Implementation roadmap
-- ✅ Project structure and build system
-- ✅ Chevrotain-based lexer with all IEC 61131-3 tokens
-- ✅ Parser with grammar rules for POUs, statements, and expressions
-- ✅ Symbol table with scope management
-- ✅ Test infrastructure (66 passing tests)
-- ✅ CI/CD pipeline (GitHub Actions)
-- ⏳ Phase 1: IEC Types and Runtime (next)
-
-For the complete implementation roadmap, see [docs/implementation-phases/](docs/implementation-phases/).
-
-## Documentation
-
-All documentation is organized in the `docs/` folder:
-
-### Design Documents
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed compiler architecture and design decisions
-- [docs/CPP_RUNTIME.md](docs/CPP_RUNTIME.md) - C++ runtime library design
-- [docs/IEC61131_COMPLIANCE.md](docs/IEC61131_COMPLIANCE.md) - IEC 61131-3 v3 compliance details
-- [docs/MATIEC_COMPARISON.md](docs/MATIEC_COMPARISON.md) - Comparison with MatIEC and improvement analysis
-- [docs/PARSER_SELECTION.md](docs/PARSER_SELECTION.md) - Parser library evaluation and selection rationale
-
-### Implementation Phases
-- [docs/implementation-phases/](docs/implementation-phases/) - Phased development plan with detailed sub-phases
-  - [Phase 0: Design and Planning](docs/implementation-phases/phase-0-design.md) - COMPLETED
-  - [Phase 1: IEC Types, Runtime, and Library Architecture](docs/implementation-phases/) - Expanded into 6 sub-phases:
-    - [Phase 1.1: Core IEC Type Wrappers](docs/implementation-phases/phase-1.1-core-types.md)
-    - [Phase 1.2: Type Categories and Traits](docs/implementation-phases/phase-1.2-type-traits.md)
-    - [Phase 1.3: Time and Date Types](docs/implementation-phases/phase-1.3-time-types.md)
-    - [Phase 1.4: String Types](docs/implementation-phases/phase-1.4-string-types.md)
-    - [Phase 1.5: Composite Types](docs/implementation-phases/phase-1.5-composite-types.md)
-    - [Phase 1.6: Standard Functions and Library](docs/implementation-phases/phase-1.6-standard-functions.md)
-  - [Phase 2: Project Structure and Scheduling Model](docs/implementation-phases/phase-2-project-structure.md)
-  - [Phase 3: Core ST Translation](docs/implementation-phases/phase-3-st-translation.md)
-  - [Phase 4: Functions and Function Calls](docs/implementation-phases/phase-4-functions.md)
-  - [Phase 5: Function Blocks and Classes](docs/implementation-phases/phase-5-function-blocks.md)
-  - [Phase 6: Located Variables and OpenPLC Integration](docs/implementation-phases/phase-6-openplc-integration.md)
-  - [Phase 7: IEC v3 Features and Full Coverage](docs/implementation-phases/phase-7-iec-v3-features.md)
-  - [Phase 8: Optimizations and Advanced Debug Support](docs/implementation-phases/phase-8-optimizations.md)
-
-## Technology Stack
-
-- **Implementation Language**: TypeScript 5.0+
-- **Parser**: Chevrotain - see [docs/PARSER_SELECTION.md](docs/PARSER_SELECTION.md) for rationale
-- **Target Language**: C++17 or later
-- **Build System**: npm/pnpm for compiler, CMake for C++ runtime
-- **Testing**: Vitest for compiler tests, Google Test for C++ runtime tests
-- **Runtime**: Node.js 18+ or modern browsers (Chrome, Firefox, Safari, Edge)
+Just as "structure" and "construct" relate to building and arranging things systematically, STruC++ builds a bridge between the high-level expressiveness of ST and the performance and flexibility of C++.
 
 ## Getting Started
 
@@ -313,6 +205,104 @@ STruCpp/
     └── pid_controller.st        # PID controller function block
 ```
 
+### Primary Objectives
+
+1. **Modern Architecture** - Clean, maintainable TypeScript codebase with clear separation of concerns
+2. **IEC 61131-3 v3 Compliance** - Full support for version 3 features including references, nested comments, and modern type system
+3. **Line-by-Line Mapping** - Generate C++ code that maintains 1:1 correspondence with ST source for debugging
+4. **C++ Native** - Generate idiomatic C++ code leveraging classes, inheritance, and polymorphism
+5. **Real-Time Performance** - Produce efficient, deterministic code suitable for PLC applications
+6. **Maintainability** - Straightforward implementation that is easy to understand, extend, and debug
+7. **Browser-Ready** - Designed to run in both Node.js and browser environments
+8. **Simple Architecture** - Multi-pass pipeline with explicit data structures instead of complex visitor patterns
+9. **Well Designed Type System** - C++ wrapper classes for IEC types including built-in support for variable debugging and forcing
+10. **Modern Language** - TypeScript implementation enabling type-safe development and browser compatibility
+11. **Enhanced Debugging** - Built-in support for source-level debugging with line mapping
+12. **Clean Output** - Readable C++ code without excessive macro usage
+13. **Extensibility** - Modular design allowing easy addition of new features and optimizations
+
+## Architecture Overview
+
+STruC++ follows a multi-pass compilation pipeline:
+
+1. **Frontend** - Lexical analysis and parsing to produce an Abstract Syntax Tree (AST)
+2. **Symbol Table Building** - Global indexing of POUs, types, and constants
+3. **Semantic Analysis** - Type checking, overload resolution, and semantic validation
+4. **IR Generation** - Lowering to a statement-level Intermediate Representation
+5. **Code Generation** - Emission of C++ code with line mapping metadata
+
+For detailed architecture information, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## IEC 61131-3 Compliance
+
+STruC++ targets full compliance with IEC 61131-3 Edition 3.0 **Structured Text (ST) language**, including:
+
+- Modern type system with references (REF_TO, REF, DREF, ^, NULL)
+- Nested comments
+- Function blocks, functions, and programs
+- User-defined types (structures, enumerations, arrays)
+- All standard data types and functions
+- Full project structure (CONFIGURATION, RESOURCE, TASK, program instances)
+
+For detailed compliance information, see [docs/IEC61131_COMPLIANCE.md](docs/IEC61131_COMPLIANCE.md).
+
+## Implementation Status
+
+STruC++ is currently in **Phase 0 - Repository Setup**. The foundation is in place with a working lexer, parser, and test infrastructure.
+
+### Current Phase: Phase 0 - Repository Setup (Complete)
+
+- ✅ Architecture design
+- ✅ Parser library selection (Chevrotain)
+- ✅ Implementation roadmap
+- ✅ Project structure and build system
+- ✅ Chevrotain-based lexer with all IEC 61131-3 tokens
+- ✅ Parser with grammar rules for POUs, statements, and expressions
+- ✅ Symbol table with scope management
+- ✅ Test infrastructure (66 passing tests)
+- ✅ CI/CD pipeline (GitHub Actions)
+- ⏳ Phase 1: IEC Types and Runtime (next)
+
+For the complete implementation roadmap, see [docs/implementation-phases/](docs/implementation-phases/).
+
+## Documentation
+
+All documentation is organized in the `docs/` folder:
+
+### Design Documents
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) - Detailed compiler architecture and design decisions
+- [docs/CPP_RUNTIME.md](docs/CPP_RUNTIME.md) - C++ runtime library design
+- [docs/IEC61131_COMPLIANCE.md](docs/IEC61131_COMPLIANCE.md) - IEC 61131-3 v3 compliance details
+- [docs/MATIEC_COMPARISON.md](docs/MATIEC_COMPARISON.md) - Comparison with MatIEC and improvement analysis
+- [docs/PARSER_SELECTION.md](docs/PARSER_SELECTION.md) - Parser library evaluation and selection rationale
+
+### Implementation Phases
+- [docs/implementation-phases/](docs/implementation-phases/) - Phased development plan with detailed sub-phases
+  - [Phase 0: Design and Planning](docs/implementation-phases/phase-0-design.md) - COMPLETED
+  - [Phase 1: IEC Types, Runtime, and Library Architecture](docs/implementation-phases/) - Expanded into 6 sub-phases:
+    - [Phase 1.1: Core IEC Type Wrappers](docs/implementation-phases/phase-1.1-core-types.md)
+    - [Phase 1.2: Type Categories and Traits](docs/implementation-phases/phase-1.2-type-traits.md)
+    - [Phase 1.3: Time and Date Types](docs/implementation-phases/phase-1.3-time-types.md)
+    - [Phase 1.4: String Types](docs/implementation-phases/phase-1.4-string-types.md)
+    - [Phase 1.5: Composite Types](docs/implementation-phases/phase-1.5-composite-types.md)
+    - [Phase 1.6: Standard Functions and Library](docs/implementation-phases/phase-1.6-standard-functions.md)
+  - [Phase 2: Project Structure and Scheduling Model](docs/implementation-phases/phase-2-project-structure.md)
+  - [Phase 3: Core ST Translation](docs/implementation-phases/phase-3-st-translation.md)
+  - [Phase 4: Functions and Function Calls](docs/implementation-phases/phase-4-functions.md)
+  - [Phase 5: Function Blocks and Classes](docs/implementation-phases/phase-5-function-blocks.md)
+  - [Phase 6: Located Variables and OpenPLC Integration](docs/implementation-phases/phase-6-openplc-integration.md)
+  - [Phase 7: IEC v3 Features and Full Coverage](docs/implementation-phases/phase-7-iec-v3-features.md)
+  - [Phase 8: Optimizations and Advanced Debug Support](docs/implementation-phases/phase-8-optimizations.md)
+
+## Technology Stack
+
+- **Implementation Language**: TypeScript 5.0+
+- **Parser**: Chevrotain - see [docs/PARSER_SELECTION.md](docs/PARSER_SELECTION.md) for rationale
+- **Target Language**: C++17 or later
+- **Build System**: npm/pnpm for compiler, CMake for C++ runtime
+- **Testing**: Vitest for compiler tests, Google Test for C++ runtime tests
+- **Runtime**: Node.js 18+ or modern browsers (Chrome, Firefox, Safari, Edge)
+
 ## Contributing
 
 STruC++ is part of the OpenPLC project. Contributions are welcome! Please see the OpenPLC contribution guidelines.
@@ -332,7 +322,3 @@ This is free software: you are free to change and redistribute it. There is NO W
 ## Contact
 
 For questions, issues, or contributions, please use the GitHub issue tracker or contact the OpenPLC development team.
-
----
-
-**Note**: Phase 0 (repository setup) is complete. The compiler infrastructure is in place with a working lexer, parser, and test suite. Actual compilation functionality will be implemented in subsequent phases as described in [docs/implementation-phases/](docs/implementation-phases/).
