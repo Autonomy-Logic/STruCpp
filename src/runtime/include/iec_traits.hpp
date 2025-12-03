@@ -28,6 +28,7 @@ template<typename EnumType> class IEC_ENUM_Value;
 template<typename EnumType> class IEC_ENUM_Var;
 template<typename BaseType, auto Lower, auto Upper> class IEC_SUBRANGE_Value;
 template<typename BaseType, auto Lower, auto Upper> class IEC_SUBRANGE_Var;
+template<typename T> class IEC_REF_TO;
 
 // =============================================================================
 // Primary Type Traits (default to false)
@@ -412,13 +413,23 @@ struct is_iec_subrange<IEC_SUBRANGE_Var<B, L, U>> : std::true_type {};
 template<typename T>
 inline constexpr bool is_iec_subrange_v = is_iec_subrange<T>::value;
 
-/** Check if T is ANY_DERIVED (composite types: arrays, structs, enums, subranges) */
+/** Check if T is an IEC pointer type (REF_TO) */
+template<typename T> struct is_iec_pointer : std::false_type {};
+
+template<typename T>
+struct is_iec_pointer<IEC_REF_TO<T>> : std::true_type {};
+
+template<typename T>
+inline constexpr bool is_iec_pointer_v = is_iec_pointer<T>::value;
+
+/** Check if T is ANY_DERIVED (composite types: arrays, structs, enums, subranges, pointers) */
 template<typename T>
 struct is_any_derived : std::bool_constant<
     is_iec_array<T>::value ||
     is_iec_struct<T>::value ||
     is_iec_enum<T>::value ||
-    is_iec_subrange<T>::value
+    is_iec_subrange<T>::value ||
+    is_iec_pointer<T>::value
 > {};
 
 template<typename T>
@@ -466,6 +477,9 @@ using enable_if_iec_subrange = std::enable_if_t<is_iec_subrange_v<T>, int>;
 
 template<typename T>
 using enable_if_any_derived = std::enable_if_t<is_any_derived_v<T>, int>;
+
+template<typename T>
+using enable_if_iec_pointer = std::enable_if_t<is_iec_pointer_v<T>, int>;
 
 // =============================================================================
 // C++20 Concepts (when available)
@@ -546,6 +560,10 @@ concept IECSubrange = is_iec_subrange_v<T>;
 /** Concept for ANY_DERIVED types (composite types) */
 template<typename T>
 concept AnyDerived = is_any_derived_v<T>;
+
+/** Concept for IEC pointer types (REF_TO) */
+template<typename T>
+concept IECPointer = is_iec_pointer_v<T>;
 
 #endif // C++20
 

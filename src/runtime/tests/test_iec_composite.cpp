@@ -6,6 +6,7 @@
  * - Structures
  * - Enumerations
  * - Subranges
+ * - Pointers (REF_TO)
  */
 
 #include <gtest/gtest.h>
@@ -13,6 +14,7 @@
 #include "../include/iec_struct.hpp"
 #include "../include/iec_enum.hpp"
 #include "../include/iec_subrange.hpp"
+#include "../include/iec_pointer.hpp"
 #include "../include/iec_traits.hpp"
 #include "../include/iec_std_lib.hpp"
 
@@ -687,6 +689,207 @@ TEST(IECStdLibTest, LT_CHAIN) {
     // Not strictly increasing
     IEC_INT e(30);
     EXPECT_FALSE(LT_CHAIN(a, b, c, e).get());  // c == e
+}
+
+// =============================================================================
+// Pointer (REF_TO) Tests
+// =============================================================================
+
+TEST(IECPointerTest, Pointer_DefaultNull) {
+    REF_TO<INT_t> ptr;
+    
+    EXPECT_TRUE(ptr.is_null());
+    EXPECT_TRUE(ptr == IEC_NULL);
+    EXPECT_FALSE(ptr != IEC_NULL);
+    EXPECT_FALSE(static_cast<bool>(ptr));
+}
+
+TEST(IECPointerTest, Pointer_REF_Operator) {
+    IEC_INT var(42);
+    REF_TO<INT_t> ptr = REF(var);
+    
+    EXPECT_FALSE(ptr.is_null());
+    EXPECT_TRUE(ptr != IEC_NULL);
+    EXPECT_TRUE(static_cast<bool>(ptr));
+    EXPECT_EQ(ptr.deref().get(), 42);
+}
+
+TEST(IECPointerTest, Pointer_Dereference_Read) {
+    IEC_INT V1, V2;
+    V2 = 100;
+    
+    REF_TO<INT_t> rV = REF(V2);
+    
+    // Read V2 via reference
+    V1 = rV.deref().get();
+    EXPECT_EQ(V1.get(), 100);
+}
+
+TEST(IECPointerTest, Pointer_Dereference_Write) {
+    IEC_INT V2;
+    V2 = 0;
+    
+    REF_TO<INT_t> rV = REF(V2);
+    
+    // Assign 12 to V2 via reference (rV^ := 12)
+    rV.deref() = 12;
+    EXPECT_EQ(V2.get(), 12);
+}
+
+TEST(IECPointerTest, Pointer_NullCheck) {
+    IEC_INT target(42);
+    REF_TO<INT_t> rV;
+    
+    // Initially NULL
+    EXPECT_TRUE(rV == IEC_NULL);
+    
+    // Assign address
+    rV = REF(target);
+    EXPECT_TRUE(rV != IEC_NULL);
+    
+    // Reset to NULL
+    rV = IEC_NULL;
+    EXPECT_TRUE(rV == IEC_NULL);
+}
+
+TEST(IECPointerTest, Pointer_ConditionalDereference) {
+    IEC_INT target(0);
+    REF_TO<INT_t> rV;
+    
+    // Simulate: IF rV <> NULL THEN rV^ := 42; END_IF;
+    if (rV != IEC_NULL) {
+        rV.deref() = 42;
+    }
+    EXPECT_EQ(target.get(), 0);  // Not modified because rV was NULL
+    
+    // Now assign address and try again
+    rV = REF(target);
+    if (rV != IEC_NULL) {
+        rV.deref() = 42;
+    }
+    EXPECT_EQ(target.get(), 42);  // Modified because rV was not NULL
+}
+
+TEST(IECPointerTest, Pointer_Reassignment) {
+    IEC_INT target1(100);
+    IEC_INT target2(200);
+    REF_TO<INT_t> ptr;
+    
+    ptr = REF(target1);
+    EXPECT_EQ(ptr.deref().get(), 100);
+    
+    ptr = REF(target2);
+    EXPECT_EQ(ptr.deref().get(), 200);
+}
+
+TEST(IECPointerTest, Pointer_Forcing) {
+    IEC_INT target1(100);
+    IEC_INT target2(200);
+    REF_TO<INT_t> ptr = REF(target1);
+    
+    EXPECT_EQ(ptr.deref().get(), 100);
+    EXPECT_FALSE(ptr.is_forced());
+    
+    // Force pointer to point to target2
+    ptr.force(&target2);
+    EXPECT_TRUE(ptr.is_forced());
+    EXPECT_EQ(ptr.deref().get(), 200);
+    
+    // Setting pointer is ignored while forced
+    ptr = REF(target1);
+    EXPECT_EQ(ptr.deref().get(), 200);  // Still points to target2
+    
+    // Unforce
+    ptr.unforce();
+    EXPECT_FALSE(ptr.is_forced());
+    EXPECT_EQ(ptr.deref().get(), 100);  // Now points to target1
+}
+
+TEST(IECPointerTest, Pointer_ForceToNull) {
+    IEC_INT target(42);
+    REF_TO<INT_t> ptr = REF(target);
+    
+    EXPECT_FALSE(ptr.is_null());
+    
+    // Force to NULL
+    ptr.force(nullptr);
+    EXPECT_TRUE(ptr.is_forced());
+    EXPECT_TRUE(ptr.is_null());
+    
+    // Unforce
+    ptr.unforce();
+    EXPECT_FALSE(ptr.is_null());
+    EXPECT_EQ(ptr.deref().get(), 42);
+}
+
+TEST(IECPointerTest, Pointer_Comparison) {
+    IEC_INT target1(100);
+    IEC_INT target2(200);
+    
+    REF_TO<INT_t> ptr1 = REF(target1);
+    REF_TO<INT_t> ptr2 = REF(target1);
+    REF_TO<INT_t> ptr3 = REF(target2);
+    
+    EXPECT_TRUE(ptr1 == ptr2);   // Both point to target1
+    EXPECT_FALSE(ptr1 == ptr3);  // Different targets
+    EXPECT_TRUE(ptr1 != ptr3);
+}
+
+TEST(IECPointerTest, Pointer_ArrowOperator) {
+    IEC_INT target(42);
+    REF_TO<INT_t> ptr = REF(target);
+    
+    // Use arrow operator to access IECVar methods
+    EXPECT_EQ(ptr->get(), 42);
+    EXPECT_FALSE(ptr->is_forced());
+    
+    // Force via arrow operator
+    ptr->force(999);
+    EXPECT_EQ(ptr->get(), 999);
+    EXPECT_TRUE(ptr->is_forced());
+    
+    ptr->unforce();
+    EXPECT_EQ(ptr->get(), 42);
+}
+
+TEST(IECPointerTest, Pointer_StarOperator) {
+    IEC_INT target(42);
+    REF_TO<INT_t> ptr = REF(target);
+    
+    // Use * operator (same as deref())
+    EXPECT_EQ((*ptr).get(), 42);
+    
+    (*ptr) = 100;
+    EXPECT_EQ(target.get(), 100);
+}
+
+TEST(IECPointerTest, Pointer_GetUnderlying) {
+    IEC_INT target1(100);
+    IEC_INT target2(200);
+    REF_TO<INT_t> ptr = REF(target1);
+    
+    // Force to target2
+    ptr.force(&target2);
+    
+    // get() returns forced pointer
+    EXPECT_EQ(ptr.get(), &target2);
+    
+    // get_underlying() returns original pointer
+    EXPECT_EQ(ptr.get_underlying(), &target1);
+}
+
+// =============================================================================
+// Pointer Type Traits Tests
+// =============================================================================
+
+TEST(IECTraitsTest, PointerTraits) {
+    using IntPtr = REF_TO<INT_t>;
+    
+    EXPECT_TRUE(is_iec_pointer_v<IntPtr>);
+    EXPECT_FALSE(is_iec_array_v<IntPtr>);
+    EXPECT_FALSE(is_iec_struct_v<IntPtr>);
+    EXPECT_FALSE(is_iec_enum_v<IntPtr>);
+    EXPECT_TRUE(is_any_derived_v<IntPtr>);
 }
 
 int main(int argc, char **argv) {
