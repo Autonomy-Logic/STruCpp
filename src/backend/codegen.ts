@@ -8,6 +8,11 @@
 import type { CompilationUnit } from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import type { LineMapEntry } from "../types.js";
+import type {
+  ProjectModel,
+  ConfigurationDecl,
+  ProgramDecl,
+} from "../project-model.js";
 
 // =============================================================================
 // Code Generation Options
@@ -72,6 +77,7 @@ export class CodeGenerator {
   private lineMap: Map<number, LineMapEntry> = new Map();
   private currentLine = 1;
   private indentLevel = 0;
+  private projectModel?: ProjectModel;
 
   constructor(
     private readonly _symbolTables: SymbolTables,
@@ -83,6 +89,13 @@ export class CodeGenerator {
   /** Get symbol tables (for future use in Phase 3+) */
   get symbolTables(): SymbolTables {
     return this._symbolTables;
+  }
+
+  /**
+   * Set the project model for enhanced code generation.
+   */
+  setProjectModel(model: ProjectModel): void {
+    this.projectModel = model;
   }
 
   /**
@@ -122,12 +135,20 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_types.hpp"');
     this.emitHeader('#include "iec_std_lib.hpp"');
     this.emitHeader("");
+    this.emitHeader("namespace strucpp {");
+    this.emitHeader("");
 
     // Generate forward declarations
     for (const fb of ast.functionBlocks) {
       this.emitHeader(`class ${fb.name};`);
     }
-    if (ast.functionBlocks.length > 0) {
+    for (const prog of ast.programs) {
+      this.emitHeader(`class Program_${prog.name};`);
+    }
+    for (const config of ast.configurations) {
+      this.emitHeader(`class Configuration_${config.name};`);
+    }
+    if (ast.functionBlocks.length > 0 || ast.programs.length > 0 || ast.configurations.length > 0) {
       this.emitHeader("");
     }
 
@@ -137,14 +158,35 @@ export class CodeGenerator {
     }
 
     // Generate program class declarations
-    for (const prog of ast.programs) {
-      this.generateProgramHeaderDeclaration(prog);
+    if (this.projectModel) {
+      // Use project model for enhanced generation with VAR_EXTERNAL support
+      for (const prog of this.projectModel.programs.values()) {
+        this.generateProgramHeaderFromModel(prog);
+      }
+    } else {
+      // Fallback to AST-based generation
+      for (const prog of ast.programs) {
+        this.generateProgramHeaderDeclaration(prog);
+      }
     }
 
     // Generate function declarations
     for (const func of ast.functions) {
       this.generateFunctionHeaderDeclaration(func);
     }
+
+    // Generate configuration class declarations
+    if (this.projectModel) {
+      for (const config of this.projectModel.configurations) {
+        this.generateConfigurationHeaderFromModel(config);
+      }
+    } else {
+      for (const config of ast.configurations) {
+        this.generateConfigurationHeaderDeclaration(config);
+      }
+    }
+
+    this.emitHeader("} // namespace strucpp");
   }
 
   /**
@@ -158,21 +200,42 @@ export class CodeGenerator {
     this.emit("");
     this.emit('#include "generated.hpp"');
     this.emit("");
+    this.emit("namespace strucpp {");
+    this.emit("");
 
-    // TODO: Generate actual implementation in Phase 3+
-    // For now, generate placeholder implementations
-
-    for (const prog of ast.programs) {
-      this.generateProgramImplementation(prog);
+    // Generate program implementations
+    if (this.projectModel) {
+      for (const prog of this.projectModel.programs.values()) {
+        this.generateProgramImplementationFromModel(prog);
+      }
+    } else {
+      for (const prog of ast.programs) {
+        this.generateProgramImplementation(prog);
+      }
     }
 
+    // Generate function block implementations
     for (const fb of ast.functionBlocks) {
       this.generateFBImplementation(fb);
     }
 
+    // Generate function implementations
     for (const func of ast.functions) {
       this.generateFunctionImplementation(func);
     }
+
+    // Generate configuration implementations
+    if (this.projectModel) {
+      for (const config of this.projectModel.configurations) {
+        this.generateConfigurationImplementationFromModel(config);
+      }
+    } else {
+      for (const config of ast.configurations) {
+        this.generateConfigurationImplementation(config);
+      }
+    }
+
+    this.emit("} // namespace strucpp");
   }
 
   /**
@@ -343,6 +406,361 @@ export class CodeGenerator {
     this.emit(`    return ${func.name}_result;`);
     this.emit("}");
     this.emit("");
+  }
+
+  // ===========================================================================
+  // Project Model-based Generation (Phase 2.1)
+  // ===========================================================================
+
+  /**
+   * Generate header declaration for a program from the project model.
+   * Handles VAR_EXTERNAL as reference members.
+   */
+  private generateProgramHeaderFromModel(prog: ProgramDecl): void {
+    this.emitHeader(`class Program_${prog.name} : public ProgramBase {`);
+    this.emitHeader("public:");
+
+    // Generate local variable members
+    if (prog.varDeclarations.length > 0) {
+      this.emitHeader("    // Local variables");
+      for (const decl of prog.varDeclarations) {
+        this.emitHeader(`    IEC_${decl.typeName} ${decl.name};`);
+      }
+    }
+
+    // Generate external variable references
+    if (prog.varExternal.length > 0) {
+      this.emitHeader("    // External variables (references to globals)");
+      for (const ext of prog.varExternal) {
+        this.emitHeader(`    IEC_${ext.typeName}& ${ext.name};`);
+      }
+    }
+
+    this.emitHeader("");
+    this.emitHeader("    // Constructor");
+    if (prog.varExternal.length > 0) {
+      // Constructor with external variable references
+      const params = prog.varExternal
+        .map((ext) => `IEC_${ext.typeName}& ${ext.name}_ref`)
+        .join(", ");
+      this.emitHeader(`    explicit Program_${prog.name}(${params});`);
+    } else {
+      this.emitHeader(`    Program_${prog.name}();`);
+    }
+    this.emitHeader("");
+    this.emitHeader("    // Run program");
+    this.emitHeader("    void run() override;");
+    this.emitHeader("};");
+    this.emitHeader("");
+  }
+
+  /**
+   * Generate implementation for a program from the project model.
+   */
+  private generateProgramImplementationFromModel(prog: ProgramDecl): void {
+    // Constructor
+    if (prog.varExternal.length > 0) {
+      const params = prog.varExternal
+        .map((ext) => `IEC_${ext.typeName}& ${ext.name}_ref`)
+        .join(", ");
+      this.emit(`Program_${prog.name}::Program_${prog.name}(${params})`);
+
+      // Initializer list
+      const inits: string[] = [];
+      for (const decl of prog.varDeclarations) {
+        const initVal = this.getDefaultValue(decl.typeName, decl.initialValue);
+        inits.push(`${decl.name}(${initVal})`);
+      }
+      for (const ext of prog.varExternal) {
+        inits.push(`${ext.name}(${ext.name}_ref)`);
+      }
+      if (inits.length > 0) {
+        this.emit(`    : ${inits.join(", ")}`);
+      }
+      this.emit("{");
+      this.emit("}");
+    } else {
+      this.emit(`Program_${prog.name}::Program_${prog.name}()`);
+      // Initializer list for local variables
+      const inits: string[] = [];
+      for (const decl of prog.varDeclarations) {
+        const initVal = this.getDefaultValue(decl.typeName, decl.initialValue);
+        inits.push(`${decl.name}(${initVal})`);
+      }
+      if (inits.length > 0) {
+        this.emit(`    : ${inits.join(", ")}`);
+      }
+      this.emit("{");
+      this.emit("}");
+    }
+    this.emit("");
+
+    // Run method
+    this.emit(`void Program_${prog.name}::run() {`);
+    if (this.options.sourceComments) {
+      this.emit("    // Phase 2.1: Empty stub - body will be compiled in Phase 3+");
+    }
+    this.emit("}");
+    this.emit("");
+  }
+
+  /**
+   * Generate header declaration for a configuration from the project model.
+   */
+  private generateConfigurationHeaderFromModel(config: ConfigurationDecl): void {
+    this.emitHeader(`class Configuration_${config.name} : public ConfigurationInstance {`);
+    this.emitHeader("public:");
+
+    // Generate VAR_GLOBAL members
+    if (config.globalVars.length > 0) {
+      this.emitHeader("    // VAR_GLOBAL variables");
+      for (const gvar of config.globalVars) {
+        this.emitHeader(`    IEC_${gvar.typeName} ${gvar.name};`);
+      }
+      this.emitHeader("");
+    }
+
+    // Generate program instance members
+    const allInstances = this.collectProgramInstances(config);
+    if (allInstances.length > 0) {
+      this.emitHeader("    // Program instances");
+      for (const inst of allInstances) {
+        this.emitHeader(`    Program_${inst.programType} ${inst.instanceName};`);
+      }
+      this.emitHeader("");
+    }
+
+    // Generate task and resource storage
+    const taskCount = this.countTasks(config);
+    const resourceCount = config.resources.length;
+    if (taskCount > 0) {
+      this.emitHeader("    // Task storage");
+      this.emitHeader(`    TaskInstance tasks_storage[${taskCount}];`);
+      this.emitHeader(`    ProgramBase* task_programs_storage[${allInstances.length > 0 ? allInstances.length : 1}];`);
+    }
+    if (resourceCount > 0) {
+      this.emitHeader("    // Resource storage");
+      this.emitHeader(`    ResourceInstance resources_storage[${resourceCount}];`);
+    }
+    this.emitHeader("");
+
+    // Constructor
+    this.emitHeader("    // Constructor");
+    this.emitHeader(`    Configuration_${config.name}();`);
+    this.emitHeader("");
+
+    // ConfigurationInstance interface
+    this.emitHeader("    // ConfigurationInstance interface");
+    this.emitHeader("    const char* get_name() const override;");
+    this.emitHeader("    ResourceInstance* get_resources() override;");
+    this.emitHeader("    size_t get_resource_count() const override;");
+
+    this.emitHeader("};");
+    this.emitHeader("");
+  }
+
+  /**
+   * Generate implementation for a configuration from the project model.
+   */
+  private generateConfigurationImplementationFromModel(config: ConfigurationDecl): void {
+    const allInstances = this.collectProgramInstances(config);
+
+    // Constructor
+    this.emit(`Configuration_${config.name}::Configuration_${config.name}()`);
+
+    // Initializer list
+    const inits: string[] = [];
+
+    // Initialize global variables
+    for (const gvar of config.globalVars) {
+      const initVal = this.getDefaultValue(gvar.typeName, gvar.initialValue);
+      inits.push(`${gvar.name}(${initVal})`);
+    }
+
+    // Initialize program instances (with external variable references)
+    for (const inst of allInstances) {
+      const prog = this.projectModel?.programs.get(inst.programType.toUpperCase());
+      if (prog && prog.varExternal.length > 0) {
+        // Pass references to global variables
+        const args = prog.varExternal.map((ext) => ext.name).join(", ");
+        inits.push(`${inst.instanceName}(${args})`);
+      } else {
+        inits.push(`${inst.instanceName}()`);
+      }
+    }
+
+    if (inits.length > 0) {
+      this.emit(`    : ${inits.join(",")}`);
+      this.emit(`      ${inits.slice(1).length > 0 ? "" : ""}`);
+    }
+    this.emit("{");
+
+    // Wire up tasks and resources
+    if (this.options.sourceComments) {
+      this.emit("    // Wire up tasks and resources");
+    }
+
+    let taskIndex = 0;
+    let programIndex = 0;
+    let resourceIndex = 0;
+
+    for (const resource of config.resources) {
+      const resourceTaskStart = taskIndex;
+
+      for (const task of resource.tasks) {
+        const taskProgramStart = programIndex;
+
+        // Store program pointers for this task
+        for (const inst of task.programInstances) {
+          this.emit(`    task_programs_storage[${programIndex}] = &${inst.instanceName};`);
+          programIndex++;
+        }
+
+        // Initialize task
+        const intervalNs = task.interval?.nanoseconds ?? 0;
+        const priority = task.priority ?? 0;
+        const programCount = task.programInstances.length;
+        this.emit(
+          `    tasks_storage[${taskIndex}] = TaskInstance("${task.name}", ${intervalNs}LL, ${priority}, &task_programs_storage[${taskProgramStart}], ${programCount});`,
+        );
+        taskIndex++;
+      }
+
+      // Initialize resource
+      const taskCount = resource.tasks.length;
+      this.emit(
+        `    resources_storage[${resourceIndex}] = ResourceInstance("${resource.name}", "${resource.processor}", &tasks_storage[${resourceTaskStart}], ${taskCount});`,
+      );
+      resourceIndex++;
+    }
+
+    this.emit("}");
+    this.emit("");
+
+    // get_name()
+    this.emit(`const char* Configuration_${config.name}::get_name() const {`);
+    this.emit(`    return "${config.name}";`);
+    this.emit("}");
+    this.emit("");
+
+    // get_resources()
+    this.emit(`ResourceInstance* Configuration_${config.name}::get_resources() {`);
+    this.emit("    return resources_storage;");
+    this.emit("}");
+    this.emit("");
+
+    // get_resource_count()
+    this.emit(`size_t Configuration_${config.name}::get_resource_count() const {`);
+    this.emit(`    return ${config.resources.length};`);
+    this.emit("}");
+    this.emit("");
+  }
+
+  /**
+   * Generate header declaration for a configuration from AST (fallback).
+   */
+  private generateConfigurationHeaderDeclaration(
+    config: CompilationUnit["configurations"][0],
+  ): void {
+    this.emitHeader(`class Configuration_${config.name} : public ConfigurationInstance {`);
+    this.emitHeader("public:");
+
+    // Generate VAR_GLOBAL members
+    for (const block of config.varBlocks) {
+      if (block.blockType === "VAR_GLOBAL") {
+        this.emitHeader("    // VAR_GLOBAL variables");
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            this.emitHeader(`    IEC_${decl.type.name} ${name};`);
+          }
+        }
+      }
+    }
+
+    this.emitHeader("");
+    this.emitHeader("    // Constructor");
+    this.emitHeader(`    Configuration_${config.name}();`);
+    this.emitHeader("");
+    this.emitHeader("    // ConfigurationInstance interface");
+    this.emitHeader("    const char* get_name() const override;");
+    this.emitHeader("    ResourceInstance* get_resources() override;");
+    this.emitHeader("    size_t get_resource_count() const override;");
+    this.emitHeader("};");
+    this.emitHeader("");
+  }
+
+  /**
+   * Generate implementation for a configuration from AST (fallback).
+   */
+  private generateConfigurationImplementation(
+    config: CompilationUnit["configurations"][0],
+  ): void {
+    this.emit(`Configuration_${config.name}::Configuration_${config.name}() {`);
+    this.emit("    // Initialize configuration");
+    this.emit("}");
+    this.emit("");
+
+    this.emit(`const char* Configuration_${config.name}::get_name() const {`);
+    this.emit(`    return "${config.name}";`);
+    this.emit("}");
+    this.emit("");
+
+    this.emit(`ResourceInstance* Configuration_${config.name}::get_resources() {`);
+    this.emit("    return nullptr;");
+    this.emit("}");
+    this.emit("");
+
+    this.emit(`size_t Configuration_${config.name}::get_resource_count() const {`);
+    this.emit("    return 0;");
+    this.emit("}");
+    this.emit("");
+  }
+
+  // ===========================================================================
+  // Helper Methods
+  // ===========================================================================
+
+  /**
+   * Get the default value for a type.
+   */
+  private getDefaultValue(typeName: string, initialValue?: string): string {
+    if (initialValue) {
+      return initialValue;
+    }
+
+    const upperType = typeName.toUpperCase();
+    if (upperType === "BOOL") return "false";
+    if (upperType === "REAL" || upperType === "LREAL") return "0.0";
+    if (upperType === "STRING" || upperType === "WSTRING") return '""';
+    return "0";
+  }
+
+  /**
+   * Collect all program instances from a configuration.
+   */
+  private collectProgramInstances(
+    config: ConfigurationDecl,
+  ): Array<{ instanceName: string; programType: string; taskName?: string }> {
+    const instances: Array<{ instanceName: string; programType: string; taskName?: string }> = [];
+    for (const resource of config.resources) {
+      for (const task of resource.tasks) {
+        for (const inst of task.programInstances) {
+          instances.push(inst);
+        }
+      }
+    }
+    return instances;
+  }
+
+  /**
+   * Count total tasks in a configuration.
+   */
+  private countTasks(config: ConfigurationDecl): number {
+    let count = 0;
+    for (const resource of config.resources) {
+      count += resource.tasks.length;
+    }
+    return count;
   }
 
   /**

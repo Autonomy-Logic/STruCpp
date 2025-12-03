@@ -29,6 +29,60 @@ struct ProgramBase {
     virtual void run() = 0;
 };
 
+/**
+ * Task instance descriptor.
+ * Describes a task's scheduling properties and associated program instances.
+ */
+struct TaskInstance {
+    const char* name;           ///< Task name
+    int64_t interval_ns;        ///< Execution interval in nanoseconds (0 = event-driven)
+    int32_t priority;           ///< Task priority (higher = more important)
+    ProgramBase** programs;     ///< Array of program instances for this task
+    size_t program_count;       ///< Number of programs in this task
+
+    TaskInstance() noexcept
+        : name(nullptr), interval_ns(0), priority(0), programs(nullptr), program_count(0) {}
+
+    TaskInstance(const char* n, int64_t interval, int32_t prio,
+                 ProgramBase** progs, size_t count) noexcept
+        : name(n), interval_ns(interval), priority(prio), programs(progs), program_count(count) {}
+};
+
+/**
+ * Resource instance descriptor.
+ * Describes a resource (processor) and its associated tasks.
+ */
+struct ResourceInstance {
+    const char* name;           ///< Resource name
+    const char* processor;      ///< Processor type (from ON clause)
+    TaskInstance* tasks;        ///< Array of tasks in this resource
+    size_t task_count;          ///< Number of tasks
+
+    ResourceInstance() noexcept
+        : name(nullptr), processor(nullptr), tasks(nullptr), task_count(0) {}
+
+    ResourceInstance(const char* n, const char* proc,
+                     TaskInstance* t, size_t count) noexcept
+        : name(n), processor(proc), tasks(t), task_count(count) {}
+};
+
+/**
+ * Base class for configuration instances.
+ * Provides the interface for the runtime to access project structure.
+ */
+struct ConfigurationInstance {
+    virtual ~ConfigurationInstance() = default;
+
+    /** Get configuration name */
+    virtual const char* get_name() const = 0;
+
+    /** Get array of resources */
+    virtual ResourceInstance* get_resources() = 0;
+
+    /** Get number of resources */
+    virtual size_t get_resource_count() const = 0;
+};
+
 // =============================================================================
 // Numeric Functions
 // =============================================================================

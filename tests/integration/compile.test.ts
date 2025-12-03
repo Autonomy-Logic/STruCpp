@@ -37,12 +37,11 @@ describe('STruC++ Compiler', () => {
       expect(result).toHaveProperty('warnings');
     });
 
-    it('should indicate not implemented in Phase 0', () => {
+    it('should compile a simple program successfully', () => {
       const result = compile('PROGRAM Main END_PROGRAM');
-      // In Phase 0, the compiler is not yet implemented
-      expect(result.success).toBe(false);
-      expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0]?.message).toContain('not yet implemented');
+      // Phase 2.1: Compiler now generates code for programs
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain('Program_Main');
     });
 
     it('should accept compilation options', () => {
