@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <stdexcept>
 #include "iec_var.hpp"
 
 namespace strucpp {
@@ -67,21 +68,17 @@ public:
         return data_[to_internal_index(index)];
     }
     
-    // Bounds-checked access
+    // Bounds-checked access - throws std::out_of_range on invalid index
     var_type& at(int64_t index) {
         if (!Bounds::in_bounds(index)) {
-            // In real-time systems, we may want to handle this differently
-            // For now, clamp to valid range
-            if (index < Bounds::lower) index = Bounds::lower;
-            if (index > Bounds::upper) index = Bounds::upper;
+            throw std::out_of_range("Array index out of bounds");
         }
         return data_[to_internal_index(index)];
     }
     
     const var_type& at(int64_t index) const {
         if (!Bounds::in_bounds(index)) {
-            if (index < Bounds::lower) index = Bounds::lower;
-            if (index > Bounds::upper) index = Bounds::upper;
+            throw std::out_of_range("Array index out of bounds");
         }
         return data_[to_internal_index(index)];
     }
@@ -134,30 +131,19 @@ public:
         return data_[to_linear_index(i, j)];
     }
     
-    // Bounds-checked access
+    // Bounds-checked access - throws std::out_of_range on invalid index
     var_type& at(int64_t i, int64_t j) {
-        if (!Bounds1::in_bounds(i)) {
-            if (i < Bounds1::lower) i = Bounds1::lower;
-            if (i > Bounds1::upper) i = Bounds1::upper;
-        }
-        if (!Bounds2::in_bounds(j)) {
-            if (j < Bounds2::lower) j = Bounds2::lower;
-            if (j > Bounds2::upper) j = Bounds2::upper;
+        if (!Bounds1::in_bounds(i) || !Bounds2::in_bounds(j)) {
+            throw std::out_of_range("Array index out of bounds");
         }
         return data_[to_linear_index(i, j)];
     }
     
     const var_type& at(int64_t i, int64_t j) const {
-        int64_t ci = i, cj = j;
-        if (!Bounds1::in_bounds(ci)) {
-            if (ci < Bounds1::lower) ci = Bounds1::lower;
-            if (ci > Bounds1::upper) ci = Bounds1::upper;
+        if (!Bounds1::in_bounds(i) || !Bounds2::in_bounds(j)) {
+            throw std::out_of_range("Array index out of bounds");
         }
-        if (!Bounds2::in_bounds(cj)) {
-            if (cj < Bounds2::lower) cj = Bounds2::lower;
-            if (cj > Bounds2::upper) cj = Bounds2::upper;
-        }
-        return data_[to_linear_index(ci, cj)];
+        return data_[to_linear_index(i, j)];
     }
     
     // Size information
