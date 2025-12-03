@@ -380,12 +380,10 @@ template<typename T>
 inline constexpr bool is_iec_array_v = is_iec_array<T>::value;
 
 /** Check if T is an IEC struct type */
-template<typename T> struct is_iec_struct : std::false_type {};
-
-// Specialization for types derived from IEC_STRUCT_Base
+// Uses std::is_base_of to detect types derived from IEC_STRUCT_Base
 // Note: Generated structs inherit from IEC_STRUCT_Base
 template<typename T>
-struct is_iec_struct<T> : std::bool_constant<std::is_base_of_v<IEC_STRUCT_Base, T>> {};
+struct is_iec_struct : std::bool_constant<std::is_base_of_v<IEC_STRUCT_Base, T>> {};
 
 template<typename T>
 inline constexpr bool is_iec_struct_v = is_iec_struct<T>::value;
