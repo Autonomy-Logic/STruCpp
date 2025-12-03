@@ -33,15 +33,19 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
-# Project specific
+# Project specific - generated output files
 generated/
 output/
+
+# Generated C++ files (but not runtime source headers)
 *.cpp
-*.hpp
-*.h
 *.o
 *.a
 *.exe
+
+# Allow runtime source headers (these are source code, not generated)
+!src/runtime/include/*.hpp
+!src/runtime/include/*.h
 
 # Test outputs
 test_output/
