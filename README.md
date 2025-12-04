@@ -96,6 +96,62 @@ npm run dev
 npm run clean
 ```
 
+### Testing
+
+STruC++ has a comprehensive test suite covering all compiler components. Tests are written using [Vitest](https://vitest.dev/) and can be run in several ways:
+
+```bash
+# Run all tests
+npm test
+
+# Run tests in watch mode (re-runs on file changes)
+npm run test:watch
+
+# Run tests with coverage report
+npm run test:coverage
+
+# Run a specific test file
+npx vitest run tests/frontend/lexer.test.ts
+
+# Run tests matching a pattern
+npx vitest run -t "should parse"
+```
+
+#### Test Categories
+
+The test suite is organized into several categories:
+
+| Category | Location | Description |
+|----------|----------|-------------|
+| Frontend | `tests/frontend/` | Lexer and parser tests for tokenization and AST generation |
+| Semantic | `tests/semantic/` | Symbol table and type checking tests |
+| Backend | `tests/backend/` | Code generation tests |
+| Integration | `tests/integration/` | End-to-end compilation tests |
+| C++ Compilation | `tests/integration/cpp-compile.test.ts` | Tests that verify generated C++ code compiles with g++ |
+
+#### C++ Compilation Tests
+
+The C++ compilation tests (`tests/integration/cpp-compile.test.ts`) validate that the generated C++ code is syntactically correct by actually compiling it with g++. These tests:
+
+- Generate C++ code from ST source
+- Write the generated code to temporary files
+- Compile with `g++ -std=c++17 -fsyntax-only` to check syntax
+- Clean up temporary files after each test
+
+**Requirements**: These tests require g++ to be installed. If g++ is not available, the tests are automatically skipped.
+
+```bash
+# Run only the C++ compilation tests
+npx vitest run tests/integration/cpp-compile.test.ts
+
+# Check if g++ is available
+which g++
+```
+
+#### Coverage Requirements
+
+The project maintains a minimum coverage threshold of 75% for branches. Coverage reports are generated in the `coverage/` directory when running `npm run test:coverage`.
+
 ### Usage (Future - Not Yet Implemented)
 
 The compiler CLI and programmatic API are scaffolded but not yet functional. Full compilation will be available in Phase 3+.

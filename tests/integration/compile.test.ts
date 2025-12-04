@@ -372,8 +372,7 @@ describe('Error Handling Tests', () => {
       expect(result.errors.some(e => e.message.includes('nonExistentVar'))).toBe(true);
     });
 
-    // Note: Full type checking for VAR_EXTERNAL is planned for Phase 3+
-    it('should compile VAR_EXTERNAL with type mismatch (type checking not yet implemented)', () => {
+    it('should report error for VAR_EXTERNAL with type mismatch', () => {
       const source = `
         CONFIGURATION MyConfig
           VAR_GLOBAL
@@ -391,8 +390,8 @@ describe('Error Handling Tests', () => {
         END_PROGRAM
       `;
       const result = compile(source);
-      // Currently compiles - full type checking will be added in Phase 3+
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.message.includes('Type mismatch'))).toBe(true);
     });
   });
 

@@ -227,9 +227,23 @@ export class ASTBuilder {
    */
   buildFunctionDeclaration(node: CstNode): FunctionDeclaration {
     const children = node.children as CstChildren;
-    const identifiers = getAllTokens(children.Identifier);
-    const name = identifiers[0]?.image ?? "";
-    const returnTypeName = identifiers[1]?.image ?? "VOID";
+    const nameToken = getAllTokens(children.Identifier)[0];
+    const name = nameToken?.image ?? "";
+
+    // Get return type from the dataType subrule
+    const dataTypeNode = getFirstNode(children.dataType);
+    let returnType: TypeReference;
+    if (dataTypeNode) {
+      returnType = this.buildTypeReference(dataTypeNode);
+    } else {
+      // Fallback to VOID if no return type specified
+      returnType = {
+        kind: "TypeReference",
+        sourceSpan: nodeToSourceSpan(node),
+        name: "VOID",
+        isReference: false,
+      };
+    }
 
     const varBlocks: VarBlock[] = [];
     for (const varBlockNode of getAllNodes(children.varBlock)) {
@@ -246,14 +260,7 @@ export class ASTBuilder {
       kind: "FunctionDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
-      returnType: {
-        kind: "TypeReference",
-        sourceSpan: identifiers[1]
-          ? tokenToSourceSpan(identifiers[1])
-          : nodeToSourceSpan(node),
-        name: returnTypeName,
-        isReference: false,
-      },
+      returnType,
       varBlocks,
       body,
     };
@@ -477,21 +484,17 @@ export class ASTBuilder {
     const identifiers = getAllTokens(children.Identifier);
     const names = identifiers.map((t) => t.image);
 
-    // Get type reference
-    const typeRefNode = getFirstNode(children.typeReference);
+    // Get type reference from the dataType subrule
+    const dataTypeNode = getFirstNode(children.dataType);
     let type: TypeReference;
-    if (typeRefNode) {
-      type = this.buildTypeReference(typeRefNode);
+    if (dataTypeNode) {
+      type = this.buildTypeReference(dataTypeNode);
     } else {
-      // Fallback: look for type name in identifiers
-      // In "x : INT", the type is the last identifier after the colon
-      const typeIdentifiers = getAllTokens(children.Identifier);
-      const lastTypeIdent = typeIdentifiers[typeIdentifiers.length - 1];
-      const typeName = lastTypeIdent?.image ?? "INT";
+      // Fallback: default to INT if no type found
       type = {
         kind: "TypeReference",
         sourceSpan: nodeToSourceSpan(node),
-        name: typeName,
+        name: "INT",
         isReference: false,
       };
     }
