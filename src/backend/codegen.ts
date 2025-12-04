@@ -615,7 +615,6 @@ export class CodeGenerator {
 
     if (inits.length > 0) {
       this.emit(`    : ${inits.join(",")}`);
-      this.emit(`      ${inits.slice(1).length > 0 ? "" : ""}`);
     }
     this.emit("{");
 

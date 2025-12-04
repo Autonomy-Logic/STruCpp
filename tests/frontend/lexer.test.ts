@@ -131,6 +131,48 @@ describe('STLexer', () => {
       expect(result.tokens).toHaveLength(1);
       expect(result.tokens[0]?.tokenType.name).toBe('TimeLiteral');
     });
+
+    it('should tokenize time literals with various units', () => {
+      const validLiterals = ['T#10ms', 'T#100us', 'T#1000ns', 'T#1d', 'T#2h', 'T#30m', 'T#45s'];
+      for (const literal of validLiterals) {
+        const result = tokenize(literal);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('TimeLiteral');
+        expect(result.tokens[0]?.image).toBe(literal);
+      }
+    });
+
+    it('should tokenize compound time literals', () => {
+      const result = tokenize('T#1h2m3s');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]?.tokenType.name).toBe('TimeLiteral');
+      expect(result.tokens[0]?.image).toBe('T#1h2m3s');
+    });
+
+    it('should tokenize TIME# prefix', () => {
+      const result = tokenize('TIME#500ms');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]?.tokenType.name).toBe('TimeLiteral');
+    });
+
+    it('should not match time literals without unit suffix', () => {
+      // T#10.5 without a unit should NOT be a valid time literal
+      // It should tokenize as separate tokens or produce an error
+      const result = tokenize('T#10.5');
+      // The regex should not match T#10.5 as a TimeLiteral
+      // It will either not match at all or match only T#10 if there was a unit
+      const timeLiteralTokens = result.tokens.filter(t => t.tokenType.name === 'TimeLiteral');
+      expect(timeLiteralTokens).toHaveLength(0);
+    });
+
+    it('should not match bare T# without number and unit', () => {
+      const result = tokenize('T#');
+      const timeLiteralTokens = result.tokens.filter(t => t.tokenType.name === 'TimeLiteral');
+      expect(timeLiteralTokens).toHaveLength(0);
+    });
   });
 
   describe('operators', () => {
