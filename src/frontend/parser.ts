@@ -5,7 +5,7 @@
  * Uses Chevrotain's embedded DSL for grammar definition.
  */
 
-import { CstParser } from "chevrotain";
+import { CstParser, CstNode } from "chevrotain";
 import * as tokens from "./lexer.js";
 
 /**
@@ -731,7 +731,7 @@ export const parser = new STParser();
  * @returns Parse result with CST and any errors
  */
 export function parse(source: string): {
-  cst: unknown;
+  cst: CstNode | null;
   errors: unknown[];
 } {
   const lexResult = tokens.tokenize(source);

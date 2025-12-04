@@ -96,20 +96,98 @@ npm run dev
 npm run clean
 ```
 
-### Usage (Future - Not Yet Implemented)
+### Testing
 
-The compiler CLI and programmatic API are scaffolded but not yet functional. Full compilation will be available in Phase 3+.
+STruC++ has a comprehensive test suite covering all compiler components. Tests are written using [Vitest](https://vitest.dev/) and can be run in several ways:
 
 ```bash
-# Compile an ST program to C++ (CLI) - FUTURE
+# Run all tests
+npm test
+
+# Run tests in watch mode (re-runs on file changes)
+npm run test:watch
+
+# Run tests with coverage report
+npm run test:coverage
+
+# Run a specific test file
+npx vitest run tests/frontend/lexer.test.ts
+
+# Run tests matching a pattern
+npx vitest run -t "should parse"
+```
+
+#### Test Categories
+
+The test suite is organized into several categories:
+
+| Category | Location | Description |
+|----------|----------|-------------|
+| Frontend | `tests/frontend/` | Lexer and parser tests for tokenization and AST generation |
+| Semantic | `tests/semantic/` | Symbol table and type checking tests |
+| Backend | `tests/backend/` | Code generation tests |
+| Integration | `tests/integration/` | End-to-end compilation tests |
+| C++ Compilation | `tests/integration/cpp-compile.test.ts` | Tests that verify generated C++ code compiles with g++ |
+
+#### C++ Compilation Tests
+
+The C++ compilation tests (`tests/integration/cpp-compile.test.ts`) validate that the generated C++ code is syntactically correct by actually compiling it with g++. These tests:
+
+- Generate C++ code from ST source
+- Write the generated code to temporary files
+- Compile with `g++ -std=c++17 -fsyntax-only` to check syntax
+- Clean up temporary files after each test
+
+**Requirements**: These tests require g++ to be installed. If g++ is not available, the tests are automatically skipped.
+
+```bash
+# Run only the C++ compilation tests
+npx vitest run tests/integration/cpp-compile.test.ts
+
+# Check if g++ is available
+which g++
+```
+
+#### Coverage Requirements
+
+The project maintains a minimum coverage threshold of 75% for branches. Coverage reports are generated in the `coverage/` directory when running `npm run test:coverage`.
+
+### Usage
+
+The compiler CLI is functional for generating C++ code from Structured Text programs:
+
+```bash
+# Compile an ST program to C++
 npx strucpp input.st -o output.cpp
 
-# Compile with debug information - FUTURE
+# This generates two files:
+# - output.cpp (implementation)
+# - output.hpp (header)
+
+# Compile with debug information
 npx strucpp input.st -o output.cpp --debug --line-mapping
 
-# Show help - FUTURE
+# Show help
 npx strucpp --help
 ```
+
+### Compiling Generated C++ Code
+
+The generated C++ code requires the STruC++ runtime library headers. When compiling the generated code with g++, you need to add the runtime include path:
+
+```bash
+# Compile generated C++ code
+g++ -std=c++17 -I /path/to/STruCpp/src/runtime/include output.cpp -o output
+
+# Example with the repository cloned to ~/STruCpp:
+g++ -std=c++17 -I ~/STruCpp/src/runtime/include output.cpp -o output
+```
+
+The runtime library is header-only, so no additional linking is required. The generated header file includes:
+- `iec_types.hpp` - IEC 61131-3 type definitions
+- `iec_std_lib.hpp` - Standard library functions and runtime base classes
+
+**Note**: The runtime headers must be accessible via the `-I` include path when compiling. They are not copied to the output directory.
 
 ```typescript
 // Programmatic usage (Browser or Node.js) - FUTURE

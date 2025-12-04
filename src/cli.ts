@@ -133,6 +133,9 @@ function main(): void {
     ? resolve(options.output)
     : inputPath.replace(/\.st$/i, ".cpp");
 
+  // Derive header filename from output path for correct #include directive
+  const headerFileName = basename(outputPath).replace(/\.cpp$/i, ".hpp");
+
   let source: string;
   try {
     source = readFileSync(inputPath, "utf-8");
@@ -147,6 +150,7 @@ function main(): void {
     lineDirectives: options.lineDirectives,
     sourceComments: options.sourceComments,
     optimizationLevel: options.optimizationLevel,
+    headerFileName,
   };
 
   console.log(`Compiling ${basename(inputPath)}...`);

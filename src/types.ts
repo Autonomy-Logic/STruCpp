@@ -25,6 +25,9 @@ export interface CompileOptions {
 
   /** Include ST source as comments in generated C++ */
   sourceComments?: boolean;
+
+  /** Header filename to use in #include directive (default: "generated.hpp") */
+  headerFileName?: string;
 }
 
 /**
