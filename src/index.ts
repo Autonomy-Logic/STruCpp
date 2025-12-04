@@ -151,6 +151,7 @@ export function compile(
   const codegen = new CodeGenerator(symbolTables, {
     sourceComments: mergedOptions.debug,
     lineDirectives: mergedOptions.lineMapping,
+    headerFileName: mergedOptions.headerFileName ?? "generated.hpp",
   });
   codegen.setProjectModel(projectModelResult.model);
 
