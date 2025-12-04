@@ -161,7 +161,9 @@ export class TypeCodeGenerator {
       for (const fieldName of field.names) {
         if (field.initialValue) {
           const initVal = this.expressionToCpp(field.initialValue);
-          this.emit(`${this.options.indent}${cppType} ${fieldName} = ${initVal};`);
+          this.emit(
+            `${this.options.indent}${cppType} ${fieldName} = ${initVal};`,
+          );
         } else {
           this.emit(`${this.options.indent}${cppType} ${fieldName}{};`);
         }
@@ -249,12 +251,8 @@ export class TypeCodeGenerator {
     const upper = this.expressionToCpp(def.upperBound);
 
     this.emit(`using ${name} = ${baseType};`);
-    this.emit(
-      `constexpr ${baseType} ${name}_MIN = ${lower};`,
-    );
-    this.emit(
-      `constexpr ${baseType} ${name}_MAX = ${upper};`,
-    );
+    this.emit(`constexpr ${baseType} ${name}_MIN = ${lower};`);
+    this.emit(`constexpr ${baseType} ${name}_MAX = ${upper};`);
     this.emit("");
   }
 
