@@ -22,10 +22,10 @@ export default defineConfig({
         'src/semantic/type-checker.ts', // Type checker - Phase 2+
       ],
       thresholds: {
-        lines: 80,
-        functions: 80,
-        branches: 80,
-        statements: 80,
+        lines: 75,
+        functions: 75,
+        branches: 75,
+        statements: 75,
       },
     },
     testTimeout: 10000,

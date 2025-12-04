@@ -478,6 +478,1192 @@ describe('Parse Function Tests', () => {
   });
 });
 
+describe('Function and Function Block Parsing Tests', () => {
+  it('should parse a simple function declaration', () => {
+    const source = `
+      FUNCTION Add : INT
+        VAR_INPUT a, b : INT; END_VAR
+        Add := a + b;
+      END_FUNCTION
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse a function with multiple VAR blocks', () => {
+    const source = `
+      FUNCTION Calculate : REAL
+        VAR_INPUT x : REAL; END_VAR
+        VAR_OUTPUT result : REAL; END_VAR
+        VAR temp : REAL; END_VAR
+        temp := x * 2.0;
+        result := temp;
+        Calculate := result;
+      END_FUNCTION
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse a function block declaration', () => {
+    const source = `
+      FUNCTION_BLOCK Counter
+        VAR_INPUT enable : BOOL; END_VAR
+        VAR_OUTPUT count : INT; END_VAR
+        VAR internal : INT; END_VAR
+      END_FUNCTION_BLOCK
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse a function block with statements', () => {
+    const source = `
+      FUNCTION_BLOCK Timer
+        VAR_INPUT start : BOOL; END_VAR
+        VAR_OUTPUT done : BOOL; END_VAR
+        VAR elapsed : INT; END_VAR
+        elapsed := elapsed + 1;
+      END_FUNCTION_BLOCK
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Expression Parsing Tests', () => {
+  it('should parse arithmetic expressions with addition', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y, z : INT; END_VAR
+        z := x + y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse arithmetic expressions with subtraction', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y, z : INT; END_VAR
+        z := x - y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse arithmetic expressions with multiplication', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y, z : INT; END_VAR
+        z := x * y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse arithmetic expressions with division', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y, z : INT; END_VAR
+        z := x / y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse arithmetic expressions with MOD', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y, z : INT; END_VAR
+        z := x MOD y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse power expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : REAL; END_VAR
+        y := x ** 2;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse comparison expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : INT; flag : BOOL; END_VAR
+        flag := x < y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse equality expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : INT; flag : BOOL; END_VAR
+        flag := x = y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse inequality expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : INT; flag : BOOL; END_VAR
+        flag := x <> y;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse logical AND expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c : BOOL; END_VAR
+        c := a AND b;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse logical OR expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c : BOOL; END_VAR
+        c := a OR b;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse logical XOR expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c : BOOL; END_VAR
+        c := a XOR b;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse logical NOT expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b : BOOL; END_VAR
+        b := NOT a;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse unary minus expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : INT; END_VAR
+        y := -x;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse complex nested expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : INT; result : BOOL; END_VAR
+        result := (a + b) * c > d AND (a < b OR c = d);
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse literal expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; y : REAL; s : STRING; b : BOOL; END_VAR
+        x := 42;
+        y := 3.14;
+        s := 'hello';
+        b := TRUE;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Chained Expression Tests', () => {
+  it('should parse chained OR expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : BOOL; END_VAR
+        d := a OR b OR c;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse chained XOR expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : BOOL; END_VAR
+        d := a XOR b XOR c;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse chained AND expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : BOOL; END_VAR
+        d := a AND b AND c;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse chained addition expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : INT; END_VAR
+        d := a + b + c;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse chained multiplication expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : INT; END_VAR
+        d := a * b * c;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse power expressions with parentheses', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : REAL; END_VAR
+        y := (x ** 2) * (x ** 3);
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse all comparison operators', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b : INT; r1, r2, r3, r4, r5, r6 : BOOL; END_VAR
+        r1 := a = b;
+        r2 := a <> b;
+        r3 := a < b;
+        r4 := a > b;
+        r5 := a <= b;
+        r6 := a >= b;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse mixed arithmetic operators', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d, e : INT; END_VAR
+        e := a + b - c * d / 2 MOD 3;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse parenthesized expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c : INT; END_VAR
+        c := (a + b) * (a - b);
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse deeply nested expressions', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : INT; result : BOOL; END_VAR
+        result := ((a + b) > (c - d)) AND ((a * b) < (c / d));
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Literal Types Tests', () => {
+  it('should parse integer literals', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := 12345;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse real literals', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : REAL; END_VAR
+        x := 3.14159;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse scientific notation', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : REAL; END_VAR
+        x := 1.5e10;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse boolean literals', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b : BOOL; END_VAR
+        a := TRUE;
+        b := FALSE;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse string literals', () => {
+    const source = `
+      PROGRAM Main
+        VAR s : STRING; END_VAR
+        s := 'Hello, World!';
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse time literals with various units', () => {
+    const source = `
+      CONFIGURATION TimeConfig
+        RESOURCE MainResource ON PLC
+          TASK Task1(INTERVAL := T#1d);
+          TASK Task2(INTERVAL := T#2h);
+          TASK Task3(INTERVAL := T#30m);
+          TASK Task4(INTERVAL := T#45s);
+          TASK Task5(INTERVAL := T#500ms);
+          TASK Task6(INTERVAL := T#1000us);
+          TASK Task7(INTERVAL := T#1000000ns);
+          PROGRAM MainInstance WITH Task1 : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+
+      PROGRAM Main
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Direct Address Tests', () => {
+  it('should parse direct input address', () => {
+    const source = `
+      PROGRAM Main
+        VAR x AT %IX0.0 : BOOL; END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse direct output address', () => {
+    const source = `
+      PROGRAM Main
+        VAR y AT %QX0.0 : BOOL; END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse direct memory address', () => {
+    const source = `
+      PROGRAM Main
+        VAR m AT %MW100 : INT; END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Type Declaration Tests', () => {
+  it('should parse simple type declaration', () => {
+    const source = `
+      TYPE MyInt : INT; END_TYPE
+      PROGRAM Main
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Additional Expression Edge Cases', () => {
+  it('should parse greater than or equal comparison', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b : INT; result : BOOL; END_VAR
+        result := a >= b;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse less than or equal comparison', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b : INT; result : BOOL; END_VAR
+        result := a <= b;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse multiple statements in sequence', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c : INT; END_VAR
+        a := 1;
+        b := 2;
+        c := a + b;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse nested IF statements', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : INT; END_VAR
+        IF x > 0 THEN
+          IF y > 0 THEN
+            x := x + y;
+          END_IF;
+        END_IF;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse nested loops', () => {
+    const source = `
+      PROGRAM Main
+        VAR i, j, sum : INT; END_VAR
+        FOR i := 1 TO 10 DO
+          FOR j := 1 TO 10 DO
+            sum := sum + 1;
+          END_FOR;
+        END_FOR;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse WHILE with complex condition', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : INT; running : BOOL; END_VAR
+        WHILE (x < 100) AND (y > 0) AND running DO
+          x := x + 1;
+          y := y - 1;
+        END_WHILE;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Multiple POU Tests', () => {
+  it('should parse multiple programs', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+      END_PROGRAM
+
+      PROGRAM Secondary
+        VAR y : INT; END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse program with function', () => {
+    const source = `
+      FUNCTION Add : INT
+        VAR_INPUT a, b : INT; END_VAR
+        Add := a + b;
+      END_FUNCTION
+
+      PROGRAM Main
+        VAR x, y, z : INT; END_VAR
+        z := Add;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse program with function block', () => {
+    const source = `
+      FUNCTION_BLOCK Counter
+        VAR_INPUT enable : BOOL; END_VAR
+        VAR_OUTPUT count : INT; END_VAR
+        VAR internal : INT; END_VAR
+      END_FUNCTION_BLOCK
+
+      PROGRAM Main
+        VAR myCounter : Counter; END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse configuration with multiple resources', () => {
+    const source = `
+      CONFIGURATION MultiResource
+        RESOURCE Resource1 ON PLC
+          TASK Task1(PRIORITY := 1);
+          PROGRAM Prog1 WITH Task1 : Main;
+        END_RESOURCE
+        RESOURCE Resource2 ON PLC
+          TASK Task2(PRIORITY := 2);
+          PROGRAM Prog2 WITH Task2 : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+
+      PROGRAM Main
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Variable Declaration Tests', () => {
+  it('should parse multiple variables in one declaration', () => {
+    const source = `
+      PROGRAM Main
+        VAR a, b, c, d : INT; END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse VAR_INPUT block', () => {
+    const source = `
+      FUNCTION Test : INT
+        VAR_INPUT x, y : INT; END_VAR
+        Test := x + y;
+      END_FUNCTION
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse VAR_OUTPUT block', () => {
+    const source = `
+      FUNCTION_BLOCK Test
+        VAR_OUTPUT result : INT; END_VAR
+      END_FUNCTION_BLOCK
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse VAR_IN_OUT block', () => {
+    const source = `
+      FUNCTION_BLOCK Test
+        VAR_IN_OUT data : INT; END_VAR
+      END_FUNCTION_BLOCK
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse VAR_TEMP block', () => {
+    const source = `
+      PROGRAM Main
+        VAR_TEMP temp : INT; END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse variable with initialization', () => {
+    const source = `
+      PROGRAM Main
+        VAR
+          counter : INT := 0;
+          flag : BOOL := TRUE;
+          value : REAL := 3.14;
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Control Flow Parsing Tests', () => {
+  it('should parse IF-THEN-END_IF statement', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        IF x > 0 THEN
+          x := x - 1;
+        END_IF;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse IF-THEN-ELSE-END_IF statement', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        IF x > 0 THEN
+          x := x - 1;
+        ELSE
+          x := x + 1;
+        END_IF;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse IF-THEN-ELSIF-ELSE-END_IF statement', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        IF x > 10 THEN
+          x := 10;
+        ELSIF x > 5 THEN
+          x := 5;
+        ELSE
+          x := 0;
+        END_IF;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse FOR loop', () => {
+    const source = `
+      PROGRAM Main
+        VAR i, sum : INT; END_VAR
+        sum := 0;
+        FOR i := 1 TO 10 DO
+          sum := sum + i;
+        END_FOR;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse FOR loop with BY clause', () => {
+    const source = `
+      PROGRAM Main
+        VAR i, sum : INT; END_VAR
+        sum := 0;
+        FOR i := 0 TO 100 BY 10 DO
+          sum := sum + 1;
+        END_FOR;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse WHILE loop', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := 10;
+        WHILE x > 0 DO
+          x := x - 1;
+        END_WHILE;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse REPEAT-UNTIL loop', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := 0;
+        REPEAT
+          x := x + 1;
+        UNTIL x >= 10
+        END_REPEAT;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse EXIT statement', () => {
+    const source = `
+      PROGRAM Main
+        VAR i : INT; END_VAR
+        FOR i := 1 TO 100 DO
+          IF i > 50 THEN
+            EXIT;
+          END_IF;
+        END_FOR;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse RETURN statement', () => {
+    const source = `
+      FUNCTION Test : INT
+        VAR_INPUT x : INT; END_VAR
+        IF x < 0 THEN
+          RETURN;
+        END_IF;
+        Test := x * 2;
+      END_FUNCTION
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse CASE statement', () => {
+    const source = `
+      PROGRAM Main
+        VAR x, y : INT; END_VAR
+        CASE x OF
+          1: y := 10;
+          2: y := 20;
+        END_CASE;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Complex Program Tests', () => {
+  it('should parse program with all statement types', () => {
+    const source = `
+      PROGRAM AllStatements
+        VAR i, x, y : INT; flag : BOOL; END_VAR
+        
+        x := 10;
+        y := 20;
+        
+        IF x > 0 THEN
+          x := x - 1;
+        ELSIF x < 0 THEN
+          x := x + 1;
+        ELSE
+          x := 0;
+        END_IF;
+        
+        FOR i := 1 TO 10 BY 2 DO
+          y := y + i;
+        END_FOR;
+        
+        WHILE flag DO
+          flag := FALSE;
+        END_WHILE;
+        
+        REPEAT
+          x := x + 1;
+        UNTIL x > 100
+        END_REPEAT;
+        
+        CASE x OF
+          1: y := 10;
+          2: y := 20;
+          3: y := 30;
+        END_CASE;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse program with all expression types', () => {
+    const source = `
+      PROGRAM AllExpressions
+        VAR a, b, c, d, e : INT; 
+            x, y, z : REAL;
+            p, q, r, s : BOOL;
+        END_VAR
+        
+        a := 1 + 2 - 3;
+        b := 4 * 5 / 6;
+        c := 7 MOD 8;
+        x := y ** 2;
+        
+        p := a < b;
+        q := a > b;
+        r := a <= b;
+        s := a >= b;
+        p := a = b;
+        q := a <> b;
+        
+        p := q AND r;
+        q := r OR s;
+        r := p XOR q;
+        s := NOT p;
+        
+        a := -b;
+        c := (a + b) * (c - d);
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse program with all literal types', () => {
+    const source = `
+      PROGRAM AllLiterals
+        VAR i : INT; r : REAL; b : BOOL; s : STRING; END_VAR
+        i := 42;
+        i := 16#FF;
+        r := 3.14;
+        r := 1.5e-10;
+        b := TRUE;
+        b := FALSE;
+        s := 'Hello World';
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse configuration with VAR_GLOBAL and programs with VAR_EXTERNAL', () => {
+    const source = `
+      CONFIGURATION CompleteConfig
+        VAR_GLOBAL
+          sharedCounter : INT := 0;
+          sharedFlag : BOOL := FALSE;
+        END_VAR
+        
+        RESOURCE MainResource ON PLC
+          TASK FastTask(INTERVAL := T#10ms, PRIORITY := 1);
+          TASK SlowTask(INTERVAL := T#100ms, PRIORITY := 2);
+          PROGRAM FastProgram WITH FastTask : FastProg;
+          PROGRAM SlowProgram WITH SlowTask : SlowProg;
+        END_RESOURCE
+      END_CONFIGURATION
+      
+      PROGRAM FastProg
+        VAR_EXTERNAL
+          sharedCounter : INT;
+        END_VAR
+        VAR local : INT; END_VAR
+        local := sharedCounter + 1;
+      END_PROGRAM
+      
+      PROGRAM SlowProg
+        VAR_EXTERNAL
+          sharedFlag : BOOL;
+        END_VAR
+        VAR temp : BOOL; END_VAR
+        temp := sharedFlag;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+  });
+
+  it('should parse function with all VAR block types', () => {
+    const source = `
+      FUNCTION CompleteFunction : INT
+        VAR_INPUT in1, in2 : INT; END_VAR
+        VAR_OUTPUT out1 : INT; END_VAR
+        VAR_IN_OUT inout1 : INT; END_VAR
+        VAR local1 : INT; END_VAR
+        VAR_TEMP temp1 : INT; END_VAR
+        
+        local1 := in1 + in2;
+        out1 := local1;
+        inout1 := inout1 + 1;
+        CompleteFunction := out1;
+      END_FUNCTION
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should parse function block with all VAR block types', () => {
+    const source = `
+      FUNCTION_BLOCK CompleteFB
+        VAR_INPUT enable : BOOL; reset : BOOL; END_VAR
+        VAR_OUTPUT count : INT; done : BOOL; END_VAR
+        VAR_IN_OUT data : INT; END_VAR
+        VAR internal : INT; END_VAR
+        VAR_TEMP temp : INT; END_VAR
+        
+        IF reset THEN
+          internal := 0;
+        ELSIF enable THEN
+          internal := internal + 1;
+        END_IF;
+        count := internal;
+        done := internal > 100;
+      END_FUNCTION_BLOCK
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe('Edge Case Tests', () => {
+  it('should handle empty program body', () => {
+    const source = `
+      PROGRAM Empty
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should handle empty function body', () => {
+    const source = `
+      FUNCTION EmptyFunc : INT
+        EmptyFunc := 0;
+      END_FUNCTION
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should handle empty function block body', () => {
+    const source = `
+      FUNCTION_BLOCK EmptyFB
+      END_FUNCTION_BLOCK
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should handle deeply nested control structures', () => {
+    const source = `
+      PROGRAM DeepNesting
+        VAR i, j, k : INT; flag : BOOL; END_VAR
+        FOR i := 1 TO 10 DO
+          FOR j := 1 TO 10 DO
+            IF i > j THEN
+              WHILE flag DO
+                k := k + 1;
+                IF k > 100 THEN
+                  EXIT;
+                END_IF;
+              END_WHILE;
+            END_IF;
+          END_FOR;
+        END_FOR;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should handle complex boolean expressions', () => {
+    const source = `
+      PROGRAM ComplexBool
+        VAR a, b, c, d, e : BOOL; END_VAR
+        e := (a AND b) OR (c AND d) XOR (NOT a AND NOT b);
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should handle multiple ELSIF clauses', () => {
+    const source = `
+      PROGRAM MultiElsif
+        VAR x, y : INT; END_VAR
+        IF x = 1 THEN
+          y := 10;
+        ELSIF x = 2 THEN
+          y := 20;
+        ELSIF x = 3 THEN
+          y := 30;
+        ELSIF x = 4 THEN
+          y := 40;
+        ELSE
+          y := 0;
+        END_IF;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+
+  it('should handle CASE with multiple values', () => {
+    const source = `
+      PROGRAM MultiCase
+        VAR selector, result : INT; END_VAR
+        CASE selector OF
+          1: result := 10;
+          2: result := 20;
+          3: result := 30;
+          4: result := 40;
+          5: result := 50;
+        END_CASE;
+      END_PROGRAM
+    `;
+    const result = parse(source);
+    expect(result.ast).toBeDefined();
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
 describe('Compiler Options Tests', () => {
   it('should accept debug option', () => {
     const result = compile('PROGRAM Main END_PROGRAM', { debug: true });
