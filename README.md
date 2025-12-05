@@ -205,6 +205,233 @@ console.log(result.cppCode);
 console.log(result.lineMap);
 ```
 
+## Compilation Examples
+
+STruC++ compiles IEC 61131-3 Structured Text to modern C++17 code. The following examples show actual compiler output.
+
+### Program with Variables
+
+**Structured Text Input:**
+```iecst
+PROGRAM main
+  VAR
+    hello : BOOL;
+    world : BOOL;
+  END_VAR
+END_PROGRAM
+```
+
+**Generated C++ Header:**
+```cpp
+namespace strucpp {
+
+class Program_main : public ProgramBase {
+public:
+    IEC_BOOL hello;
+    IEC_BOOL world;
+
+    Program_main();
+    void run() override;
+};
+
+} // namespace strucpp
+```
+
+**Generated C++ Implementation:**
+```cpp
+namespace strucpp {
+
+Program_main::Program_main()
+    : hello(false), world(false)
+{
+}
+
+void Program_main::run() {
+    // Phase 3+: ST statements will be compiled here
+}
+
+} // namespace strucpp
+```
+
+### Configuration with Tasks and Programs
+
+**Structured Text Input:**
+```iecst
+PROGRAM main
+  VAR
+    hello : BOOL;
+  END_VAR
+END_PROGRAM
+
+PROGRAM another
+  VAR
+    LocalVar : DINT;
+  END_VAR
+  VAR_EXTERNAL
+    my_global_var : DINT;
+  END_VAR
+END_PROGRAM
+
+CONFIGURATION Config0
+  VAR_GLOBAL
+    my_global_var : DINT;
+  END_VAR
+
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+    TASK task1(INTERVAL := T#50ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : main;
+    PROGRAM instance1 WITH task1 : another;
+  END_RESOURCE
+END_CONFIGURATION
+```
+
+**Generated C++ Header:**
+```cpp
+namespace strucpp {
+
+class Program_main : public ProgramBase {
+public:
+    IEC_BOOL hello;
+    Program_main();
+    void run() override;
+};
+
+class Program_another : public ProgramBase {
+public:
+    IEC_DINT LocalVar;
+    IEC_DINT& my_global_var;  // Reference to global variable
+    explicit Program_another(IEC_DINT& my_global_var_ref);
+    void run() override;
+};
+
+class Configuration_Config0 : public ConfigurationInstance {
+public:
+    IEC_DINT my_global_var;  // Global variable
+
+    Program_main instance0;
+    Program_another instance1;
+
+    TaskInstance tasks_storage[2];
+    ProgramBase* task_programs_storage[2];
+    ResourceInstance resources_storage[1];
+
+    Configuration_Config0();
+
+    const char* get_name() const override;
+    ResourceInstance* get_resources() override;
+    size_t get_resource_count() const override;
+};
+
+} // namespace strucpp
+```
+
+### User-Defined Types
+
+**Structured Text Input:**
+```iecst
+TYPE
+  PumpState : (Stopped, Running, Failed);
+END_TYPE
+
+TYPE
+  MotorDrive : STRUCT
+    CurrentInAmps : REAL;
+    StartCount : UDINT;
+  END_STRUCT;
+END_TYPE
+
+TYPE
+  SensorReadings : ARRAY[0..9] OF REAL;
+END_TYPE
+```
+
+**Generated C++ Header:**
+```cpp
+namespace strucpp {
+
+// User-defined types
+enum class PumpState { Stopped, Running, Failed };
+using IEC_PumpState = IEC_ENUM<PumpState>;
+
+struct MotorDrive {
+    REAL_t CurrentInAmps{};
+    UDINT_t StartCount{};
+};
+using IEC_MotorDrive = IECVar<MotorDrive>;
+
+using SensorReadings = std::array<REAL_t, 10>;
+using IEC_SensorReadings = IECVar<SensorReadings>;
+
+} // namespace strucpp
+```
+
+## Runtime Integration
+
+STruC++ generates only the logic equivalent of ST code. The runtime (task scheduling, I/O handling, etc.) must be provided by the user. The generated code provides a clean interface for runtime integration.
+
+### Basic Scheduler Loop
+
+```cpp
+#include "generated.hpp"
+#include <thread>
+#include <chrono>
+
+using namespace strucpp;
+
+int main() {
+    // Instantiate the generated configuration
+    Configuration_Config0 config;
+
+    for (;;) {
+        // Iterate over resources
+        auto* resources = config.get_resources();
+        const auto resourceCount = config.get_resource_count();
+
+        for (size_t r = 0; r < resourceCount; ++r) {
+            ResourceInstance& res = resources[r];
+
+            // Iterate over tasks in each resource
+            for (size_t t = 0; t < res.task_count; ++t) {
+                TaskInstance& task = res.tasks[t];
+
+                // Execute all programs assigned to this task
+                for (size_t p = 0; p < task.program_count; ++p) {
+                    task.programs[p]->run();
+                }
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+```
+
+### Variable Forcing (Debugging)
+
+All variables use the `IECVar<T>` wrapper which supports forcing for debugging:
+
+```cpp
+Configuration_Config0 config;
+
+// Read and write global variables
+int32_t value = config.my_global_var.get();
+config.my_global_var.set(10);
+
+// Force a value for debugging (overrides normal operation)
+config.my_global_var.force(42);
+bool forced = config.my_global_var.is_forced();  // true
+
+// Unforce to return to normal operation
+config.my_global_var.unforce();
+
+// Access program instance variables
+bool hello = config.instance0.hello.get();
+config.instance0.hello.force(true);
+```
+
+For more detailed examples, see [docs/project_structure_example.cpp](docs/project_structure_example.cpp) and [docs/CPP_RUNTIME.md](docs/CPP_RUNTIME.md).
+
 ## Project Structure
 
 ```
@@ -326,20 +553,15 @@ For detailed compliance information, see [docs/IEC61131_COMPLIANCE.md](docs/IEC6
 
 ## Implementation Status
 
-STruC++ is currently in **Phase 0 - Repository Setup**. The foundation is in place with a working lexer, parser, and test infrastructure.
+STruC++ has completed **Phase 0** (repository setup), **Phase 1** (C++ runtime library), and **Phase 2** (project structure and user-defined types). The compiler can parse complete IEC 61131-3 project structures and generate C++ class hierarchies for configurations, resources, tasks, and programs.
 
-### Current Phase: Phase 0 - Repository Setup (Complete)
+**Completed:**
+- Phase 0: Lexer, parser, AST, symbol tables, type checker, CI/CD pipeline
+- Phase 1: C++ runtime library with IEC type wrappers, forcing support, and standard functions
+- Phase 2: Project structure parsing (CONFIGURATION, RESOURCE, TASK, program instances) and user-defined types
 
-- ✅ Architecture design
-- ✅ Parser library selection (Chevrotain)
-- ✅ Implementation roadmap
-- ✅ Project structure and build system
-- ✅ Chevrotain-based lexer with all IEC 61131-3 tokens
-- ✅ Parser with grammar rules for POUs, statements, and expressions
-- ✅ Symbol table with scope management
-- ✅ Test infrastructure (66 passing tests)
-- ✅ CI/CD pipeline (GitHub Actions)
-- ⏳ Phase 1: IEC Types and Runtime (next)
+**In Progress:**
+- Phase 3: ST statement translation (converting ST logic to C++ in program `run()` bodies)
 
 For the complete implementation roadmap, see [docs/implementation-phases/](docs/implementation-phases/).
 
