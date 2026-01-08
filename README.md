@@ -553,12 +553,16 @@ For detailed compliance information, see [docs/IEC61131_COMPLIANCE.md](docs/IEC6
 
 ## Implementation Status
 
-STruC++ has completed **Phase 0** (repository setup), **Phase 1** (C++ runtime library), and **Phase 2** (project structure and user-defined types). The compiler can parse complete IEC 61131-3 project structures and generate C++ class hierarchies for configurations, resources, tasks, and programs.
+STruC++ has completed **Phase 0** (repository setup), **Phase 1** (C++ runtime library), and **Phase 2.1-2.2** (project structure and user-defined types). The compiler can parse complete IEC 61131-3 project structures and generate C++ class hierarchies for configurations, resources, tasks, and programs.
 
 **Completed:**
 - Phase 0: Lexer, parser, AST, symbol tables, type checker, CI/CD pipeline
-- Phase 1: C++ runtime library with IEC type wrappers, forcing support, and standard functions
-- Phase 2: Project structure parsing (CONFIGURATION, RESOURCE, TASK, program instances) and user-defined types
+- Phase 1: C++ runtime library with IEC type wrappers, forcing support, and standard functions (5800+ lines)
+- Phase 2.1: Project structure parsing (CONFIGURATION, RESOURCE, TASK, program instances)
+- Phase 2.2: User-defined data types (TYPE declarations for structs, enums, arrays, subranges)
+
+**Pending:**
+- Phase 2.3: Located variables architecture (AT %IX0.0, %QX0.0 with runtime binding)
 
 **In Progress:**
 - Phase 3: ST statement translation (converting ST logic to C++ in program `run()` bodies)
@@ -579,18 +583,21 @@ All documentation is organized in the `docs/` folder:
 ### Implementation Phases
 - [docs/implementation-phases/](docs/implementation-phases/) - Phased development plan with detailed sub-phases
   - [Phase 0: Design and Planning](docs/implementation-phases/phase-0-design.md) - COMPLETED
-  - [Phase 1: IEC Types, Runtime, and Library Architecture](docs/implementation-phases/) - Expanded into 6 sub-phases:
-    - [Phase 1.1: Core IEC Type Wrappers](docs/implementation-phases/phase-1.1-core-types.md)
-    - [Phase 1.2: Type Categories and Traits](docs/implementation-phases/phase-1.2-type-traits.md)
-    - [Phase 1.3: Time and Date Types](docs/implementation-phases/phase-1.3-time-types.md)
-    - [Phase 1.4: String Types](docs/implementation-phases/phase-1.4-string-types.md)
-    - [Phase 1.5: Composite Types](docs/implementation-phases/phase-1.5-composite-types.md)
-    - [Phase 1.6: Standard Functions and Library](docs/implementation-phases/phase-1.6-standard-functions.md)
-  - [Phase 2: Project Structure and Scheduling Model](docs/implementation-phases/phase-2-project-structure.md)
-  - [Phase 3: Core ST Translation](docs/implementation-phases/phase-3-st-translation.md)
+  - [Phase 1: IEC Types, Runtime, and Library Architecture](docs/implementation-phases/) - COMPLETED (6 sub-phases):
+    - [Phase 1.1: Core IEC Type Wrappers](docs/implementation-phases/phase-1.1-core-types.md) ✓
+    - [Phase 1.2: Type Categories and Traits](docs/implementation-phases/phase-1.2-type-traits.md) ✓
+    - [Phase 1.3: Time and Date Types](docs/implementation-phases/phase-1.3-time-types.md) ✓
+    - [Phase 1.4: String Types](docs/implementation-phases/phase-1.4-string-types.md) ✓
+    - [Phase 1.5: Composite Types](docs/implementation-phases/phase-1.5-composite-types.md) ✓
+    - [Phase 1.6: Standard Functions and Library](docs/implementation-phases/phase-1.6-standard-functions.md) ✓
+  - [Phase 2: Project Structure and User Types](docs/implementation-phases/) - PARTIALLY COMPLETE (3 sub-phases):
+    - [Phase 2.1: Project Structure and Scheduling Model](docs/implementation-phases/phase-2.1-project-structure.md) ✓
+    - [Phase 2.2: User-Defined Data Types](docs/implementation-phases/phase-2.2-user-data-types.md) ✓
+    - [Phase 2.3: Located Variables Architecture](docs/implementation-phases/phase-2.3-located-variables.md) - PENDING
+  - [Phase 3: Core ST Translation](docs/implementation-phases/phase-3-st-translation.md) - IN PROGRESS
   - [Phase 4: Functions and Function Calls](docs/implementation-phases/phase-4-functions.md)
   - [Phase 5: Function Blocks and Classes](docs/implementation-phases/phase-5-function-blocks.md)
-  - [Phase 6: Located Variables and OpenPLC Integration](docs/implementation-phases/phase-6-openplc-integration.md)
+  - [Phase 6: OpenPLC Integration](docs/implementation-phases/phase-6-openplc-integration.md)
   - [Phase 7: IEC v3 Features and Full Coverage](docs/implementation-phases/phase-7-iec-v3-features.md)
   - [Phase 8: Optimizations and Advanced Debug Support](docs/implementation-phases/phase-8-optimizations.md)
 

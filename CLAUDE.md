@@ -60,7 +60,8 @@ Generates two files: `.cpp` (implementation) and `.hpp` (header). All generated 
 
 ## Implementation Status
 
-- **Completed**: Phases 0-2 (lexer, parser, AST, symbol tables, C++ runtime, project structure, user-defined types, located variables)
+- **Completed**: Phases 0-2.2 (lexer, parser, AST, symbol tables, C++ runtime, project structure, user-defined types)
+- **Pending**: Phase 2.3 (located variables with raw_ptr() and locatedVars[] array)
 - **In Progress**: Phase 3 (ST statement translation)
 - **Future**: Functions, function blocks, OpenPLC integration
 

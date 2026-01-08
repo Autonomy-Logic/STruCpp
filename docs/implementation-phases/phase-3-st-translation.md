@@ -1,6 +1,6 @@
 # Phase 3: Core ST Translation (Expressions and Statements)
 
-**Status**: PENDING
+**Status**: IN PROGRESS
 
 **Duration**: 4-6 weeks
 
