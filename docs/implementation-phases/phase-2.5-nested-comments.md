@@ -2,7 +2,7 @@
 
 **Status**: PENDING
 
-**Duration**: TBD
+**Duration**: 1 week
 
 **Goal**: Implement support for nested comments in IEC 61131-3 Structured Text
 
@@ -10,43 +10,282 @@
 
 IEC 61131-3 Edition 3 introduced support for nested comments, allowing comment blocks to contain other comment blocks. This is useful for commenting out code that already contains comments.
 
+## Design Decisions
+
+### Key Architectural Choices
+
+1. **Lexer-only change** - Nested comments are handled entirely in the lexer. No parser, AST, or code generator changes required.
+
+2. **Comments are stripped** - Comments do not appear in generated C++ output. Source mapping provides the connection back to ST source for debugging.
+
+3. **Custom pattern function** - Replace the current regex-based comment token with a custom Chevrotain pattern function that tracks nesting depth.
+
+4. **Single-line comments unchanged** - The `//` comment syntax doesn't support nesting (it's inherently single-line) and remains regex-based.
+
+### Why Not Emit C++ Comments?
+
+C++ does **not** support nested comments:
+```cpp
+/* outer /* inner */ outer */  // Syntax error!
+```
+
+Converting nested ST comments to C++ would require:
+- Flattening (loses structure)
+- Using `#if 0` preprocessor blocks (awkward)
+- Converting to multiple `//` lines (verbose)
+
+Since generated C++ is an intermediate artifact (not meant for human editing), stripping comments is the simplest and cleanest approach.
+
 ## Scope
 
 ### Comment Syntax
 
-**Standard comments (already supported):**
+**Single-line comments (unchanged):**
 ```st
-(* This is a comment *)
 // This is a single-line comment
 ```
 
-**Nested comments (to be implemented):**
+**Block comments with nesting (new):**
 ```st
+(* This is a block comment *)
+
 (* Outer comment
    (* Inner comment *)
    Still in outer comment
 *)
+
+(* You can nest (* multiple (* levels *) deep *) *)
 ```
 
 ### Current Limitation
 
-The current lexer treats `(* ... *)` as a simple token without tracking nesting depth. This means:
+The current lexer (line 26-30 of `src/frontend/lexer.ts`) uses a non-greedy regex:
+
+```typescript
+export const Comment = createToken({
+  name: "Comment",
+  pattern: /\/\/[^\n\r]*|(?:\(\*[\s\S]*?\*\))/,
+  group: Lexer.SKIPPED,
+});
+```
+
+The `*?` non-greedy quantifier stops at the **first** `*)`, breaking nested comments:
 
 ```st
-(*
-   (* This breaks *)
-   because the first *) closes the comment
-*)
+(* outer (* inner *) outer *)
+         ^^^^^^^^^^^
+         Matches here, leaving " outer *)" as an error
 ```
+
+## Implementation
+
+### Custom Pattern Function
+
+Replace the regex with a custom Chevrotain pattern function:
+
+```typescript
+/**
+ * Custom pattern for comments with nested block comment support.
+ * Handles both // single-line and (* *) block comments.
+ * Block comments can be nested to arbitrary depth.
+ */
+function matchComment(
+  text: string,
+  startOffset: number
+): RegExpExecArray | null {
+  // Try single-line comment first: // ...
+  if (
+    text.charAt(startOffset) === "/" &&
+    text.charAt(startOffset + 1) === "/"
+  ) {
+    let end = startOffset + 2;
+    while (end < text.length && text.charAt(end) !== "\n" && text.charAt(end) !== "\r") {
+      end++;
+    }
+    return createMatchResult(text.substring(startOffset, end), startOffset);
+  }
+
+  // Try block comment: (* ... *)
+  if (
+    text.charAt(startOffset) === "(" &&
+    text.charAt(startOffset + 1) === "*"
+  ) {
+    let depth = 1;
+    let i = startOffset + 2;
+
+    while (i < text.length && depth > 0) {
+      if (text.charAt(i) === "(" && text.charAt(i + 1) === "*") {
+        depth++;
+        i += 2;
+      } else if (text.charAt(i) === "*" && text.charAt(i + 1) === ")") {
+        depth--;
+        i += 2;
+      } else {
+        i++;
+      }
+    }
+
+    if (depth === 0) {
+      return createMatchResult(text.substring(startOffset, i), startOffset);
+    }
+
+    // Unclosed comment - return null, lexer will report error
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Helper to create a RegExpExecArray-compatible result.
+ */
+function createMatchResult(
+  match: string,
+  offset: number
+): RegExpExecArray {
+  const result = [match] as RegExpExecArray;
+  result.index = offset;
+  result.input = "";
+  result.groups = undefined;
+  return result;
+}
+```
+
+### Updated Token Definition
+
+```typescript
+export const Comment = createToken({
+  name: "Comment",
+  pattern: matchComment,
+  line_breaks: true,  // Essential for multi-line block comments
+  group: Lexer.SKIPPED,
+});
+```
+
+The `line_breaks: true` option is critical - it tells Chevrotain that this token can span multiple lines, ensuring line number tracking remains accurate.
+
+### Algorithm Complexity
+
+- **Time**: O(n) where n is the comment length - single pass through characters
+- **Space**: O(1) - only tracking depth counter and position
+
+No recursion or stack needed since we only need to count depth, not remember the nesting structure.
+
+## Edge Cases
+
+### Valid Cases
+
+| Input | Behavior |
+|-------|----------|
+| `(* simple *)` | Matches entire comment |
+| `(* (* nested *) *)` | Matches entire comment (depth 2) |
+| `(* (* (* deep *) *) *)` | Matches entire comment (depth 3) |
+| `(* no close` | Returns null - lexer error |
+| `// single line` | Matches to end of line |
+| `// line (* not nested *)` | Matches entire line as single-line comment |
+
+### Stars and Parentheses Inside Comments
+
+The pattern function doesn't try to interpret content - it just counts `(*` and `*)` pairs:
+
+```st
+(* This has (* in it without closing *)  // Valid - the (* starts nesting
+(* This has random ) and ( chars *)      // Valid - individual chars ignored
+(* Pointer: myRef^ := value; *)          // Valid - ^ is just content
+```
+
+### Comments vs Strings
+
+Token matching in Chevrotain is position-based. At any position, only one token matches. A string starting with `'` won't conflict with a comment starting with `(*`:
+
+```st
+myString := '(* not a comment *)';  // String literal, not comment
+(* This is 'really' a comment *)    // Comment containing quotes
+```
+
+## Error Handling
+
+### Unclosed Comments
+
+When a `(*` has no matching `*)`, the pattern function returns `null`. Chevrotain reports this as a lexer error at the position of the `(*`:
+
+```
+Error: Unexpected character '(' at line 5, column 1
+```
+
+For better error messages, we could potentially:
+1. Return a partial match and let semantic analysis report "unclosed comment"
+2. Add a custom error handler
+
+However, the default Chevrotain behavior is acceptable for this phase.
+
+### Mismatched Closing
+
+A `*)` without a preceding `(*` is not treated as a comment - it becomes two separate tokens (`Star` and `RParen`), which will likely cause a parser error in context. This is correct behavior.
 
 ## Deliverables
 
-*To be defined*
+### Lexer Changes
+- [ ] Create `matchComment` custom pattern function
+- [ ] Create `createMatchResult` helper function
+- [ ] Update `Comment` token to use custom pattern
+- [ ] Add `line_breaks: true` option
+- [ ] Remove old regex pattern
+
+### Testing
+- [ ] Unit test: simple block comment `(* ... *)`
+- [ ] Unit test: nested comment (depth 2)
+- [ ] Unit test: deeply nested comment (depth 3+)
+- [ ] Unit test: unclosed comment error
+- [ ] Unit test: single-line comment unchanged
+- [ ] Unit test: mixed single-line and block comments
+- [ ] Unit test: comments in various code contexts
+- [ ] Integration test: ST file with nested comments parses correctly
+- [ ] Integration test: error reporting for unclosed comments
+
+### Documentation
+- [ ] Update lexer.ts file comments
+- [ ] Update any user-facing documentation about comment syntax
 
 ## Success Criteria
 
-*To be defined*
+- Nested block comments parse correctly to arbitrary depth
+- Single-line comments (`//`) continue to work unchanged
+- Unclosed comments produce clear lexer errors
+- Line number tracking remains accurate for multi-line comments
+- No performance regression for typical code (comments are O(n) in comment length)
+- All existing tests continue to pass
+- New test coverage for nested comment cases
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `src/frontend/lexer.ts` | Replace Comment regex with custom pattern function |
 
 ## Notes
 
-This requires modifications to the Chevrotain lexer to track comment nesting depth rather than using a simple regex pattern.
+### Why This is Simple
+
+This phase is intentionally minimal:
+- **No parser changes** - comments are already skipped tokens
+- **No AST changes** - comments don't appear in AST
+- **No code generator changes** - nothing to generate
+- **No semantic analysis** - comments have no semantic meaning
+
+The entire change is confined to ~40 lines in the lexer.
+
+### Future Considerations
+
+If comment preservation becomes needed (e.g., for documentation generation), we could:
+1. Change `group` from `Lexer.SKIPPED` to a custom group
+2. Store comments as metadata attached to subsequent AST nodes
+3. Optionally emit as C++ `//` comments (flattened)
+
+This would be a separate enhancement, not part of Phase 2.5.
+
+### Relationship to Other Phases
+
+- **Phase 1**: No relationship (runtime library)
+- **Phase 2.x**: Independent of other Phase 2 features
+- **Phase 3+**: Comments already stripped before these phases see the token stream
