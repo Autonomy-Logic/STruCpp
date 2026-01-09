@@ -392,7 +392,9 @@ export class CodeGenerator {
         for (const name of decl.names) {
           // Generate variable with optional address comment
           if (decl.address) {
-            this.emitHeader(`    IEC_${decl.type.name} ${name};  // AT ${decl.address}`);
+            this.emitHeader(
+              `    IEC_${decl.type.name} ${name};  // AT ${decl.address}`,
+            );
             // Collect located variable info
             this.collectLocatedVar(name, decl, prog.name);
           } else {
@@ -537,7 +539,9 @@ export class CodeGenerator {
       this.emitHeader("    // Local variables");
       for (const decl of prog.varDeclarations) {
         if (decl.address) {
-          this.emitHeader(`    IEC_${decl.typeName} ${decl.name};  // AT ${decl.address}`);
+          this.emitHeader(
+            `    IEC_${decl.typeName} ${decl.name};  // AT ${decl.address}`,
+          );
           // Collect located variable info
           this.collectLocatedVarFromModel(decl, prog.name);
         } else {
@@ -1016,26 +1020,38 @@ export class CodeGenerator {
   private generateLocatedVarsDeclaration(): void {
     if (this.locatedVars.length === 0) return;
 
-    this.emitHeader("// =============================================================================");
+    this.emitHeader(
+      "// =============================================================================",
+    );
     this.emitHeader("// Located Variables Descriptor Array");
-    this.emitHeader("// =============================================================================");
+    this.emitHeader(
+      "// =============================================================================",
+    );
     this.emitHeader("");
     this.emitHeader("/**");
     this.emitHeader(" * Located variable descriptors for runtime I/O binding.");
-    this.emitHeader(" * The runtime iterates this array to bind variables to I/O image tables.");
+    this.emitHeader(
+      " * The runtime iterates this array to bind variables to I/O image tables.",
+    );
     this.emitHeader(" */");
     this.emitHeader("");
 
     // Forward declarations for program instances
     for (const locVar of this.locatedVars) {
-      this.emitHeader(`// Forward: ${locVar.varName} AT ${locVar.address} in Program_${locVar.programName}`);
+      this.emitHeader(
+        `// Forward: ${locVar.varName} AT ${locVar.address} in Program_${locVar.programName}`,
+      );
     }
     this.emitHeader("");
 
     // The actual array will be defined in the implementation file
     // and initialized in the constructor
-    this.emitHeader(`extern LocatedVar locatedVars[${this.locatedVars.length}];`);
-    this.emitHeader(`constexpr uint32_t locatedVarsCount = ${this.locatedVars.length};`);
+    this.emitHeader(
+      `extern LocatedVar locatedVars[${this.locatedVars.length}];`,
+    );
+    this.emitHeader(
+      `constexpr uint32_t locatedVarsCount = ${this.locatedVars.length};`,
+    );
     this.emitHeader("");
   }
 
@@ -1045,9 +1061,13 @@ export class CodeGenerator {
   private generateLocatedVarsDefinition(): void {
     if (this.locatedVars.length === 0) return;
 
-    this.emit("// =============================================================================");
+    this.emit(
+      "// =============================================================================",
+    );
     this.emit("// Located Variables Descriptor Array");
-    this.emit("// =============================================================================");
+    this.emit(
+      "// =============================================================================",
+    );
     this.emit("");
     this.emit(`LocatedVar locatedVars[${this.locatedVars.length}] = {`);
 
@@ -1056,7 +1076,7 @@ export class CodeGenerator {
       const comma = i < this.locatedVars.length - 1 ? "," : "";
       this.emit(
         `    { LocatedArea::${locVar.area}, LocatedSize::${locVar.size}, ` +
-        `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
+          `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
       );
     }
 
@@ -1072,17 +1092,22 @@ export class CodeGenerator {
     programName: string,
     indent: string = "    ",
   ): void {
-    const progVars = this.locatedVars.filter((v) => v.programName === programName);
+    const progVars = this.locatedVars.filter(
+      (v) => v.programName === programName,
+    );
     if (progVars.length === 0) return;
 
     this.emit(`${indent}// Initialize located variable pointers`);
     for (const locVar of progVars) {
       // Find the index of this variable in the global array
       const index = this.locatedVars.findIndex(
-        (v) => v.varName === locVar.varName && v.programName === locVar.programName,
+        (v) =>
+          v.varName === locVar.varName && v.programName === locVar.programName,
       );
       if (index >= 0) {
-        this.emit(`${indent}locatedVars[${index}].pointer = ${locVar.varName}.raw_ptr();`);
+        this.emit(
+          `${indent}locatedVars[${index}].pointer = ${locVar.varName}.raw_ptr();`,
+        );
       }
     }
   }

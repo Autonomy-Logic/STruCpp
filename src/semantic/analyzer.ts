@@ -5,7 +5,11 @@
  * Builds symbol tables, performs type checking, and validates IEC semantics.
  */
 
-import type { CompilationUnit, ElementaryType, VarDeclaration } from "../frontend/ast.js";
+import type {
+  CompilationUnit,
+  ElementaryType,
+  VarDeclaration,
+} from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
 import { SymbolTables } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
@@ -18,8 +22,8 @@ import { TypeChecker } from "./type-checker.js";
  * Parsed components of a located variable address.
  */
 interface ParsedAddress {
-  area: "I" | "Q" | "M";       // Input, Output, Memory
-  size: "X" | "B" | "W" | "D" | "L";  // Bit, Byte, Word, DWord, LWord
+  area: "I" | "Q" | "M"; // Input, Output, Memory
+  size: "X" | "B" | "W" | "D" | "L"; // Bit, Byte, Word, DWord, LWord
   byteIndex: number;
   bitIndex: number;
 }
@@ -55,11 +59,16 @@ function parseAddress(address: string): ParsedAddress | null {
  */
 function getCompatibleTypes(size: "X" | "B" | "W" | "D" | "L"): string[] {
   switch (size) {
-    case "X": return ["BOOL"];
-    case "B": return ["BYTE", "USINT", "SINT"];
-    case "W": return ["WORD", "INT", "UINT"];
-    case "D": return ["DWORD", "DINT", "UDINT", "REAL"];
-    case "L": return ["LWORD", "LINT", "ULINT", "LREAL"];
+    case "X":
+      return ["BOOL"];
+    case "B":
+      return ["BYTE", "USINT", "SINT"];
+    case "W":
+      return ["WORD", "INT", "UINT"];
+    case "D":
+      return ["DWORD", "DINT", "UDINT", "REAL"];
+    case "L":
+      return ["LWORD", "LINT", "ULINT", "LREAL"];
   }
 }
 
@@ -208,7 +217,12 @@ export class SemanticAnalyzer {
 
         // Create local scope for function
         const scope = this.symbolTables.createFunctionScope(funcDecl.name);
-        this.buildVarBlockSymbols(funcDecl.varBlocks, scope, "function", funcDecl.name);
+        this.buildVarBlockSymbols(
+          funcDecl.varBlocks,
+          scope,
+          "function",
+          funcDecl.name,
+        );
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -235,7 +249,12 @@ export class SemanticAnalyzer {
 
         // Create local scope for function block
         const scope = this.symbolTables.createFBScope(fbDecl.name);
-        this.buildVarBlockSymbols(fbDecl.varBlocks, scope, "functionBlock", fbDecl.name);
+        this.buildVarBlockSymbols(
+          fbDecl.varBlocks,
+          scope,
+          "functionBlock",
+          fbDecl.name,
+        );
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -259,7 +278,12 @@ export class SemanticAnalyzer {
 
         // Create local scope for program
         const scope = this.symbolTables.createProgramScope(progDecl.name);
-        this.buildVarBlockSymbols(progDecl.varBlocks, scope, "program", progDecl.name);
+        this.buildVarBlockSymbols(
+          progDecl.varBlocks,
+          scope,
+          "program",
+          progDecl.name,
+        );
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -398,7 +422,10 @@ export class SemanticAnalyzer {
       }
 
       // Rule 3: Validate bit index is 0-7 for bit addresses
-      if (locVar.parsed.size === "X" && (locVar.parsed.bitIndex < 0 || locVar.parsed.bitIndex > 7)) {
+      if (
+        locVar.parsed.size === "X" &&
+        (locVar.parsed.bitIndex < 0 || locVar.parsed.bitIndex > 7)
+      ) {
         this.addError(
           `Bit index ${locVar.parsed.bitIndex} out of range (0-7) in address '${locVar.address}'`,
           decl.sourceSpan.startLine,
