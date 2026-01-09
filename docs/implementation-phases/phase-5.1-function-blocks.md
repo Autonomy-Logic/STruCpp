@@ -1,10 +1,10 @@
-# Phase 5: Function Blocks and Classes
+# Phase 5.1: Function Blocks Core
 
 **Status**: PENDING
 
-**Duration**: 6-8 weeks
+**Duration**: 4-5 weeks
 
-**Goal**: Implement function blocks as C++ classes with state and methods
+**Goal**: Implement function blocks as C++ classes with state and execution body
 
 ## Overview
 
@@ -164,8 +164,9 @@ END_PROGRAM
 ## Notes
 
 ### Relationship to Other Phases
-- **Phase 4**: Functions provide the foundation for FB methods
-- **Phase 6**: Located variables and OpenPLC integration build on FB infrastructure
+- **Phase 4**: Functions provide the foundation for FB execution
+- **Phase 5.2**: OOP extensions (methods, interfaces, inheritance) build on this foundation
+- **Phase 6**: OpenPLC integration builds on FB infrastructure
 
 ### Generated C++ Structure
 

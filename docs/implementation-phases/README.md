@@ -40,8 +40,7 @@ Parse IEC 61131-3 project structure, user-defined data types, and advanced langu
 - [Phase 2.4: References and Pointers](phase-2.4-references.md) - REF_TO, REF, DREF, ^, NULL
 - [Phase 2.5: Nested Comments](phase-2.5-nested-comments.md) - Support for nested comment blocks
 - [Phase 2.6: Variable Modifiers](phase-2.6-variable-modifiers.md) - RETAIN and CONSTANT code generation
-- [Phase 2.7: Namespaces](phase-2.7-namespaces.md) - NAMESPACE/END_NAMESPACE support
-- [Phase 2.8: OOP Extensions](phase-2.8-oop-extensions.md) - Methods, interfaces, inheritance
+- [Phase 2.7: Namespaces](phase-2.7-namespaces.md) - Project-level namespace configuration (CODESYS-style)
 
 ### Phase 3: Core ST Translation
 **Status**: IN PROGRESS | **Duration**: 4-6 weeks
@@ -57,12 +56,14 @@ Add support for user-defined functions and standard library functions.
 
 **Document**: [phase-4-functions.md](phase-4-functions.md)
 
-### Phase 5: Function Blocks and Classes
-**Status**: PENDING | **Duration**: 6-8 weeks
+### Phase 5: Function Blocks and OOP
+**Status**: PENDING | **Duration**: 8-11 weeks
 
-Implement function blocks as C++ classes with state and methods.
+Implement function blocks as C++ classes with state, methods, interfaces, and inheritance.
 
-**Document**: [phase-5-function-blocks.md](phase-5-function-blocks.md)
+**Sub-phases**:
+- [Phase 5.1: Function Blocks Core](phase-5.1-function-blocks.md) - FB declarations, instantiation, state, operator()
+- [Phase 5.2: OOP Extensions](phase-5.2-oop-extensions.md) - Methods, interfaces, inheritance, properties
 
 ### Phase 6: OpenPLC Integration
 **Status**: PENDING | **Duration**: 3-4 weeks

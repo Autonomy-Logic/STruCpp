@@ -490,8 +490,8 @@ void Program_Main::run() {
 ### Relationship to Other Phases
 
 - **Phase 2.2**: User-defined types are placed in the project namespace
-- **Phase 2.8**: OOP extensions (methods, interfaces) work within namespaces
-- **Phase 5**: Function blocks are namespaced
+- **Phase 5.1**: Function blocks are namespaced
+- **Phase 5.2**: OOP extensions (methods, interfaces) work within namespaces
 - **Phase 6**: OpenPLC integration may have its own namespace conventions
 
 ### Future Considerations

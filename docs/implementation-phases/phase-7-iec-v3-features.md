@@ -10,11 +10,11 @@
 
 This phase implements optional IEC 61131-3 languages beyond Structured Text, including Instruction List (IL) and Sequential Function Chart (SFC). It also addresses any remaining IEC 61131-3 features not covered in earlier phases.
 
-**Note**: Many IEC v3 features have been moved to Phase 2:
+**Note**: Many IEC v3 features have been moved to other phases:
 - References (REF_TO, etc.) → Phase 2.4
 - Nested comments → Phase 2.5
 - Namespaces → Phase 2.7
-- OOP extensions → Phase 2.8
+- OOP extensions (methods, interfaces, inheritance) → Phase 5.2
 
 ## Scope
 
@@ -140,6 +140,7 @@ SFC is a graphical language for defining sequential processes. It requires:
 
 ### Relationship to Other Phases
 - **Phase 1**: Type system foundation
-- **Phase 2**: Structural elements (POUs, types, namespaces, OOP)
+- **Phase 2**: Structural elements (POUs, types, namespaces)
 - **Phase 3**: ST expression/statement compilation
-- **Phase 5**: Function blocks (used by SFC actions)
+- **Phase 5.1**: Function blocks (used by SFC actions)
+- **Phase 5.2**: OOP extensions (methods in SFC actions)
