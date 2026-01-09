@@ -3,6 +3,10 @@
  *
  * This header defines the IECVar template class that wraps IEC types
  * with support for variable forcing (a key OpenPLC feature).
+ *
+ * Located variables (AT %IX0.0, etc.) use this same wrapper, and the
+ * raw_ptr() method provides access to the underlying storage for
+ * runtime binding to I/O image tables.
  */
 
 #pragma once
@@ -67,11 +71,13 @@ public:
 
     /**
      * Set the value.
-     * If forcing is active, the underlying value is still updated but
-     * get() will continue to return the forced value.
+     * If forcing is active, the set is ignored to ensure drivers reading
+     * the raw storage always see the forced value for output variables.
      */
     void set(T v) noexcept {
-        value_ = v;
+        if (!forced_) {
+            value_ = v;
+        }
     }
 
     /**
@@ -89,10 +95,12 @@ public:
     /**
      * Force the variable to a specific value.
      * While forced, get() will return the forced value regardless of set() calls.
+     * Also updates the raw storage so drivers reading via raw_ptr() see the forced value.
      */
     void force(T v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;  // Update raw value so external readers (plugins) see forced value
     }
 
     /**
@@ -115,6 +123,25 @@ public:
     T get_forced_value() const noexcept {
         return forced_value_;
     }
+
+    // =========================================================================
+    // Raw Pointer Access (for Located Variables)
+    // =========================================================================
+
+    /**
+     * Get a pointer to the underlying raw storage.
+     * Used by the runtime to bind located variables to I/O image tables.
+     * Plugins and drivers read/write through this pointer.
+     *
+     * For inputs: drivers write to this pointer, get() returns forced value when forced
+     * For outputs: force() updates this storage, so drivers always read the forced value
+     */
+    T* raw_ptr() noexcept { return &value_; }
+
+    /**
+     * Get a const pointer to the underlying raw storage.
+     */
+    const T* raw_ptr() const noexcept { return &value_; }
 
     // =========================================================================
     // Implicit Conversions

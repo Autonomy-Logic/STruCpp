@@ -774,9 +774,9 @@ export class ASTBuilder {
     let address: string | undefined;
     const atToken = getFirstToken(children.AT);
     if (atToken) {
-      const directVarToken = getFirstToken(children.DirectVariable);
-      if (directVarToken) {
-        address = directVarToken.image;
+      const directAddrToken = getFirstToken(children.DirectAddress);
+      if (directAddrToken) {
+        address = directAddrToken.image;
       }
     }
 

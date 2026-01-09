@@ -10,6 +10,7 @@ import { parse as parseSource } from "./frontend/parser.js";
 import { buildAST } from "./frontend/ast-builder.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
+import { SemanticAnalyzer } from "./semantic/analyzer.js";
 import { CodeGenerator } from "./backend/codegen.js";
 import type { CompilationUnit } from "./frontend/ast.js";
 
@@ -146,9 +147,40 @@ export function compile(
     };
   }
 
+  // Phase 3.5: Semantic analysis (located variables, type checking, etc.)
+  const analyzer = new SemanticAnalyzer();
+  const semanticResult = analyzer.analyze(ast);
+  for (const err of semanticResult.errors) {
+    errors.push({
+      message: err.message,
+      line: err.line ?? 0,
+      column: err.column ?? 0,
+      severity: "error",
+    });
+  }
+  for (const warn of semanticResult.warnings) {
+    warnings.push({
+      message: warn.message,
+      line: warn.line ?? 0,
+      column: warn.column ?? 0,
+      severity: "warning",
+    });
+  }
+
+  if (errors.length > 0) {
+    return {
+      success: false,
+      cppCode: "",
+      headerCode: "",
+      lineMap: new Map(),
+      errors,
+      warnings,
+    };
+  }
+
   // Phase 4: Generate C++ code
-  const symbolTables = new SymbolTables();
-  const codegen = new CodeGenerator(symbolTables, {
+  const codegenSymbolTables = new SymbolTables();
+  const codegen = new CodeGenerator(codegenSymbolTables, {
     sourceComments: mergedOptions.debug,
     lineDirectives: mergedOptions.lineMapping,
     headerFileName: mergedOptions.headerFileName ?? "generated.hpp",

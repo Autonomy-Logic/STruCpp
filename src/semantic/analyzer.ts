@@ -5,10 +5,79 @@
  * Builds symbol tables, performs type checking, and validates IEC semantics.
  */
 
-import type { CompilationUnit, ElementaryType } from "../frontend/ast.js";
+import type {
+  CompilationUnit,
+  ElementaryType,
+  VarDeclaration,
+} from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
 import { SymbolTables } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
+
+// =============================================================================
+// Located Variable Address Parsing
+// =============================================================================
+
+/**
+ * Parsed components of a located variable address.
+ */
+interface ParsedAddress {
+  area: "I" | "Q" | "M"; // Input, Output, Memory
+  size: "X" | "B" | "W" | "D" | "L"; // Bit, Byte, Word, DWord, LWord
+  byteIndex: number;
+  bitIndex: number;
+}
+
+/**
+ * Parse a located variable address string.
+ * @param address Address string like "%IX0.0" or "%QW10"
+ * @returns Parsed address components or null if invalid
+ */
+function parseAddress(address: string): ParsedAddress | null {
+  // Pattern: %<area><size><byte_index>.<bit_index>
+  // Examples: %IX0.0, %QX2.3, %IW10, %QW5, %MW100, %MD50
+  const match = address.match(/^%([IQM])([XBWDL]?)(\d+)(?:\.(\d+))?$/i);
+  if (!match) {
+    return null;
+  }
+
+  const area = match[1]!.toUpperCase() as "I" | "Q" | "M";
+  let size = match[2]?.toUpperCase() as "X" | "B" | "W" | "D" | "L" | undefined;
+  const byteIndex = parseInt(match[3]!, 10);
+  const bitIndex = match[4] ? parseInt(match[4], 10) : 0;
+
+  // Default size to X (bit) if not specified and bit index is present
+  if (!size) {
+    size = "X";
+  }
+
+  return { area, size, byteIndex, bitIndex };
+}
+
+/**
+ * Get the expected IEC types for a given address size.
+ */
+function getCompatibleTypes(size: "X" | "B" | "W" | "D" | "L"): string[] {
+  switch (size) {
+    case "X":
+      return ["BOOL"];
+    case "B":
+      return ["BYTE", "USINT", "SINT"];
+    case "W":
+      return ["WORD", "INT", "UINT"];
+    case "D":
+      return ["DWORD", "DINT", "UDINT", "REAL"];
+    case "L":
+      return ["LWORD", "LINT", "ULINT", "LREAL"];
+  }
+}
+
+/**
+ * Create a canonical address key for duplicate detection.
+ */
+function addressKey(parsed: ParsedAddress): string {
+  return `${parsed.area}${parsed.size}${parsed.byteIndex}.${parsed.bitIndex}`;
+}
 
 // =============================================================================
 // Analysis Result
@@ -43,11 +112,27 @@ export interface SemanticAnalysisResult {
  * 2. Type checking - Verify type correctness
  * 3. Semantic validation - Check IEC semantic rules
  */
+/**
+ * Information about a located variable for validation.
+ */
+interface LocatedVarInfo {
+  name: string;
+  address: string;
+  parsed: ParsedAddress;
+  typeName: string;
+  scopeType: "program" | "function" | "functionBlock";
+  scopeName: string;
+  declaration: VarDeclaration;
+}
+
 export class SemanticAnalyzer {
   private symbolTables: SymbolTables;
   private typeChecker: TypeChecker;
   private errors: CompileError[] = [];
   private warnings: CompileError[] = [];
+
+  /** Track all located variables for duplicate detection */
+  private locatedVars: LocatedVarInfo[] = [];
 
   constructor() {
     this.symbolTables = new SymbolTables();
@@ -60,6 +145,7 @@ export class SemanticAnalyzer {
   analyze(ast: CompilationUnit): SemanticAnalysisResult {
     this.errors = [];
     this.warnings = [];
+    this.locatedVars = [];
 
     // Pass 1: Build symbol tables
     this.buildSymbolTables(ast);
@@ -131,7 +217,12 @@ export class SemanticAnalyzer {
 
         // Create local scope for function
         const scope = this.symbolTables.createFunctionScope(funcDecl.name);
-        this.buildVarBlockSymbols(funcDecl.varBlocks, scope);
+        this.buildVarBlockSymbols(
+          funcDecl.varBlocks,
+          scope,
+          "function",
+          funcDecl.name,
+        );
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -158,7 +249,12 @@ export class SemanticAnalyzer {
 
         // Create local scope for function block
         const scope = this.symbolTables.createFBScope(fbDecl.name);
-        this.buildVarBlockSymbols(fbDecl.varBlocks, scope);
+        this.buildVarBlockSymbols(
+          fbDecl.varBlocks,
+          scope,
+          "functionBlock",
+          fbDecl.name,
+        );
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -182,7 +278,12 @@ export class SemanticAnalyzer {
 
         // Create local scope for program
         const scope = this.symbolTables.createProgramScope(progDecl.name);
-        this.buildVarBlockSymbols(progDecl.varBlocks, scope);
+        this.buildVarBlockSymbols(
+          progDecl.varBlocks,
+          scope,
+          "program",
+          progDecl.name,
+        );
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -201,6 +302,8 @@ export class SemanticAnalyzer {
   private buildVarBlockSymbols(
     varBlocks: CompilationUnit["programs"][0]["varBlocks"],
     scope: ReturnType<typeof this.symbolTables.createProgramScope>,
+    scopeType: "program" | "function" | "functionBlock",
+    scopeName: string,
   ): void {
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
@@ -232,6 +335,28 @@ export class SemanticAnalyzer {
                 isRetain: block.isRetain,
                 address: decl.address,
               });
+
+              // Track located variables for validation
+              if (decl.address) {
+                const parsed = parseAddress(decl.address);
+                if (parsed) {
+                  this.locatedVars.push({
+                    name,
+                    address: decl.address,
+                    parsed,
+                    typeName: decl.type.name,
+                    scopeType,
+                    scopeName,
+                    declaration: decl,
+                  });
+                } else {
+                  this.addError(
+                    `Invalid address format: ${decl.address}`,
+                    decl.sourceSpan.startLine,
+                    decl.sourceSpan.startCol,
+                  );
+                }
+              }
             }
           } catch (err) {
             if (err instanceof Error) {
@@ -249,15 +374,78 @@ export class SemanticAnalyzer {
 
   /**
    * Validate IEC 61131-3 semantic rules.
-   * Will be implemented in Phase 3+.
    */
   private validateSemantics(_ast: CompilationUnit): void {
-    // TODO: Implement semantic validation in Phase 3+
+    // Validate located variables
+    this.validateLocatedVariables();
+
+    // TODO: Implement additional semantic validation in Phase 3+
     // - Check that variables are declared before use
     // - Validate array bounds
     // - Check CASE statement coverage
     // - Validate reference operations
     // - Check for unreachable code
+  }
+
+  /**
+   * Validate located variables for IEC 61131-3 compliance.
+   * Checks:
+   * - Located variables not allowed in function blocks
+   * - No duplicate addresses
+   * - Type must be compatible with address size
+   * - Bit index must be 0-7 for bit addresses
+   */
+  private validateLocatedVariables(): void {
+    const addressMap = new Map<string, LocatedVarInfo>();
+
+    for (const locVar of this.locatedVars) {
+      const decl = locVar.declaration;
+
+      // Rule 1: Located variables not allowed in function blocks
+      if (locVar.scopeType === "functionBlock") {
+        this.addError(
+          `Located variable '${locVar.name}' at ${locVar.address} not allowed in FUNCTION_BLOCK '${locVar.scopeName}'. Located variables can only be declared in PROGRAM or VAR_GLOBAL scope.`,
+          decl.sourceSpan.startLine,
+          decl.sourceSpan.startCol,
+        );
+        continue;
+      }
+
+      // Rule 2: Validate type compatibility with address size
+      const compatibleTypes = getCompatibleTypes(locVar.parsed.size);
+      if (!compatibleTypes.includes(locVar.typeName.toUpperCase())) {
+        this.addError(
+          `Type '${locVar.typeName}' is not compatible with address size '${locVar.parsed.size}' in '${locVar.address}'. Expected one of: ${compatibleTypes.join(", ")}`,
+          decl.sourceSpan.startLine,
+          decl.sourceSpan.startCol,
+        );
+      }
+
+      // Rule 3: Validate bit index is 0-7 for bit addresses
+      if (
+        locVar.parsed.size === "X" &&
+        (locVar.parsed.bitIndex < 0 || locVar.parsed.bitIndex > 7)
+      ) {
+        this.addError(
+          `Bit index ${locVar.parsed.bitIndex} out of range (0-7) in address '${locVar.address}'`,
+          decl.sourceSpan.startLine,
+          decl.sourceSpan.startCol,
+        );
+      }
+
+      // Rule 4: Check for duplicate addresses
+      const key = addressKey(locVar.parsed);
+      const existing = addressMap.get(key);
+      if (existing) {
+        this.addError(
+          `Duplicate address ${locVar.address}: variable '${locVar.name}' conflicts with '${existing.name}'`,
+          decl.sourceSpan.startLine,
+          decl.sourceSpan.startCol,
+        );
+      } else {
+        addressMap.set(key, locVar);
+      }
+    }
   }
 
   /**
