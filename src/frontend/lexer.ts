@@ -148,8 +148,13 @@ export const XOR = createToken({ name: "XOR", pattern: /XOR/i });
 export const NOT = createToken({ name: "NOT", pattern: /NOT/i });
 export const MOD = createToken({ name: "MOD", pattern: /MOD/i });
 
-// Reference types (IEC v3)
+// Reference types (IEC v3 and CODESYS compatibility)
+export const REFERENCE_TO = createToken({
+  name: "REFERENCE_TO",
+  pattern: /REFERENCE_TO/i,
+});
 export const REF_TO = createToken({ name: "REF_TO", pattern: /REF_TO/i });
+export const DREF = createToken({ name: "DREF", pattern: /DREF/i });
 export const REF = createToken({ name: "REF", pattern: /REF/i });
 export const NULL = createToken({ name: "NULL", pattern: /NULL/i });
 
@@ -212,6 +217,7 @@ export const WideStringLiteral = createToken({
 // Operators and Punctuation
 // =============================================================================
 
+export const RefAssign = createToken({ name: "RefAssign", pattern: /REF=/i });
 export const Assign = createToken({ name: "Assign", pattern: /:=/ });
 export const OutputAssign = createToken({
   name: "OutputAssign",
@@ -327,7 +333,9 @@ const keywordTokens = [
   XOR,
   NOT,
   MOD,
+  REFERENCE_TO,
   REF_TO,
+  DREF,
   REF,
   NULL,
 ];
@@ -353,6 +361,7 @@ export const allTokens = [
   // Multi-character operators (before single-character)
   DoubleDot,
   Power,
+  RefAssign,
   Assign,
   OutputAssign,
   NotEqual,
@@ -416,7 +425,9 @@ export const allTokens = [
   XOR,
   NOT,
   MOD,
+  REFERENCE_TO,
   REF_TO,
+  DREF,
   REF,
   NULL,
 

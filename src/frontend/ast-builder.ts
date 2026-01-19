@@ -27,11 +27,15 @@ import type {
   VarBlockType,
   VarDeclaration,
   TypeReference,
+  ReferenceKind,
   Statement,
   Expression,
   LiteralExpression,
   VariableExpression,
   AssignmentStatement,
+  RefAssignStatement,
+  RefExpression,
+  DrefExpression,
   IfStatement,
   ForStatement,
   WhileStatement,
@@ -249,6 +253,7 @@ export class ASTBuilder {
         sourceSpan: nodeToSourceSpan(node),
         name: "VOID",
         isReference: false,
+        referenceKind: "none",
       };
     }
 
@@ -373,6 +378,7 @@ export class ASTBuilder {
       sourceSpan: nodeToSourceSpan(node),
       name: "INT",
       isReference: false,
+      referenceKind: "none",
     };
   }
 
@@ -467,6 +473,7 @@ export class ASTBuilder {
           sourceSpan: nodeToSourceSpan(node),
           name: "INT",
           isReference: false,
+          referenceKind: "none",
         };
 
     return {
@@ -521,6 +528,7 @@ export class ASTBuilder {
           sourceSpan: nodeToSourceSpan(node),
           name: "INT",
           isReference: false,
+          referenceKind: "none",
         };
 
     // Check for subrange bounds
@@ -757,6 +765,7 @@ export class ASTBuilder {
         sourceSpan: nodeToSourceSpan(node),
         name: "INT",
         isReference: false,
+        referenceKind: "none",
       };
     }
 
@@ -798,13 +807,23 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
     const nameToken = getFirstToken(children.Identifier);
     const name = nameToken?.image ?? "INT";
-    const isReference = !!children.REF_TO;
+    const isRefTo = !!children.REF_TO;
+    const isReferenceTo = !!children.REFERENCE_TO;
+    const isReference = isRefTo || isReferenceTo;
+
+    let referenceKind: ReferenceKind = "none";
+    if (isRefTo) {
+      referenceKind = "ref_to";
+    } else if (isReferenceTo) {
+      referenceKind = "reference_to";
+    }
 
     return {
       kind: "TypeReference",
       sourceSpan: nodeToSourceSpan(node),
       name,
       isReference,
+      referenceKind,
     };
   }
 
@@ -815,6 +834,11 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
 
     // Check for different statement types
+    if (children.refAssignStatement) {
+      return this.buildRefAssignStatement(
+        getFirstNode(children.refAssignStatement)!,
+      );
+    }
     if (children.assignmentStatement) {
       return this.buildAssignmentStatement(
         getFirstNode(children.assignmentStatement)!,
@@ -843,6 +867,28 @@ export class ASTBuilder {
     }
 
     return undefined;
+  }
+
+  /**
+   * Build a RefAssignStatement from a CST node.
+   */
+  buildRefAssignStatement(node: CstNode): RefAssignStatement {
+    const children = node.children as CstChildren;
+    const variableNodes = getAllNodes(children.variable);
+
+    const target = variableNodes[0]
+      ? this.buildVariableExpression(variableNodes[0])
+      : this.createDummyVariable(node);
+    const source = variableNodes[1]
+      ? this.buildVariableExpression(variableNodes[1])
+      : this.createDummyVariable(node);
+
+    return {
+      kind: "RefAssignStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      target,
+      source,
+    };
   }
 
   /**
@@ -1345,6 +1391,16 @@ export class ASTBuilder {
       return this.buildLiteralExpression(getFirstNode(children.literal)!);
     }
 
+    // Check for REF(variable) expression
+    if (children.refExpression) {
+      return this.buildRefExpression(getFirstNode(children.refExpression)!);
+    }
+
+    // Check for DREF(expression) expression
+    if (children.drefExpression) {
+      return this.buildDrefExpression(getFirstNode(children.drefExpression)!);
+    }
+
     // Check for variable
     if (children.variable) {
       return this.buildVariableExpression(getFirstNode(children.variable)!);
@@ -1364,6 +1420,40 @@ export class ASTBuilder {
 
     // Try to extract a literal or variable directly
     return this.tryBuildDirectExpression(node);
+  }
+
+  /**
+   * Build a RefExpression from a CST node.
+   */
+  buildRefExpression(node: CstNode): RefExpression {
+    const children = node.children as CstChildren;
+    const variableNode = getFirstNode(children.variable);
+    const operand = variableNode
+      ? this.buildVariableExpression(variableNode)
+      : this.createDummyVariable(node);
+
+    return {
+      kind: "RefExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      operand,
+    };
+  }
+
+  /**
+   * Build a DrefExpression from a CST node.
+   */
+  buildDrefExpression(node: CstNode): DrefExpression {
+    const children = node.children as CstChildren;
+    const exprNode = getFirstNode(children.expression);
+    const operand = exprNode
+      ? this.buildExpression(exprNode)
+      : this.createDummyVariable(node);
+
+    return {
+      kind: "DrefExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      operand: operand!,
+    };
   }
 
   /**
@@ -1520,6 +1610,17 @@ export class ASTBuilder {
       };
     }
 
+    if (children.NULL) {
+      const token = getFirstToken(children.NULL)!;
+      return {
+        kind: "LiteralExpression",
+        sourceSpan: tokenToSourceSpan(token),
+        literalType: "NULL",
+        value: "NULL",
+        rawValue: "NULL",
+      };
+    }
+
     // Default fallback
     return {
       kind: "LiteralExpression",
@@ -1538,14 +1639,27 @@ export class ASTBuilder {
     const nameToken = getFirstToken(children.Identifier);
     const name = nameToken?.image ?? "";
 
-    // TODO: Handle subscripts and field access in Phase 3+
+    // Check for dereference operator (^)
+    const isDereference = !!children.Caret;
+
+    // Get additional field access identifiers
+    const allIdentifiers = getAllTokens(children.Identifier);
+    const fieldAccess: string[] = [];
+    for (let i = 1; i < allIdentifiers.length; i++) {
+      const token = allIdentifiers[i];
+      if (token) {
+        fieldAccess.push(token.image);
+      }
+    }
+
+    // TODO: Handle subscripts in Phase 3+
     return {
       kind: "VariableExpression",
       sourceSpan: nodeToSourceSpan(node),
       name,
       subscripts: [],
-      fieldAccess: [],
-      isDereference: false,
+      fieldAccess,
+      isDereference,
     };
   }
 

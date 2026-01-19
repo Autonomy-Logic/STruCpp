@@ -308,12 +308,15 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Data type reference (simple type or REF_TO type)
+   * Data type reference (simple type, REF_TO type, or REFERENCE_TO type)
    * Note: arrayType is handled separately in singleTypeDeclaration to avoid ambiguity
    */
   public dataType = this.RULE("dataType", () => {
     this.OPTION(() => {
-      this.CONSUME(tokens.REF_TO);
+      this.OR([
+        { ALT: () => this.CONSUME(tokens.REF_TO) },
+        { ALT: () => this.CONSUME(tokens.REFERENCE_TO) },
+      ]);
     });
     this.CONSUME(tokens.Identifier);
   });
@@ -409,6 +412,10 @@ export class STParser extends CstParser {
    */
   public statement = this.RULE("statement", () => {
     this.OR([
+      {
+        ALT: () => this.SUBRULE(this.refAssignStatement),
+        GATE: () => this.isRefAssignAhead(),
+      },
       { ALT: () => this.SUBRULE(this.assignmentStatement) },
       { ALT: () => this.SUBRULE(this.ifStatement) },
       { ALT: () => this.SUBRULE(this.caseStatement) },
@@ -419,6 +426,37 @@ export class STParser extends CstParser {
       { ALT: () => this.SUBRULE(this.returnStatement) },
       { ALT: () => this.SUBRULE(this.functionCallStatement) },
     ]);
+  });
+
+  /**
+   * Lookahead helper to detect if we're parsing a refAssign statement (has REF=)
+   */
+  private isRefAssignAhead(): boolean {
+    // Look ahead to see if there's a RefAssign token before Semicolon or Assign
+    const MAX_LOOKAHEAD = 50;
+    for (let i = 1; i <= MAX_LOOKAHEAD; i++) {
+      const token = this.LA(i);
+      if (token === undefined || token.tokenType === tokens.Semicolon) {
+        return false;
+      }
+      if (token.tokenType === tokens.RefAssign) {
+        return true;
+      }
+      if (token.tokenType === tokens.Assign) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * REF= assignment statement (bind REFERENCE_TO to a variable)
+   */
+  public refAssignStatement = this.RULE("refAssignStatement", () => {
+    this.SUBRULE(this.variable);
+    this.CONSUME(tokens.RefAssign);
+    this.SUBRULE2(this.variable);
+    this.CONSUME(tokens.Semicolon);
   });
 
   /**
@@ -697,6 +735,8 @@ export class STParser extends CstParser {
   public primaryExpression = this.RULE("primaryExpression", () => {
     this.OR([
       { ALT: () => this.SUBRULE(this.literal) },
+      { ALT: () => this.SUBRULE(this.refExpression) },
+      { ALT: () => this.SUBRULE(this.drefExpression) },
       { ALT: () => this.SUBRULE(this.functionCall) },
       { ALT: () => this.SUBRULE(this.variable) },
       {
@@ -707,6 +747,26 @@ export class STParser extends CstParser {
         },
       },
     ]);
+  });
+
+  /**
+   * REF(variable) expression - get reference to a variable
+   */
+  public refExpression = this.RULE("refExpression", () => {
+    this.CONSUME(tokens.REF);
+    this.CONSUME(tokens.LParen);
+    this.SUBRULE(this.variable);
+    this.CONSUME(tokens.RParen);
+  });
+
+  /**
+   * DREF(expression) expression - dereference a reference
+   */
+  public drefExpression = this.RULE("drefExpression", () => {
+    this.CONSUME(tokens.DREF);
+    this.CONSUME(tokens.LParen);
+    this.SUBRULE(this.expression);
+    this.CONSUME(tokens.RParen);
   });
 
   /**

@@ -86,6 +86,7 @@ export interface EnumType extends IECType {
 export interface ReferenceType extends IECType {
   typeKind: "reference";
   referencedType: IECType;
+  isImplicitDeref: boolean; // true for REFERENCE_TO (CODESYS), false for REF_TO
 }
 
 /**
@@ -270,12 +271,18 @@ export interface ArrayDimension extends ASTNode {
 }
 
 /**
+ * Reference kind for type references
+ */
+export type ReferenceKind = "none" | "ref_to" | "reference_to";
+
+/**
  * Type reference (name of a type)
  */
 export interface TypeReference extends ASTNode {
   kind: "TypeReference";
   name: string;
-  isReference: boolean;
+  isReference: boolean; // true for REF_TO (for backwards compat)
+  referenceKind: ReferenceKind; // more specific: "none", "ref_to", or "reference_to"
 }
 
 // =============================================================================
@@ -331,6 +338,7 @@ export interface ProgramInstance extends ASTNode {
  */
 export type Statement =
   | AssignmentStatement
+  | RefAssignStatement
   | IfStatement
   | CaseStatement
   | ForStatement
@@ -347,6 +355,15 @@ export interface AssignmentStatement extends ASTNode {
   kind: "AssignmentStatement";
   target: Expression;
   value: Expression;
+}
+
+/**
+ * REF= assignment statement (bind REFERENCE_TO to a variable)
+ */
+export interface RefAssignStatement extends ASTNode {
+  kind: "RefAssignStatement";
+  target: Expression;
+  source: Expression;
 }
 
 /**
@@ -462,7 +479,9 @@ export type Expression =
   | FunctionCallExpression
   | VariableExpression
   | LiteralExpression
-  | ParenthesizedExpression;
+  | ParenthesizedExpression
+  | RefExpression
+  | DrefExpression;
 
 /**
  * Binary operator
@@ -569,6 +588,22 @@ export type LiteralType =
 export interface ParenthesizedExpression extends TypedNode {
   kind: "ParenthesizedExpression";
   expression: Expression;
+}
+
+/**
+ * REF(variable) expression - get reference to a variable
+ */
+export interface RefExpression extends TypedNode {
+  kind: "RefExpression";
+  operand: Expression;
+}
+
+/**
+ * DREF(expression) expression - explicit dereference
+ */
+export interface DrefExpression extends TypedNode {
+  kind: "DrefExpression";
+  operand: Expression;
 }
 
 // =============================================================================
