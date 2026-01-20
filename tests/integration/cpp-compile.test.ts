@@ -619,6 +619,92 @@ int main() {
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors.some(e => e.message.toLowerCase().includes('unclosed') || e.message.toLowerCase().includes('comment'))).toBe(true);
   });
+
+  // =============================================================================
+  // Variable Modifiers Tests (Phase 2.6)
+  // =============================================================================
+
+  it('should compile a program with CONSTANT variables', () => {
+    const source = `
+      PROGRAM ConstantVars
+        VAR CONSTANT
+          PI : REAL := 3.14159;
+          MAX_SIZE : INT := 100;
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify const qualifier is generated
+    expect(result.headerCode).toContain('const IEC_REAL PI');
+    expect(result.headerCode).toContain('const IEC_INT MAX_SIZE');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'constant_vars');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile a program with RETAIN variables', () => {
+    const source = `
+      PROGRAM RetainVars
+        VAR RETAIN
+          counter : DINT;
+          last_state : BOOL;
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify retain table is generated
+    expect(result.headerCode).toContain('__retain_vars');
+    expect(result.headerCode).toContain('getRetainVars');
+    expect(result.headerCode).toContain('getRetainCount');
+    expect(result.cppCode).toContain('RetainVarInfo');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'retain_vars');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile a program with mixed CONSTANT and RETAIN variables', () => {
+    const source = `
+      PROGRAM MixedModifiers
+        VAR CONSTANT
+          MAX_VALUE : INT := 1000;
+        END_VAR
+        VAR RETAIN
+          accumulated : DINT;
+        END_VAR
+        VAR
+          temp : INT;
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify const qualifier
+    expect(result.headerCode).toContain('const IEC_INT MAX_VALUE');
+    // Verify retain table (only for retained vars)
+    expect(result.headerCode).toContain('__retain_vars[1]');
+    expect(result.cppCode).toContain('accumulated');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'mixed_modifiers');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should fail semantic validation for CONSTANT without initializer', () => {
+    const source = `
+      PROGRAM NoInitializer
+        VAR CONSTANT
+          missing : INT;
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(false);
+    expect(result.errors.some(e => e.message.includes('CONSTANT') && e.message.includes('initializer'))).toBe(true);
+  });
 });
 
 /**

@@ -8,6 +8,7 @@
 import type {
   CompilationUnit,
   ElementaryType,
+  VarBlock,
   VarDeclaration,
 } from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
@@ -306,6 +307,9 @@ export class SemanticAnalyzer {
     scopeName: string,
   ): void {
     for (const block of varBlocks) {
+      // Validate variable modifiers (CONSTANT, RETAIN)
+      this.validateVarModifiers(block);
+
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           try {
@@ -444,6 +448,77 @@ export class SemanticAnalyzer {
         );
       } else {
         addressMap.set(key, locVar);
+      }
+    }
+  }
+
+  /**
+   * Validate variable block modifiers (CONSTANT, RETAIN).
+   * Checks:
+   * - RETAIN + CONSTANT mutual exclusion
+   * - CONSTANT requires initializer
+   * - Block type restrictions for CONSTANT
+   * - Block type restrictions for RETAIN
+   */
+  private validateVarModifiers(block: VarBlock): void {
+    const blockType = block.blockType;
+
+    // RETAIN + CONSTANT is invalid
+    if (block.isRetain && block.isConstant) {
+      this.addError(
+        "Variable cannot be both RETAIN and CONSTANT",
+        block.sourceSpan.startLine,
+        block.sourceSpan.startCol,
+      );
+      return; // Skip further validation for this block
+    }
+
+    // CONSTANT validation
+    if (block.isConstant) {
+      // CONSTANT requires initializer
+      for (const decl of block.declarations) {
+        if (!decl.initialValue) {
+          const names = decl.names.join(", ");
+          this.addError(
+            `CONSTANT variable '${names}' must have an initializer`,
+            decl.sourceSpan.startLine,
+            decl.sourceSpan.startCol,
+          );
+        }
+      }
+
+      // Block type restrictions for CONSTANT
+      if (blockType === "VAR_OUTPUT") {
+        this.addError(
+          "VAR_OUTPUT cannot be CONSTANT",
+          block.sourceSpan.startLine,
+          block.sourceSpan.startCol,
+        );
+      } else if (blockType === "VAR_IN_OUT") {
+        this.addError(
+          "VAR_IN_OUT cannot be CONSTANT",
+          block.sourceSpan.startLine,
+          block.sourceSpan.startCol,
+        );
+      }
+    }
+
+    // RETAIN validation - block type restrictions
+    if (block.isRetain) {
+      const invalidRetainTypes = [
+        "VAR_INPUT",
+        "VAR_OUTPUT",
+        "VAR_IN_OUT",
+        "VAR_TEMP",
+        "VAR_EXTERNAL",
+      ];
+
+      if (invalidRetainTypes.includes(blockType)) {
+        this.addError(
+          `${blockType} cannot be RETAIN`,
+          block.sourceSpan.startLine,
+          block.sourceSpan.startCol,
+        );
       }
     }
   }
