@@ -1,6 +1,6 @@
 # Phase 2.5: Nested Comments
 
-**Status**: PENDING
+**Status**: COMPLETED
 
 **Duration**: 1 week
 
@@ -142,11 +142,11 @@ function matchComment(
 function createMatchResult(
   match: string,
   offset: number
-): RegExpExecArray {
-  const result = [match] as RegExpExecArray;
+): RegExpExecArray | null {
+  if (match.length === 0) return null;
+  const result = [match] as unknown as RegExpExecArray;
   result.index = offset;
   result.input = "";
-  result.groups = undefined;
   return result;
 }
 ```
@@ -207,17 +207,40 @@ myString := '(* not a comment *)';  // String literal, not comment
 
 ### Unclosed Comments
 
-When a `(*` has no matching `*)`, the pattern function returns `null`. Chevrotain reports this as a lexer error at the position of the `(*`:
+When a `(*` has no matching `*)`, the implementation uses a two-pronged approach:
 
+1. **Pattern function returns `null`** - This allows Chevrotain to try other tokens (like `(` and `*` individually).
+
+2. **Pre-scan validation** - The `tokenize()` wrapper function includes a `findUnclosedBlockComment()` helper that scans the entire source for unbalanced `(*` / `*)` pairs before lexing. If found, it adds a clear error to the result:
+
+```typescript
+function findUnclosedBlockComment(source: string): { line: number; column: number; offset: number } | null {
+  // Tracks nesting depth while scanning
+  // Returns position of unclosed (* if found
+}
+
+export function tokenize(source: string) {
+  const unclosedComment = findUnclosedBlockComment(source);
+  const result = STLexer.tokenize(source);
+
+  if (unclosedComment) {
+    result.errors.push({
+      offset: unclosedComment.offset,
+      line: unclosedComment.line,
+      column: unclosedComment.column,
+      length: 2,
+      message: "Unclosed block comment",
+    });
+  }
+
+  return result;
+}
 ```
-Error: Unexpected character '(' at line 5, column 1
+
+This provides clear error messages:
 ```
-
-For better error messages, we could potentially:
-1. Return a partial match and let semantic analysis report "unclosed comment"
-2. Add a custom error handler
-
-However, the default Chevrotain behavior is acceptable for this phase.
+Error: Unclosed block comment at line 5, column 1
+```
 
 ### Mismatched Closing
 
@@ -226,26 +249,26 @@ A `*)` without a preceding `(*` is not treated as a comment - it becomes two sep
 ## Deliverables
 
 ### Lexer Changes
-- [ ] Create `matchComment` custom pattern function
-- [ ] Create `createMatchResult` helper function
-- [ ] Update `Comment` token to use custom pattern
-- [ ] Add `line_breaks: true` option
-- [ ] Remove old regex pattern
+- [x] Create `matchComment` custom pattern function
+- [x] Create `createMatchResult` helper function
+- [x] Update `Comment` token to use custom pattern
+- [x] Add `line_breaks: true` option
+- [x] Remove old regex pattern
 
 ### Testing
-- [ ] Unit test: simple block comment `(* ... *)`
-- [ ] Unit test: nested comment (depth 2)
-- [ ] Unit test: deeply nested comment (depth 3+)
-- [ ] Unit test: unclosed comment error
-- [ ] Unit test: single-line comment unchanged
-- [ ] Unit test: mixed single-line and block comments
-- [ ] Unit test: comments in various code contexts
-- [ ] Integration test: ST file with nested comments parses correctly
-- [ ] Integration test: error reporting for unclosed comments
+- [x] Unit test: simple block comment `(* ... *)`
+- [x] Unit test: nested comment (depth 2)
+- [x] Unit test: deeply nested comment (depth 3+)
+- [x] Unit test: unclosed comment error
+- [x] Unit test: single-line comment unchanged
+- [x] Unit test: mixed single-line and block comments
+- [x] Unit test: comments in various code contexts
+- [x] Integration test: ST file with nested comments parses correctly
+- [x] Integration test: error reporting for unclosed comments
 
 ### Documentation
-- [ ] Update lexer.ts file comments
-- [ ] Update any user-facing documentation about comment syntax
+- [x] Update lexer.ts file comments
+- [x] Update any user-facing documentation about comment syntax
 
 ## Success Criteria
 

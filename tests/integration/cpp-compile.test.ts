@@ -549,6 +549,76 @@ int main() {
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'types_only');
     expect(cppResult.success).toBe(true);
   });
+
+  // =============================================================================
+  // Nested Comments Tests (Phase 2.5)
+  // =============================================================================
+
+  it('should compile a program with nested block comments', () => {
+    const source = `
+      PROGRAM NestedComments
+        (* This is a comment with (* nested content *) inside *)
+        VAR x : INT; END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'nested_comments');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile a program with deeply nested comments', () => {
+    const source = `
+      PROGRAM DeeplyNested
+        (* Level 1
+           (* Level 2
+              (* Level 3 - deepest *)
+              Back to level 2
+           *)
+           Back to level 1
+        *)
+        VAR counter : DINT; END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'deeply_nested');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile a program with mixed comment styles', () => {
+    const source = `
+      PROGRAM MixedComments
+        // Single-line comment
+        (* Block comment *)
+        (* Nested (* block *) comment *)
+        VAR
+          a : INT; // inline comment
+          b : REAL; (* inline block *)
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'mixed_comments');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should fail to compile with unclosed nested comment', () => {
+    const source = `
+      PROGRAM UnclosedComment
+        (* This comment (* has a nested part but is not closed properly
+        VAR x : INT; END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors.some(e => e.message.toLowerCase().includes('unclosed') || e.message.toLowerCase().includes('comment'))).toBe(true);
+  });
 });
 
 /**
