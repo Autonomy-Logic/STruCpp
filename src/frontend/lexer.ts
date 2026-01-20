@@ -20,12 +20,93 @@ export const WhiteSpace = createToken({
   group: Lexer.SKIPPED,
 });
 
+// =============================================================================
+// Nested Comment Support
+// =============================================================================
+
 /**
- * Single-line comment: // ... or (* ... *)
+ * Helper to create a RegExpExecArray-compatible result for custom patterns.
+ */
+function createMatchResult(
+  match: string,
+  offset: number,
+): RegExpExecArray | null {
+  if (match.length === 0) return null;
+  const result = [match] as unknown as RegExpExecArray;
+  result.index = offset;
+  result.input = "";
+  return result;
+}
+
+/**
+ * Custom pattern for comments with nested block comment support.
+ * Handles both // single-line and (* *) block comments.
+ * Block comments can be nested to arbitrary depth per IEC 61131-3 Ed.3.
+ *
+ * @param text - The full source text
+ * @param startOffset - The current position in the text
+ * @returns A RegExpExecArray-compatible result or null if no match
+ */
+function matchComment(
+  text: string,
+  startOffset: number,
+): RegExpExecArray | null {
+  // Try single-line comment first: // ...
+  if (
+    text.charAt(startOffset) === "/" &&
+    text.charAt(startOffset + 1) === "/"
+  ) {
+    let end = startOffset + 2;
+    while (
+      end < text.length &&
+      text.charAt(end) !== "\n" &&
+      text.charAt(end) !== "\r"
+    ) {
+      end++;
+    }
+    return createMatchResult(text.substring(startOffset, end), startOffset);
+  }
+
+  // Try block comment: (* ... *) with nesting support
+  if (
+    text.charAt(startOffset) === "(" &&
+    text.charAt(startOffset + 1) === "*"
+  ) {
+    let depth = 1;
+    let i = startOffset + 2;
+
+    while (i < text.length && depth > 0) {
+      if (text.charAt(i) === "(" && text.charAt(i + 1) === "*") {
+        depth++;
+        i += 2;
+      } else if (text.charAt(i) === "*" && text.charAt(i + 1) === ")") {
+        depth--;
+        i += 2;
+      } else {
+        i++;
+      }
+    }
+
+    if (depth === 0) {
+      return createMatchResult(text.substring(startOffset, i), startOffset);
+    }
+
+    // Unclosed comment - return null, lexer will report error
+    return null;
+  }
+
+  return null;
+}
+
+/**
+ * Comment token with support for nested block comments.
+ * - Single-line: // ... (to end of line)
+ * - Block: (* ... *) with arbitrary nesting depth
  */
 export const Comment = createToken({
   name: "Comment",
-  pattern: /\/\/[^\n\r]*|(?:\(\*[\s\S]*?\*\))/,
+  pattern: matchComment,
+  line_breaks: true, // Essential for multi-line block comments
   group: Lexer.SKIPPED,
 });
 
@@ -471,11 +552,100 @@ export const allTokens = [
 export const STLexer = new Lexer(allTokens);
 
 /**
+ * Check for unclosed block comments in source code.
+ * Returns error info if an unclosed comment is found.
+ */
+function findUnclosedBlockComment(
+  source: string,
+): { line: number; column: number; offset: number } | null {
+  let i = 0;
+  let depth = 0;
+  let commentStartOffset = -1;
+  let commentStartLine = 1;
+  let commentStartColumn = 1;
+  let line = 1;
+  let column = 1;
+
+  while (i < source.length) {
+    // Track line/column for error reporting
+    if (source.charAt(i) === "\n") {
+      line++;
+      column = 1;
+    } else {
+      column++;
+    }
+
+    // Skip single-line comments
+    if (
+      source.charAt(i) === "/" &&
+      source.charAt(i + 1) === "/" &&
+      depth === 0
+    ) {
+      while (i < source.length && source.charAt(i) !== "\n") {
+        i++;
+        column++;
+      }
+      continue;
+    }
+
+    // Check for block comment start
+    if (source.charAt(i) === "(" && source.charAt(i + 1) === "*") {
+      if (depth === 0) {
+        commentStartOffset = i;
+        commentStartLine = line;
+        commentStartColumn = column;
+      }
+      depth++;
+      i += 2;
+      column++;
+      continue;
+    }
+
+    // Check for block comment end
+    if (source.charAt(i) === "*" && source.charAt(i + 1) === ")") {
+      if (depth > 0) {
+        depth--;
+      }
+      i += 2;
+      column++;
+      continue;
+    }
+
+    i++;
+  }
+
+  if (depth > 0) {
+    return {
+      line: commentStartLine,
+      column: commentStartColumn,
+      offset: commentStartOffset,
+    };
+  }
+
+  return null;
+}
+
+/**
  * Tokenize ST source code.
  *
  * @param source - The ST source code to tokenize
  * @returns Lexer result with tokens and any lexing errors
  */
 export function tokenize(source: string): ReturnType<typeof STLexer.tokenize> {
-  return STLexer.tokenize(source);
+  // Check for unclosed block comments first
+  const unclosedComment = findUnclosedBlockComment(source);
+
+  const result = STLexer.tokenize(source);
+
+  if (unclosedComment) {
+    result.errors.push({
+      offset: unclosedComment.offset,
+      line: unclosedComment.line,
+      column: unclosedComment.column,
+      length: 2,
+      message: "Unclosed block comment",
+    });
+  }
+
+  return result;
 }

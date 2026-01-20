@@ -38,6 +38,86 @@ describe('STLexer', () => {
       expect(result.errors).toHaveLength(0);
       expect(result.tokens).toHaveLength(0);
     });
+
+    it('should skip nested block comments (depth 2)', () => {
+      const result = tokenize('(* outer (* inner *) outer *)');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(0);
+    });
+
+    it('should skip deeply nested block comments (depth 3)', () => {
+      const result = tokenize('(* level1 (* level2 (* level3 *) level2 *) level1 *)');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(0);
+    });
+
+    it('should skip nested comments with multiple inner comments', () => {
+      const result = tokenize('(* outer (* inner1 *) middle (* inner2 *) outer *)');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(0);
+    });
+
+    it('should handle nested comments spanning multiple lines', () => {
+      const result = tokenize(`(* outer
+        (* inner
+           comment *)
+        still outer
+      *)`);
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(0);
+    });
+
+    it('should report error for unclosed block comment', () => {
+      const result = tokenize('(* unclosed comment');
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('should report error for unclosed nested comment', () => {
+      const result = tokenize('(* outer (* inner *) missing close');
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('should handle comments with stars and parens inside', () => {
+      const result = tokenize('(* contains ) and ( and * chars *)');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(0);
+    });
+
+    it('should handle code with nested comments', () => {
+      const result = tokenize(`
+        PROGRAM Main
+          (* This is a comment
+             (* with a nested comment *)
+             and more text
+          *)
+          VAR x : INT; END_VAR
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+      // Should have tokens for PROGRAM, Main, VAR, x, :, INT, ;, END_VAR, END_PROGRAM
+      expect(result.tokens.length).toBeGreaterThan(0);
+      expect(result.tokens[0]?.tokenType.name).toBe('PROGRAM');
+    });
+
+    it('should not confuse single-line comment with nested block comment', () => {
+      const result = tokenize('// This (* is not *) nested');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(0); // Entire line is single-line comment
+    });
+
+    it('should handle comment followed by code', () => {
+      const result = tokenize('(* comment *) VAR');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]?.tokenType.name).toBe('VAR');
+    });
+
+    it('should handle nested comment followed by code', () => {
+      const result = tokenize('(* outer (* inner *) *) PROGRAM');
+      expect(result.errors).toHaveLength(0);
+      expect(result.tokens).toHaveLength(1);
+      expect(result.tokens[0]?.tokenType.name).toBe('PROGRAM');
+    });
   });
 
   describe('keywords', () => {
