@@ -18,8 +18,10 @@
 
 #include "iec_var.hpp"
 #include "iec_traits.hpp"
+#include "iec_retain.hpp"
 #include <cmath>
 #include <algorithm>
+#include <cstddef>
 #include <type_traits>
 
 namespace strucpp {
@@ -27,6 +29,9 @@ namespace strucpp {
 // =============================================================================
 // Base Classes for Runtime
 // =============================================================================
+
+// Forward declaration for retain support
+struct RetainVarInfo;
 
 /**
  * Base class for all program instances.
@@ -37,6 +42,20 @@ struct ProgramBase {
 
     /** Execute one cycle of the program */
     virtual void run() = 0;
+
+    /**
+     * Get the array of retain variable descriptors.
+     * Override in generated code if the program has RETAIN variables.
+     * @return Pointer to static array, or nullptr if no retain variables
+     */
+    virtual const RetainVarInfo* getRetainVars() const { return nullptr; }
+
+    /**
+     * Get the number of retain variables.
+     * Override in generated code if the program has RETAIN variables.
+     * @return Count of retain variables
+     */
+    virtual size_t getRetainCount() const { return 0; }
 };
 
 /**

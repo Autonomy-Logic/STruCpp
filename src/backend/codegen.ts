@@ -150,6 +150,12 @@ export class CodeGenerator {
   /** Track located variables for descriptor array generation */
   private locatedVars: LocatedVarDescriptor[] = [];
 
+  /** Track retain variables per program for table generation */
+  private programRetainVars: Map<
+    string,
+    Array<{ name: string; typeName: string }>
+  > = new Map();
+
   constructor(
     private readonly _symbolTables: SymbolTables,
     options: Partial<CodeGenOptions> = {},
@@ -211,6 +217,7 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_std_lib.hpp"');
     this.emitHeader('#include "iec_enum.hpp"');
     this.emitHeader("#include <array>");
+    this.emitHeader("#include <cstddef>");
     this.emitHeader("#include <string>");
     this.emitHeader("");
     this.emitHeader("namespace strucpp {");
@@ -532,21 +539,33 @@ export class CodeGenerator {
    * Handles VAR_EXTERNAL as reference members.
    */
   private generateProgramHeaderFromModel(prog: ProgramDecl): void {
-    this.emitHeader(`class Program_${prog.name} : public ProgramBase {`);
+    const className = `Program_${prog.name}`;
+    this.emitHeader(`class ${className} : public ProgramBase {`);
     this.emitHeader("public:");
+
+    // Collect retain variables for table generation
+    const retainVars: Array<{ name: string; typeName: string }> = [];
 
     // Generate local variable members and collect located variables
     if (prog.varDeclarations.length > 0) {
       this.emitHeader("    // Local variables");
       for (const decl of prog.varDeclarations) {
+        const constQualifier = decl.isConstant ? "const " : "";
+        const cppType = `IEC_${decl.typeName}`;
+
         if (decl.address) {
           this.emitHeader(
-            `    IEC_${decl.typeName} ${decl.name};  // AT ${decl.address}`,
+            `    ${constQualifier}${cppType} ${decl.name};  // AT ${decl.address}`,
           );
           // Collect located variable info
           this.collectLocatedVarFromModel(decl, prog.name);
         } else {
-          this.emitHeader(`    IEC_${decl.typeName} ${decl.name};`);
+          this.emitHeader(`    ${constQualifier}${cppType} ${decl.name};`);
+        }
+
+        // Collect retain variables
+        if (decl.isRetain) {
+          retainVars.push({ name: decl.name, typeName: cppType });
         }
       }
     }
@@ -566,13 +585,30 @@ export class CodeGenerator {
       const params = prog.varExternal
         .map((ext) => `IEC_${ext.typeName}& ${ext.name}_ref`)
         .join(", ");
-      this.emitHeader(`    explicit Program_${prog.name}(${params});`);
+      this.emitHeader(`    explicit ${className}(${params});`);
     } else {
-      this.emitHeader(`    Program_${prog.name}();`);
+      this.emitHeader(`    ${className}();`);
     }
     this.emitHeader("");
     this.emitHeader("    // Run program");
     this.emitHeader("    void run() override;");
+
+    // Generate retain variable support if there are retain variables
+    if (retainVars.length > 0) {
+      this.emitHeader("");
+      this.emitHeader("    // Retain variable support");
+      this.emitHeader(`    static const RetainVarInfo __retain_vars[${retainVars.length}];`);
+      this.emitHeader(
+        `    const RetainVarInfo* getRetainVars() const override { return __retain_vars; }`,
+      );
+      this.emitHeader(
+        `    size_t getRetainCount() const override { return ${retainVars.length}; }`,
+      );
+
+      // Store retain vars for implementation file generation
+      this.programRetainVars.set(prog.name, retainVars);
+    }
+
     this.emitHeader("};");
     this.emitHeader("");
   }
@@ -641,6 +677,27 @@ export class CodeGenerator {
     }
     this.emit("}");
     this.emit("");
+
+    // Generate retain variable table if there are retain variables
+    this.generateRetainTable(`Program_${prog.name}`, prog.name);
+  }
+
+  /**
+   * Generate retain variable table for a class.
+   */
+  private generateRetainTable(className: string, progName: string): void {
+    const retainVars = this.programRetainVars.get(progName);
+    if (!retainVars || retainVars.length === 0) return;
+
+    this.emit(`// Retain variable table for ${className}`);
+    this.emit(`const RetainVarInfo ${className}::__retain_vars[] = {`);
+    for (const v of retainVars) {
+      this.emit(
+        `    {"${v.name}", offsetof(${className}, ${v.name}), sizeof(${v.typeName})},`,
+      );
+    }
+    this.emit("};");
+    this.emit("");
   }
 
   /**
@@ -658,7 +715,8 @@ export class CodeGenerator {
     if (config.globalVars.length > 0) {
       this.emitHeader("    // VAR_GLOBAL variables");
       for (const gvar of config.globalVars) {
-        this.emitHeader(`    IEC_${gvar.typeName} ${gvar.name};`);
+        const constQualifier = gvar.isConstant ? "const " : "";
+        this.emitHeader(`    ${constQualifier}IEC_${gvar.typeName} ${gvar.name};`);
       }
       this.emitHeader("");
     }
