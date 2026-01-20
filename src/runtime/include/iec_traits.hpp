@@ -464,6 +464,9 @@ template<typename T>
 using enable_if_any_magnitude = std::enable_if_t<is_any_magnitude_v<T>, int>;
 
 template<typename T>
+using enable_if_any_elementary = std::enable_if_t<is_any_elementary_v<T>, int>;
+
+template<typename T>
 using enable_if_iec_array = std::enable_if_t<is_iec_array_v<T>, int>;
 
 template<typename T>
