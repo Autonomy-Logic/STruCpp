@@ -41,6 +41,7 @@ Parse IEC 61131-3 project structure, user-defined data types, and advanced langu
 - [Phase 2.5: Nested Comments](phase-2.5-nested-comments.md) - Support for nested comment blocks ✓
 - [Phase 2.6: Variable Modifiers](phase-2.6-variable-modifiers.md) - RETAIN and CONSTANT code generation ✓
 - [Phase 2.7: Namespaces](phase-2.7-namespaces.md) - Project-level namespace configuration (CODESYS-style) ✓
+- [Phase 2.8: Pragmas and External Code](phase-2.8-pragmas-external-code.md) - Attribute pragmas and inline C/C++ pass-through
 
 ### Phase 3: Core ST Translation
 **Status**: PENDING | **Duration**: 14-20 weeks
