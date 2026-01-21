@@ -1,10 +1,16 @@
-# Phase 3: Core ST Translation (Expressions and Statements)
+# Phase 3.1: Core ST Translation (Expressions and Assignments)
 
 **Status**: PENDING
 
 **Duration**: 4-6 weeks
 
 **Goal**: Implement parser and code generator for basic ST expressions, assignments, and simple statements to fill in program .run() methods
+
+**See also**:
+- [Phase 3.2: Control Flow Statements](phase-3.2-control-flow.md) - IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN
+- [Phase 3.3: Composite Type Access](phase-3.3-composite-types.md) - Array subscripts, struct members, literals, intrinsics
+- [Phase 3.4: Variable-Length Arrays](phase-3.4-variable-length-arrays.md) - ARRAY[*] parameters
+- [Phase 3.5: Dynamic Memory Allocation](phase-3.5-dynamic-memory.md) - __NEW/__DELETE (CODESYS extension)
 
 ## Overview
 
@@ -162,13 +168,20 @@ Expected: sum = 5.5, product = 7.0
 - **Phase 2.4**: Completes reference/pointer code generation deferred from Phase 2.4
 - **Phase 2.6**: Completes CONSTANT assignment validation deferred from Phase 2.6
 - **Phase 2.7**: Completes qualified name handling deferred from Phase 2.7
+- **Phase 3.2**: Adds control flow statements (IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN)
+- **Phase 3.3**: Adds composite type access (arrays, structs, literals, intrinsics)
+- **Phase 3.4**: Adds variable-length array parameters (ARRAY[*])
+- **Phase 3.5**: Adds dynamic memory allocation (__NEW/__DELETE, CODESYS extension)
 - **Phase 4**: Will add function calls and user-defined functions
 
-### What Phase 3 Does NOT Include
+### What Phase 3.1 Does NOT Include
+- Control flow statements (IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN) - Phase 3.2
+- Array element access, struct member access - Phase 3.3
+- Array literals, SIZEOF, LOWER_BOUND, UPPER_BOUND - Phase 3.3
+- Variable-length arrays (ARRAY[*]) - Phase 3.4
+- Dynamic memory allocation (__NEW/__DELETE) - Phase 3.5
 - Function calls (Phase 4)
 - Function blocks (Phase 5)
-- Control flow statements (IF, CASE, FOR, WHILE) - Phase 7
-- Arrays and structures - Phase 7
 
 ### Deferred Items Summary
 
