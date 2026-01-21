@@ -26,6 +26,30 @@ import type { CompileError } from "./types.js";
 // =============================================================================
 
 /**
+ * Library reference with namespace information.
+ */
+export interface LibraryReference {
+  /** Library name */
+  name: string;
+  /** Namespace identifier for the library */
+  namespace: string;
+  /** Optional path to library files */
+  path?: string;
+}
+
+/**
+ * Project configuration for namespace and library management.
+ */
+export interface ProjectConfig {
+  /** Project name */
+  name: string;
+  /** Namespace identifier (defaults to project name if not specified) */
+  namespace?: string;
+  /** Referenced libraries */
+  libraries: LibraryReference[];
+}
+
+/**
  * Time value representation for task intervals.
  */
 export interface TimeValue {
@@ -130,6 +154,48 @@ export interface ProjectModel {
   programs: Map<string, ProgramDecl>;
   functions: Map<string, FunctionDecl>;
   functionBlocks: Map<string, FunctionBlockDecl>;
+
+  /** Project configuration (optional, for namespace support) */
+  config?: ProjectConfig;
+}
+
+/**
+ * Get the effective namespace for a project model.
+ * Returns the configured namespace, or the project name, or "strucpp" as fallback.
+ */
+export function getProjectNamespace(model: ProjectModel): string {
+  if (model.config?.namespace) {
+    return model.config.namespace;
+  }
+  if (model.config?.name) {
+    return model.config.name;
+  }
+  return "strucpp";
+}
+
+/**
+ * Resolve a qualified name to its namespace and local name.
+ * Returns undefined if the name is not qualified.
+ */
+export function resolveQualifiedName(
+  name: string,
+): { namespace: string; localName: string } | undefined {
+  const dotIndex = name.indexOf(".");
+  if (dotIndex === -1) {
+    return undefined;
+  }
+  return {
+    namespace: name.substring(0, dotIndex),
+    localName: name.substring(dotIndex + 1),
+  };
+}
+
+/**
+ * Convert an IEC qualified name to C++ qualified name.
+ * Replaces dots with double colons.
+ */
+export function toQualifiedCppName(name: string): string {
+  return name.replace(/\./g, "::");
 }
 
 /**
