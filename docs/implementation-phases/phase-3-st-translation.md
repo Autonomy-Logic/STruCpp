@@ -10,6 +10,8 @@
 
 This phase implements the core Structured Text translation capability. It parses ST code inside PROGRAM bodies and generates C++ code to fill in the .run() method implementations created in Phase 2.
 
+**Note**: This phase also includes several features deferred from Phase 2.x that require expression/statement translation infrastructure.
+
 ## Scope
 
 ### Language Features
@@ -19,6 +21,30 @@ This phase implements the core Structured Text translation capability. It parses
 - Simple expressions: arithmetic (+, -, *, /), comparison (=, <>, <, >, <=, >=), logical (AND, OR, NOT)
 - Assignment statements
 - Variable references (local VAR and VAR_EXTERNAL)
+
+### Deferred Items from Phase 2.x
+
+The following items were deferred from Phase 2.x because they require expression analysis infrastructure:
+
+#### From Phase 2.4 (References and Pointers)
+- Code generation for `REF_TO<T>` type declarations
+- Code generation for `REFERENCE_TO<T>` type declarations
+- Code generation for `REF()` calls
+- Code generation for `deref()` calls (`^` and `DREF` operators)
+- Code generation for null comparisons (`ref <> NULL`)
+- Code generation for `REF=` as `bind()` calls
+- Nested `REF_TO REF_TO` type support
+
+#### From Phase 2.6 (Variable Modifiers)
+- Validate assignments don't target CONSTANT variables
+- Unit test: Assignment to CONSTANT produces error
+
+#### From Phase 2.7 (Namespaces)
+- Handle qualified type names in declarations (e.g., `MotorLib.FB_Motor`)
+- Handle qualified names in function/FB calls (e.g., `MotorLib.Calculate()`)
+- Validate namespace references exist
+- Error messages for unknown namespaces
+- Cross-namespace type references in generated code
 
 ### Example ST Program Body
 
@@ -51,17 +77,26 @@ This phase fills in the `.run()` method for programs created in Phase 2.
 - Type inference for literals and expressions
 - Type checking for assignments and operators
 - Basic error reporting with source locations
+- **[From 2.6]** Validate assignments don't target CONSTANT variables
+- **[From 2.7]** Qualified name resolution in type references and calls
 
 ### Code Generation
 - C++ code generator for expressions and assignments
 - Fill in .run() method bodies in program classes
 - Line mapping implementation
 - Use Phase 1 IEC type wrappers and Phase 2 program structure
+- **[From 2.4]** Generate `REF_TO<T>` and `REFERENCE_TO<T>` declarations
+- **[From 2.4]** Generate `REF()`, `deref()`, null comparisons, and `REF=` calls
+- **[From 2.7]** Convert qualified names (`Lib.Type`) to C++ syntax (`Lib::Type`)
 
 ### Testing
 - Unit tests for parser, type checker, code generator
 - Golden file tests (ST input -> expected C++ output)
 - Runtime tests (compile and execute generated C++)
+- **[From 2.4]** Unit tests for reference type code generation
+- **[From 2.4]** Unit tests for null dereference exception
+- **[From 2.4]** Integration tests for reference operations
+- **[From 2.6]** Unit test: Assignment to CONSTANT produces error
 
 ## Success Criteria
 
@@ -124,6 +159,9 @@ Expected: sum = 5.5, product = 7.0
 
 ### Relationship to Other Phases
 - **Phase 2**: Uses program classes and structure created in Phase 2
+- **Phase 2.4**: Completes reference/pointer code generation deferred from Phase 2.4
+- **Phase 2.6**: Completes CONSTANT assignment validation deferred from Phase 2.6
+- **Phase 2.7**: Completes qualified name handling deferred from Phase 2.7
 - **Phase 4**: Will add function calls and user-defined functions
 
 ### What Phase 3 Does NOT Include
@@ -131,3 +169,22 @@ Expected: sum = 5.5, product = 7.0
 - Function blocks (Phase 5)
 - Control flow statements (IF, CASE, FOR, WHILE) - Phase 7
 - Arrays and structures - Phase 7
+
+### Deferred Items Summary
+
+The following table summarizes all items deferred to Phase 3 from earlier phases:
+
+| Source Phase | Feature | Status in Source | Reason Deferred |
+|-------------|---------|------------------|-----------------|
+| 2.4 | REF_TO code generation | Parser complete | Requires expression codegen |
+| 2.4 | REFERENCE_TO code generation | Parser complete | Requires expression codegen |
+| 2.4 | REF() operator codegen | Parser complete | Requires expression codegen |
+| 2.4 | Dereference (^, DREF) codegen | Parser complete | Requires expression codegen |
+| 2.4 | Null comparison codegen | Parser complete | Requires expression codegen |
+| 2.4 | REF= binding codegen | Parser complete | Requires statement codegen |
+| 2.4 | Nested REF_TO REF_TO | Skipped | Requires grammar extension |
+| 2.6 | CONSTANT assignment validation | Deferred | Requires expression analysis |
+| 2.7 | Qualified type name resolution | Helper ready | Requires type reference codegen |
+| 2.7 | Qualified function/FB calls | Helper ready | Requires call expression codegen |
+| 2.7 | Namespace validation errors | Deferred | Requires semantic analysis |
+| 2.7 | Cross-namespace references | Helper ready | Requires type mapping in codegen |
