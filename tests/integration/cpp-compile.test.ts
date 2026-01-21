@@ -705,6 +705,122 @@ int main() {
     expect(result.success).toBe(false);
     expect(result.errors.some(e => e.message.includes('CONSTANT') && e.message.includes('initializer'))).toBe(true);
   });
+
+  // =============================================================================
+  // Namespace Tests (Phase 2.7)
+  // =============================================================================
+
+  it('should compile a program with correct namespace wrapping', () => {
+    const source = `
+      PROGRAM NamespaceTest
+        VAR
+          counter : INT;
+          flag : BOOL;
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify namespace structure in header
+    expect(result.headerCode).toContain('namespace strucpp {');
+    expect(result.headerCode).toContain('}  // namespace strucpp');
+
+    // Verify namespace structure in source
+    expect(result.cppCode).toContain('namespace strucpp {');
+    expect(result.cppCode).toContain('}  // namespace strucpp');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'namespace_test');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile user-defined types in namespace', () => {
+    const source = `
+      TYPE
+        MotorState : (Stopped, Running, Error);
+        Point : STRUCT
+          x : INT;
+          y : INT;
+        END_STRUCT;
+      END_TYPE
+
+      PROGRAM TypesInNamespace
+        VAR
+          state : MotorState;
+          position : Point;
+        END_VAR
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify types are in namespace
+    expect(result.headerCode).toContain('namespace strucpp {');
+    expect(result.headerCode).toContain('enum class MotorState');
+    expect(result.headerCode).toContain('struct Point');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'types_in_namespace');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile function blocks in namespace', () => {
+    // Note: FB instance variables not tested here due to pre-existing
+    // type mapping issue (IEC_ prefix applied to user types).
+    // That will be addressed in Phase 3+ expression/type handling.
+    const source = `
+      FUNCTION_BLOCK Counter
+        VAR_INPUT
+          enable : BOOL;
+        END_VAR
+        VAR_OUTPUT
+          count : INT;
+        END_VAR
+        VAR
+          internal : INT;
+        END_VAR
+      END_FUNCTION_BLOCK
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify FB is in namespace
+    expect(result.headerCode).toContain('namespace strucpp {');
+    expect(result.headerCode).toContain('class Counter {');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'fb_in_namespace');
+    if (!cppResult.success) {
+      console.log('C++ compile error:', cppResult.error);
+      console.log('Header code:\n', result.headerCode);
+      console.log('CPP code:\n', result.cppCode);
+    }
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile complete configuration in namespace', () => {
+    const source = `
+      PROGRAM MainProg
+        VAR
+          x : INT;
+        END_VAR
+      END_PROGRAM
+
+      CONFIGURATION TestConfig
+        RESOURCE res1 ON PLC
+          TASK mainTask(INTERVAL := T#20ms, PRIORITY := 1);
+          PROGRAM instance1 WITH mainTask : MainProg;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify configuration is in namespace
+    expect(result.headerCode).toContain('namespace strucpp {');
+    expect(result.headerCode).toContain('class Configuration_TestConfig');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'config_in_namespace');
+    expect(cppResult.success).toBe(true);
+  });
 });
 
 /**
