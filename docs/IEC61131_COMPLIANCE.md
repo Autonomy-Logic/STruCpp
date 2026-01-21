@@ -1,6 +1,6 @@
 # IEC 61131-3 Compliance
 
-This document details STruC++'s compliance with the IEC 61131-3 standard, specifically targeting Edition 3.0 (2013) with full support for version 3 features.
+This document details STruC++'s compliance with the IEC 61131-3 standard, targeting Edition 3.0 (2013) with Edition 4.0 (2025) compatibility, plus CODESYS-compatible extensions.
 
 ## Table of Contents
 
@@ -15,16 +15,19 @@ This document details STruC++'s compliance with the IEC 61131-3 standard, specif
 9. [Standard Functions](#standard-functions)
 10. [Standard Function Blocks](#standard-function-blocks)
 11. [IEC 61131-3 v3 Specific Features](#iec-61131-3-v3-specific-features)
-12. [Extensions and Deviations](#extensions-and-deviations)
+12. [CODESYS Extensions](#codesys-extensions)
+13. [Extensions and Deviations](#extensions-and-deviations)
 
 ## Overview
 
-STruC++ aims for full compliance with IEC 61131-3 Edition 3.0, which represents a significant update from Edition 2.0 (the basis for MatIEC). The compiler implements all mandatory features and most optional features defined in the standard.
+STruC++ aims for full compliance with IEC 61131-3 Edition 3.0, with forward compatibility for Edition 4.0 (2025). The compiler also implements CODESYS-compatible extensions to maximize compatibility with existing industrial PLC programs.
 
 ### Compliance Goals
 
 - ✅ **Full v3 Compliance** - Support all Edition 3.0 features
+- ✅ **Edition 4 Ready** - Compatible with Edition 4.0 (2025) changes
 - ✅ **Backward Compatibility** - Support programs written for Edition 2.0
+- ✅ **CODESYS Compatible** - Support CODESYS extensions for portability
 - ✅ **Standard Library** - Complete implementation of standard functions and FBs
 - ✅ **Type System** - Full support for IEC type system including references
 - ✅ **Semantic Rules** - Enforce all IEC semantic constraints
@@ -46,7 +49,7 @@ This is the baseline version that MatIEC targets. STruC++ maintains full backwar
 
 ### IEC 61131-3 Edition 3.0 (2013)
 
-**Status**: ✅ Target Version
+**Status**: ✅ Primary Target Version
 
 Edition 3.0 adds significant new features that STruC++ implements from the ground up.
 
@@ -55,8 +58,24 @@ Edition 3.0 adds significant new features that STruC++ implements from the groun
 - Nested comments
 - Additional data types (LWORD)
 - Enhanced type system
+- Variable-length arrays (ARRAY[*])
 - Improved namespace handling
 - Extended standard library
+
+### IEC 61131-3 Edition 4.0 (2025)
+
+**Status**: ✅ Forward Compatible
+
+Edition 4.0 was released in May 2025. Key changes relevant to STruC++:
+
+**Changes in v4**:
+- **IL Removed**: Instruction List (IL) is no longer part of the standard
+- STruC++ is unaffected as it focuses on ST only (IL was already translated to ST by OpenPLC Editor)
+
+**Maintained Features**:
+- All Edition 3.0 features remain valid
+- Array semantics unchanged
+- Reference types unchanged
 
 ## Programming Languages
 
@@ -972,6 +991,99 @@ PROGRAM Main
     motor1.Start();
 END_PROGRAM
 ```
+
+## CODESYS Extensions
+
+STruC++ implements CODESYS-compatible extensions to maximize portability with existing industrial PLC programs. These features are not part of the IEC 61131-3 standard but are widely used in CODESYS and TwinCAT environments.
+
+### Dynamic Memory Allocation
+
+**Operators**: `__NEW`, `__DELETE`
+
+Dynamic memory allocation for creating arrays, structures, and function block instances at runtime.
+
+```
+VAR
+    pArr : POINTER TO INT;
+    pFB : POINTER TO MyFunctionBlock;
+END_VAR
+
+(* Allocate dynamic array *)
+pArr := __NEW(INT, 100);
+
+(* Allocate function block instance *)
+pFB := __NEW(MyFunctionBlock);
+
+(* Use allocated memory *)
+pArr[0] := 42;
+pFB^();
+
+(* Free memory *)
+__DELETE(pArr);
+__DELETE(pFB);
+```
+
+**Supported Types**:
+- Scalar types: `__NEW(INT)`, `__NEW(REAL)`, etc.
+- Arrays: `__NEW(INT, size)` - creates array of specified size
+- Structures: `__NEW(MyStruct)` - requires `{attribute 'enable_dynamic_creation'}`
+- Function blocks: `__NEW(MyFB)` - calls `FB_Init`, requires attribute
+
+**Behavior**:
+- Returns typed pointer on success
+- Returns 0 (null) on allocation failure
+- `__DELETE` frees memory and sets pointer to 0
+- For function blocks, `FB_Init` is called on `__NEW`, `FB_Exit` on `__DELETE`
+
+### Enable Dynamic Creation Attribute
+
+Types that can be dynamically allocated must be marked with a pragma:
+
+```
+{attribute 'enable_dynamic_creation'}
+FUNCTION_BLOCK MyFB
+    (* ... *)
+END_FUNCTION_BLOCK
+
+TYPE
+    {attribute 'enable_dynamic_creation'}
+    MyStruct : STRUCT
+        (* ... *)
+    END_STRUCT;
+END_TYPE
+```
+
+**Exceptions**: Standard types and library function blocks don't require this attribute.
+
+### Function Block Lifecycle Methods
+
+CODESYS-compatible lifecycle methods for function blocks:
+
+```
+FUNCTION_BLOCK {attribute 'enable_dynamic_creation'} FB_Resource
+    METHOD FB_Init : BOOL
+        VAR_INPUT
+            bInitRetains : BOOL;
+            bInCopyCode : BOOL;
+        END_VAR
+        (* Called when FB is created or on warm start *)
+        FB_Init := TRUE;
+    END_METHOD
+
+    METHOD FB_Exit : BOOL
+        VAR_INPUT
+            bInCopyCode : BOOL;
+        END_VAR
+        (* Called before FB is destroyed *)
+        FB_Exit := TRUE;
+    END_METHOD
+END_FUNCTION_BLOCK
+```
+
+### References
+
+- [CODESYS __NEW Operator](https://content.helpme-codesys.com/en/CODESYS%20Development%20System/_cds_operator_new.html)
+- [Beckhoff TwinCAT __NEW](https://infosys.beckhoff.com/content/1033/tc3_plc_intro/2529171083.html)
 
 ## Extensions and Deviations
 
