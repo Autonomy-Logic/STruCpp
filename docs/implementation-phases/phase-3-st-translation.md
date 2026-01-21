@@ -167,8 +167,8 @@ Expected: sum = 5.5, product = 7.0
 ### What Phase 3 Does NOT Include
 - Function calls (Phase 4)
 - Function blocks (Phase 5)
-- Control flow statements (IF, CASE, FOR, WHILE) - Phase 7
-- Arrays and structures - Phase 7
+- Control flow statements (IF, CASE, FOR, WHILE) - Phase 3.2
+- Arrays and structures - Phase 3.2
 
 ### Deferred Items Summary
 
