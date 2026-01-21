@@ -37,17 +37,19 @@ Parse IEC 61131-3 project structure, user-defined data types, and advanced langu
 - [Phase 2.1: Project Structure and Scheduling Model](phase-2.1-project-structure.md) - Parse CONFIGURATION, RESOURCE, TASK, program instances ✓
 - [Phase 2.2: User-Defined Data Types](phase-2.2-user-data-types.md) - Parse TYPE declarations (enumerations, structures, arrays, subranges) ✓
 - [Phase 2.3: Located Variables Architecture](phase-2.3-located-variables.md) - Located variables (AT %IX0.0, %QX0.0) with runtime binding and forcing support ✓
-- [Phase 2.4: References and Pointers](phase-2.4-references.md) - REF_TO, REF, DREF, ^, NULL
-- [Phase 2.5: Nested Comments](phase-2.5-nested-comments.md) - Support for nested comment blocks
-- [Phase 2.6: Variable Modifiers](phase-2.6-variable-modifiers.md) - RETAIN and CONSTANT code generation
-- [Phase 2.7: Namespaces](phase-2.7-namespaces.md) - Project-level namespace configuration (CODESYS-style)
+- [Phase 2.4: References and Pointers](phase-2.4-references.md) - REF_TO, REF, DREF, ^, NULL ✓
+- [Phase 2.5: Nested Comments](phase-2.5-nested-comments.md) - Support for nested comment blocks ✓
+- [Phase 2.6: Variable Modifiers](phase-2.6-variable-modifiers.md) - RETAIN and CONSTANT code generation ✓
+- [Phase 2.7: Namespaces](phase-2.7-namespaces.md) - Project-level namespace configuration (CODESYS-style) ✓
 
 ### Phase 3: Core ST Translation
-**Status**: PENDING | **Duration**: 4-6 weeks
+**Status**: PENDING | **Duration**: 6-9 weeks
 
-Implement parser and code generator for basic ST expressions, assignments, and simple statements.
+Implement parser and code generator for ST expressions, assignments, statements, and control flow.
 
-**Document**: [phase-3-st-translation.md](phase-3-st-translation.md)
+**Sub-phases**:
+- [Phase 3.1: Expressions and Assignments](phase-3-st-translation.md) - Basic expressions, assignments, literals
+- [Phase 3.2: Control Flow Statements](phase-3.2-control-flow.md) - IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN
 
 ### Phase 4: Functions and Function Calls
 **Status**: PENDING | **Duration**: 4-6 weeks
@@ -72,19 +74,14 @@ Full integration with OpenPLC runtime (located variables architecture already co
 
 **Document**: [phase-6-openplc-integration.md](phase-6-openplc-integration.md)
 
-### Phase 7: Additional Languages and Full Coverage
-**Status**: PENDING | **Duration**: 6-8 weeks
-
-Implement optional IEC 61131-3 languages (IL, SFC) and complete full standard coverage.
-
-**Document**: [phase-7-iec-v3-features.md](phase-7-iec-v3-features.md)
-
-### Phase 8: Optimizations and Advanced Debug Support
+### Phase 7: Optimizations and Advanced Debug Support
 **Status**: PENDING | **Duration**: 4-6 weeks
 
 Optimize generated code and enhance debugging capabilities.
 
-**Document**: [phase-8-optimizations.md](phase-8-optimizations.md)
+**Document**: [phase-7-optimizations.md](phase-7-optimizations.md)
+
+**Note**: STruC++ focuses exclusively on Structured Text (ST). Other IEC 61131-3 languages (IL, SFC, LD, FBD) are translated to ST by OpenPLC Editor before compilation.
 
 ## Phasing Philosophy
 
