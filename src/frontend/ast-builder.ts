@@ -43,6 +43,7 @@ import type {
   CaseStatement,
   ExitStatement,
   ReturnStatement,
+  ExternalCodePragma,
   BinaryOperator,
   UnaryOperator,
 } from "./ast.js";
@@ -219,9 +220,14 @@ export class ASTBuilder {
     }
 
     const body: Statement[] = [];
-    for (const stmtNode of getAllNodes(children.statement)) {
-      const stmt = this.buildStatement(stmtNode);
-      if (stmt) body.push(stmt);
+    // Statements are wrapped in a statementList node
+    const stmtListNode = getFirstNode(children.statementList);
+    if (stmtListNode) {
+      const stmtListChildren = stmtListNode.children as CstChildren;
+      for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
+        const stmt = this.buildStatement(stmtNode);
+        if (stmt) body.push(stmt);
+      }
     }
 
     return {
@@ -263,9 +269,14 @@ export class ASTBuilder {
     }
 
     const body: Statement[] = [];
-    for (const stmtNode of getAllNodes(children.statement)) {
-      const stmt = this.buildStatement(stmtNode);
-      if (stmt) body.push(stmt);
+    // Statements are wrapped in a statementList node
+    const stmtListNode = getFirstNode(children.statementList);
+    if (stmtListNode) {
+      const stmtListChildren = stmtListNode.children as CstChildren;
+      for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
+        const stmt = this.buildStatement(stmtNode);
+        if (stmt) body.push(stmt);
+      }
     }
 
     return {
@@ -292,9 +303,14 @@ export class ASTBuilder {
     }
 
     const body: Statement[] = [];
-    for (const stmtNode of getAllNodes(children.statement)) {
-      const stmt = this.buildStatement(stmtNode);
-      if (stmt) body.push(stmt);
+    // Statements are wrapped in a statementList node
+    const stmtListNode = getFirstNode(children.statementList);
+    if (stmtListNode) {
+      const stmtListChildren = stmtListNode.children as CstChildren;
+      for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
+        const stmt = this.buildStatement(stmtNode);
+        if (stmt) body.push(stmt);
+      }
     }
 
     return {
@@ -865,6 +881,11 @@ export class ASTBuilder {
     if (children.RETURN) {
       return this.buildReturnStatement(node);
     }
+    if (children.externalCodePragma) {
+      return this.buildExternalCodePragma(
+        getFirstNode(children.externalCodePragma)!,
+      );
+    }
 
     return undefined;
   }
@@ -1060,6 +1081,32 @@ export class ASTBuilder {
     return {
       kind: "ReturnStatement",
       sourceSpan: nodeToSourceSpan(node),
+    };
+  }
+
+  /**
+   * Build an ExternalCodePragma from a CST node.
+   * Extracts the raw C/C++ code from the {external ...} pragma.
+   */
+  buildExternalCodePragma(node: CstNode): ExternalCodePragma {
+    const children = node.children as CstChildren;
+    const token = getFirstToken(children.ExternalPragma);
+
+    // Extract code content from the pragma token
+    // Token format: {external ... }
+    let code = "";
+    if (token) {
+      const raw = token.image;
+      // Find the position after "external" keyword and skip whitespace
+      const externalKeywordEnd = raw.toLowerCase().indexOf("external") + 8;
+      // Remove opening {external and closing }
+      code = raw.substring(externalKeywordEnd, raw.length - 1).trim();
+    }
+
+    return {
+      kind: "ExternalCodePragma",
+      sourceSpan: token ? tokenToSourceSpan(token) : nodeToSourceSpan(node),
+      code,
     };
   }
 

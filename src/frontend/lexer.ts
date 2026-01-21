@@ -21,7 +21,7 @@ export const WhiteSpace = createToken({
 });
 
 // =============================================================================
-// Nested Comment Support
+// Custom Pattern Helpers
 // =============================================================================
 
 /**
@@ -37,6 +37,163 @@ function createMatchResult(
   result.input = "";
   return result;
 }
+
+// =============================================================================
+// Pragma Support
+// =============================================================================
+
+/**
+ * Custom pattern matcher for {external ...} pragma.
+ * Handles nested braces in C++ code correctly.
+ * Content inside is passed through AS-IS to generated code.
+ *
+ * @param text - The full source text
+ * @param startOffset - The current position in the text
+ * @returns A RegExpExecArray-compatible result or null if no match
+ */
+function matchExternalPragma(
+  text: string,
+  startOffset: number,
+): RegExpExecArray | null {
+  // Must start with {external (case insensitive)
+  if (text.charAt(startOffset) !== "{") return null;
+
+  // Check for "external" keyword (case insensitive)
+  const keywordStart = startOffset + 1;
+  let keywordEnd = keywordStart;
+
+  // Skip whitespace after {
+  while (keywordEnd < text.length && /\s/.test(text.charAt(keywordEnd))) {
+    keywordEnd++;
+  }
+
+  // Check for "external" keyword
+  const potentialKeyword = text.substring(keywordEnd, keywordEnd + 8);
+  if (potentialKeyword.toLowerCase() !== "external") {
+    return null;
+  }
+
+  // Find the matching closing brace, counting nested braces
+  let depth = 1;
+  let i = keywordEnd + 8; // After "external"
+
+  while (i < text.length && depth > 0) {
+    const char = text.charAt(i);
+
+    // Handle string literals (don't count braces inside strings)
+    if (char === '"' || char === "'") {
+      const quote = char;
+      i++;
+      while (i < text.length && text.charAt(i) !== quote) {
+        if (text.charAt(i) === "\\") i++; // Skip escape sequences
+        i++;
+      }
+      i++; // Skip closing quote
+      continue;
+    }
+
+    // Handle C++ comments inside external code
+    if (char === "/" && text.charAt(i + 1) === "/") {
+      // Single-line comment - skip to end of line
+      while (i < text.length && text.charAt(i) !== "\n") {
+        i++;
+      }
+      continue;
+    }
+    if (char === "/" && text.charAt(i + 1) === "*") {
+      // Block comment - skip to */
+      i += 2;
+      while (i < text.length - 1) {
+        if (text.charAt(i) === "*" && text.charAt(i + 1) === "/") {
+          i += 2;
+          break;
+        }
+        i++;
+      }
+      continue;
+    }
+
+    if (char === "{") {
+      depth++;
+    } else if (char === "}") {
+      depth--;
+    }
+    i++;
+  }
+
+  if (depth === 0) {
+    return createMatchResult(text.substring(startOffset, i), startOffset);
+  }
+
+  return null; // Unclosed pragma
+}
+
+/**
+ * Custom pattern matcher for {attribute ...} pragma.
+ * Matches {attribute 'name'} or {attribute 'name' := 'value'}
+ *
+ * @param text - The full source text
+ * @param startOffset - The current position in the text
+ * @returns A RegExpExecArray-compatible result or null if no match
+ */
+function matchAttributePragma(
+  text: string,
+  startOffset: number,
+): RegExpExecArray | null {
+  // Must start with {attribute (case insensitive)
+  if (text.charAt(startOffset) !== "{") return null;
+
+  // Check for "attribute" keyword (case insensitive)
+  const keywordStart = startOffset + 1;
+  let keywordEnd = keywordStart;
+
+  // Skip whitespace after {
+  while (keywordEnd < text.length && /\s/.test(text.charAt(keywordEnd))) {
+    keywordEnd++;
+  }
+
+  // Check for "attribute" keyword
+  const potentialKeyword = text.substring(keywordEnd, keywordEnd + 9);
+  if (potentialKeyword.toLowerCase() !== "attribute") {
+    return null;
+  }
+
+  // Find the closing brace (attribute pragmas don't have nested braces)
+  let i = keywordEnd + 9; // After "attribute"
+  while (i < text.length && text.charAt(i) !== "}") {
+    i++;
+  }
+
+  if (i < text.length && text.charAt(i) === "}") {
+    return createMatchResult(text.substring(startOffset, i + 1), startOffset);
+  }
+
+  return null; // Unclosed pragma
+}
+
+/**
+ * External code pragma token: {external ... }
+ * Content is passed through AS-IS to generated C++ code.
+ */
+export const ExternalPragma = createToken({
+  name: "ExternalPragma",
+  pattern: matchExternalPragma,
+  line_breaks: true, // Content can span multiple lines
+});
+
+/**
+ * Attribute pragma token: {attribute 'name'} or {attribute 'name' := 'value'}
+ * Used for CODESYS-compatible compiler directives.
+ */
+export const AttributePragma = createToken({
+  name: "AttributePragma",
+  pattern: matchAttributePragma,
+  line_breaks: false, // Attributes are typically single-line
+});
+
+// =============================================================================
+// Nested Comment Support
+// =============================================================================
 
 /**
  * Custom pattern for comments with nested block comment support.
@@ -438,6 +595,10 @@ export const allTokens = [
   // Whitespace and comments (skipped)
   WhiteSpace,
   Comment,
+
+  // Pragmas (must come before other tokens that might match {)
+  ExternalPragma,
+  AttributePragma,
 
   // Multi-character operators (before single-character)
   DoubleDot,

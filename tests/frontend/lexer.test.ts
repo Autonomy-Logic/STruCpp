@@ -309,4 +309,177 @@ describe('STLexer', () => {
       expect(result.tokens.length).toBeGreaterThan(0);
     });
   });
+
+  describe('pragmas', () => {
+    describe('external code pragma', () => {
+      it('should tokenize simple external pragma', () => {
+        const result = tokenize('{external printf("hello"); }');
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+        expect(result.tokens[0]?.image).toBe('{external printf("hello"); }');
+      });
+
+      it('should tokenize external pragma with nested braces', () => {
+        const result = tokenize('{external if (x > 0) { y = x; } }');
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+        expect(result.tokens[0]?.image).toBe('{external if (x > 0) { y = x; } }');
+      });
+
+      it('should tokenize external pragma with deeply nested braces', () => {
+        const result = tokenize('{external if (a) { if (b) { if (c) { x = 1; } } } }');
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should tokenize multiline external pragma', () => {
+        const source = `{external
+          int x = 0;
+          x = x + 1;
+          printf("%d", x);
+        }`;
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle string literals inside external pragma', () => {
+        const result = tokenize('{external printf("contains } brace"); }');
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle single quotes inside external pragma', () => {
+        const result = tokenize("{external char c = '}'; }");
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle C++ single-line comments inside external pragma', () => {
+        const source = `{external
+          // This is a comment with { braces }
+          int x = 0;
+        }`;
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle C++ multi-line comments inside external pragma', () => {
+        const result = tokenize('{external /* comment { with } braces */ int x; }');
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should be case insensitive for external keyword', () => {
+        const result = tokenize('{EXTERNAL int x = 0; }');
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should not match non-external pragma', () => {
+        const result = tokenize('{notexternal code }');
+        expect(result.tokens.filter(t => t.tokenType.name === 'ExternalPragma')).toHaveLength(0);
+      });
+
+      it('should tokenize external pragma followed by code', () => {
+        const source = '{external printf("test"); } VAR';
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(2);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+        expect(result.tokens[1]?.tokenType.name).toBe('VAR');
+      });
+    });
+
+    describe('attribute pragma', () => {
+      it('should tokenize simple attribute pragma', () => {
+        const result = tokenize("{attribute 'enable_dynamic_creation'}");
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
+      });
+
+      it('should tokenize attribute pragma with value', () => {
+        const result = tokenize("{attribute 'name' := 'value'}");
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
+      });
+
+      it('should be case insensitive for attribute keyword', () => {
+        const result = tokenize("{ATTRIBUTE 'test'}");
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
+      });
+
+      it('should tokenize multiple attributes', () => {
+        const source = "{attribute 'attr1'} {attribute 'attr2'}";
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(2);
+        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
+        expect(result.tokens[1]?.tokenType.name).toBe('AttributePragma');
+      });
+
+      it('should tokenize attribute followed by VAR declaration', () => {
+        const source = "{attribute 'pack_mode' := '2'} VAR";
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(2);
+        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
+        expect(result.tokens[1]?.tokenType.name).toBe('VAR');
+      });
+    });
+
+    describe('pragma in program context', () => {
+      it('should tokenize program with external pragma', () => {
+        const source = `
+          PROGRAM Main
+            VAR x : INT; END_VAR
+            {external printf("x = %d", x); }
+            x := x + 1;
+          END_PROGRAM
+        `;
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        const externalTokens = result.tokens.filter(t => t.tokenType.name === 'ExternalPragma');
+        expect(externalTokens).toHaveLength(1);
+      });
+
+      it('should tokenize mixed ST code and external pragmas', () => {
+        const source = `
+          PROGRAM Test
+            VAR counter : INT; END_VAR
+            counter := 0;
+            {external // Start C++ code
+              for (int i = 0; i < 10; i++) {
+                counter++;
+              }
+            }
+            counter := counter * 2;
+          END_PROGRAM
+        `;
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        // Should have PROGRAM, Test, VAR, counter, :, INT, ;, END_VAR,
+        // counter, :=, 0, ;, ExternalPragma, counter, :=, counter, *, 2, ;, END_PROGRAM
+        const externalTokens = result.tokens.filter(t => t.tokenType.name === 'ExternalPragma');
+        expect(externalTokens).toHaveLength(1);
+        // Verify keywords are still recognized
+        expect(result.tokens.filter(t => t.tokenType.name === 'PROGRAM')).toHaveLength(1);
+        expect(result.tokens.filter(t => t.tokenType.name === 'END_PROGRAM')).toHaveLength(1);
+      });
+    });
+  });
 });

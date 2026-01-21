@@ -5,7 +5,12 @@
  * Produces readable, debuggable C++ that maintains line correspondence with ST source.
  */
 
-import type { CompilationUnit, VarDeclaration } from "../frontend/ast.js";
+import type {
+  CompilationUnit,
+  VarDeclaration,
+  Statement,
+  ExternalCodePragma,
+} from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import type { LineMapEntry } from "../types.js";
 import type {
@@ -157,6 +162,9 @@ export class CodeGenerator {
     Array<{ name: string; typeName: string }>
   > = new Map();
 
+  /** Store AST for looking up program bodies when using project model */
+  private ast?: CompilationUnit;
+
   constructor(
     private readonly _symbolTables: SymbolTables,
     options: Partial<CodeGenOptions> = {},
@@ -186,6 +194,7 @@ export class CodeGenerator {
     this.currentLine = 1;
     this.indentLevel = 0;
     this.locatedVars = [];
+    this.ast = ast;  // Store AST for looking up program bodies
 
     // Generate header
     this.generateHeader(ast);
@@ -491,10 +500,12 @@ export class CodeGenerator {
 
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
-    if (this.options.sourceComments) {
-      this.emit("    // TODO: Implement program body (Phase 3+)");
+    if (prog.body.length > 0) {
+      // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
+      this.generateStatements(prog.body);
+    } else if (this.options.sourceComments) {
+      this.emit("    // Empty program body");
     }
-    // TODO: Generate actual body in Phase 3+
     this.emit("}");
     this.emit("");
   }
@@ -513,8 +524,11 @@ export class CodeGenerator {
 
     // Operator()
     this.emit(`void ${fb.name}::operator()() {`);
-    if (this.options.sourceComments) {
-      this.emit("    // TODO: Implement function block body (Phase 3+)");
+    if (fb.body.length > 0) {
+      // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
+      this.generateStatements(fb.body);
+    } else if (this.options.sourceComments) {
+      this.emit("    // Empty function block body");
     }
     this.emit("}");
     this.emit("");
@@ -541,8 +555,11 @@ export class CodeGenerator {
       `IEC_${func.returnType.name} ${func.name}(${params.join(", ")}) {`,
     );
     this.emit(`    IEC_${func.returnType.name} ${func.name}_result;`);
-    if (this.options.sourceComments) {
-      this.emit("    // TODO: Implement function body (Phase 3+)");
+    if (func.body.length > 0) {
+      // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
+      this.generateStatements(func.body);
+    } else if (this.options.sourceComments) {
+      this.emit("    // Empty function body");
     }
     this.emit(`    return ${func.name}_result;`);
     this.emit("}");
@@ -689,10 +706,15 @@ export class CodeGenerator {
 
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
-    if (this.options.sourceComments) {
-      this.emit(
-        "    // Phase 2.1: Empty stub - body will be compiled in Phase 3+",
-      );
+    // Look up the AST program to get the body
+    const astProgram = this.ast?.programs.find(
+      (p) => p.name.toUpperCase() === prog.name.toUpperCase(),
+    );
+    if (astProgram && astProgram.body.length > 0) {
+      // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
+      this.generateStatements(astProgram.body);
+    } else if (this.options.sourceComments) {
+      this.emit("    // Empty program body");
     }
     this.emit("}");
     this.emit("");
@@ -958,6 +980,58 @@ export class CodeGenerator {
     this.emit("    return 0;");
     this.emit("}");
     this.emit("");
+  }
+
+  // ===========================================================================
+  // Statement Generation (Phase 2.8+)
+  // ===========================================================================
+
+  /**
+   * Generate code for a statement.
+   * Phase 2.8: Only handles ExternalCodePragma; other statements are Phase 3+.
+   */
+  protected generateStatement(stmt: Statement, indent: string = "    "): void {
+    switch (stmt.kind) {
+      case "ExternalCodePragma":
+        this.generateExternalCodePragma(stmt, indent);
+        break;
+      default:
+        // Other statements are implemented in Phase 3+
+        if (this.options.sourceComments) {
+          this.emit(`${indent}// TODO: ${stmt.kind} (Phase 3+)`);
+        }
+        break;
+    }
+  }
+
+  /**
+   * Generate code for an external code pragma.
+   * The code content is emitted AS-IS to the output.
+   */
+  private generateExternalCodePragma(
+    pragma: ExternalCodePragma,
+    indent: string,
+  ): void {
+    // Split the code into lines and emit each with proper indentation
+    const lines = pragma.code.split(/\r?\n/);
+    for (const line of lines) {
+      // Emit the line with base indentation
+      // The code is emitted AS-IS, but we add the base indent for consistency
+      if (line.trim() === "") {
+        this.emit("");
+      } else {
+        this.emit(`${indent}${line}`);
+      }
+    }
+  }
+
+  /**
+   * Generate code for a list of statements.
+   */
+  protected generateStatements(stmts: Statement[], indent: string = "    "): void {
+    for (const stmt of stmts) {
+      this.generateStatement(stmt, indent);
+    }
   }
 
   // ===========================================================================

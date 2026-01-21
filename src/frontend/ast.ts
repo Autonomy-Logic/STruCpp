@@ -346,7 +346,8 @@ export type Statement =
   | RepeatStatement
   | ExitStatement
   | ReturnStatement
-  | FunctionCallStatement;
+  | FunctionCallStatement
+  | ExternalCodePragma;
 
 /**
  * Assignment statement
@@ -464,6 +465,34 @@ export interface ReturnStatement extends ASTNode {
 export interface FunctionCallStatement extends ASTNode {
   kind: "FunctionCallStatement";
   call: FunctionCallExpression;
+}
+
+// =============================================================================
+// Pragmas
+// =============================================================================
+
+/**
+ * External code pragma: {external ... }
+ * Content is passed through AS-IS to generated C++ code.
+ * Allows mixing Structured Text with C/C++ code.
+ */
+export interface ExternalCodePragma extends ASTNode {
+  kind: "ExternalCodePragma";
+  /** Raw C/C++ code content (AS-IS, no transformation) */
+  code: string;
+}
+
+/**
+ * Attribute pragma: {attribute 'name'} or {attribute 'name' := 'value'}
+ * CODESYS-compatible compiler directive.
+ * Attached to the following declaration.
+ */
+export interface AttributePragma extends ASTNode {
+  kind: "AttributePragma";
+  /** Attribute name (e.g., 'enable_dynamic_creation') */
+  name: string;
+  /** Optional attribute value */
+  value?: string;
 }
 
 // =============================================================================

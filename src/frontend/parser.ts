@@ -425,7 +425,16 @@ export class STParser extends CstParser {
       { ALT: () => this.SUBRULE(this.exitStatement) },
       { ALT: () => this.SUBRULE(this.returnStatement) },
       { ALT: () => this.SUBRULE(this.functionCallStatement) },
+      { ALT: () => this.SUBRULE(this.externalCodePragma) },
     ]);
+  });
+
+  /**
+   * External code pragma: {external ... }
+   * Content is passed through AS-IS to generated C++ code.
+   */
+  public externalCodePragma = this.RULE("externalCodePragma", () => {
+    this.CONSUME(tokens.ExternalPragma);
   });
 
   /**

@@ -1693,6 +1693,153 @@ describe('Compiler Options Tests', () => {
   });
 });
 
+describe('External Code Pragma Tests (Phase 2.8)', () => {
+  describe('compile with external pragma', () => {
+    it('should compile program with external pragma', () => {
+      const source = `
+        PROGRAM Main
+          VAR x : INT; END_VAR
+          {external printf("x = %d", x); }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+    });
+
+    it('should include external code in generated output', () => {
+      const source = `
+        PROGRAM Main
+          {external printf("Hello from C++"); }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('printf("Hello from C++")');
+    });
+
+    it('should preserve nested braces in external code', () => {
+      const source = `
+        PROGRAM Main
+          {external
+            if (x > 0) {
+              y = x;
+            }
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('if (x > 0)');
+      expect(result.cppCode).toContain('y = x;');
+    });
+
+    it('should compile multiple external pragmas', () => {
+      const source = `
+        PROGRAM Main
+          {external int a = 1; }
+          {external int b = 2; }
+          {external int c = a + b; }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('int a = 1;');
+      expect(result.cppCode).toContain('int b = 2;');
+      expect(result.cppCode).toContain('int c = a + b;');
+    });
+
+    it('should compile external pragma in function', () => {
+      const source = `
+        FUNCTION AddWithLog : INT
+          VAR_INPUT a : INT; b : INT; END_VAR
+          {external printf("AddWithLog called"); }
+          AddWithLog := a + b;
+        END_FUNCTION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('printf("AddWithLog called")');
+    });
+
+    it('should compile external pragma in function block', () => {
+      const source = `
+        FUNCTION_BLOCK Logger
+          VAR_INPUT message : INT; END_VAR
+          {external std::cout << "FB executed" << std::endl; }
+        END_FUNCTION_BLOCK
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('std::cout << "FB executed"');
+    });
+
+    it('should handle external pragma with C++ comments', () => {
+      const source = `
+        PROGRAM Main
+          {external
+            // This is a C++ comment
+            int x = 10;
+            /* Multi-line
+               comment */
+            int y = 20;
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('// This is a C++ comment');
+      expect(result.cppCode).toContain('int x = 10;');
+      expect(result.cppCode).toContain('int y = 20;');
+    });
+
+    it('should handle external pragma with string containing braces', () => {
+      const source = `
+        PROGRAM Main
+          {external printf("braces: {} and more {}"); }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('printf("braces: {} and more {}")');
+    });
+  });
+
+  describe('AST representation', () => {
+    it('should create ExternalCodePragma AST node', () => {
+      const source = `
+        PROGRAM Main
+          {external printf("test"); }
+        END_PROGRAM
+      `;
+      const result = parse(source);
+      expect(result.ast).toBeDefined();
+      expect(result.errors).toHaveLength(0);
+
+      // Check that the program has a body with the external pragma
+      const program = result.ast?.programs[0];
+      expect(program).toBeDefined();
+      expect(program?.body).toHaveLength(1);
+      expect(program?.body[0]?.kind).toBe('ExternalCodePragma');
+    });
+
+    it('should extract code content correctly', () => {
+      const source = `
+        PROGRAM Main
+          {external int x = 42; }
+        END_PROGRAM
+      `;
+      const result = parse(source);
+      const program = result.ast?.programs[0];
+      const pragma = program?.body[0];
+
+      expect(pragma?.kind).toBe('ExternalCodePragma');
+      if (pragma?.kind === 'ExternalCodePragma') {
+        expect(pragma.code).toContain('int x = 42;');
+      }
+    });
+  });
+});
+
 describe('Future Integration Tests', () => {
   // These tests are placeholders for Phase 3+ when the compiler is implemented
 

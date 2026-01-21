@@ -295,4 +295,106 @@ describe('STParser', () => {
       expect(result.errors).toHaveLength(0);
     });
   });
+
+  describe('pragmas', () => {
+    describe('external code pragma', () => {
+      it('should parse external pragma as statement in program', () => {
+        const source = `
+          PROGRAM Main
+            VAR x : INT; END_VAR
+            {external printf("test"); }
+          END_PROGRAM
+        `;
+        const result = parse(source);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should parse external pragma with nested braces', () => {
+        const source = `
+          PROGRAM Main
+            {external if (x > 0) { y = x; } }
+          END_PROGRAM
+        `;
+        const result = parse(source);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should parse external pragma as only statement', () => {
+        const source = `
+          PROGRAM CppOnly
+            {external
+              int x = 0;
+              for (int i = 0; i < 10; i++) {
+                x += i;
+              }
+            }
+          END_PROGRAM
+        `;
+        const result = parse(source);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should parse external pragma mixed with ST statements', () => {
+        const source = `
+          PROGRAM Mixed
+            VAR counter : INT; END_VAR
+            counter := 0;
+            {external printf("counter = %d\\n", counter); }
+            counter := counter + 1;
+            {external
+              // More C++ code
+              if (counter > 10) {
+                reset_counter();
+              }
+            }
+            counter := counter * 2;
+          END_PROGRAM
+        `;
+        const result = parse(source);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should parse external pragma in function', () => {
+        const source = `
+          FUNCTION AddWithLog : INT
+            VAR_INPUT a : INT; b : INT; END_VAR
+            {external printf("AddWithLog(%d, %d)\\n", a, b); }
+            AddWithLog := a + b;
+          END_FUNCTION
+        `;
+        const result = parse(source);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should parse external pragma in function block', () => {
+        const source = `
+          FUNCTION_BLOCK Counter
+            VAR_INPUT enable : BOOL; END_VAR
+            VAR_OUTPUT count : INT; END_VAR
+            IF enable THEN
+              count := count + 1;
+            END_IF;
+            {external
+              // Hardware access code
+              write_to_hardware(count);
+            }
+          END_FUNCTION_BLOCK
+        `;
+        const result = parse(source);
+        expect(result.errors).toHaveLength(0);
+      });
+
+      it('should parse multiple external pragmas', () => {
+        const source = `
+          PROGRAM Multi
+            {external printf("first"); }
+            {external printf("second"); }
+            {external printf("third"); }
+          END_PROGRAM
+        `;
+        const result = parse(source);
+        expect(result.errors).toHaveLength(0);
+      });
+    });
+  });
 });
