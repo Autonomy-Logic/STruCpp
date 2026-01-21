@@ -267,7 +267,82 @@ int64_t LOWER_BOUND(const ArrayView1D<T>& arr, int dim) {
 
 ## Testing
 
-### Test 1: Basic Variable-Length Function
+### Required Tests for Phase Completion
+
+#### Unit Tests - Lexer (`tests/frontend/lexer-vla.test.ts`)
+- [ ] Tokenize `ARRAY[*]` syntax
+- [ ] Tokenize `ARRAY[*, *]` for 2D
+- [ ] Tokenize `ARRAY[*, *, *]` for 3D
+
+#### Unit Tests - Parser (`tests/frontend/parser-vla.test.ts`)
+- [ ] Parse `ARRAY[*] OF INT` in VAR_IN_OUT
+- [ ] Parse `ARRAY[*, *] OF REAL` in VAR_IN_OUT
+- [ ] Parse mixed fixed and variable dimensions (if supported)
+- [ ] Reject `ARRAY[*]` in VAR_INPUT with syntax/semantic error
+- [ ] Reject `ARRAY[*]` in VAR_OUTPUT with error
+- [ ] Reject `ARRAY[*]` in local VAR with error
+
+#### Unit Tests - AST Builder (`tests/frontend/ast-builder-vla.test.ts`)
+- [ ] Build ArrayDimension with isVariableLength=true for `*`
+- [ ] Build ArrayType with variable-length dimensions
+- [ ] Preserve dimension info for multi-dimensional VLAs
+
+#### Unit Tests - Semantic Analysis (`tests/semantic/vla.test.ts`)
+- [ ] ARRAY[*] only valid in VAR_IN_OUT
+- [ ] ARRAY[*] in VAR_INPUT produces error
+- [ ] ARRAY[*] in VAR_OUTPUT produces error
+- [ ] ARRAY[*] in local VAR produces error
+- [ ] ARRAY[*] in VAR_GLOBAL produces error
+- [ ] Concrete array passed to VLA parameter is valid
+- [ ] Element type must match between concrete and VLA
+- [ ] Dimension count must match between concrete and VLA
+- [ ] LOWER_BOUND on VLA is valid
+- [ ] UPPER_BOUND on VLA is valid
+
+#### Unit Tests - Code Generation (`tests/backend/codegen-vla.test.ts`)
+- [ ] VLA parameter generates ArrayView<T> type
+- [ ] 2D VLA generates ArrayView2D<T>
+- [ ] 3D VLA generates ArrayView3D<T>
+- [ ] Concrete array passed to VLA generates implicit conversion
+- [ ] LOWER_BOUND on VLA generates runtime call
+- [ ] UPPER_BOUND on VLA generates runtime call
+- [ ] Array element access in VLA function generates correct code
+
+#### Unit Tests - Runtime Library (`tests/runtime/array-view.test.cpp`)
+- [ ] ArrayView1D construction from IEC_ARRAY_1D
+- [ ] ArrayView1D preserves bounds
+- [ ] ArrayView1D operator[] works correctly
+- [ ] ArrayView1D lower_bound() returns correct value
+- [ ] ArrayView1D upper_bound() returns correct value
+- [ ] ArrayView2D construction and access
+- [ ] ArrayView3D construction and access
+- [ ] LOWER_BOUND overload for ArrayView works
+- [ ] UPPER_BOUND overload for ArrayView works
+
+#### Golden File Tests (`tests/golden/vla/`)
+- [ ] `vla-function-1d.st` → `vla-function-1d.cpp`
+- [ ] `vla-function-2d.st` → `vla-function-2d.cpp`
+- [ ] `vla-fb-method.st` → `vla-fb-method.cpp`
+- [ ] `vla-bounds-query.st` → `vla-bounds-query.cpp`
+
+#### Integration Tests (`tests/integration/vla.test.ts`)
+- [ ] Function with VLA accepts different-sized arrays (compile & run)
+- [ ] VLA function processes array correctly (compile & run)
+- [ ] LOWER_BOUND returns correct value at runtime (compile & run)
+- [ ] UPPER_BOUND returns correct value at runtime (compile & run)
+- [ ] Non-zero-based array passed to VLA (compile & run)
+- [ ] 2D VLA function works correctly (compile & run)
+- [ ] VLA in function block VAR_IN_OUT (compile & run)
+
+#### Error Case Tests (`tests/semantic/vla-errors.test.ts`)
+- [ ] `VAR arr : ARRAY[*] OF INT;` → error: VLA only in VAR_IN_OUT
+- [ ] `VAR_INPUT arr : ARRAY[*] OF INT;` → error
+- [ ] VLA with incompatible element type → error
+- [ ] VLA with wrong dimension count → error
+
+### Validation Examples
+
+#### Test 1: Basic Variable-Length Function
 ```st
 FUNCTION ArraySum : INT
     VAR_IN_OUT

@@ -369,11 +369,94 @@ strucpp::iec_delete_fb(pFB);
 
 ### 7. Testing
 
-- Unit tests for parser (new expressions, delete statements)
-- Unit tests for semantic validation
-- Integration tests that allocate, use, and free memory
-- Memory leak detection tests (valgrind integration)
-- Edge cases: null pointer delete, double delete protection
+#### Unit Tests - Lexer (`tests/frontend/lexer-dynamic.test.ts`)
+- [ ] Tokenize `__NEW` keyword
+- [ ] Tokenize `__DELETE` keyword
+- [ ] Tokenize `__NEW(INT)`
+- [ ] Tokenize `__NEW(INT, 100)`
+- [ ] Tokenize `__DELETE(ptr)`
+
+#### Unit Tests - Parser (`tests/frontend/parser-dynamic.test.ts`)
+- [ ] Parse `__NEW(INT)` as expression
+- [ ] Parse `__NEW(MyStruct)` as expression
+- [ ] Parse `__NEW(MyFB)` as expression
+- [ ] Parse `__NEW(INT, size)` with size expression
+- [ ] Parse `__NEW(INT, 100)` with literal size
+- [ ] Parse `__DELETE(ptr)` as statement
+- [ ] Parse assignment with __NEW: `ptr := __NEW(INT)`
+- [ ] Reject __NEW without type argument
+- [ ] Reject __DELETE without pointer argument
+
+#### Unit Tests - AST Builder (`tests/frontend/ast-builder-dynamic.test.ts`)
+- [ ] Build NewExpression with scalar type
+- [ ] Build NewExpression with struct type
+- [ ] Build NewExpression with FB type
+- [ ] Build NewExpression with array size
+- [ ] Build DeleteStatement with pointer variable
+
+#### Unit Tests - Semantic Analysis (`tests/semantic/dynamic-memory.test.ts`)
+- [ ] __NEW target must be POINTER TO type
+- [ ] __NEW returns POINTER TO <type>
+- [ ] __NEW(Type) requires enable_dynamic_creation for UDT
+- [ ] __NEW(Type) requires enable_dynamic_creation for FB
+- [ ] __NEW(INT) doesn't require attribute (standard type)
+- [ ] __NEW(INT, size) - size must be integer
+- [ ] __DELETE argument must be pointer type
+- [ ] __DELETE on non-pointer produces error
+- [ ] Warn on pointer reassignment without __DELETE (potential leak)
+
+#### Unit Tests - Code Generation (`tests/backend/codegen-dynamic.test.ts`)
+- [ ] __NEW(INT) generates `iec_new<IEC_INT>()`
+- [ ] __NEW(MyStruct) generates `iec_new<MyStruct>()`
+- [ ] __NEW(MyFB) generates `iec_new_fb<MyFB>()`
+- [ ] __NEW(INT, 100) generates `iec_new_array<IEC_INT>(100)`
+- [ ] __NEW(INT, size) generates `iec_new_array<IEC_INT>(size.get())`
+- [ ] __DELETE(ptr) generates `iec_delete(ptr)`
+- [ ] __DELETE(pFB) generates `iec_delete_fb(pFB)`
+- [ ] __DELETE(pArr) generates `iec_delete_array(pArr, ...)`
+
+#### Unit Tests - Runtime Library (`tests/runtime/iec-memory.test.cpp`)
+- [ ] iec_new<T>() allocates and constructs
+- [ ] iec_new<T>() returns nullptr on failure (simulate)
+- [ ] iec_delete(ptr) destroys and frees
+- [ ] iec_delete(ptr) sets ptr to nullptr
+- [ ] iec_delete(nullptr) is safe (no-op)
+- [ ] iec_new_array<T>(n) allocates n elements
+- [ ] iec_new_array<T>(n) constructs each element
+- [ ] iec_delete_array properly destructs all elements
+- [ ] iec_new_fb<FB>() calls FB_Init
+- [ ] iec_delete_fb(pFB) calls FB_Exit before destruction
+
+#### Golden File Tests (`tests/golden/dynamic-memory/`)
+- [ ] `new-scalar.st` → `new-scalar.cpp`
+- [ ] `new-struct.st` → `new-struct.cpp`
+- [ ] `new-array.st` → `new-array.cpp`
+- [ ] `new-fb.st` → `new-fb.cpp`
+- [ ] `delete-all.st` → `delete-all.cpp`
+
+#### Integration Tests (`tests/integration/dynamic-memory.test.ts`)
+- [ ] Allocate and use scalar (compile & run)
+- [ ] Allocate and use dynamic array (compile & run)
+- [ ] Allocate and use struct (compile & run)
+- [ ] Allocate and use function block (compile & run)
+- [ ] FB_Init called on __NEW (compile & run, verify side effect)
+- [ ] FB_Exit called on __DELETE (compile & run, verify side effect)
+- [ ] Allocation failure returns 0 (compile & run with check)
+- [ ] __DELETE sets pointer to 0 (compile & run)
+- [ ] Double delete is safe (compile & run)
+
+#### Memory Safety Tests (`tests/integration/memory-safety.test.ts`)
+- [ ] No memory leak with proper __DELETE (valgrind)
+- [ ] Memory leak detected without __DELETE (valgrind, expect leak)
+- [ ] No use-after-free crashes (sanitizer)
+- [ ] No double-free crashes (sanitizer)
+
+#### Error Case Tests (`tests/semantic/dynamic-errors.test.ts`)
+- [ ] `x := __NEW(INT)` where x is INT → type mismatch error
+- [ ] `__NEW(MyStruct)` without attribute → error
+- [ ] `__NEW(MyFB)` without attribute → error
+- [ ] `__DELETE(x)` where x is INT → not a pointer error
+- [ ] `__NEW(INT, 3.14)` → size must be integer error
 
 ## Success Criteria
 

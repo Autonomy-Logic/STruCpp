@@ -197,11 +197,50 @@ class AttributeRegistry {
 
 ### 6. Testing
 
-- Lexer tests for pragma tokenization
-- Parser tests for pragma recognition in various positions
-- Code generation tests verifying AS-IS output
-- Integration tests mixing ST and C++ code
-- Attribute pragma tests for `enable_dynamic_creation` etc.
+#### Unit Tests - Lexer (`tests/frontend/lexer-pragma.test.ts`)
+- [ ] Tokenize single-line external pragma: `{external printf("hi"); }`
+- [ ] Tokenize multi-line external pragma with newlines
+- [ ] Tokenize attribute pragma: `{attribute 'enable_dynamic_creation'}`
+- [ ] Tokenize attribute pragma with value: `{attribute 'symbol' := 'readwrite'}`
+- [ ] Preserve whitespace and formatting inside external pragma
+- [ ] Handle nested braces in C++ code inside external pragma
+- [ ] Handle string literals with braces inside external pragma
+
+#### Unit Tests - Parser (`tests/frontend/parser-pragma.test.ts`)
+- [ ] Parse external pragma as statement in program body
+- [ ] Parse external pragma inside IF block
+- [ ] Parse external pragma inside WHILE loop
+- [ ] Parse external pragma inside FOR loop
+- [ ] Parse multiple external pragmas in sequence
+- [ ] Parse attribute pragma before FUNCTION_BLOCK
+- [ ] Parse attribute pragma before TYPE declaration
+- [ ] Parse attribute pragma before VAR_GLOBAL
+- [ ] Reject malformed pragma (missing closing brace)
+
+#### Unit Tests - AST Builder (`tests/frontend/ast-builder-pragma.test.ts`)
+- [ ] Build ExternalCodePragma node with correct code content
+- [ ] Build AttributePragma node with name only
+- [ ] Build AttributePragma node with name and value
+- [ ] Preserve exact content (AS-IS) in ExternalCodePragma.code
+
+#### Unit Tests - Code Generation (`tests/backend/codegen-pragma.test.ts`)
+- [ ] Generate external code at correct position in run() method
+- [ ] Generate external code verbatim (no transformation)
+- [ ] Generate external code with proper indentation context
+- [ ] Multiple external pragmas generate in correct order
+
+#### Golden File Tests (`tests/golden/pragma/`)
+- [ ] `external-basic.st` → `external-basic.cpp` (simple external block)
+- [ ] `external-mixed.st` → `external-mixed.cpp` (ST + C++ interleaved)
+- [ ] `external-inline.st` → `external-inline.cpp` (single-line external)
+- [ ] `attribute-fb.st` → `attribute-fb.cpp` (attributed function block)
+
+#### Integration Tests (`tests/integration/pragma.test.ts`)
+- [ ] Compile and run program with external printf
+- [ ] Compile and run program with external code accessing ST variable
+- [ ] Compile and run program with external code modifying ST variable
+- [ ] Compile and run program mixing ST control flow with external code
+- [ ] Verify attribute pragma enables dynamic creation (with Phase 3.5)
 
 ## Success Criteria
 

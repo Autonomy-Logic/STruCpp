@@ -241,11 +241,79 @@ return Calculate;
 
 ### Testing
 
-- Unit tests for semantic validation of each statement type
-- Unit tests for code generation of each statement type
-- Golden file tests comparing ST input to expected C++ output
-- Integration tests that compile and execute generated C++
-- Edge cases: empty bodies, deeply nested statements, complex conditions
+#### Unit Tests - Semantic Analysis (`tests/semantic/control-flow.test.ts`)
+- [ ] IF condition must be BOOL type
+- [ ] IF condition rejects non-BOOL types with error
+- [ ] ELSIF condition must be BOOL type
+- [ ] CASE selector must be integer or enum type
+- [ ] CASE selector rejects REAL type with error
+- [ ] CASE labels must match selector type
+- [ ] CASE duplicate labels produce error
+- [ ] CASE range start must be <= end
+- [ ] FOR control variable must be integer type
+- [ ] FOR start/end/step must be compatible with control variable
+- [ ] FOR control variable modification inside loop produces error
+- [ ] WHILE condition must be BOOL type
+- [ ] REPEAT UNTIL condition must be BOOL type
+- [ ] EXIT outside loop produces error
+- [ ] EXIT inside FOR loop is valid
+- [ ] EXIT inside WHILE loop is valid
+- [ ] EXIT inside REPEAT loop is valid
+- [ ] EXIT inside nested loops exits innermost
+- [ ] RETURN in FUNCTION is valid
+- [ ] RETURN in PROGRAM is valid
+
+#### Unit Tests - Code Generation (`tests/backend/codegen-control-flow.test.ts`)
+- [ ] IF generates C++ if statement
+- [ ] IF-ELSE generates C++ if-else
+- [ ] IF-ELSIF-ELSE generates C++ if-else if-else chain
+- [ ] CASE generates C++ switch statement
+- [ ] CASE with multiple labels generates fall-through cases
+- [ ] CASE with range expands to individual case labels
+- [ ] CASE ELSE generates default clause
+- [ ] FOR ascending generates correct C++ for loop
+- [ ] FOR descending generates correct C++ for loop (>=)
+- [ ] FOR with BY step generates correct increment
+- [ ] FOR with negative step generates correct decrement
+- [ ] WHILE generates C++ while loop
+- [ ] REPEAT generates C++ do-while with negated condition
+- [ ] EXIT generates C++ break
+- [ ] RETURN generates C++ return
+
+#### Golden File Tests (`tests/golden/control-flow/`)
+- [ ] `if-simple.st` → `if-simple.cpp`
+- [ ] `if-elsif-else.st` → `if-elsif-else.cpp`
+- [ ] `if-nested.st` → `if-nested.cpp`
+- [ ] `case-simple.st` → `case-simple.cpp`
+- [ ] `case-ranges.st` → `case-ranges.cpp`
+- [ ] `case-enum.st` → `case-enum.cpp`
+- [ ] `for-ascending.st` → `for-ascending.cpp`
+- [ ] `for-descending.st` → `for-descending.cpp`
+- [ ] `for-by-step.st` → `for-by-step.cpp`
+- [ ] `while-simple.st` → `while-simple.cpp`
+- [ ] `repeat-until.st` → `repeat-until.cpp`
+- [ ] `exit-in-loop.st` → `exit-in-loop.cpp`
+- [ ] `return-function.st` → `return-function.cpp`
+
+#### Integration Tests (`tests/integration/control-flow.test.ts`)
+- [ ] IF statement executes correct branch (compile & run)
+- [ ] CASE statement executes correct case (compile & run)
+- [ ] CASE with ranges executes correct case (compile & run)
+- [ ] FOR loop iterates correct number of times (compile & run)
+- [ ] FOR loop with BY step iterates correctly (compile & run)
+- [ ] WHILE loop terminates correctly (compile & run)
+- [ ] REPEAT loop executes at least once (compile & run)
+- [ ] EXIT breaks out of loop early (compile & run)
+- [ ] Nested loops with EXIT (compile & run)
+- [ ] Complex nested control flow (compile & run)
+
+#### Error Case Tests (`tests/semantic/control-flow-errors.test.ts`)
+- [ ] IF with INT condition → type error
+- [ ] CASE with REAL selector → type error
+- [ ] CASE duplicate label → error with location
+- [ ] FOR with REAL control variable → type error
+- [ ] EXIT outside loop → error with location
+- [ ] Unreachable code after RETURN → warning
 
 ## Success Criteria
 

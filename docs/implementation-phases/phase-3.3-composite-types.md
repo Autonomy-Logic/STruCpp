@@ -233,11 +233,79 @@ upper.set(arr.upper_bound());
 
 ### 6. Testing
 
-- Parser tests for array literals
-- AST builder tests for subscript extraction
-- Code generation tests for all access patterns
-- Integration tests that compile and execute
-- Edge cases: empty arrays, single-element arrays, max dimensions
+#### Unit Tests - AST Builder (`tests/frontend/ast-builder-composite.test.ts`)
+- [ ] Extract single subscript from `arr[i]`
+- [ ] Extract multiple subscripts from `arr[i, j]`
+- [ ] Extract subscripts from `arr[i, j, k]` (3D)
+- [ ] Extract field access from `point.x`
+- [ ] Extract nested field access from `line.start.x`
+- [ ] Extract combined access from `points[i].x`
+- [ ] Extract complex access from `data[i].items[j].value`
+- [ ] Subscript expressions preserve source spans
+
+#### Unit Tests - Semantic Analysis (`tests/semantic/composite-types.test.ts`)
+- [ ] Array subscript count must match dimensions (1D)
+- [ ] Array subscript count must match dimensions (2D)
+- [ ] Array subscript count must match dimensions (3D)
+- [ ] Too few subscripts produces error
+- [ ] Too many subscripts produces error
+- [ ] Array subscript must be integer type
+- [ ] Array subscript rejects REAL type with error
+- [ ] Struct member must exist
+- [ ] Struct member access on non-struct produces error
+- [ ] Invalid struct member name produces error with suggestions
+- [ ] SIZEOF argument must be array
+- [ ] LOWER_BOUND argument must be array
+- [ ] LOWER_BOUND dimension must be valid (1-based)
+- [ ] UPPER_BOUND argument must be array
+- [ ] Type inference: `arr[i]` has element type
+- [ ] Type inference: `point.x` has field type
+- [ ] Type inference: `points[i].x` chains correctly
+
+#### Unit Tests - Code Generation (`tests/backend/codegen-composite.test.ts`)
+- [ ] Array read generates `.get()`: `x := arr[i]`
+- [ ] Array write generates `.set()`: `arr[i] := x`
+- [ ] 2D array access generates `arr[i][j]`
+- [ ] 3D array access generates `arr[i][j][k]`
+- [ ] Struct read generates `.get()`: `x := point.x`
+- [ ] Struct write generates `.set()`: `point.x := x`
+- [ ] Nested struct access: `line.start.x`
+- [ ] Combined access: `points[i].x`
+- [ ] Array literal initialization
+- [ ] SIZEOF generates `sizeof(arr)`
+- [ ] LOWER_BOUND generates `arr.lower_bound()`
+- [ ] UPPER_BOUND generates `arr.upper_bound()`
+
+#### Golden File Tests (`tests/golden/composite-types/`)
+- [ ] `array-1d-access.st` → `array-1d-access.cpp`
+- [ ] `array-2d-access.st` → `array-2d-access.cpp`
+- [ ] `array-3d-access.st` → `array-3d-access.cpp`
+- [ ] `struct-access.st` → `struct-access.cpp`
+- [ ] `struct-nested.st` → `struct-nested.cpp`
+- [ ] `array-of-struct.st` → `array-of-struct.cpp`
+- [ ] `array-literal.st` → `array-literal.cpp`
+- [ ] `array-intrinsics.st` → `array-intrinsics.cpp`
+
+#### Integration Tests (`tests/integration/composite-types.test.ts`)
+- [ ] 1D array read/write produces correct values (compile & run)
+- [ ] 2D array read/write produces correct values (compile & run)
+- [ ] Struct member read/write produces correct values (compile & run)
+- [ ] Array of structs access produces correct values (compile & run)
+- [ ] Nested struct access produces correct values (compile & run)
+- [ ] Array literal initializes correctly (compile & run)
+- [ ] SIZEOF returns correct byte count (compile & run)
+- [ ] LOWER_BOUND returns correct value (compile & run)
+- [ ] UPPER_BOUND returns correct value (compile & run)
+- [ ] Non-zero-based array bounds work correctly (compile & run)
+
+#### Error Case Tests (`tests/semantic/composite-errors.test.ts`)
+- [ ] `arr[i, j]` on 1D array → dimension mismatch error
+- [ ] `arr[i]` on 2D array → dimension mismatch error
+- [ ] `arr[3.14]` → subscript type error
+- [ ] `point.z` on Point{x, y} → member not found error
+- [ ] `x.field` where x is INT → not a struct error
+- [ ] LOWER_BOUND(arr, 0) → invalid dimension error
+- [ ] LOWER_BOUND(arr, 3) on 2D array → invalid dimension error
 
 ## Success Criteria
 
