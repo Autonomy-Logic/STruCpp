@@ -43,13 +43,15 @@ Parse IEC 61131-3 project structure, user-defined data types, and advanced langu
 - [Phase 2.7: Namespaces](phase-2.7-namespaces.md) - Project-level namespace configuration (CODESYS-style) ✓
 
 ### Phase 3: Core ST Translation
-**Status**: PENDING | **Duration**: 6-9 weeks
+**Status**: PENDING | **Duration**: 11-16 weeks
 
-Implement parser and code generator for ST expressions, assignments, statements, and control flow.
+Implement parser and code generator for ST expressions, assignments, statements, control flow, and composite type access.
 
 **Sub-phases**:
 - [Phase 3.1: Expressions and Assignments](phase-3-st-translation.md) - Basic expressions, assignments, literals
 - [Phase 3.2: Control Flow Statements](phase-3.2-control-flow.md) - IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN
+- [Phase 3.3: Composite Type Access](phase-3.3-composite-types.md) - Array subscripts, struct members, array literals, SIZEOF/LOWER_BOUND/UPPER_BOUND
+- [Phase 3.4: Variable-Length Arrays](phase-3.4-variable-length-arrays.md) - ARRAY[*] parameters (IEC 61131-3 Edition 3)
 
 ### Phase 4: Functions and Function Calls
 **Status**: PENDING | **Duration**: 4-6 weeks
