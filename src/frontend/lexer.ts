@@ -129,49 +129,6 @@ function matchExternalPragma(
 }
 
 /**
- * Custom pattern matcher for {attribute ...} pragma.
- * Matches {attribute 'name'} or {attribute 'name' := 'value'}
- *
- * @param text - The full source text
- * @param startOffset - The current position in the text
- * @returns A RegExpExecArray-compatible result or null if no match
- */
-function matchAttributePragma(
-  text: string,
-  startOffset: number,
-): RegExpExecArray | null {
-  // Must start with {attribute (case insensitive)
-  if (text.charAt(startOffset) !== "{") return null;
-
-  // Check for "attribute" keyword (case insensitive)
-  const keywordStart = startOffset + 1;
-  let keywordEnd = keywordStart;
-
-  // Skip whitespace after {
-  while (keywordEnd < text.length && /\s/.test(text.charAt(keywordEnd))) {
-    keywordEnd++;
-  }
-
-  // Check for "attribute" keyword
-  const potentialKeyword = text.substring(keywordEnd, keywordEnd + 9);
-  if (potentialKeyword.toLowerCase() !== "attribute") {
-    return null;
-  }
-
-  // Find the closing brace (attribute pragmas don't have nested braces)
-  let i = keywordEnd + 9; // After "attribute"
-  while (i < text.length && text.charAt(i) !== "}") {
-    i++;
-  }
-
-  if (i < text.length && text.charAt(i) === "}") {
-    return createMatchResult(text.substring(startOffset, i + 1), startOffset);
-  }
-
-  return null; // Unclosed pragma
-}
-
-/**
  * External code pragma token: {external ... }
  * Content is passed through AS-IS to generated C++ code.
  */
@@ -179,16 +136,6 @@ export const ExternalPragma = createToken({
   name: "ExternalPragma",
   pattern: matchExternalPragma,
   line_breaks: true, // Content can span multiple lines
-});
-
-/**
- * Attribute pragma token: {attribute 'name'} or {attribute 'name' := 'value'}
- * Used for CODESYS-compatible compiler directives.
- */
-export const AttributePragma = createToken({
-  name: "AttributePragma",
-  pattern: matchAttributePragma,
-  line_breaks: false, // Attributes are typically single-line
 });
 
 // =============================================================================
@@ -596,9 +543,8 @@ export const allTokens = [
   WhiteSpace,
   Comment,
 
-  // Pragmas (must come before other tokens that might match {)
+  // External code pragma
   ExternalPragma,
-  AttributePragma,
 
   // Multi-character operators (before single-character)
   DoubleDot,

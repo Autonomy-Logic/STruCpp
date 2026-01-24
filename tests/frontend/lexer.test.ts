@@ -399,46 +399,110 @@ describe('STLexer', () => {
         expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
         expect(result.tokens[1]?.tokenType.name).toBe('VAR');
       });
-    });
 
-    describe('attribute pragma', () => {
-      it('should tokenize simple attribute pragma', () => {
-        const result = tokenize("{attribute 'enable_dynamic_creation'}");
+      it('should handle empty external pragma', () => {
+        const result = tokenize('{external }');
         expect(result.errors).toHaveLength(0);
         expect(result.tokens).toHaveLength(1);
-        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
       });
 
-      it('should tokenize attribute pragma with value', () => {
-        const result = tokenize("{attribute 'name' := 'value'}");
+      it('should handle external pragma with only whitespace', () => {
+        const result = tokenize('{external   \n  \t  }');
         expect(result.errors).toHaveLength(0);
         expect(result.tokens).toHaveLength(1);
-        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
       });
 
-      it('should be case insensitive for attribute keyword', () => {
-        const result = tokenize("{ATTRIBUTE 'test'}");
-        expect(result.errors).toHaveLength(0);
-        expect(result.tokens).toHaveLength(1);
-        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
-      });
-
-      it('should tokenize multiple attributes', () => {
-        const source = "{attribute 'attr1'} {attribute 'attr2'}";
+      it('should handle very deeply nested braces (4+ levels)', () => {
+        const source = `{external
+          void foo() {
+            if (a) {
+              while (b) {
+                for (int i = 0; i < 10; i++) {
+                  if (c) {
+                    x++;
+                  }
+                }
+              }
+            }
+          }
+        }`;
         const result = tokenize(source);
         expect(result.errors).toHaveLength(0);
-        expect(result.tokens).toHaveLength(2);
-        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
-        expect(result.tokens[1]?.tokenType.name).toBe('AttributePragma');
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
       });
 
-      it('should tokenize attribute followed by VAR declaration', () => {
-        const source = "{attribute 'pack_mode' := '2'} VAR";
+      it('should handle C++ class/struct definitions', () => {
+        const source = `{external
+          struct Point {
+            int x;
+            int y;
+            Point(int a, int b) : x(a), y(b) {}
+          };
+        }`;
         const result = tokenize(source);
         expect(result.errors).toHaveLength(0);
-        expect(result.tokens).toHaveLength(2);
-        expect(result.tokens[0]?.tokenType.name).toBe('AttributePragma');
-        expect(result.tokens[1]?.tokenType.name).toBe('VAR');
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle C++ lambda expressions', () => {
+        const source = '{external auto fn = [](int x) { return x * 2; }; }';
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle C++ template syntax', () => {
+        const source = '{external std::vector<std::map<int, std::string>> data; }';
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle main function definition', () => {
+        const source = `{external
+          int main() {
+            printf("Hello, World!\\n");
+            return 0;
+          }
+        }`;
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle mixed braces and brackets', () => {
+        const source = '{external int arr[10] = {1, 2, 3}; std::map<int, int> m = {{1, 2}}; }';
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle escaped quotes in strings', () => {
+        const source = '{external printf("quote: \\" and brace: }"); }';
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
+      });
+
+      it('should handle preprocessor directives', () => {
+        const source = `{external
+          #ifdef DEBUG
+          printf("debug mode");
+          #endif
+        }`;
+        const result = tokenize(source);
+        expect(result.errors).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('ExternalPragma');
       });
     });
 

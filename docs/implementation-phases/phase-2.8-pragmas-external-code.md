@@ -1,19 +1,30 @@
 # Phase 2.8: Pragmas and External Code
 
-**Status**: COMPLETED
+**Status**: COMPLETED (External Code only; Attribute Pragmas deferred)
 
 **Duration**: 1-2 weeks
 
-**Goal**: Implement pragma support including CODESYS-compatible attributes and inline C/C++ code pass-through for OpenPLC compatibility
+**Goal**: Implement pragma support for inline C/C++ code pass-through for OpenPLC compatibility
 
 ## Overview
 
-This phase implements pragma handling in STruC++, with two key capabilities:
+This phase implements pragma handling in STruC++:
 
-1. **CODESYS-compatible attribute pragmas** - `{attribute 'name'}` syntax for compiler directives
-2. **External code pass-through** - `{external ...}` pragma for embedding C/C++ code directly in ST programs
+1. **External code pass-through** - `{external ...}` pragma for embedding C/C++ code directly in ST programs ✅ IMPLEMENTED
+2. **CODESYS-compatible attribute pragmas** - `{attribute 'name'}` syntax for compiler directives ⏳ DEFERRED (future phase)
 
 The external code feature is essential for OpenPLC compatibility, allowing developers to mix Structured Text with C/C++ code within the same program.
+
+## Implementation Notes
+
+The `{external ...}` pragma is fully implemented with support for:
+- Nested braces in C++ code (structs, classes, lambdas, control flow)
+- String and character literals containing braces
+- C++ single-line (`//`) and block (`/* */`) comments
+- Preprocessor directives (`#ifdef`, `#endif`, etc.)
+- Case-insensitive `external` keyword
+
+Attribute pragmas (`{attribute 'name'}`) are deferred to a future phase when CODESYS-specific features are needed.
 
 ## Language Features
 

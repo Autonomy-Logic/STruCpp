@@ -482,19 +482,6 @@ export interface ExternalCodePragma extends ASTNode {
   code: string;
 }
 
-/**
- * Attribute pragma: {attribute 'name'} or {attribute 'name' := 'value'}
- * CODESYS-compatible compiler directive.
- * Attached to the following declaration.
- */
-export interface AttributePragma extends ASTNode {
-  kind: "AttributePragma";
-  /** Attribute name (e.g., 'enable_dynamic_creation') */
-  name: string;
-  /** Optional attribute value */
-  value?: string;
-}
-
 // =============================================================================
 // Expressions
 // =============================================================================

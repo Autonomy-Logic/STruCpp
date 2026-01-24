@@ -1802,6 +1802,150 @@ describe('External Code Pragma Tests (Phase 2.8)', () => {
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain('printf("braces: {} and more {}")');
     });
+
+    it('should handle deeply nested C++ code structures', () => {
+      const source = `
+        PROGRAM Main
+          {external
+            void processData() {
+              if (condition) {
+                while (running) {
+                  for (int i = 0; i < 10; i++) {
+                    if (data[i] > 0) {
+                      result += data[i];
+                    }
+                  }
+                }
+              }
+            }
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('void processData()');
+      expect(result.cppCode).toContain('if (condition)');
+      expect(result.cppCode).toContain('while (running)');
+      expect(result.cppCode).toContain('for (int i = 0; i < 10; i++)');
+    });
+
+    it('should handle C++ class/struct definitions', () => {
+      const source = `
+        PROGRAM Main
+          {external
+            struct SensorData {
+              int id;
+              float value;
+              SensorData(int i, float v) : id(i), value(v) {}
+            };
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('struct SensorData');
+      expect(result.cppCode).toContain('int id;');
+      expect(result.cppCode).toContain('float value;');
+    });
+
+    it('should handle C++ lambda expressions', () => {
+      const source = `
+        PROGRAM Main
+          {external
+            auto callback = [](int x) { return x * 2; };
+            auto complex = [&](int a, int b) {
+              return a + b;
+            };
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('auto callback = [](int x) { return x * 2; };');
+      expect(result.cppCode).toContain('auto complex = [&](int a, int b)');
+    });
+
+    it('should handle C++ template usage', () => {
+      const source = `
+        PROGRAM Main
+          {external
+            std::vector<int> numbers;
+            std::map<std::string, std::vector<int>> data;
+            numbers.push_back(42);
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('std::vector<int> numbers');
+      expect(result.cppCode).toContain('std::map<std::string, std::vector<int>> data');
+    });
+
+    it('should handle empty external pragma', () => {
+      const source = `
+        PROGRAM Main
+          {external }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+    });
+
+    it('should handle preprocessor directives', () => {
+      const source = `
+        PROGRAM Main
+          {external
+            #ifdef ARDUINO
+            analogWrite(PWM_PIN, speed);
+            #else
+            printf("Not on Arduino\\n");
+            #endif
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('#ifdef ARDUINO');
+      expect(result.cppCode).toContain('#endif');
+    });
+
+    it('should place external code inside run() method', () => {
+      const source = `
+        PROGRAM TestPlacement
+          {external int localVar = 42; }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      // Verify code appears after run() { and before closing }
+      const runMethodMatch = result.cppCode?.match(/void Program_TestPlacement::run\(\)\s*\{([^}]*int localVar = 42;[^}]*)\}/);
+      expect(runMethodMatch).not.toBeNull();
+    });
+
+    it('should handle real-world OpenPLC-style hardware access pattern', () => {
+      const source = `
+        PROGRAM HardwareControl
+          VAR
+            motorSpeed : INT;
+            sensorInput : INT;
+          END_VAR
+
+          {external
+            // Direct hardware access
+            #ifdef ARDUINO
+            int rawValue = analogRead(A0);
+            sensorInput.set(rawValue);
+            analogWrite(PWM_PIN, motorSpeed.get());
+            #endif
+          }
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('analogRead(A0)');
+      expect(result.cppCode).toContain('sensorInput.set(rawValue)');
+      expect(result.cppCode).toContain('motorSpeed.get()');
+    });
   });
 
   describe('AST representation', () => {
