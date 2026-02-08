@@ -821,6 +821,151 @@ int main() {
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'config_in_namespace');
     expect(cppResult.success).toBe(true);
   });
+
+  // =============================================================================
+  // External Code Pragma Tests (Phase 2.8)
+  // =============================================================================
+
+  it('should compile a program with simple external pragma', () => {
+    const source = `
+      PROGRAM ExternalSimple
+        {external
+          int local_var = 42;
+          if (local_var > 0) { local_var--; }
+        }
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_simple');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile a program with external pragma using C++ stdlib', () => {
+    const source = `
+      PROGRAM ExternalStdLib
+        {external
+          std::string msg = "hello";
+          int len = static_cast<int>(msg.size());
+        }
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_stdlib');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile a program with multiple external pragmas', () => {
+    const source = `
+      PROGRAM ExternalMultiple
+        {external int a = 1; }
+        {external int b = 2; }
+        {external int c = a + b; }
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_multiple');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile external pragma in function block', () => {
+    const source = `
+      FUNCTION_BLOCK ExternalFB
+        VAR_INPUT enable : BOOL; END_VAR
+        VAR_OUTPUT count : INT; END_VAR
+        {external
+          if (enable.get()) {
+            count.set(count.get() + 1);
+          }
+        }
+      END_FUNCTION_BLOCK
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_fb');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile external pragma in function', () => {
+    const source = `
+      FUNCTION ExternalFunc : INT
+        VAR_INPUT x : INT; END_VAR
+        {external
+          int doubled = x.get() * 2;
+          ExternalFunc_result.set(doubled);
+        }
+      END_FUNCTION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_func');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile external pragma with struct definition', () => {
+    const source = `
+      PROGRAM ExternalStruct
+        {external
+          struct LocalPoint {
+            int x;
+            int y;
+            LocalPoint() : x(0), y(0) {}
+          };
+          LocalPoint p;
+          p.x = 10;
+          p.y = 20;
+        }
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_struct');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile external pragma with lambda', () => {
+    const source = `
+      PROGRAM ExternalLambda
+        {external
+          auto square = [](int x) { return x * x; };
+          int result = square(5);
+        }
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_lambda');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile external pragma with C++ comments and preprocessor', () => {
+    const source = `
+      PROGRAM ExternalComments
+        {external
+          // Single-line comment
+          /* Block comment */
+          int x = 0;
+          #ifdef NEVER_DEFINED
+          int unreachable = 999;
+          #endif
+        }
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_comments');
+    expect(cppResult.success).toBe(true);
+  });
 });
 
 /**
@@ -1208,5 +1353,191 @@ int main() {
     expect(Number(match10![1])).toBe(10000000);      // 10ms in ns
     expect(Number(match500![1])).toBe(500000000);   // 500ms in ns
     expect(Number(match1s![1])).toBe(1000000000);   // 1s in ns
+  });
+});
+
+/**
+ * External Code Pragma Runtime Tests (Phase 2.8)
+ *
+ * These tests verify that external C/C++ code embedded via {external ...}
+ * pragmas actually compiles, links, and executes correctly.
+ */
+describeIfGpp('External Code Pragma Runtime Tests', () => {
+  let tempDir: string;
+  const runtimeIncludePath = path.resolve(__dirname, '../../src/runtime/include');
+
+  beforeAll(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-external-test-'));
+  });
+
+  afterAll(() => {
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  function compileAndRun(
+    headerCode: string,
+    cppCode: string,
+    mainCode: string,
+    testName: string,
+  ): { success: boolean; output?: string; error?: string } {
+    const headerPath = path.join(tempDir, 'generated.hpp');
+    const cppPath = path.join(tempDir, `${testName}.cpp`);
+    const binPath = path.join(tempDir, testName);
+
+    fs.writeFileSync(headerPath, headerCode);
+    const fullCpp = `${cppCode}\n\n${mainCode}\n`;
+    fs.writeFileSync(cppPath, fullCpp);
+
+    try {
+      execSync(
+        `g++ -std=c++17 -O2 -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" -o "${binPath}" 2>&1`,
+        { encoding: 'utf-8' },
+      );
+    } catch (error) {
+      const execError = error as { stdout?: string; stderr?: string; message?: string };
+      return {
+        success: false,
+        error: `Compilation failed: ${execError.stdout || execError.stderr || execError.message || 'Unknown error'}`,
+      };
+    }
+
+    try {
+      const output = execSync(`"${binPath}"`, { encoding: 'utf-8', timeout: 5000 });
+      return { success: true, output };
+    } catch (error) {
+      const execError = error as { stdout?: string; stderr?: string; message?: string };
+      return {
+        success: false,
+        error: `Execution failed: ${execError.stdout || execError.stderr || execError.message || 'Unknown error'}`,
+      };
+    }
+  }
+
+  it('should execute external pragma code that prints output', () => {
+    const source = `
+      PROGRAM PrintTest
+        {external
+          printf("EXTERNAL_OK\\n");
+        }
+      END_PROGRAM
+    `;
+
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const mainCode = `
+#include <cstdio>
+int main() {
+    strucpp::Program_PrintTest prog;
+    prog.run();
+    return 0;
+}
+`;
+
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'external_print');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toContain('EXTERNAL_OK');
+  });
+
+  it('should execute external pragma that reads and writes IEC variables', () => {
+    const source = `
+      PROGRAM VarAccessTest
+        VAR
+          counter : INT;
+          flag : BOOL;
+        END_VAR
+        {external
+          counter.set(counter.get() + 10);
+          flag.set(true);
+        }
+      END_PROGRAM
+    `;
+
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const mainCode = `
+#include <cstdio>
+int main() {
+    strucpp::Program_VarAccessTest prog;
+    // Run twice to verify accumulation
+    prog.run();
+    prog.run();
+    printf("counter=%d\\n", static_cast<int>(prog.counter.get()));
+    printf("flag=%d\\n", static_cast<int>(prog.flag.get()));
+    return 0;
+}
+`;
+
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'external_var_access');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toContain('counter=20');
+    expect(runResult.output).toContain('flag=1');
+  });
+
+  it('should execute external pragma with control flow and nested braces', () => {
+    const source = `
+      PROGRAM ControlFlowTest
+        VAR result : INT; END_VAR
+        {external
+          int sum = 0;
+          for (int i = 1; i <= 5; i++) {
+            if (i % 2 == 0) {
+              sum += i;
+            }
+          }
+          result.set(sum);
+        }
+      END_PROGRAM
+    `;
+
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const mainCode = `
+#include <cstdio>
+int main() {
+    strucpp::Program_ControlFlowTest prog;
+    prog.run();
+    // sum of even numbers 1..5: 2 + 4 = 6
+    printf("result=%d\\n", static_cast<int>(prog.result.get()));
+    return 0;
+}
+`;
+
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'external_control_flow');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toContain('result=6');
+  });
+
+  it('should execute multiple external pragmas in sequence', () => {
+    const source = `
+      PROGRAM MultiPragmaTest
+        VAR x : INT; END_VAR
+        {external x.set(1); }
+        {external x.set(x.get() * 3); }
+        {external x.set(x.get() + 7); }
+      END_PROGRAM
+    `;
+
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const mainCode = `
+#include <cstdio>
+int main() {
+    strucpp::Program_MultiPragmaTest prog;
+    prog.run();
+    // 1 * 3 + 7 = 10
+    printf("x=%d\\n", static_cast<int>(prog.x.get()));
+    return 0;
+}
+`;
+
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'external_multi_pragma');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toContain('x=10');
   });
 });

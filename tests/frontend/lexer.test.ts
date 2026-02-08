@@ -506,6 +506,40 @@ describe('STLexer', () => {
       });
     });
 
+    describe('malformed external pragmas', () => {
+      it('should produce error for unclosed external pragma', () => {
+        const source = `
+          PROGRAM Main
+            {external printf("test");
+          END_PROGRAM
+        `;
+        const result = tokenize(source);
+        // The unclosed pragma should cause a lexer error (unrecognized '{')
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it('should produce error for unclosed nested braces in external pragma', () => {
+        const source = '{external if (x) { y = 1; }';
+        // Missing the final closing brace for the pragma itself
+        const result = tokenize(source);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it('should not match pragma with no closing brace at all', () => {
+        const result = tokenize('{external int x = 0;');
+        const externalTokens = result.tokens.filter(t => t.tokenType.name === 'ExternalPragma');
+        expect(externalTokens).toHaveLength(0);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it('should not match pragma where keyword is not immediately after brace', () => {
+        // {something external} should NOT be matched
+        const result = tokenize('{something external code }');
+        const externalTokens = result.tokens.filter(t => t.tokenType.name === 'ExternalPragma');
+        expect(externalTokens).toHaveLength(0);
+      });
+    });
+
     describe('pragma in program context', () => {
       it('should tokenize program with external pragma', () => {
         const source = `
