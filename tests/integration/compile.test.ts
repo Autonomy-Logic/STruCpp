@@ -1948,6 +1948,41 @@ describe('External Code Pragma Tests (Phase 2.8)', () => {
     });
   });
 
+  describe('error cases', () => {
+    it('should fail to compile with unclosed external pragma', () => {
+      const source = `
+        PROGRAM Main
+          {external printf("test");
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('should fail to compile with unclosed nested braces in external pragma', () => {
+      const source = `
+        PROGRAM Main
+          {external if (x) { y = 1; }
+        END_PROGRAM
+      `;
+      // The pragma consumes up to the first unmatched }, leaving the rest unparseable
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('should fail to compile with completely unclosed external pragma', () => {
+      const source = `
+        PROGRAM Main
+          {external int x = 0;
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+  });
+
   describe('AST representation', () => {
     it('should create ExternalCodePragma AST node', () => {
       const source = `
