@@ -12,6 +12,11 @@ import type {
   Expression,
   AssignmentStatement,
   RefAssignStatement,
+  IfStatement,
+  CaseStatement,
+  ForStatement,
+  WhileStatement,
+  RepeatStatement,
   FunctionCallExpression,
   BinaryExpression,
   UnaryExpression,
@@ -1013,14 +1018,29 @@ export class CodeGenerator {
       case "FunctionCallStatement":
         this.emit(`${indent}${this.generateExpression(stmt.call)};`);
         break;
+      case "IfStatement":
+        this.generateIfStatement(stmt, indent);
+        break;
+      case "CaseStatement":
+        this.generateCaseStatement(stmt, indent);
+        break;
+      case "ForStatement":
+        this.generateForStatement(stmt, indent);
+        break;
+      case "WhileStatement":
+        this.generateWhileStatement(stmt, indent);
+        break;
+      case "RepeatStatement":
+        this.generateRepeatStatement(stmt, indent);
+        break;
+      case "ExitStatement":
+        this.emit(`${indent}break;`);
+        break;
+      case "ReturnStatement":
+        this.generateReturnStatement(indent);
+        break;
       case "ExternalCodePragma":
         this.generateExternalCodePragma(stmt, indent);
-        break;
-      default:
-        // Control flow statements are implemented in Phase 3.2
-        if (this.options.sourceComments) {
-          this.emit(`${indent}// TODO: ${stmt.kind} (Phase 3.2+)`);
-        }
         break;
     }
   }
@@ -1070,6 +1090,152 @@ export class CodeGenerator {
         this.emit(`${indent}${line}`);
       }
     }
+  }
+
+  // ===========================================================================
+  // Control Flow Statement Generation (Phase 3.2)
+  // ===========================================================================
+
+  /**
+   * Generate code for an IF statement.
+   * ST: IF/ELSIF/ELSE → C++: if/else if/else
+   */
+  private generateIfStatement(stmt: IfStatement, indent: string): void {
+    this.emit(`${indent}if (${this.generateExpression(stmt.condition)}) {`);
+    this.generateStatements(stmt.thenStatements, indent + this.options.indent);
+
+    for (const elsif of stmt.elsifClauses) {
+      this.emit(`${indent}} else if (${this.generateExpression(elsif.condition)}) {`);
+      this.generateStatements(elsif.statements, indent + this.options.indent);
+    }
+
+    if (stmt.elseStatements.length > 0) {
+      this.emit(`${indent}} else {`);
+      this.generateStatements(stmt.elseStatements, indent + this.options.indent);
+    }
+
+    this.emit(`${indent}}`);
+  }
+
+  /**
+   * Generate code for a CASE statement.
+   * ST: CASE/OF → C++: switch/case with range expansion
+   */
+  private generateCaseStatement(stmt: CaseStatement, indent: string): void {
+    this.emit(`${indent}switch (${this.generateExpression(stmt.selector)}) {`);
+    const innerIndent = indent + this.options.indent;
+    const bodyIndent = innerIndent + this.options.indent;
+
+    for (const caseElement of stmt.cases) {
+      for (const label of caseElement.labels) {
+        if (label.end) {
+          // Range: expand to individual case labels
+          const startVal = this.evaluateLiteralInt(label.start);
+          const endVal = this.evaluateLiteralInt(label.end);
+          if (startVal !== undefined && endVal !== undefined) {
+            for (let i = startVal; i <= endVal; i++) {
+              this.emit(`${innerIndent}case ${i}:`);
+            }
+          } else {
+            // Fallback: emit as comment with expression
+            this.emit(`${innerIndent}case ${this.generateExpression(label.start)}: // range to ${this.generateExpression(label.end)}`);
+          }
+        } else {
+          this.emit(`${innerIndent}case ${this.generateExpression(label.start)}:`);
+        }
+      }
+      this.generateStatements(caseElement.statements, bodyIndent);
+      this.emit(`${bodyIndent}break;`);
+    }
+
+    if (stmt.elseStatements.length > 0) {
+      this.emit(`${innerIndent}default:`);
+      this.generateStatements(stmt.elseStatements, bodyIndent);
+      this.emit(`${bodyIndent}break;`);
+    }
+
+    this.emit(`${indent}}`);
+  }
+
+  /**
+   * Generate code for a FOR statement.
+   * ST: FOR i := start TO end BY step DO → C++: for (i = start; i <= end; i += step)
+   */
+  private generateForStatement(stmt: ForStatement, indent: string): void {
+    const varName = stmt.controlVariable;
+    const start = this.generateExpression(stmt.start);
+    const end = this.generateExpression(stmt.end);
+
+    if (stmt.step) {
+      const stepExpr = this.generateExpression(stmt.step);
+      // Determine direction from step when it's a literal
+      const stepVal = this.evaluateLiteralInt(stmt.step);
+      if (stepVal !== undefined && stepVal < 0) {
+        this.emit(`${indent}for (${varName} = ${start}; ${varName} >= ${end}; ${varName} += ${stepExpr}) {`);
+      } else {
+        this.emit(`${indent}for (${varName} = ${start}; ${varName} <= ${end}; ${varName} += ${stepExpr}) {`);
+      }
+    } else {
+      // Default step is 1, ascending
+      this.emit(`${indent}for (${varName} = ${start}; ${varName} <= ${end}; ${varName}++) {`);
+    }
+
+    this.generateStatements(stmt.body, indent + this.options.indent);
+    this.emit(`${indent}}`);
+  }
+
+  /**
+   * Generate code for a WHILE statement.
+   * ST: WHILE condition DO → C++: while (condition)
+   */
+  private generateWhileStatement(stmt: WhileStatement, indent: string): void {
+    this.emit(`${indent}while (${this.generateExpression(stmt.condition)}) {`);
+    this.generateStatements(stmt.body, indent + this.options.indent);
+    this.emit(`${indent}}`);
+  }
+
+  /**
+   * Generate code for a REPEAT statement.
+   * ST: REPEAT ... UNTIL condition → C++: do { ... } while (!(condition))
+   */
+  private generateRepeatStatement(stmt: RepeatStatement, indent: string): void {
+    this.emit(`${indent}do {`);
+    this.generateStatements(stmt.body, indent + this.options.indent);
+    this.emit(`${indent}} while (!(${this.generateExpression(stmt.condition)}));`);
+  }
+
+  /**
+   * Generate code for a RETURN statement.
+   * In functions: return functionName_result;
+   * In programs/FBs: return;
+   */
+  private generateReturnStatement(indent: string): void {
+    if (this.currentFunctionName) {
+      this.emit(`${indent}return ${this.currentFunctionName}_result;`);
+    } else {
+      this.emit(`${indent}return;`);
+    }
+  }
+
+  /**
+   * Evaluate an expression as a literal integer value (for CASE ranges and FOR step direction).
+   * Returns undefined if the expression is not a compile-time integer constant.
+   */
+  private evaluateLiteralInt(expr: Expression): number | undefined {
+    if (expr.kind === "LiteralExpression" && expr.literalType === "INT") {
+      return typeof expr.value === "number"
+        ? expr.value
+        : parseInt(String(expr.value), 10);
+    }
+    if (
+      expr.kind === "UnaryExpression" &&
+      expr.operator === "-" &&
+      expr.operand.kind === "LiteralExpression"
+    ) {
+      const val = this.evaluateLiteralInt(expr.operand);
+      return val !== undefined ? -val : undefined;
+    }
+    return undefined;
   }
 
   /**

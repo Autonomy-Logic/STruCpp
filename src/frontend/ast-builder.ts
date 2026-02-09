@@ -37,10 +37,13 @@ import type {
   RefExpression,
   DrefExpression,
   IfStatement,
+  ElsifClause,
   ForStatement,
   WhileStatement,
   RepeatStatement,
   CaseStatement,
+  CaseElement,
+  CaseLabel,
   ExitStatement,
   ReturnStatement,
   ExternalCodePragma,
@@ -875,11 +878,11 @@ export class ASTBuilder {
     if (children.caseStatement) {
       return this.buildCaseStatement(getFirstNode(children.caseStatement)!);
     }
-    if (children.EXIT) {
-      return this.buildExitStatement(node);
+    if (children.exitStatement) {
+      return this.buildExitStatement(getFirstNode(children.exitStatement)!);
     }
-    if (children.RETURN) {
-      return this.buildReturnStatement(node);
+    if (children.returnStatement) {
+      return this.buildReturnStatement(getFirstNode(children.returnStatement)!);
     }
     if (children.externalCodePragma) {
       return this.buildExternalCodePragma(
@@ -939,24 +942,47 @@ export class ASTBuilder {
    */
   buildIfStatement(node: CstNode): IfStatement {
     const children = node.children as CstChildren;
-    const exprNode = getFirstNode(children.expression);
-    const condition = exprNode
-      ? this.buildExpression(exprNode)
+
+    // expressions: [0] = IF condition, [1..] = ELSIF conditions
+    const expressions = getAllNodes(children.expression);
+    const condition = expressions[0]
+      ? this.buildExpression(expressions[0])
       : this.createDummyLiteral(node);
 
-    const thenStatements: Statement[] = [];
-    for (const stmtNode of getAllNodes(children.statement)) {
-      const stmt = this.buildStatement(stmtNode);
-      if (stmt) thenStatements.push(stmt);
+    // statementLists: [0] = THEN body, [1..n] = ELSIF bodies, [n+1] = ELSE body (if present)
+    const statementLists = getAllNodes(children.statementList);
+    const thenStatements = this.extractStatementsFromList(statementLists[0]);
+
+    // ELSIF clauses
+    const elsifTokens = getAllTokens(children.ELSIF);
+    const elsifClauses: ElsifClause[] = [];
+    for (let i = 0; i < elsifTokens.length; i++) {
+      const elsifCondition = (expressions[i + 1]
+        ? this.buildExpression(expressions[i + 1]!)
+        : undefined) ?? this.createDummyLiteral(node);
+      const elsifStatements = this.extractStatementsFromList(statementLists[i + 1]);
+      elsifClauses.push({
+        kind: "ElsifClause",
+        sourceSpan: tokenToSourceSpan(elsifTokens[i]!),
+        condition: elsifCondition,
+        statements: elsifStatements,
+      });
     }
+
+    // ELSE body (last statementList if ELSE token is present)
+    const elseTokens = getAllTokens(children.ELSE);
+    const elseStatements =
+      elseTokens.length > 0
+        ? this.extractStatementsFromList(statementLists[elsifTokens.length + 1])
+        : [];
 
     return {
       kind: "IfStatement",
       sourceSpan: nodeToSourceSpan(node),
       condition: condition!,
       thenStatements,
-      elsifClauses: [],
-      elseStatements: [],
+      elsifClauses,
+      elseStatements,
     };
   }
 
@@ -979,11 +1005,8 @@ export class ASTBuilder {
       ? this.buildExpression(expressions[2])
       : undefined;
 
-    const body: Statement[] = [];
-    for (const stmtNode of getAllNodes(children.statement)) {
-      const stmt = this.buildStatement(stmtNode);
-      if (stmt) body.push(stmt);
-    }
+    const stmtListNode = getFirstNode(children.statementList);
+    const body = this.extractStatementsFromList(stmtListNode);
 
     // Use conditional spreading for optional step to comply with exactOptionalPropertyTypes
     return {
@@ -1007,11 +1030,8 @@ export class ASTBuilder {
       ? this.buildExpression(exprNode)
       : this.createDummyLiteral(node);
 
-    const body: Statement[] = [];
-    for (const stmtNode of getAllNodes(children.statement)) {
-      const stmt = this.buildStatement(stmtNode);
-      if (stmt) body.push(stmt);
-    }
+    const stmtListNode = getFirstNode(children.statementList);
+    const body = this.extractStatementsFromList(stmtListNode);
 
     return {
       kind: "WhileStatement",
@@ -1031,11 +1051,8 @@ export class ASTBuilder {
       ? this.buildExpression(exprNode)
       : this.createDummyLiteral(node);
 
-    const body: Statement[] = [];
-    for (const stmtNode of getAllNodes(children.statement)) {
-      const stmt = this.buildStatement(stmtNode);
-      if (stmt) body.push(stmt);
-    }
+    const stmtListNode = getFirstNode(children.statementList);
+    const body = this.extractStatementsFromList(stmtListNode);
 
     return {
       kind: "RepeatStatement",
@@ -1055,12 +1072,71 @@ export class ASTBuilder {
       ? this.buildExpression(exprNode)
       : this.createDummyLiteral(node);
 
+    // Case elements
+    const cases: CaseElement[] = [];
+    for (const caseNode of getAllNodes(children.caseElement)) {
+      cases.push(this.buildCaseElement(caseNode));
+    }
+
+    // ELSE body
+    const elseTokens = getAllTokens(children.ELSE);
+    let elseStatements: Statement[] = [];
+    if (elseTokens.length > 0) {
+      const stmtListNode = getFirstNode(children.statementList);
+      elseStatements = this.extractStatementsFromList(stmtListNode);
+    }
+
     return {
       kind: "CaseStatement",
       sourceSpan: nodeToSourceSpan(node),
       selector: selector!,
-      cases: [],
-      elseStatements: [],
+      cases,
+      elseStatements,
+    };
+  }
+
+  /**
+   * Build a CaseElement from a CST node.
+   */
+  buildCaseElement(node: CstNode): CaseElement {
+    const children = node.children as CstChildren;
+
+    // Labels
+    const labels: CaseLabel[] = [];
+    for (const labelNode of getAllNodes(children.caseLabel)) {
+      labels.push(this.buildCaseLabel(labelNode));
+    }
+
+    // Statements
+    const stmtListNode = getFirstNode(children.statementList);
+    const statements = this.extractStatementsFromList(stmtListNode);
+
+    return {
+      kind: "CaseElement",
+      sourceSpan: nodeToSourceSpan(node),
+      labels,
+      statements,
+    };
+  }
+
+  /**
+   * Build a CaseLabel from a CST node.
+   */
+  buildCaseLabel(node: CstNode): CaseLabel {
+    const children = node.children as CstChildren;
+    const expressions = getAllNodes(children.expression);
+    const start = expressions[0]
+      ? this.buildExpression(expressions[0])
+      : this.createDummyLiteral(node);
+    const end = expressions[1]
+      ? this.buildExpression(expressions[1])
+      : undefined;
+
+    return {
+      kind: "CaseLabel",
+      sourceSpan: nodeToSourceSpan(node),
+      start: start!,
+      ...(end !== undefined ? { end } : {}),
     };
   }
 
@@ -1772,6 +1848,21 @@ export class ASTBuilder {
   /**
    * Create a dummy literal expression for error recovery.
    */
+  /**
+   * Extract statements from a statementList CST node.
+   */
+  private extractStatementsFromList(listNode?: CstNode): Statement[] {
+    const stmts: Statement[] = [];
+    if (listNode) {
+      const listChildren = listNode.children as CstChildren;
+      for (const stmtNode of getAllNodes(listChildren.statement)) {
+        const stmt = this.buildStatement(stmtNode);
+        if (stmt) stmts.push(stmt);
+      }
+    }
+    return stmts;
+  }
+
   private createDummyLiteral(node: CstNode): LiteralExpression {
     return {
       kind: "LiteralExpression",
