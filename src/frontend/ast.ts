@@ -350,7 +350,8 @@ export type Statement =
   | ExitStatement
   | ReturnStatement
   | FunctionCallStatement
-  | ExternalCodePragma;
+  | ExternalCodePragma
+  | DeleteStatement;
 
 /**
  * Assignment statement
@@ -470,6 +471,14 @@ export interface FunctionCallStatement extends ASTNode {
   call: FunctionCallExpression;
 }
 
+/**
+ * __DELETE(pointer) statement - deallocate dynamic memory
+ */
+export interface DeleteStatement extends ASTNode {
+  kind: "DeleteStatement";
+  pointer: Expression;
+}
+
 // =============================================================================
 // Pragmas
 // =============================================================================
@@ -500,7 +509,8 @@ export type Expression =
   | LiteralExpression
   | ParenthesizedExpression
   | RefExpression
-  | DrefExpression;
+  | DrefExpression
+  | NewExpression;
 
 /**
  * Binary operator
@@ -623,6 +633,15 @@ export interface RefExpression extends TypedNode {
 export interface DrefExpression extends TypedNode {
   kind: "DrefExpression";
   operand: Expression;
+}
+
+/**
+ * __NEW(Type) or __NEW(Type, size) expression - allocate dynamic memory
+ */
+export interface NewExpression extends TypedNode {
+  kind: "NewExpression";
+  allocationType: TypeReference;
+  arraySize?: Expression;
 }
 
 // =============================================================================

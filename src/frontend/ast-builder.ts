@@ -36,6 +36,8 @@ import type {
   RefAssignStatement,
   RefExpression,
   DrefExpression,
+  NewExpression,
+  DeleteStatement,
   IfStatement,
   ElsifClause,
   ForStatement,
@@ -950,6 +952,11 @@ export class ASTBuilder {
         getFirstNode(children.externalCodePragma)!,
       );
     }
+    if (children.deleteStatement) {
+      return this.buildDeleteStatement(
+        getFirstNode(children.deleteStatement)!,
+      );
+    }
 
     return undefined;
   }
@@ -1623,6 +1630,11 @@ export class ASTBuilder {
       return this.buildDrefExpression(getFirstNode(children.drefExpression)!);
     }
 
+    // Check for __NEW(type) or __NEW(type, size) expression
+    if (children.newExpression) {
+      return this.buildNewExpression(getFirstNode(children.newExpression)!);
+    }
+
     // Check for variable
     if (children.variable) {
       return this.buildVariableExpression(getFirstNode(children.variable)!);
@@ -1682,6 +1694,61 @@ export class ASTBuilder {
       kind: "DrefExpression",
       sourceSpan: nodeToSourceSpan(node),
       operand: operand!,
+    };
+  }
+
+  /**
+   * Build a NewExpression from a CST node.
+   * Handles: __NEW(dataType) or __NEW(dataType, expression)
+   */
+  buildNewExpression(node: CstNode): NewExpression {
+    const children = node.children as CstChildren;
+
+    // Get the allocation type from dataType
+    const dataTypeNode = getFirstNode(children.dataType);
+    const allocationType: TypeReference = dataTypeNode
+      ? this.buildTypeReference(dataTypeNode)
+      : {
+          kind: "TypeReference",
+          sourceSpan: nodeToSourceSpan(node),
+          name: "INT",
+          isReference: false,
+          referenceKind: "none",
+        };
+
+    // Get optional array size from expression
+    let arraySize: Expression | undefined;
+    const exprNode = getFirstNode(children.expression);
+    if (exprNode) {
+      const expr = this.buildExpression(exprNode);
+      if (expr) {
+        arraySize = expr;
+      }
+    }
+
+    return {
+      kind: "NewExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      allocationType,
+      ...(arraySize !== undefined ? { arraySize } : {}),
+    };
+  }
+
+  /**
+   * Build a DeleteStatement from a CST node.
+   * Handles: __DELETE(expression)
+   */
+  buildDeleteStatement(node: CstNode): DeleteStatement {
+    const children = node.children as CstChildren;
+    const exprNode = getFirstNode(children.expression);
+    const pointer = exprNode
+      ? this.buildExpression(exprNode)
+      : this.createDummyVariable(node);
+
+    return {
+      kind: "DeleteStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      pointer: pointer!,
     };
   }
 

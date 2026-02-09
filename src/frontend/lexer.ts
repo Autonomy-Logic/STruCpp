@@ -343,6 +343,10 @@ export const DREF = createToken({ name: "DREF", pattern: /DREF/i });
 export const REF = createToken({ name: "REF", pattern: /REF/i });
 export const NULL = createToken({ name: "NULL", pattern: /NULL/i });
 
+// Dynamic memory (extension keywords)
+export const __NEW = createToken({ name: "__NEW", pattern: /__NEW/i });
+export const __DELETE = createToken({ name: "__DELETE", pattern: /__DELETE/i });
+
 // =============================================================================
 // Literals
 // =============================================================================
@@ -523,6 +527,8 @@ const keywordTokens = [
   DREF,
   REF,
   NULL,
+  __NEW,
+  __DELETE,
 ];
 
 // Set longer_alt for all keywords
@@ -618,6 +624,8 @@ export const allTokens = [
   DREF,
   REF,
   NULL,
+  __NEW,
+  __DELETE,
 
   // Literals
   TimeLiteral,

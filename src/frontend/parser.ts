@@ -452,6 +452,7 @@ export class STParser extends CstParser {
       { ALT: () => this.SUBRULE(this.repeatStatement) },
       { ALT: () => this.SUBRULE(this.exitStatement) },
       { ALT: () => this.SUBRULE(this.returnStatement) },
+      { ALT: () => this.SUBRULE(this.deleteStatement) },
       { ALT: () => this.SUBRULE(this.functionCallStatement) },
       { ALT: () => this.SUBRULE(this.externalCodePragma) },
     ]);
@@ -647,6 +648,17 @@ export class STParser extends CstParser {
     this.CONSUME(tokens.Semicolon);
   });
 
+  /**
+   * __DELETE(expression) statement - deallocate dynamic memory
+   */
+  public deleteStatement = this.RULE("deleteStatement", () => {
+    this.CONSUME(tokens.__DELETE);
+    this.CONSUME(tokens.LParen);
+    this.SUBRULE(this.expression);
+    this.CONSUME(tokens.RParen);
+    this.CONSUME(tokens.Semicolon);
+  });
+
   // ==========================================================================
   // Expressions
   // ==========================================================================
@@ -774,6 +786,7 @@ export class STParser extends CstParser {
       { ALT: () => this.SUBRULE(this.literal) },
       { ALT: () => this.SUBRULE(this.refExpression) },
       { ALT: () => this.SUBRULE(this.drefExpression) },
+      { ALT: () => this.SUBRULE(this.newExpression) },
       { ALT: () => this.SUBRULE(this.functionCall) },
       { ALT: () => this.SUBRULE(this.variable) },
       {
@@ -803,6 +816,20 @@ export class STParser extends CstParser {
     this.CONSUME(tokens.DREF);
     this.CONSUME(tokens.LParen);
     this.SUBRULE(this.expression);
+    this.CONSUME(tokens.RParen);
+  });
+
+  /**
+   * __NEW(dataType) or __NEW(dataType, expression) - allocate dynamic memory
+   */
+  public newExpression = this.RULE("newExpression", () => {
+    this.CONSUME(tokens.__NEW);
+    this.CONSUME(tokens.LParen);
+    this.SUBRULE(this.dataType);
+    this.OPTION(() => {
+      this.CONSUME(tokens.Comma);
+      this.SUBRULE(this.expression);
+    });
     this.CONSUME(tokens.RParen);
   });
 

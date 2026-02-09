@@ -266,6 +266,7 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_located.hpp"');
     this.emitHeader('#include "iec_std_lib.hpp"');
     this.emitHeader('#include "iec_enum.hpp"');
+    this.emitHeader('#include "iec_memory.hpp"');
     this.emitHeader("#include <array>");
     this.emitHeader("#include <cstddef>");
     this.emitHeader("#include <string>");
@@ -1076,6 +1077,9 @@ export class CodeGenerator {
       case "ExternalCodePragma":
         this.generateExternalCodePragma(stmt, indent);
         break;
+      case "DeleteStatement":
+        this.emit(`${indent}strucpp::iec_delete(${this.generateExpression(stmt.pointer)});`);
+        break;
     }
   }
 
@@ -1307,6 +1311,13 @@ export class CodeGenerator {
         return `REF(${this.generateExpression(expr.operand)})`;
       case "DrefExpression":
         return `${this.generateExpression(expr.operand)}.deref()`;
+      case "NewExpression": {
+        const cppType = this.typeCodeGen.mapTypeToCpp(expr.allocationType.name);
+        if (expr.arraySize) {
+          return `strucpp::iec_new_array<${cppType}>(${this.generateExpression(expr.arraySize)})`;
+        }
+        return `strucpp::iec_new<${cppType}>()`;
+      }
     }
   }
 
