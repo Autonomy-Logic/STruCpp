@@ -1810,7 +1810,7 @@ export class ASTBuilder {
     // Check for dereference operator (^)
     const isDereference = !!children.Caret;
 
-    // Get additional field access identifiers
+    // Get additional field access identifiers (Identifier[0] is the variable name)
     const allIdentifiers = getAllTokens(children.Identifier);
     const fieldAccess: string[] = [];
     for (let i = 1; i < allIdentifiers.length; i++) {
@@ -1820,12 +1820,18 @@ export class ASTBuilder {
       }
     }
 
-    // TODO: Handle subscripts in Phase 3+
+    // Extract subscript expressions from array access: arr[i], arr[i,j], etc.
+    const subscripts: Expression[] = [];
+    for (const exprNode of getAllNodes(children.expression)) {
+      const expr = this.buildExpression(exprNode);
+      if (expr) subscripts.push(expr);
+    }
+
     return {
       kind: "VariableExpression",
       sourceSpan: nodeToSourceSpan(node),
       name,
-      subscripts: [],
+      subscripts,
       fieldAccess,
       isDereference,
     };
