@@ -96,6 +96,12 @@ export interface CompileResult {
 
   /** Optional debug information */
   debugInfo?: unknown;
+
+  /** Parsed AST (only populated on successful compilation) */
+  ast?: import("./frontend/ast.js").CompilationUnit;
+
+  /** Project model (only populated on successful compilation) */
+  projectModel?: import("./project-model.js").ProjectModel;
 }
 
 /**

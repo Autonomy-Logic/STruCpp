@@ -12,13 +12,18 @@
  *   --line-directives      Include #line directives
  *   --source-comments      Include ST source as comments
  *   -O, --optimize <level> Optimization level (0, 1, 2)
+ *   --build                Compile to executable binary with interactive REPL
+ *   --gpp <path>           Custom g++ path (default: g++)
+ *   --cxx-flags <flags>    Extra C++ compiler flags
  *   -v, --version          Show version
  *   -h, --help             Show help
  */
 
-import { readFileSync, writeFileSync } from "fs";
-import { resolve, basename } from "path";
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { resolve, basename, dirname } from "path";
+import { execSync } from "child_process";
 import { compile, getVersion } from "./index.js";
+import { generateReplMain } from "./backend/repl-main-gen.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
@@ -31,6 +36,9 @@ interface CLIOptions {
   optimizationLevel: 0 | 1 | 2;
   showHelp: boolean;
   showVersion: boolean;
+  build: boolean;
+  gpp: string;
+  cxxFlags: string;
 }
 
 function parseArgs(args: string[]): CLIOptions {
@@ -42,6 +50,9 @@ function parseArgs(args: string[]): CLIOptions {
     optimizationLevel: 0,
     showHelp: false,
     showVersion: false,
+    build: false,
+    gpp: "g++",
+    cxxFlags: "",
   };
 
   let i = 0;
@@ -72,6 +83,20 @@ function parseArgs(args: string[]): CLIOptions {
       if (level >= 0 && level <= 2) {
         options.optimizationLevel = level as 0 | 1 | 2;
       }
+    } else if (arg === "--build") {
+      options.build = true;
+    } else if (arg === "--gpp") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.gpp = nextArg;
+      }
+    } else if (arg === "--cxx-flags") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.cxxFlags = nextArg;
+      }
     } else if (arg !== undefined && !arg.startsWith("-")) {
       options.input = arg;
     }
@@ -96,12 +121,16 @@ Options:
   --line-directives      Include #line directives in output
   --source-comments      Include ST source as comments
   -O, --optimize <level> Optimization level (0, 1, 2)
+  --build                Compile to executable with interactive REPL
+  --gpp <path>           Custom g++ path (default: g++)
+  --cxx-flags <flags>    Extra C++ compiler flags
   -v, --version          Show version
   -h, --help             Show this help
 
 Examples:
   strucpp program.st -o program.cpp
   strucpp program.st -o program.cpp --debug --line-directives
+  strucpp program.st -o program.cpp --build
   strucpp program.st -O 2
 
 For more information, visit: https://github.com/Autonomy-Logic/STruCpp
@@ -193,6 +222,59 @@ function main(): void {
   }
 
   console.log("Compilation successful!");
+
+  // --build: generate main.cpp and invoke g++
+  if (options.build) {
+    if (!result.ast || !result.projectModel) {
+      console.error("Error: AST/ProjectModel not available for --build");
+      process.exit(1);
+    }
+
+    const outputDir = dirname(outputPath);
+    const mainCppPath = resolve(outputDir, "main.cpp");
+
+    // Resolve runtime include directory
+    // When running from dist/cli.js, go up to project root then into src/runtime/include
+    // When running from src/cli.ts directly, go to src/runtime/include
+    const scriptDir = dirname(new URL(import.meta.url).pathname);
+    let runtimeIncludeDir = resolve(scriptDir, "runtime", "include");
+    if (!existsSync(runtimeIncludeDir)) {
+      runtimeIncludeDir = resolve(scriptDir, "..", "src", "runtime", "include");
+    }
+
+    console.log("Generating REPL harness...");
+    const mainCppCode = generateReplMain(result.ast, result.projectModel, {
+      headerFileName,
+    });
+    writeFileSync(mainCppPath, mainCppCode, "utf-8");
+    console.log(`REPL main written to ${mainCppPath}`);
+
+    // Derive binary output path (strip .cpp extension)
+    const binaryPath = outputPath.replace(/\.cpp$/i, "");
+
+    const gppCmd = [
+      options.gpp,
+      "-std=c++17",
+      `-I"${runtimeIncludeDir}"`,
+      `-I"${outputDir}"`,
+      options.cxxFlags,
+      `"${mainCppPath}"`,
+      `"${outputPath}"`,
+      `-o "${binaryPath}"`,
+    ]
+      .filter((s) => s.length > 0)
+      .join(" ");
+
+    console.log(`Building binary: ${basename(binaryPath)}`);
+    try {
+      execSync(gppCmd, { stdio: "inherit" });
+      console.log(`Binary built: ${binaryPath}`);
+      console.log(`Run it with: ${binaryPath}`);
+    } catch (err) {
+      console.error("Error: g++ compilation failed");
+      process.exit(1);
+    }
+  }
 }
 
 main();

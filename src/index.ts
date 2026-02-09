@@ -196,6 +196,8 @@ export function compile(
     lineMap: codeResult.lineMap,
     errors,
     warnings,
+    ast,
+    projectModel: projectModelResult.model,
   };
 }
 
