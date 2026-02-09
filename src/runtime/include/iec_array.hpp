@@ -219,4 +219,65 @@ using Array2D = IEC_ARRAY_2D<T, ArrayBounds<L1, U1>, ArrayBounds<L2, U2>>;
 template<typename T, int64_t L1, int64_t U1, int64_t L2, int64_t U2, int64_t L3, int64_t U3>
 using Array3D = IEC_ARRAY_3D<T, ArrayBounds<L1, U1>, ArrayBounds<L2, U2>, ArrayBounds<L3, U3>>;
 
+// =============================================================================
+// Variable-Length Array Views (Phase 3.4)
+// Type-erased array views for ARRAY[*] parameters in VAR_IN_OUT
+// =============================================================================
+
+// 1D ArrayView - type-erased wrapper for ARRAY[*] OF T
+template<typename T>
+class ArrayView1D {
+    IECVar<T>* data_;
+    int64_t lower_;
+    int64_t upper_;
+
+public:
+    // Construct from any IEC_ARRAY_1D with matching element type
+    template<typename Bounds>
+    ArrayView1D(IEC_ARRAY_1D<T, Bounds>& arr)
+        : data_(&arr[Bounds::lower])
+        , lower_(Bounds::lower)
+        , upper_(Bounds::upper) {}
+
+    IECVar<T>& operator[](int64_t index) noexcept {
+        return data_[index - lower_];
+    }
+
+    const IECVar<T>& operator[](int64_t index) const noexcept {
+        return data_[index - lower_];
+    }
+
+    int64_t lower_bound() const noexcept { return lower_; }
+    int64_t upper_bound() const noexcept { return upper_; }
+    int64_t length() const noexcept { return upper_ - lower_ + 1; }
+};
+
+// 2D ArrayView - type-erased wrapper for ARRAY[*, *] OF T
+template<typename T>
+class ArrayView2D {
+    IECVar<T>* data_;
+    int64_t lower1_, upper1_;
+    int64_t lower2_, upper2_;
+    int64_t dim2_;
+
+public:
+    template<typename Bounds1, typename Bounds2>
+    ArrayView2D(IEC_ARRAY_2D<T, Bounds1, Bounds2>& arr)
+        : data_(arr.data())
+        , lower1_(Bounds1::lower), upper1_(Bounds1::upper)
+        , lower2_(Bounds2::lower), upper2_(Bounds2::upper)
+        , dim2_(Bounds2::upper - Bounds2::lower + 1) {}
+
+    IECVar<T>& operator()(int64_t i, int64_t j) noexcept {
+        return data_[(i - lower1_) * dim2_ + (j - lower2_)];
+    }
+
+    const IECVar<T>& operator()(int64_t i, int64_t j) const noexcept {
+        return data_[(i - lower1_) * dim2_ + (j - lower2_)];
+    }
+
+    int64_t lower_bound(int dim) const noexcept { return dim == 1 ? lower1_ : lower2_; }
+    int64_t upper_bound(int dim) const noexcept { return dim == 1 ? upper1_ : upper2_; }
+};
+
 }  // namespace strucpp

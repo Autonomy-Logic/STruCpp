@@ -270,10 +270,10 @@ export class TypeCodeGenerator {
     const elementType = this.mapTypeToCpp(def.elementType.name);
     const numDims = def.dimensions.length;
 
-    // Collect bounds for all dimensions
+    // Collect bounds for all dimensions (skip variable-length dimensions)
     const bounds: Array<{ start: number; end: number }> = [];
     for (const dim of def.dimensions) {
-      if (dim) {
+      if (dim && !dim.isVariableLength && dim.start && dim.end) {
         const start = this.evaluateConstantExpression(dim.start);
         const end = this.evaluateConstantExpression(dim.end);
         bounds.push({ start, end });
@@ -294,7 +294,7 @@ export class TypeCodeGenerator {
       cppType = elementType;
       for (let i = def.dimensions.length - 1; i >= 0; i--) {
         const dim = def.dimensions[i];
-        if (dim) {
+        if (dim && !dim.isVariableLength && dim.start && dim.end) {
           const start = this.evaluateConstantExpression(dim.start);
           const end = this.evaluateConstantExpression(dim.end);
           const size = end - start + 1;

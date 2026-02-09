@@ -188,9 +188,28 @@ export class CodeGenerator {
     this.options = { ...defaultCodeGenOptions, ...options };
   }
 
+  /** TypeCodeGenerator instance for type mapping */
+  private typeCodeGen = new TypeCodeGenerator();
+
   /** Get symbol tables (for future use in Phase 3+) */
   get symbolTables(): SymbolTables {
     return this._symbolTables;
+  }
+
+  /**
+   * Map a variable type name to its C++ type string.
+   * Handles VLA synthetic names (__VLA_1D_INT → ArrayView1D<INT_t>)
+   * and regular types (INT → IEC_INT).
+   */
+  private mapVarTypeToCpp(typeName: string): string {
+    // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
+    const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
+    if (vlaMatch) {
+      const ndims = vlaMatch[1];
+      const elemType = this.typeCodeGen.mapTypeToCpp(vlaMatch[2]!);
+      return `ArrayView${ndims}D<${elemType}>`;
+    }
+    return `IEC_${typeName}`;
   }
 
   /**
@@ -472,20 +491,44 @@ export class CodeGenerator {
   private generateFunctionHeaderDeclaration(
     func: CompilationUnit["functions"][0],
   ): void {
+    const params = this.generateFunctionParams(func);
+
+    this.emitHeader(
+      `IEC_${func.returnType.name} ${func.name}(${params.join(", ")});`,
+    );
+  }
+
+  /**
+   * Generate function parameter list including VAR_INPUT and VAR_IN_OUT.
+   * VAR_IN_OUT parameters are passed by reference.
+   * VLA types use ArrayView instead of IECVar reference.
+   */
+  private generateFunctionParams(
+    func: CompilationUnit["functions"][0],
+  ): string[] {
     const params: string[] = [];
     for (const block of func.varBlocks) {
       if (block.blockType === "VAR_INPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`IEC_${decl.type.name} ${name}`);
+            params.push(`${this.mapVarTypeToCpp(decl.type.name)} ${name}`);
+          }
+        }
+      } else if (block.blockType === "VAR_IN_OUT") {
+        for (const decl of block.declarations) {
+          const cppType = this.mapVarTypeToCpp(decl.type.name);
+          for (const name of decl.names) {
+            // VLA types (ArrayView) are already reference-like; others need &
+            if (decl.type.name.startsWith("__VLA_")) {
+              params.push(`${cppType} ${name}`);
+            } else {
+              params.push(`${cppType}& ${name}`);
+            }
           }
         }
       }
     }
-
-    this.emitHeader(
-      `IEC_${func.returnType.name} ${func.name}(${params.join(", ")});`,
-    );
+    return params;
   }
 
   /**
@@ -556,16 +599,7 @@ export class CodeGenerator {
   private generateFunctionImplementation(
     func: CompilationUnit["functions"][0],
   ): void {
-    const params: string[] = [];
-    for (const block of func.varBlocks) {
-      if (block.blockType === "VAR_INPUT") {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            params.push(`IEC_${decl.type.name} ${name}`);
-          }
-        }
-      }
-    }
+    const params = this.generateFunctionParams(func);
 
     this.emit(
       `IEC_${func.returnType.name} ${func.name}(${params.join(", ")}) {`,

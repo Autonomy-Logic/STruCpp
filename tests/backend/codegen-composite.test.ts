@@ -7,8 +7,8 @@
  * - Structure member access: point.x, line.start.x
  * - Combined access: points[i].x
  *
- * Note: Array types must be defined in TYPE blocks since the parser
- * doesn't support inline ARRAY type syntax in VAR declarations.
+ * Note: Array types are typically defined in TYPE blocks for clarity.
+ * Phase 3.4 added inline ARRAY type syntax support in VAR declarations.
  */
 
 import { describe, it, expect } from "vitest";

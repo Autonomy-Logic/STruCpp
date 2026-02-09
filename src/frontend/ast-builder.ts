@@ -508,8 +508,19 @@ export class ASTBuilder {
    */
   buildArrayDimension(node: CstNode): ArrayDimension {
     const children = node.children as CstChildren;
-    const expressions = getAllNodes(children.expression);
 
+    // Check for variable-length dimension: ARRAY[*]
+    const starTokens = getAllTokens(children.Star);
+    if (starTokens.length > 0) {
+      return {
+        kind: "ArrayDimension",
+        sourceSpan: nodeToSourceSpan(node),
+        isVariableLength: true,
+      };
+    }
+
+    // Fixed bounds: start..end
+    const expressions = getAllNodes(children.expression);
     const startExpr = expressions[0]
       ? this.buildExpression(expressions[0])
       : undefined;
@@ -517,14 +528,12 @@ export class ASTBuilder {
       ? this.buildExpression(expressions[1])
       : undefined;
 
-    const start = startExpr ?? this.createDummyLiteral(node);
-    const end = endExpr ?? this.createDummyLiteral(node);
-
     return {
       kind: "ArrayDimension",
       sourceSpan: nodeToSourceSpan(node),
-      start,
-      end,
+      isVariableLength: false,
+      start: startExpr ?? this.createDummyLiteral(node),
+      end: endExpr ?? this.createDummyLiteral(node),
     };
   }
 
@@ -772,20 +781,26 @@ export class ASTBuilder {
     const identifiers = getAllTokens(children.Identifier);
     const names = identifiers.map((t) => t.image);
 
-    // Get type reference from the dataType subrule
-    const dataTypeNode = getFirstNode(children.dataType);
+    // Check for inline array type first (ARRAY[...] OF type)
+    const arrayTypeNode = getFirstNode(children.arrayType);
     let type: TypeReference;
-    if (dataTypeNode) {
-      type = this.buildTypeReference(dataTypeNode);
+    if (arrayTypeNode) {
+      type = this.buildInlineArrayTypeReference(arrayTypeNode, node);
     } else {
-      // Fallback: default to INT if no type found
-      type = {
-        kind: "TypeReference",
-        sourceSpan: nodeToSourceSpan(node),
-        name: "INT",
-        isReference: false,
-        referenceKind: "none",
-      };
+      // Get type reference from the dataType subrule
+      const dataTypeNode = getFirstNode(children.dataType);
+      if (dataTypeNode) {
+        type = this.buildTypeReference(dataTypeNode);
+      } else {
+        // Fallback: default to INT if no type found
+        type = {
+          kind: "TypeReference",
+          sourceSpan: nodeToSourceSpan(node),
+          name: "INT",
+          isReference: false,
+          referenceKind: "none",
+        };
+      }
     }
 
     // Get initial value if present
@@ -824,6 +839,7 @@ export class ASTBuilder {
    */
   buildTypeReference(node: CstNode): TypeReference {
     const children = node.children as CstChildren;
+
     const nameToken = getFirstToken(children.Identifier);
     const name = nameToken?.image ?? "INT";
     const isRefTo = !!children.REF_TO;
@@ -843,6 +859,51 @@ export class ASTBuilder {
       name,
       isReference,
       referenceKind,
+    };
+  }
+
+  /**
+   * Build a TypeReference for an inline ARRAY type.
+   * For VLA: ARRAY[*] OF INT → name "__VLA_1D_INT"
+   * For fixed: ARRAY[1..10] OF INT → name "__INLINE_ARRAY_INT"
+   */
+  private buildInlineArrayTypeReference(arrayTypeNode: CstNode, parentNode: CstNode): TypeReference {
+    const arrayChildren = arrayTypeNode.children as CstChildren;
+
+    // Get dimensions to check for variable-length
+    const dimNodes = getAllNodes(arrayChildren.arrayDimension);
+    const ndims = dimNodes.length;
+    let isVLA = false;
+    for (const dimNode of dimNodes) {
+      const dimChildren = dimNode.children as CstChildren;
+      if (getAllTokens(dimChildren.Star).length > 0) {
+        isVLA = true;
+      }
+    }
+
+    // Get element type from nested dataType
+    const elementTypeNode = getFirstNode(arrayChildren.dataType);
+    let elementTypeName = "INT";
+    if (elementTypeNode) {
+      const elemChildren = elementTypeNode.children as CstChildren;
+      const elemNameToken = getFirstToken(elemChildren.Identifier);
+      if (elemNameToken) {
+        elementTypeName = elemNameToken.image;
+      }
+    }
+
+    // Create synthetic name based on whether it's VLA or fixed
+    const dimSuffix = ndims > 1 ? `${ndims}D` : "1D";
+    const name = isVLA
+      ? `__VLA_${dimSuffix}_${elementTypeName}`
+      : `__INLINE_ARRAY_${elementTypeName}`;
+
+    return {
+      kind: "TypeReference",
+      sourceSpan: nodeToSourceSpan(parentNode),
+      name,
+      isReference: false,
+      referenceKind: "none",
     };
   }
 

@@ -263,11 +263,14 @@ export interface ArrayDefinition extends ASTNode {
 
 /**
  * Array dimension
+ * For fixed bounds: start and end are set, isVariableLength is false
+ * For variable-length (ARRAY[*]): isVariableLength is true, start/end are undefined
  */
 export interface ArrayDimension extends ASTNode {
   kind: "ArrayDimension";
-  start: Expression;
-  end: Expression;
+  isVariableLength: boolean;
+  start?: Expression;
+  end?: Expression;
 }
 
 /**
