@@ -10,6 +10,8 @@ import type {
   ElementaryType,
   VarBlock,
   VarDeclaration,
+  Statement,
+  AssignmentStatement,
 } from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
 import { SymbolTables } from "./symbol-table.js";
@@ -379,9 +381,12 @@ export class SemanticAnalyzer {
   /**
    * Validate IEC 61131-3 semantic rules.
    */
-  private validateSemantics(_ast: CompilationUnit): void {
+  private validateSemantics(ast: CompilationUnit): void {
     // Validate located variables
     this.validateLocatedVariables();
+
+    // Validate CONSTANT assignment restrictions
+    this.validateConstantAssignments(ast);
 
     // TODO: Implement additional semantic validation in Phase 3+
     // - Check that variables are declared before use
@@ -389,6 +394,83 @@ export class SemanticAnalyzer {
     // - Check CASE statement coverage
     // - Validate reference operations
     // - Check for unreachable code
+  }
+
+  /**
+   * Validate that no assignments target CONSTANT variables.
+   */
+  private validateConstantAssignments(ast: CompilationUnit): void {
+    for (const prog of ast.programs) {
+      const scope = this.symbolTables.getProgramScope(prog.name);
+      if (scope) {
+        this.validateStatementsForConstantAssignment(prog.body, scope);
+      }
+    }
+    for (const func of ast.functions) {
+      const scope = this.symbolTables.getFunctionScope(func.name);
+      if (scope) {
+        this.validateStatementsForConstantAssignment(func.body, scope);
+      }
+    }
+    for (const fb of ast.functionBlocks) {
+      const scope = this.symbolTables.getFBScope(fb.name);
+      if (scope) {
+        this.validateStatementsForConstantAssignment(fb.body, scope);
+      }
+    }
+  }
+
+  /**
+   * Walk statements and check for assignments to CONSTANT variables.
+   */
+  private validateStatementsForConstantAssignment(
+    stmts: Statement[],
+    scope: ReturnType<typeof this.symbolTables.createProgramScope>,
+  ): void {
+    for (const stmt of stmts) {
+      if (stmt.kind === "AssignmentStatement") {
+        const assignment = stmt as AssignmentStatement;
+        if (assignment.target.kind === "VariableExpression") {
+          const varName = assignment.target.name;
+          const symbol = scope.lookup(varName);
+          if (symbol && symbol.kind === "constant") {
+            this.addError(
+              `Cannot assign to CONSTANT variable '${varName}'`,
+              assignment.sourceSpan.startLine,
+              assignment.sourceSpan.startCol,
+            );
+          }
+        }
+      }
+      // Recurse into control flow statements
+      if (stmt.kind === "IfStatement") {
+        const ifStmt = stmt as { thenStatements: Statement[]; elsifClauses: Array<{ statements: Statement[] }>; elseStatements: Statement[] };
+        this.validateStatementsForConstantAssignment(ifStmt.thenStatements, scope);
+        for (const clause of ifStmt.elsifClauses) {
+          this.validateStatementsForConstantAssignment(clause.statements, scope);
+        }
+        this.validateStatementsForConstantAssignment(ifStmt.elseStatements, scope);
+      }
+      if (stmt.kind === "ForStatement") {
+        const forStmt = stmt as { body: Statement[] };
+        this.validateStatementsForConstantAssignment(forStmt.body, scope);
+      }
+      if (stmt.kind === "WhileStatement") {
+        const whileStmt = stmt as { body: Statement[] };
+        this.validateStatementsForConstantAssignment(whileStmt.body, scope);
+      }
+      if (stmt.kind === "RepeatStatement") {
+        const repeatStmt = stmt as { body: Statement[] };
+        this.validateStatementsForConstantAssignment(repeatStmt.body, scope);
+      }
+      if (stmt.kind === "CaseStatement") {
+        const caseStmt = stmt as { cases: Array<{ statements: Statement[] }>; elseStatements: Statement[] };
+        for (const c of caseStmt.cases) {
+          this.validateStatementsForConstantAssignment(c.statements, scope);
+        }
+        this.validateStatementsForConstantAssignment(caseStmt.elseStatements, scope);
+      }
+    }
   }
 
   /**

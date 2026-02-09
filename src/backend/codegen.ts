@@ -9,6 +9,14 @@ import type {
   CompilationUnit,
   VarDeclaration,
   Statement,
+  Expression,
+  AssignmentStatement,
+  RefAssignStatement,
+  FunctionCallExpression,
+  BinaryExpression,
+  UnaryExpression,
+  LiteralExpression,
+  VariableExpression,
   ExternalCodePragma,
 } from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
@@ -164,6 +172,9 @@ export class CodeGenerator {
 
   /** Store AST for looking up program bodies when using project model */
   private ast?: CompilationUnit;
+
+  /** Current function name (for redirecting function name := to result variable) */
+  private currentFunctionName: string | undefined;
 
   constructor(
     private readonly _symbolTables: SymbolTables,
@@ -484,9 +495,9 @@ export class CodeGenerator {
     for (const block of prog.varBlocks) {
       for (const decl of block.declarations) {
         if (decl.initialValue !== undefined) {
+          const initExpr = this.generateExpression(decl.initialValue);
           for (const name of decl.names) {
-            // TODO: Generate proper initialization in Phase 3+
-            this.emit(`    // ${name} = <initial value>;`);
+            this.emit(`    ${name} = ${initExpr};`);
           }
         }
       }
@@ -555,12 +566,14 @@ export class CodeGenerator {
       `IEC_${func.returnType.name} ${func.name}(${params.join(", ")}) {`,
     );
     this.emit(`    IEC_${func.returnType.name} ${func.name}_result;`);
+    // Set function context so assignments to function name redirect to result variable
+    this.currentFunctionName = func.name;
     if (func.body.length > 0) {
-      // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
       this.generateStatements(func.body);
     } else if (this.options.sourceComments) {
       this.emit("    // Empty function body");
     }
+    this.currentFunctionName = undefined;
     this.emit(`    return ${func.name}_result;`);
     this.emit("}");
     this.emit("");
@@ -988,20 +1001,54 @@ export class CodeGenerator {
 
   /**
    * Generate code for a statement.
-   * Phase 2.8: Only handles ExternalCodePragma; other statements are Phase 3+.
    */
   protected generateStatement(stmt: Statement, indent: string = "    "): void {
     switch (stmt.kind) {
+      case "AssignmentStatement":
+        this.generateAssignmentStatement(stmt, indent);
+        break;
+      case "RefAssignStatement":
+        this.generateRefAssignStatement(stmt, indent);
+        break;
+      case "FunctionCallStatement":
+        this.emit(`${indent}${this.generateExpression(stmt.call)};`);
+        break;
       case "ExternalCodePragma":
         this.generateExternalCodePragma(stmt, indent);
         break;
       default:
-        // Other statements are implemented in Phase 3+
+        // Control flow statements are implemented in Phase 3.2
         if (this.options.sourceComments) {
-          this.emit(`${indent}// TODO: ${stmt.kind} (Phase 3+)`);
+          this.emit(`${indent}// TODO: ${stmt.kind} (Phase 3.2+)`);
         }
         break;
     }
+  }
+
+  /**
+   * Generate code for an assignment statement.
+   * ST: target := value;  →  C++: target = value;
+   */
+  private generateAssignmentStatement(
+    stmt: AssignmentStatement,
+    indent: string,
+  ): void {
+    const target = this.generateExpression(stmt.target);
+    const value = this.generateExpression(stmt.value);
+    this.emit(`${indent}${target} = ${value};`);
+  }
+
+  /**
+   * Generate code for a REF= assignment (rebind REFERENCE_TO).
+   * ST: target REF= source;  →  C++: target.bind(source);
+   */
+  private generateRefAssignStatement(
+    stmt: RefAssignStatement,
+    indent: string,
+  ): void {
+    const target = this.generateExpression(stmt.target);
+    const source = this.generateExpression(stmt.source);
+    this.emit(`${indent}${target}.bind(${source});`);
   }
 
   /**
@@ -1032,6 +1079,160 @@ export class CodeGenerator {
     for (const stmt of stmts) {
       this.generateStatement(stmt, indent);
     }
+  }
+
+  // ===========================================================================
+  // Expression Generation (Phase 3.1)
+  // ===========================================================================
+
+  /**
+   * Generate C++ code for an expression.
+   * Returns the C++ expression as a string.
+   */
+  protected generateExpression(expr: Expression): string {
+    switch (expr.kind) {
+      case "LiteralExpression":
+        return this.generateLiteralExpression(expr);
+      case "VariableExpression":
+        return this.generateVariableExpression(expr);
+      case "BinaryExpression":
+        return this.generateBinaryExpression(expr);
+      case "UnaryExpression":
+        return this.generateUnaryExpression(expr);
+      case "ParenthesizedExpression":
+        return `(${this.generateExpression(expr.expression)})`;
+      case "FunctionCallExpression":
+        return this.generateFunctionCallExpression(expr);
+      case "RefExpression":
+        return `REF(${this.generateExpression(expr.operand)})`;
+      case "DrefExpression":
+        return `${this.generateExpression(expr.operand)}.deref()`;
+    }
+  }
+
+  /**
+   * Generate C++ for a literal expression.
+   */
+  private generateLiteralExpression(expr: LiteralExpression): string {
+    switch (expr.literalType) {
+      case "BOOL":
+        return expr.value === true || expr.value === "TRUE" || expr.rawValue?.toUpperCase() === "TRUE"
+          ? "true"
+          : "false";
+      case "INT": {
+        return String(expr.value);
+      }
+      case "REAL": {
+        const str = String(expr.value);
+        // Ensure real literals have a decimal point
+        return str.includes(".") ? str : str + ".0";
+      }
+      case "STRING":
+        return `"${expr.rawValue}"`;
+      case "WSTRING":
+        return `L"${expr.rawValue}"`;
+      case "TIME":
+      case "DATE":
+      case "TIME_OF_DAY":
+      case "DATE_AND_TIME":
+        return String(expr.value);
+      case "NULL":
+        return "IEC_NULL";
+      default:
+        return String(expr.value);
+    }
+  }
+
+  /**
+   * Generate C++ for a variable expression.
+   */
+  private generateVariableExpression(expr: VariableExpression): string {
+    // In function bodies, references to the function name redirect to the result variable
+    let result =
+      this.currentFunctionName &&
+      expr.name.toUpperCase() === this.currentFunctionName.toUpperCase()
+        ? `${this.currentFunctionName}_result`
+        : expr.name;
+
+    // Subscripts (array access)
+    for (const sub of expr.subscripts) {
+      result += `[${this.generateExpression(sub)}]`;
+    }
+
+    // Field access (struct members)
+    for (const field of expr.fieldAccess) {
+      result += `.${field}`;
+    }
+
+    // Dereference (^ operator → .deref())
+    if (expr.isDereference) {
+      result += ".deref()";
+    }
+
+    return result;
+  }
+
+  /**
+   * Operator mapping from ST to C++.
+   */
+  private static readonly BINARY_OP_MAP: Record<string, string> = {
+    "+": "+",
+    "-": "-",
+    "*": "*",
+    "/": "/",
+    "MOD": "%",
+    "AND": "&&",
+    "OR": "||",
+    "XOR": "^",
+    "=": "==",
+    "<>": "!=",
+    "<": "<",
+    ">": ">",
+    "<=": "<=",
+    ">=": ">=",
+  };
+
+  /**
+   * Generate C++ for a binary expression.
+   */
+  private generateBinaryExpression(expr: BinaryExpression): string {
+    const left = this.generateExpression(expr.left);
+    const right = this.generateExpression(expr.right);
+
+    // Power operator needs special handling
+    if (expr.operator === "**") {
+      return `std::pow(static_cast<double>(${left}), static_cast<double>(${right}))`;
+    }
+
+    const cppOp = CodeGenerator.BINARY_OP_MAP[expr.operator] ?? expr.operator;
+    return `${left} ${cppOp} ${right}`;
+  }
+
+  /**
+   * Generate C++ for a unary expression.
+   */
+  private generateUnaryExpression(expr: UnaryExpression): string {
+    const operand = this.generateExpression(expr.operand);
+
+    switch (expr.operator) {
+      case "NOT":
+        return `!${operand}`;
+      case "-":
+        return `-${operand}`;
+      case "+":
+        return `+${operand}`;
+    }
+  }
+
+  /**
+   * Generate C++ for a function call expression.
+   * Basic support - full function call codegen is Phase 4.
+   */
+  private generateFunctionCallExpression(expr: FunctionCallExpression): string {
+    const args = expr.arguments.map((arg) => {
+      return this.generateExpression(arg.value);
+    });
+    return `${expr.functionName}(${args.join(", ")})`;
   }
 
   // ===========================================================================

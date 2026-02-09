@@ -1251,14 +1251,27 @@ export class ASTBuilder {
     let left = this.buildAddExpression(firstAddExpr);
     if (!left) return undefined;
 
-    // Get comparison operators
-    const operators: BinaryOperator[] = [];
-    if (children.Equal) operators.push("=");
-    if (children.NotEqual) operators.push("<>");
-    if (children.LessThan) operators.push("<");
-    if (children.GreaterThan) operators.push(">");
-    if (children.LessEqual) operators.push("<=");
-    if (children.GreaterEqual) operators.push(">=");
+    // Collect all comparison operator tokens with their operators, sorted by position
+    const opTokens: Array<{ offset: number; op: BinaryOperator }> = [];
+    for (const tok of getAllTokens(children.Equal)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "=" });
+    }
+    for (const tok of getAllTokens(children.NotEqual)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "<>" });
+    }
+    for (const tok of getAllTokens(children.Less)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "<" });
+    }
+    for (const tok of getAllTokens(children.Greater)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: ">" });
+    }
+    for (const tok of getAllTokens(children.LessEqual)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "<=" });
+    }
+    for (const tok of getAllTokens(children.GreaterEqual)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: ">=" });
+    }
+    opTokens.sort((a, b) => a.offset - b.offset);
 
     for (let i = 1; i < addExprs.length; i++) {
       const addExpr = addExprs[i];
@@ -1266,7 +1279,7 @@ export class ASTBuilder {
       const right = this.buildAddExpression(addExpr);
       if (!right) continue;
 
-      const op = operators[i - 1] ?? "=";
+      const op = opTokens[i - 1]?.op ?? "=";
       left = {
         kind: "BinaryExpression",
         sourceSpan: nodeToSourceSpan(node),
@@ -1295,9 +1308,15 @@ export class ASTBuilder {
     let left = this.buildMulExpression(firstMulExpr);
     if (!left) return undefined;
 
-    // Get add/sub operators
-    const plusTokens = getAllTokens(children.Plus);
-    const minusTokens = getAllTokens(children.Minus);
+    // Collect all add/sub operator tokens, sorted by position
+    const opTokens: Array<{ offset: number; op: BinaryOperator }> = [];
+    for (const tok of getAllTokens(children.Plus)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "+" });
+    }
+    for (const tok of getAllTokens(children.Minus)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "-" });
+    }
+    opTokens.sort((a, b) => a.offset - b.offset);
 
     for (let i = 1; i < mulExprs.length; i++) {
       const mulExpr = mulExprs[i];
@@ -1305,9 +1324,7 @@ export class ASTBuilder {
       const right = this.buildMulExpression(mulExpr);
       if (!right) continue;
 
-      // Determine operator based on token positions
-      const op: BinaryOperator =
-        plusTokens.length > minusTokens.length ? "+" : "-";
+      const op = opTokens[i - 1]?.op ?? "+";
       left = {
         kind: "BinaryExpression",
         sourceSpan: nodeToSourceSpan(node),
@@ -1336,17 +1353,26 @@ export class ASTBuilder {
     let left = this.buildPowerExpression(firstPowerExpr);
     if (!left) return undefined;
 
+    // Collect all mul/div/mod operator tokens, sorted by position
+    const opTokens: Array<{ offset: number; op: BinaryOperator }> = [];
+    for (const tok of getAllTokens(children.Star)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "*" });
+    }
+    for (const tok of getAllTokens(children.Slash)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "/" });
+    }
+    for (const tok of getAllTokens(children.MOD)) {
+      opTokens.push({ offset: (tok as IToken).startOffset ?? 0, op: "MOD" });
+    }
+    opTokens.sort((a, b) => a.offset - b.offset);
+
     for (let i = 1; i < powerExprs.length; i++) {
       const powerExpr = powerExprs[i];
       if (!powerExpr) continue;
       const right = this.buildPowerExpression(powerExpr);
       if (!right) continue;
 
-      // Determine operator
-      let op: BinaryOperator = "*";
-      if (children.Divide) op = "/";
-      if (children.MOD) op = "MOD";
-
+      const op = opTokens[i - 1]?.op ?? "*";
       left = {
         kind: "BinaryExpression",
         sourceSpan: nodeToSourceSpan(node),
@@ -1424,6 +1450,18 @@ export class ASTBuilder {
       }
     }
 
+    if (children.Plus) {
+      const operand = this.buildPrimaryExpression(node);
+      if (operand) {
+        return {
+          kind: "UnaryExpression",
+          sourceSpan: nodeToSourceSpan(node),
+          operator: "+" as UnaryOperator,
+          operand,
+        };
+      }
+    }
+
     return this.buildPrimaryExpression(node);
   }
 
@@ -1455,7 +1493,14 @@ export class ASTBuilder {
 
     // Check for parenthesized expression
     if (children.expression) {
-      return this.buildExpression(getFirstNode(children.expression)!);
+      const innerExpr = this.buildExpression(getFirstNode(children.expression)!);
+      if (innerExpr) {
+        return {
+          kind: "ParenthesizedExpression",
+          sourceSpan: nodeToSourceSpan(node),
+          expression: innerExpr,
+        } as Expression;
+      }
     }
 
     // Check for primary expression
