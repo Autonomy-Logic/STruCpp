@@ -14,6 +14,7 @@
  *   -O, --optimize <level> Optimization level (0, 1, 2)
  *   --build                Compile to executable binary with interactive REPL
  *   --gpp <path>           Custom g++ path (default: g++)
+ *   --cc <path>            Custom C compiler path (default: cc)
  *   --cxx-flags <flags>    Extra C++ compiler flags
  *   -v, --version          Show version
  *   -h, --help             Show help
@@ -38,6 +39,7 @@ interface CLIOptions {
   showVersion: boolean;
   build: boolean;
   gpp: string;
+  cc: string;
   cxxFlags: string;
 }
 
@@ -52,6 +54,7 @@ function parseArgs(args: string[]): CLIOptions {
     showVersion: false,
     build: false,
     gpp: "g++",
+    cc: "cc",
     cxxFlags: "",
   };
 
@@ -91,6 +94,12 @@ function parseArgs(args: string[]): CLIOptions {
       if (nextArg !== undefined) {
         options.gpp = nextArg;
       }
+    } else if (arg === "--cc") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.cc = nextArg;
+      }
     } else if (arg === "--cxx-flags") {
       i++;
       const nextArg = args[i];
@@ -123,6 +132,7 @@ Options:
   -O, --optimize <level> Optimization level (0, 1, 2)
   --build                Compile to executable with interactive REPL
   --gpp <path>           Custom g++ path (default: g++)
+  --cc <path>            Custom C compiler path (default: cc)
   --cxx-flags <flags>    Extra C++ compiler flags
   -v, --version          Show version
   -h, --help             Show this help
@@ -138,13 +148,33 @@ For more information, visit: https://github.com/Autonomy-Logic/STruCpp
 }
 
 /**
- * Locate the runtime include directory by checking multiple candidate paths.
- * Supports ESM dev mode, CJS esbuild bundles, and pkg standalone binaries.
+ * Extract -I include paths from a compiler flags string.
+ * Handles: -I/path, -I /path, -I"/path with spaces"
  */
-function findRuntimeIncludeDir(): string {
+function extractIncludePaths(flags: string): string[] {
+  const paths: string[] = [];
+  const parts = flags.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+  for (let i = 0; i < parts.length; i++) {
+    const raw = parts[i] ?? "";
+    const part = raw.replace(/^"|"$/g, "");
+    if (part === "-I" && i + 1 < parts.length) {
+      i++;
+      paths.push((parts[i] ?? "").replace(/^"|"$/g, ""));
+    } else if (part.startsWith("-I")) {
+      paths.push(part.slice(2));
+    }
+  }
+  return paths;
+}
+
+/**
+ * Locate the runtime include directory by auto-discovery or from --cxx-flags.
+ * Returns the resolved path or null if not found.
+ */
+function findRuntimeIncludeDir(cxxFlags: string): string | null {
   const candidates: string[] = [];
 
-  // From import.meta.url (ESM: src/cli.ts or dist/cli.js)
+  // From import.meta.url (ESM dev mode)
   try {
     if (typeof import.meta?.url === "string") {
       const scriptDir = dirname(new URL(import.meta.url).pathname);
@@ -152,7 +182,7 @@ function findRuntimeIncludeDir(): string {
       candidates.push(resolve(scriptDir, "..", "src", "runtime", "include"));
     }
   } catch {
-    // import.meta.url unavailable or invalid (CJS bundle / pkg binary)
+    // unavailable in CJS bundle / pkg binary
   }
 
   // From __dirname (CJS bundle via esbuild)
@@ -161,28 +191,32 @@ function findRuntimeIncludeDir(): string {
     candidates.push(resolve(__dirname, "..", "src", "runtime", "include"));
   }
 
-  // Relative to the real binary location (pkg binary)
-  candidates.push(
-    resolve(dirname(process.execPath), "runtime", "include"),
-    resolve(dirname(process.execPath), "..", "src", "runtime", "include"),
-    resolve(dirname(process.execPath), "src", "runtime", "include"),
-  );
+  // Relative to binary (pkg binary may be in dist/bin/, dist/, or project root)
+  const execDir = dirname(process.execPath);
+  for (const base of [execDir, resolve(execDir, ".."), resolve(execDir, "..", "..")]) {
+    candidates.push(resolve(base, "runtime", "include"));
+    candidates.push(resolve(base, "src", "runtime", "include"));
+  }
 
-  // Relative to CWD as last resort
+  // CWD
   candidates.push(resolve(process.cwd(), "src", "runtime", "include"));
 
+  // Check auto-discovery candidates
   for (const candidate of candidates) {
     if (existsSync(resolve(candidate, "iec_types.hpp"))) {
       return candidate;
     }
   }
 
-  // Fallback: let the user pass -I via --cxx-flags
-  console.error(
-    "Warning: Could not locate runtime include directory. " +
-      'Use --cxx-flags "-I/path/to/runtime/include" to specify it manually.',
-  );
-  return "runtime/include";
+  // Fallback: check user-provided -I paths from --cxx-flags
+  for (const ipath of extractIncludePaths(cxxFlags)) {
+    const resolved = resolve(ipath);
+    if (existsSync(resolve(resolved, "iec_types.hpp"))) {
+      return resolved;
+    }
+  }
+
+  return null;
 }
 
 function main(): void {
@@ -281,12 +315,25 @@ function main(): void {
     const outputDir = dirname(outputPath);
     const mainCppPath = resolve(outputDir, "main.cpp");
 
-    // Resolve runtime include directory
-    // Try multiple candidate locations to support:
-    //   1. ESM dev mode (src/cli.ts or dist/cli.js via import.meta.url)
-    //   2. CJS esbuild bundle (dist/strucpp-bundle.cjs via __dirname)
-    //   3. pkg binary (via process.execPath on real filesystem)
-    const runtimeIncludeDir = findRuntimeIncludeDir();
+    // Resolve runtime include dir (auto-discovery + --cxx-flags fallback)
+    const runtimeIncludeDir = findRuntimeIncludeDir(options.cxxFlags);
+    if (!runtimeIncludeDir) {
+      console.error(
+        "Error: Could not locate runtime include directory.\n" +
+          '  Use --cxx-flags "-I/path/to/runtime/include" to specify it.',
+      );
+      process.exit(1);
+    }
+
+    // Derive repl dir as sibling of include dir (runtime/include → runtime/repl)
+    const replDir = resolve(dirname(runtimeIncludeDir), "repl");
+    if (!existsSync(resolve(replDir, "isocline.h"))) {
+      console.error(
+        `Error: REPL runtime not found at ${replDir}\n` +
+          "  Expected runtime/repl/ as sibling of runtime/include/.",
+      );
+      process.exit(1);
+    }
 
     console.log("Generating REPL harness...");
     const mainCppCode = generateReplMain(result.ast, result.projectModel, {
@@ -297,15 +344,40 @@ function main(): void {
 
     // Derive binary output path (strip .cpp extension)
     const binaryPath = outputPath.replace(/\.cpp$/i, "");
+    const isoclineObjPath = resolve(outputDir, "isocline.o");
 
+    // Step 1: Compile isocline.c as C
+    const ccCmd = [
+      options.cc,
+      "-c",
+      "-std=c11",
+      `-I"${replDir}"`,
+      `"${resolve(replDir, "isocline.c")}"`,
+      `-o "${isoclineObjPath}"`,
+    ].join(" ");
+
+    console.log("Compiling isocline...");
+    try {
+      execSync(ccCmd, { stdio: "inherit" });
+    } catch (err) {
+      console.error(
+        "Error: C compilation of isocline failed. " +
+          "Ensure a C compiler is available or specify one with --cc.",
+      );
+      process.exit(1);
+    }
+
+    // Step 2: Compile C++ and link with isocline.o
     const gppCmd = [
       options.gpp,
       "-std=c++17",
       `-I"${runtimeIncludeDir}"`,
+      `-I"${replDir}"`,
       `-I"${outputDir}"`,
       options.cxxFlags,
       `"${mainCppPath}"`,
       `"${outputPath}"`,
+      `"${isoclineObjPath}"`,
       `-o "${binaryPath}"`,
     ]
       .filter((s) => s.length > 0)
