@@ -24,7 +24,17 @@
 #include <cstdio>
 #include <cinttypes>
 #include <vector>
+#include <map>
 #include <utility>
+#include <algorithm>
+#ifdef __unix__
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+#ifdef __APPLE__
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
 
 namespace strucpp {
 
@@ -56,6 +66,47 @@ struct ProgramDescriptor {
     VarDescriptor* vars;
     size_t var_count;
 };
+
+struct STLineMap {
+    int st_line;
+    int cpp_start;
+    int cpp_end;
+};
+
+// =============================================================================
+// Terminal Width Helper
+// =============================================================================
+
+inline int get_terminal_width() {
+#if defined(__unix__) || defined(__APPLE__)
+    struct winsize ws;
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return ws.ws_col;
+    }
+#endif
+    return 120;
+}
+
+// =============================================================================
+// Line splitting helper
+// =============================================================================
+
+inline std::vector<std::string> split_lines(const char* text) {
+    std::vector<std::string> lines;
+    if (!text) return lines;
+    std::string src(text);
+    size_t pos = 0;
+    while (pos < src.size()) {
+        size_t nl = src.find('\n', pos);
+        if (nl == std::string::npos) {
+            lines.push_back(src.substr(pos));
+            break;
+        }
+        lines.push_back(src.substr(pos, nl - pos));
+        pos = nl + 1;
+    }
+    return lines;
+}
 
 // =============================================================================
 // Value Display Helpers
@@ -433,7 +484,10 @@ static void repl_highlighter(ic_highlight_env_t* henv, const char* input, void* 
 // =============================================================================
 
 inline void repl_run(ProgramDescriptor* programs, size_t program_count,
-                     const char* st_source = nullptr) {
+                     const char* st_source = nullptr,
+                     const char* cpp_source = nullptr,
+                     const STLineMap* line_map = nullptr,
+                     size_t line_map_count = 0) {
     // Set up isocline
     ic_set_history(".strucpp_history", 200);
     ic_enable_auto_tab(true);
@@ -457,19 +511,13 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
     ic_set_default_highlighter(repl_highlighter, nullptr);
 
     // Split source into lines for the code command
-    std::vector<std::string> source_lines;
-    if (st_source) {
-        std::string src(st_source);
-        size_t pos = 0;
-        while (pos < src.size()) {
-            size_t nl = src.find('\n', pos);
-            if (nl == std::string::npos) {
-                source_lines.push_back(src.substr(pos));
-                break;
-            }
-            source_lines.push_back(src.substr(pos, nl - pos));
-            pos = nl + 1;
-        }
+    std::vector<std::string> source_lines = split_lines(st_source);
+    std::vector<std::string> cpp_lines = split_lines(cpp_source);
+
+    // Build lookup: st_line_number → {cpp_start, cpp_end}
+    std::map<int, std::pair<int,int>> st_to_cpp;
+    for (size_t i = 0; i < line_map_count; ++i) {
+        st_to_cpp[line_map[i].st_line] = {line_map[i].cpp_start, line_map[i].cpp_end};
     }
 
     // Watch list: pairs of (program index, var index)
@@ -540,7 +588,7 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
             ic_println("  [b]force[/] [cyan]<program>.<var> <v>[/] Force variable to value");
             ic_println("  [b]unforce[/] [cyan]<program>.<var>[/]  Remove forcing");
             ic_println("  [b]programs[/]                 List program instances");
-            ic_println("  [b]code[/] [cyan][line] [end][/]        Show ST source code with line numbers");
+            ic_println("  [b]code[/] [cyan][line] [end][/]        Show ST/C++ side-by-side (or ST only)");
             ic_println("  [b]watch[/] [cyan]<program>.<var>[/]    Add variable to watch list");
             ic_println("  [b]watch list[/]               Show watched variables");
             ic_println("  [b]watch clear[/]              Clear watch list");
@@ -703,11 +751,95 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
                     if (to_line > source_lines.size()) to_line = source_lines.size();
                 }
             }
-            // Compute width needed for line numbers
-            int num_width = 1;
-            { size_t n = to_line; while (n >= 10) { num_width++; n /= 10; } }
-            for (size_t i = from_line; i <= to_line && i <= source_lines.size(); ++i) {
-                ic_printf("[gray]%*zu | [/]%s\n", num_width, i, source_lines[i - 1].c_str());
+
+            // Side-by-side display if C++ source and line map are available
+            if (!cpp_lines.empty() && !st_to_cpp.empty()) {
+                int term_w = get_terminal_width();
+                int half = (term_w - 3) / 2;  // 3 for " | " separator
+                if (half < 20) half = 20;
+
+                // Compute line number widths
+                int st_num_w = 1;
+                { size_t n = source_lines.size(); while (n >= 10) { st_num_w++; n /= 10; } }
+                int cpp_num_w = 1;
+                { size_t n = cpp_lines.size(); while (n >= 10) { cpp_num_w++; n /= 10; } }
+
+                int st_text_w = half - st_num_w - 4;  // "NNN | text"
+                int cpp_text_w = half - cpp_num_w - 4;
+                if (st_text_w < 10) st_text_w = 10;
+                if (cpp_text_w < 10) cpp_text_w = 10;
+
+                // Header
+                std::string st_hdr = "ST";
+                std::string cpp_hdr = "C++";
+                // Pad ST header to fill left column
+                while (static_cast<int>(st_hdr.size()) < half) st_hdr += ' ';
+                ic_printf("[b]%s[/] | [b]%s[/]\n", st_hdr.c_str(), cpp_hdr.c_str());
+
+                // Print separator line
+                std::string sep(static_cast<size_t>(half), '-');
+                ic_printf("[gray]%s-+-%s[/]\n", sep.c_str(), sep.c_str());
+
+                for (size_t i = from_line; i <= to_line && i <= source_lines.size(); ++i) {
+                    int st_line_num = static_cast<int>(i);
+                    const std::string& st_text = source_lines[i - 1];
+
+                    auto it = st_to_cpp.find(st_line_num);
+                    if (it != st_to_cpp.end()) {
+                        int cpp_start = it->second.first;
+                        int cpp_end = it->second.second;
+
+                        // First row: ST line on left, first C++ line on right
+                        std::string st_display = st_text;
+                        if (static_cast<int>(st_display.size()) > st_text_w) {
+                            st_display = st_display.substr(0, static_cast<size_t>(st_text_w - 1)) + "~";
+                        }
+                        // Pad ST side to fill column
+                        int st_content_len = st_num_w + 3 + static_cast<int>(st_display.size());
+                        std::string st_pad(static_cast<size_t>(std::max(0, half - st_content_len)), ' ');
+
+                        if (cpp_start >= 1 && cpp_start <= static_cast<int>(cpp_lines.size())) {
+                            std::string cpp_text = cpp_lines[static_cast<size_t>(cpp_start - 1)];
+                            if (static_cast<int>(cpp_text.size()) > cpp_text_w) {
+                                cpp_text = cpp_text.substr(0, static_cast<size_t>(cpp_text_w - 1)) + "~";
+                            }
+                            ic_printf("[gray]%*d | [/]%s%s [gray]|[/] [gray]%*d | [/]%s\n",
+                                st_num_w, st_line_num, st_display.c_str(), st_pad.c_str(),
+                                cpp_num_w, cpp_start, cpp_text.c_str());
+                        } else {
+                            ic_printf("[gray]%*d | [/]%s%s [gray]|[/]\n",
+                                st_num_w, st_line_num, st_display.c_str(), st_pad.c_str());
+                        }
+
+                        // Additional C++ lines (blank ST side)
+                        for (int cl = cpp_start + 1; cl <= cpp_end && cl <= static_cast<int>(cpp_lines.size()); ++cl) {
+                            std::string cpp_text = cpp_lines[static_cast<size_t>(cl - 1)];
+                            if (static_cast<int>(cpp_text.size()) > cpp_text_w) {
+                                cpp_text = cpp_text.substr(0, static_cast<size_t>(cpp_text_w - 1)) + "~";
+                            }
+                            std::string blank_left(static_cast<size_t>(half), ' ');
+                            ic_printf("%s [gray]|[/] [gray]%*d | [/]%s\n",
+                                blank_left.c_str(), cpp_num_w, cl, cpp_text.c_str());
+                        }
+                    } else {
+                        // No C++ mapping — ST line only
+                        std::string st_display = st_text;
+                        if (static_cast<int>(st_display.size()) > st_text_w) {
+                            st_display = st_display.substr(0, static_cast<size_t>(st_text_w - 1)) + "~";
+                        }
+                        int st_content_len = st_num_w + 3 + static_cast<int>(st_display.size());
+                        std::string st_pad(static_cast<size_t>(std::max(0, half - st_content_len)), ' ');
+                        ic_printf("[gray]%*d | [/]%s%s [gray]|[/]\n",
+                            st_num_w, st_line_num, st_display.c_str(), st_pad.c_str());
+                    }
+                }
+            } else {
+                // Fallback: ST-only display (existing behavior)
+                int num_width = 1;
+                { size_t n = to_line; while (n >= 10) { num_width++; n /= 10; } }
+                for (size_t i = from_line; i <= to_line && i <= source_lines.size(); ++i) {
+                    ic_printf("[gray]%*zu | [/]%s\n", num_width, i, source_lines[i - 1].c_str());
+                }
             }
             continue;
         }

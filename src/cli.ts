@@ -339,6 +339,10 @@ function main(): void {
     const mainCppCode = generateReplMain(result.ast, result.projectModel, {
       headerFileName,
       stSource: source,
+      cppCode: result.cppCode,
+      headerCode: result.headerCode,
+      lineMap: result.lineMap,
+      headerLineMap: result.headerLineMap,
     });
     writeFileSync(mainCppPath, mainCppCode, "utf-8");
     console.log(`REPL main written to ${mainCppPath}`);

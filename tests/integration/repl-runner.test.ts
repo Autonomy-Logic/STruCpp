@@ -77,6 +77,10 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
     const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
       headerFileName: 'generated.hpp',
       stSource,
+      cppCode: result.cppCode,
+      headerCode: result.headerCode,
+      lineMap: result.lineMap,
+      headerLineMap: result.headerLineMap,
     });
     fs.writeFileSync(mainPath, mainCpp);
 
@@ -351,5 +355,43 @@ END_PROGRAM`;
     expect(output).toContain('code');
     expect(output).toContain('watch');
     expect(output).toContain('dashboard');
+  });
+
+  it('should display side-by-side ST and C++ code', () => {
+    const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+    const commands = [
+      'code',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'code_sbs');
+    // Should have both ST and C++ headers
+    expect(output).toContain('ST');
+    expect(output).toContain('C++');
+    // Should show ST source
+    expect(output).toContain('PROGRAM Counter');
+    // Should show C++ generated code (run method)
+    expect(output).toContain('Program_Counter');
+    // Should have separator
+    expect(output).toContain('|');
+  });
+
+  it('should show C++ line numbers in side-by-side display', () => {
+    const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+    const commands = [
+      'code',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'code_sbs_nums');
+    // C++ side should show class definition alongside PROGRAM/VAR
+    expect(output).toContain('class Program_Counter');
+    expect(output).toContain('IEC_INT count');
+    // C++ side should also show statement code
+    expect(output).toContain('count = count + 1');
   });
 });

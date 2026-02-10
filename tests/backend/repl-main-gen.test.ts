@@ -77,7 +77,7 @@ describe('Phase 3.6 - REPL Main Generator', () => {
       expect(mainCpp).toContain('"Prog2"');
       expect(mainCpp).toContain('VarTypeTag::INT');
       expect(mainCpp).toContain('VarTypeTag::DINT');
-      expect(mainCpp).toContain('repl_run(programs, 2, g_st_source)');
+      expect(mainCpp).toContain('repl_run(programs, 2, g_st_source, g_cpp_source, g_line_map, g_line_map_count)');
     });
 
     it('should use custom header filename', () => {
@@ -226,7 +226,7 @@ END_PROGRAM`;
       expect(mainCpp).toContain(')STRUCPP_SRC"');
       expect(mainCpp).toContain('PROGRAM Counter');
       expect(mainCpp).toContain('count := count + 1;');
-      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source)');
+      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source, g_cpp_source, g_line_map, g_line_map_count)');
     });
 
     it('should emit nullptr when no source provided', () => {
@@ -242,7 +242,7 @@ END_PROGRAM`;
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
       expect(mainCpp).toContain('g_st_source = nullptr');
-      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source)');
+      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source, g_cpp_source, g_line_map, g_line_map_count)');
     });
 
     it('should pass g_st_source in configuration mode too', () => {
@@ -269,7 +269,177 @@ END_PROGRAM`;
 
       expect(mainCpp).toContain('g_st_source');
       expect(mainCpp).toContain('R"STRUCPP_SRC(');
-      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source)');
+      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source, g_cpp_source, g_line_map, g_line_map_count)');
+    });
+  });
+
+  describe('C++ Code and Line Map Embedding', () => {
+    it('should embed C++ code as raw string literal when provided', () => {
+      const stSource = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(stSource);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource,
+        cppCode: result.cppCode,
+        lineMap: result.lineMap,
+      });
+
+      expect(mainCpp).toContain('g_cpp_source');
+      expect(mainCpp).toContain('R"STRUCPP_CPP(');
+      expect(mainCpp).toContain(')STRUCPP_CPP"');
+      expect(mainCpp).toContain('Program_Counter');
+    });
+
+    it('should emit nullptr for g_cpp_source when no cppCode provided', () => {
+      const source = `
+        PROGRAM Test
+          VAR x : INT; END_VAR
+          x := 1;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!);
+
+      expect(mainCpp).toContain('g_cpp_source = nullptr');
+    });
+
+    it('should emit line map as STLineMap array when provided', () => {
+      const stSource = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(stSource);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource,
+        cppCode: result.cppCode,
+        lineMap: result.lineMap,
+      });
+
+      expect(mainCpp).toContain('STLineMap g_line_map[]');
+      expect(mainCpp).toContain('g_line_map_count');
+      // Should contain at least one line map entry
+      expect(mainCpp).toMatch(/\{\d+, \d+, \d+\}/);
+    });
+
+    it('should emit nullptr line map when not provided', () => {
+      const source = `
+        PROGRAM Test
+          VAR x : INT; END_VAR
+          x := 1;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!);
+
+      expect(mainCpp).toContain('g_line_map = nullptr');
+      expect(mainCpp).toContain('g_line_map_count = 0');
+    });
+
+    it('should use STLineMap type in using declarations', () => {
+      const source = `
+        PROGRAM Test
+          VAR x : INT; END_VAR
+          x := 1;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!);
+
+      expect(mainCpp).toContain('using strucpp::STLineMap');
+    });
+
+    it('should pass all parameters to repl_run', () => {
+      const stSource = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(stSource);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource,
+        cppCode: result.cppCode,
+        lineMap: result.lineMap,
+      });
+
+      expect(mainCpp).toContain('g_st_source, g_cpp_source, g_line_map, g_line_map_count');
+    });
+  });
+
+  describe('Codegen lineMap Population', () => {
+    it('should populate lineMap after compilation', () => {
+      const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.lineMap.size).toBeGreaterThan(0);
+    });
+
+    it('should map statement lines to C++ lines', () => {
+      const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      // Line 3 is the assignment statement
+      const entry = result.lineMap.get(3);
+      expect(entry).toBeDefined();
+      expect(entry!.cppStartLine).toBeGreaterThan(0);
+      expect(entry!.cppEndLine).toBeGreaterThanOrEqual(entry!.cppStartLine);
+    });
+
+    it('should map PROGRAM line to header and END_PROGRAM to implementation', () => {
+      const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      // Line 1 (PROGRAM Counter) now maps to header class declaration
+      const headerProgEntry = result.headerLineMap.get(1);
+      expect(headerProgEntry).toBeDefined();
+      expect(headerProgEntry!.cppStartLine).toBeGreaterThan(0);
+
+      // Line 1 should NOT be in impl lineMap (moved to header)
+      expect(result.lineMap.has(1)).toBe(false);
+
+      // Line 4 is END_PROGRAM — still maps to implementation closing }
+      const endEntry = result.lineMap.get(4);
+      expect(endEntry).toBeDefined();
+    });
+
+    it('should map variable lines to header member declarations', () => {
+      const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      // Line 2 (VAR count : INT) should map to header member line
+      const varEntry = result.headerLineMap.get(2);
+      expect(varEntry).toBeDefined();
+      expect(varEntry!.cppStartLine).toBeGreaterThan(0);
     });
   });
 
@@ -296,6 +466,88 @@ END_PROGRAM`;
       expect(result.success).toBe(false);
       expect(result.ast).toBeUndefined();
       expect(result.projectModel).toBeUndefined();
+    });
+  });
+
+  describe('Combined Header + Implementation Source', () => {
+    it('should combine headerCode and cppCode in g_cpp_source', () => {
+      const stSource = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(stSource);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource,
+        cppCode: result.cppCode,
+        headerCode: result.headerCode,
+        lineMap: result.lineMap,
+        headerLineMap: result.headerLineMap,
+      });
+
+      // g_cpp_source should contain both header and implementation
+      expect(mainCpp).toContain('class Program_Counter');
+      expect(mainCpp).toContain('Program_Counter::Program_Counter()');
+    });
+
+    it('should merge header and impl line maps with correct offsets', () => {
+      const stSource = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(stSource);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource,
+        cppCode: result.cppCode,
+        headerCode: result.headerCode,
+        lineMap: result.lineMap,
+        headerLineMap: result.headerLineMap,
+      });
+
+      // Should have line map entries
+      expect(mainCpp).toContain('STLineMap g_line_map[]');
+
+      // Header line entries should appear without offset (small numbers)
+      // Implementation line entries should appear with offset (larger numbers)
+      const lineMapMatch = mainCpp.match(/\{(\d+), (\d+), (\d+)\}/g);
+      expect(lineMapMatch).toBeDefined();
+      expect(lineMapMatch!.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should handle backward compat when no headerCode is provided', () => {
+      const stSource = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(stSource);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource,
+        cppCode: result.cppCode,
+        lineMap: result.lineMap,
+      });
+
+      // Should still contain C++ source (just impl, no header)
+      expect(mainCpp).toContain('g_cpp_source');
+      expect(mainCpp).toContain('R"STRUCPP_CPP(');
+      expect(mainCpp).toContain('Program_Counter::Program_Counter()');
+    });
+
+    it('should populate headerLineMap after compilation', () => {
+      const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.headerLineMap.size).toBeGreaterThan(0);
     });
   });
 });

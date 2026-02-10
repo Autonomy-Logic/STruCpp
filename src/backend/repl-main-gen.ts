@@ -8,23 +8,19 @@
 
 import type { CompilationUnit, VarBlock } from "../frontend/ast.js";
 import type { ProjectModel } from "../project-model.js";
+import type { LineMapEntry } from "../types.js";
 import { getProjectNamespace } from "../project-model.js";
 
 /**
  * Escape ST source for embedding in a C++ raw string literal with delimiter STRUCPP_SRC.
  * If the source contains the closing sequence `)STRUCPP_SRC"`, replace it with a safe variant.
  */
-function escapeRawStringLiteral(source: string): string {
-  // The closing delimiter is )STRUCPP_SRC" — if this appears in the source, mangle it
+function escapeRawStringLiteral(source: string, delimiter: string = "STRUCPP_SRC"): string {
+  // The closing delimiter is )DELIMITER" — if this appears in the source, mangle it
   let result = source;
-  let delimiter = "STRUCPP_SRC";
-  while (result.includes(`)${delimiter}"`)) {
-    delimiter += "_";
-  }
-  // If we had to change the delimiter, we can't use it — the caller emits a fixed delimiter.
-  // Instead, just strip the problematic sequence (extremely unlikely in real ST code).
-  if (delimiter !== "STRUCPP_SRC") {
-    result = result.replace(/\)STRUCPP_SRC"/g, ")STRUCPP_SRC_");
+  const closingSeq = `)${delimiter}"`;
+  if (result.includes(closingSeq)) {
+    result = result.replace(new RegExp(`\\)${delimiter}"`, "g"), `)${delimiter}_`);
   }
   return result;
 }
@@ -91,6 +87,14 @@ export interface ReplMainGenOptions {
   headerFileName: string;
   /** Original ST source to embed in the binary for the `code` command */
   stSource?: string;
+  /** Generated C++ implementation code to embed for side-by-side display */
+  cppCode?: string;
+  /** Generated C++ header code to embed for side-by-side display */
+  headerCode?: string;
+  /** Line mapping from ST to C++ implementation for side-by-side alignment */
+  lineMap?: Map<number, LineMapEntry>;
+  /** Line mapping from ST to C++ header for side-by-side alignment */
+  headerLineMap?: Map<number, LineMapEntry>;
 }
 
 /**
@@ -112,6 +116,7 @@ export function generateReplMain(
   lines.push("using strucpp::VarTypeTag;");
   lines.push("using strucpp::VarDescriptor;");
   lines.push("using strucpp::ProgramDescriptor;");
+  lines.push("using strucpp::STLineMap;");
   lines.push("");
 
   // Embed ST source as raw string literal
@@ -120,6 +125,65 @@ export function generateReplMain(
     lines.push(`static const char* g_st_source = R"STRUCPP_SRC(${safeSource})STRUCPP_SRC";`);
   } else {
     lines.push("static const char* g_st_source = nullptr;");
+  }
+  lines.push("");
+
+  // Embed C++ source as raw string literal (header + implementation combined)
+  if (options.headerCode || options.cppCode) {
+    const headerPart = options.headerCode ?? "";
+    const cppPart = options.cppCode ?? "";
+    const combined = headerPart + (headerPart && cppPart ? "\n" : "") + cppPart;
+    const safeCpp = escapeRawStringLiteral(combined, "STRUCPP_CPP");
+    lines.push(`static const char* g_cpp_source = R"STRUCPP_CPP(${safeCpp})STRUCPP_CPP";`);
+  } else {
+    lines.push("static const char* g_cpp_source = nullptr;");
+  }
+  lines.push("");
+
+  // Build merged line map (header lines + offset implementation lines)
+  const headerLineCount = options.headerCode
+    ? options.headerCode.split("\n").length
+    : 0;
+  const offset = headerLineCount > 0 && options.cppCode ? headerLineCount : 0;
+
+  const mergedEntries: Array<[number, { cppStartLine: number; cppEndLine: number }]> = [];
+
+  // Add header line map entries (no offset needed)
+  if (options.headerLineMap) {
+    for (const [stLine, entry] of options.headerLineMap) {
+      mergedEntries.push([stLine, { cppStartLine: entry.cppStartLine, cppEndLine: entry.cppEndLine }]);
+    }
+  }
+
+  // Add implementation line map entries (with offset)
+  if (options.lineMap) {
+    for (const [stLine, entry] of options.lineMap) {
+      const existing = mergedEntries.find(e => e[0] === stLine);
+      if (existing) {
+        // ST line appears in both maps — extend the range
+        existing[1].cppEndLine = entry.cppEndLine + offset;
+      } else {
+        mergedEntries.push([stLine, {
+          cppStartLine: entry.cppStartLine + offset,
+          cppEndLine: entry.cppEndLine + offset,
+        }]);
+      }
+    }
+  }
+
+  mergedEntries.sort((a, b) => a[0] - b[0]);
+
+  // Embed merged line map as C struct array
+  if (mergedEntries.length > 0) {
+    lines.push("static STLineMap g_line_map[] = {");
+    for (const [stLine, entry] of mergedEntries) {
+      lines.push(`    {${stLine}, ${entry.cppStartLine}, ${entry.cppEndLine}},`);
+    }
+    lines.push("};");
+    lines.push(`static size_t g_line_map_count = ${mergedEntries.length};`);
+  } else {
+    lines.push("static STLineMap* g_line_map = nullptr;");
+    lines.push("static size_t g_line_map_count = 0;");
   }
   lines.push("");
 
@@ -191,7 +255,7 @@ function generateStandalone(
   // main()
   lines.push("int main() {");
   lines.push(
-    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source);`,
+    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,
   );
   lines.push("    return 0;");
   lines.push("}");
@@ -286,7 +350,7 @@ function generateWithConfiguration(
   // main()
   lines.push("int main() {");
   lines.push(
-    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source);`,
+    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,
   );
   lines.push("    return 0;");
   lines.push("}");

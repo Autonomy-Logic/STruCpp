@@ -85,8 +85,11 @@ export interface CompileResult {
   /** Generated C++ header code */
   headerCode: string;
 
-  /** Line mapping from ST line numbers to C++ line ranges */
+  /** Line mapping from ST line numbers to C++ implementation line ranges */
   lineMap: Map<number, LineMapEntry>;
+
+  /** Line mapping from ST line numbers to C++ header line ranges */
+  headerLineMap: Map<number, LineMapEntry>;
 
   /** Compilation errors */
   errors: CompileError[];

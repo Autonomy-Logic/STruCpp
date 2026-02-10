@@ -146,8 +146,11 @@ export interface CodeGenResult {
   /** Generated C++ header code */
   headerCode: string;
 
-  /** Line mapping from ST to C++ */
+  /** Line mapping from ST to C++ implementation lines */
   lineMap: Map<number, LineMapEntry>;
+
+  /** Line mapping from ST to C++ header lines */
+  headerLineMap: Map<number, LineMapEntry>;
 }
 
 // =============================================================================
@@ -162,7 +165,9 @@ export class CodeGenerator {
   private output: string[] = [];
   private headerOutput: string[] = [];
   private lineMap: Map<number, LineMapEntry> = new Map();
+  private headerLineMap: Map<number, LineMapEntry> = new Map();
   private currentLine = 1;
+  private currentHeaderLine = 1;
   private indentLevel = 0;
   private projectModel?: ProjectModel;
 
@@ -226,7 +231,9 @@ export class CodeGenerator {
     this.output = [];
     this.headerOutput = [];
     this.lineMap = new Map();
+    this.headerLineMap = new Map();
     this.currentLine = 1;
+    this.currentHeaderLine = 1;
     this.indentLevel = 0;
     this.locatedVars = [];
     this.ast = ast;  // Store AST for looking up program bodies
@@ -241,6 +248,7 @@ export class CodeGenerator {
       cppCode: this.output.join(this.options.lineEnding),
       headerCode: this.headerOutput.join(this.options.lineEnding),
       lineMap: this.lineMap,
+      headerLineMap: this.headerLineMap,
     };
   }
 
@@ -455,13 +463,16 @@ export class CodeGenerator {
   private generateProgramHeaderDeclaration(
     prog: CompilationUnit["programs"][0],
   ): void {
+    const classLine = this.currentHeaderLine;
     this.emitHeader(`class Program_${prog.name} : public ProgramBase {`);
     this.emitHeader("public:");
+    this.recordHeaderLineMapping(prog.sourceSpan.startLine, classLine);
 
     // Generate member variables and collect located variables
     for (const block of prog.varBlocks) {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
+          const memberLine = this.currentHeaderLine;
           // Generate variable with optional address comment
           if (decl.address) {
             this.emitHeader(
@@ -472,6 +483,7 @@ export class CodeGenerator {
           } else {
             this.emitHeader(`    IEC_${decl.type.name} ${name};`);
           }
+          this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
       }
     }
@@ -557,6 +569,7 @@ export class CodeGenerator {
 
     this.emit("}");
     this.emit("");
+    // PROGRAM line now maps to header class declaration, not constructor
 
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
@@ -566,8 +579,10 @@ export class CodeGenerator {
     } else if (this.options.sourceComments) {
       this.emit("    // Empty program body");
     }
+    const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
+    this.recordLineMapping(prog.sourceSpan.endLine, closingBraceLine);
   }
 
   /**
@@ -629,8 +644,32 @@ export class CodeGenerator {
    */
   private generateProgramHeaderFromModel(prog: ProgramDecl): void {
     const className = `Program_${prog.name}`;
+
+    // Look up AST program for source spans
+    const astProg = this.ast?.programs.find(
+      p => p.name.toUpperCase() === prog.name.toUpperCase()
+    );
+
+    const classLine = this.currentHeaderLine;
     this.emitHeader(`class ${className} : public ProgramBase {`);
     this.emitHeader("public:");
+
+    // Map PROGRAM line → class declaration
+    if (astProg) {
+      this.recordHeaderLineMapping(astProg.sourceSpan.startLine, classLine);
+    }
+
+    // Build name→sourceLine lookup from AST for variable mappings
+    const varSourceLines = new Map<string, number>();
+    if (astProg) {
+      for (const block of astProg.varBlocks) {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            varSourceLines.set(name, decl.sourceSpan.startLine);
+          }
+        }
+      }
+    }
 
     // Collect retain variables for table generation
     const retainVars: Array<{ name: string; typeName: string }> = [];
@@ -642,6 +681,7 @@ export class CodeGenerator {
         const constQualifier = decl.isConstant ? "const " : "";
         const cppType = `IEC_${decl.typeName}`;
 
+        const memberLine = this.currentHeaderLine;
         if (decl.address) {
           this.emitHeader(
             `    ${constQualifier}${cppType} ${decl.name};  // AT ${decl.address}`,
@@ -650,6 +690,12 @@ export class CodeGenerator {
           this.collectLocatedVarFromModel(decl, prog.name);
         } else {
           this.emitHeader(`    ${constQualifier}${cppType} ${decl.name};`);
+        }
+
+        // Map variable ST line → header member line
+        const stLine = varSourceLines.get(decl.name);
+        if (stLine !== undefined) {
+          this.recordHeaderLineMapping(stLine, memberLine);
         }
 
         // Collect retain variables
@@ -706,6 +752,11 @@ export class CodeGenerator {
    * Generate implementation for a program from the project model.
    */
   private generateProgramImplementationFromModel(prog: ProgramDecl): void {
+    // Look up AST program for source span
+    const astProg = this.ast?.programs.find(
+      (p) => p.name.toUpperCase() === prog.name.toUpperCase(),
+    );
+
     // Constructor
     if (prog.varExternal.length > 0) {
       const params = prog.varExternal
@@ -756,21 +807,22 @@ export class CodeGenerator {
       this.emit("}");
     }
     this.emit("");
+    // PROGRAM line now maps to header class declaration, not constructor
 
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
-    // Look up the AST program to get the body
-    const astProgram = this.ast?.programs.find(
-      (p) => p.name.toUpperCase() === prog.name.toUpperCase(),
-    );
-    if (astProgram && astProgram.body.length > 0) {
+    if (astProg && astProg.body.length > 0) {
       // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
-      this.generateStatements(astProgram.body);
+      this.generateStatements(astProg.body);
     } else if (this.options.sourceComments) {
       this.emit("    // Empty program body");
     }
+    const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
+    if (astProg) {
+      this.recordLineMapping(astProg.sourceSpan.endLine, closingBraceLine);
+    }
 
     // Generate retain variable table if there are retain variables
     this.generateRetainTable(`Program_${prog.name}`, prog.name);
@@ -1043,6 +1095,9 @@ export class CodeGenerator {
    * Generate code for a statement.
    */
   protected generateStatement(stmt: Statement, indent: string = "    "): void {
+    const cppStartLine = this.currentLine;
+    // Compound statements handle their own line mappings internally
+    let isCompound = false;
     switch (stmt.kind) {
       case "AssignmentStatement":
         this.generateAssignmentStatement(stmt, indent);
@@ -1055,18 +1110,23 @@ export class CodeGenerator {
         break;
       case "IfStatement":
         this.generateIfStatement(stmt, indent);
+        isCompound = true;
         break;
       case "CaseStatement":
         this.generateCaseStatement(stmt, indent);
+        isCompound = true;
         break;
       case "ForStatement":
         this.generateForStatement(stmt, indent);
+        isCompound = true;
         break;
       case "WhileStatement":
         this.generateWhileStatement(stmt, indent);
+        isCompound = true;
         break;
       case "RepeatStatement":
         this.generateRepeatStatement(stmt, indent);
+        isCompound = true;
         break;
       case "ExitStatement":
         this.emit(`${indent}break;`);
@@ -1084,6 +1144,9 @@ export class CodeGenerator {
         const _exhaustive: never = stmt;
         throw new Error(`Unhandled statement kind: ${(_exhaustive as Statement).kind}`);
       }
+    }
+    if (!isCompound) {
+      this.recordLineMapping(stmt.sourceSpan.startLine, cppStartLine);
     }
   }
 
@@ -1143,20 +1206,37 @@ export class CodeGenerator {
    * ST: IF/ELSIF/ELSE → C++: if/else if/else
    */
   private generateIfStatement(stmt: IfStatement, indent: string): void {
+    const ifLine = this.currentLine;
     this.emit(`${indent}if (${this.generateExpression(stmt.condition)}) {`);
+    this.recordLineMapping(stmt.sourceSpan.startLine, ifLine);
     this.generateStatements(stmt.thenStatements, indent + this.options.indent);
 
     for (const elsif of stmt.elsifClauses) {
+      const elsifLine = this.currentLine;
       this.emit(`${indent}} else if (${this.generateExpression(elsif.condition)}) {`);
+      this.recordLineMapping(elsif.sourceSpan.startLine, elsifLine);
       this.generateStatements(elsif.statements, indent + this.options.indent);
     }
 
     if (stmt.elseStatements.length > 0) {
+      const elseLine = this.currentLine;
       this.emit(`${indent}} else {`);
+      // Map ELSE to the `} else {` line. Use endLine-1 as an approximation
+      // for the ELSE keyword line (one line before END_IF).
+      // The ELSE doesn't have its own AST node, so we derive from context.
+      if (stmt.elsifClauses.length > 0) {
+        const lastElsif = stmt.elsifClauses[stmt.elsifClauses.length - 1]!;
+        this.recordLineMapping(lastElsif.sourceSpan.endLine + 1, elseLine);
+      } else if (stmt.thenStatements.length > 0) {
+        const lastThen = stmt.thenStatements[stmt.thenStatements.length - 1]!;
+        this.recordLineMapping(lastThen.sourceSpan.endLine + 1, elseLine);
+      }
       this.generateStatements(stmt.elseStatements, indent + this.options.indent);
     }
 
+    const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
   /**
@@ -1164,11 +1244,14 @@ export class CodeGenerator {
    * ST: CASE/OF → C++: switch/case with range expansion
    */
   private generateCaseStatement(stmt: CaseStatement, indent: string): void {
+    const switchLine = this.currentLine;
     this.emit(`${indent}switch (${this.generateExpression(stmt.selector)}) {`);
+    this.recordLineMapping(stmt.sourceSpan.startLine, switchLine);
     const innerIndent = indent + this.options.indent;
     const bodyIndent = innerIndent + this.options.indent;
 
     for (const caseElement of stmt.cases) {
+      const caseLabelLine = this.currentLine;
       for (const label of caseElement.labels) {
         if (label.end) {
           // Range: expand to individual case labels
@@ -1186,6 +1269,7 @@ export class CodeGenerator {
           this.emit(`${innerIndent}case ${this.generateExpression(label.start)}:`);
         }
       }
+      this.recordLineMapping(caseElement.sourceSpan.startLine, caseLabelLine);
       this.generateStatements(caseElement.statements, bodyIndent);
       this.emit(`${bodyIndent}break;`);
     }
@@ -1196,7 +1280,9 @@ export class CodeGenerator {
       this.emit(`${bodyIndent}break;`);
     }
 
+    const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
   /**
@@ -1208,6 +1294,7 @@ export class CodeGenerator {
     const start = this.generateExpression(stmt.start);
     const end = this.generateExpression(stmt.end);
 
+    const forLine = this.currentLine;
     if (stmt.step) {
       const stepExpr = this.generateExpression(stmt.step);
       // Determine direction from step when it's a literal
@@ -1221,9 +1308,12 @@ export class CodeGenerator {
       // Default step is 1, ascending
       this.emit(`${indent}for (${varName} = ${start}; ${varName} <= ${end}; ${varName}++) {`);
     }
+    this.recordLineMapping(stmt.sourceSpan.startLine, forLine);
 
     this.generateStatements(stmt.body, indent + this.options.indent);
+    const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
   /**
@@ -1231,9 +1321,13 @@ export class CodeGenerator {
    * ST: WHILE condition DO → C++: while (condition)
    */
   private generateWhileStatement(stmt: WhileStatement, indent: string): void {
+    const whileLine = this.currentLine;
     this.emit(`${indent}while (${this.generateExpression(stmt.condition)}) {`);
+    this.recordLineMapping(stmt.sourceSpan.startLine, whileLine);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
   /**
@@ -1241,9 +1335,13 @@ export class CodeGenerator {
    * ST: REPEAT ... UNTIL condition → C++: do { ... } while (!(condition))
    */
   private generateRepeatStatement(stmt: RepeatStatement, indent: string): void {
+    const doLine = this.currentLine;
     this.emit(`${indent}do {`);
+    this.recordLineMapping(stmt.sourceSpan.startLine, doLine);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    const untilLine = this.currentLine;
     this.emit(`${indent}} while (!(${this.generateExpression(stmt.condition)}));`);
+    this.recordLineMapping(stmt.sourceSpan.endLine, untilLine);
   }
 
   /**
@@ -1699,6 +1797,7 @@ export class CodeGenerator {
    */
   private emitHeader(line: string): void {
     this.headerOutput.push(line);
+    this.currentHeaderLine++;
   }
 
   /**
@@ -1732,13 +1831,29 @@ export class CodeGenerator {
    * Used in Phase 3+ for debugging support.
    */
   protected recordLineMapping(stLine: number, cppStartLine: number): void {
+    // currentLine points to the *next* line to be emitted, so the last
+    // emitted line is currentLine - 1.
+    const lastEmittedLine = this.currentLine - 1;
     const existing = this.lineMap.get(stLine);
     if (existing !== undefined) {
-      existing.cppEndLine = this.currentLine;
+      existing.cppEndLine = lastEmittedLine;
     } else {
       this.lineMap.set(stLine, {
         cppStartLine,
-        cppEndLine: this.currentLine,
+        cppEndLine: lastEmittedLine,
+      });
+    }
+  }
+
+  private recordHeaderLineMapping(stLine: number, headerStartLine: number): void {
+    const lastEmittedHeaderLine = this.currentHeaderLine - 1;
+    const existing = this.headerLineMap.get(stLine);
+    if (existing !== undefined) {
+      existing.cppEndLine = lastEmittedHeaderLine;
+    } else {
+      this.headerLineMap.set(stLine, {
+        cppStartLine: headerStartLine,
+        cppEndLine: lastEmittedHeaderLine,
       });
     }
   }
