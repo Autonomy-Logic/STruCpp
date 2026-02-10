@@ -199,6 +199,63 @@ export function generateReplMain(
 }
 
 /**
+ * Unified program info for REPL code generation.
+ */
+interface ProgramInfo {
+  /** Display name for ProgramDescriptor */
+  displayName: string;
+  /** C++ expression for instance pointer (e.g. "prog_Main" or "config_Cfg.inst1") */
+  instanceExpr: string;
+  /** Name for the VarDescriptor array */
+  varsDescName: string;
+  /** Variables to expose in the REPL */
+  vars: Array<{ name: string; typeName: string }>;
+}
+
+/**
+ * Emit VarDescriptor arrays for each program.
+ */
+function emitVarDescriptors(lines: string[], programs: ProgramInfo[]): void {
+  for (const prog of programs) {
+    if (prog.vars.length > 0) {
+      lines.push(`static VarDescriptor ${prog.varsDescName}[] = {`);
+      for (const v of prog.vars) {
+        const tag = getTypeTag(v.typeName);
+        lines.push(
+          `    {"${v.name}", VarTypeTag::${tag}, &${prog.instanceExpr}.${v.name}},`,
+        );
+      }
+      lines.push("};");
+    } else {
+      lines.push(`static VarDescriptor* ${prog.varsDescName} = nullptr;`);
+    }
+    lines.push("");
+  }
+}
+
+/**
+ * Emit ProgramDescriptor array and main() function.
+ */
+function emitProgramDescriptorsAndMain(lines: string[], programs: ProgramInfo[]): void {
+  lines.push(`static ProgramDescriptor programs[] = {`);
+  for (const prog of programs) {
+    lines.push(
+      `    {"${prog.displayName}", &${prog.instanceExpr}, ${prog.varsDescName}, ${prog.vars.length}},`,
+    );
+  }
+  lines.push("};");
+  lines.push("");
+
+  lines.push("int main() {");
+  lines.push(
+    `    strucpp::repl_run(programs, ${programs.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,
+  );
+  lines.push("    return 0;");
+  lines.push("}");
+  lines.push("");
+}
+
+/**
  * Generate main.cpp for standalone programs (no CONFIGURATION).
  */
 function generateStandalone(
@@ -206,60 +263,24 @@ function generateStandalone(
   ast: CompilationUnit,
   _projectModel: ProjectModel,
 ): void {
-  // Collect program info
-  const programInfos: Array<{
-    name: string;
-    instanceVar: string;
-    vars: Array<{ name: string; typeName: string }>;
-  }> = [];
-
-  for (const prog of ast.programs) {
-    const vars = collectVarsFromBlocks(prog.varBlocks);
+  const programs: ProgramInfo[] = ast.programs.map((prog) => {
     const instanceVar = `prog_${prog.name}`;
-    programInfos.push({ name: prog.name, instanceVar, vars });
-  }
+    return {
+      displayName: prog.name,
+      instanceExpr: instanceVar,
+      varsDescName: `${instanceVar}_vars`,
+      vars: collectVarsFromBlocks(prog.varBlocks),
+    };
+  });
 
   // Emit static program instances
-  for (const prog of programInfos) {
-    lines.push(`static Program_${prog.name} ${prog.instanceVar};`);
+  for (const prog of ast.programs) {
+    lines.push(`static Program_${prog.name} prog_${prog.name};`);
   }
   lines.push("");
 
-  // Emit VarDescriptor arrays
-  for (const prog of programInfos) {
-    if (prog.vars.length > 0) {
-      lines.push(`static VarDescriptor ${prog.instanceVar}_vars[] = {`);
-      for (const v of prog.vars) {
-        const tag = getTypeTag(v.typeName);
-        lines.push(
-          `    {"${v.name}", VarTypeTag::${tag}, &${prog.instanceVar}.${v.name}},`,
-        );
-      }
-      lines.push("};");
-    } else {
-      lines.push(`static VarDescriptor* ${prog.instanceVar}_vars = nullptr;`);
-    }
-    lines.push("");
-  }
-
-  // Emit ProgramDescriptor array
-  lines.push(`static ProgramDescriptor programs[] = {`);
-  for (const prog of programInfos) {
-    lines.push(
-      `    {"${prog.name}", &${prog.instanceVar}, ${prog.instanceVar}_vars, ${prog.vars.length}},`,
-    );
-  }
-  lines.push("};");
-  lines.push("");
-
-  // main()
-  lines.push("int main() {");
-  lines.push(
-    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,
-  );
-  lines.push("    return 0;");
-  lines.push("}");
-  lines.push("");
+  emitVarDescriptors(lines, programs);
+  emitProgramDescriptorsAndMain(lines, programs);
 }
 
 /**
@@ -271,88 +292,33 @@ function generateWithConfiguration(
   ast: CompilationUnit,
   projectModel: ProjectModel,
 ): void {
-  // Use first configuration
   const config = projectModel.configurations[0];
   if (!config) return;
 
   const configInstanceVar = `config_${config.name}`;
 
   // Emit configuration instance
-  lines.push(
-    `static Configuration_${config.name} ${configInstanceVar};`,
-  );
+  lines.push(`static Configuration_${config.name} ${configInstanceVar};`);
   lines.push("");
 
   // Collect all program instances from resources/tasks
-  const programInstances: Array<{
-    instanceName: string;
-    programType: string;
-  }> = [];
+  const programs: ProgramInfo[] = [];
   for (const resource of config.resources) {
     for (const task of resource.tasks) {
       for (const inst of task.programInstances) {
-        programInstances.push({
-          instanceName: inst.instanceName,
-          programType: inst.programType,
+        const astProg = ast.programs.find(
+          (p) => p.name.toUpperCase() === inst.programType.toUpperCase(),
+        );
+        programs.push({
+          displayName: inst.instanceName,
+          instanceExpr: `${configInstanceVar}.${inst.instanceName}`,
+          varsDescName: `vars_${inst.instanceName}`,
+          vars: astProg ? collectVarsFromBlocks(astProg.varBlocks) : [],
         });
       }
     }
   }
 
-  // For each program instance, get its variable list from the AST program declaration
-  const programInfos: Array<{
-    instanceName: string;
-    programType: string;
-    vars: Array<{ name: string; typeName: string }>;
-  }> = [];
-
-  for (const inst of programInstances) {
-    const astProg = ast.programs.find(
-      (p) => p.name.toUpperCase() === inst.programType.toUpperCase(),
-    );
-    const vars = astProg ? collectVarsFromBlocks(astProg.varBlocks) : [];
-    programInfos.push({
-      instanceName: inst.instanceName,
-      programType: inst.programType,
-      vars,
-    });
-  }
-
-  // Emit VarDescriptor arrays for each program instance
-  for (const prog of programInfos) {
-    const descName = `vars_${prog.instanceName}`;
-    if (prog.vars.length > 0) {
-      lines.push(`static VarDescriptor ${descName}[] = {`);
-      for (const v of prog.vars) {
-        const tag = getTypeTag(v.typeName);
-        lines.push(
-          `    {"${v.name}", VarTypeTag::${tag}, &${configInstanceVar}.${prog.instanceName}.${v.name}},`,
-        );
-      }
-      lines.push("};");
-    } else {
-      lines.push(`static VarDescriptor* ${descName} = nullptr;`);
-    }
-    lines.push("");
-  }
-
-  // Emit ProgramDescriptor array
-  lines.push(`static ProgramDescriptor programs[] = {`);
-  for (const prog of programInfos) {
-    const descName = `vars_${prog.instanceName}`;
-    lines.push(
-      `    {"${prog.instanceName}", &${configInstanceVar}.${prog.instanceName}, ${descName}, ${prog.vars.length}},`,
-    );
-  }
-  lines.push("};");
-  lines.push("");
-
-  // main()
-  lines.push("int main() {");
-  lines.push(
-    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,
-  );
-  lines.push("    return 0;");
-  lines.push("}");
-  lines.push("");
+  emitVarDescriptors(lines, programs);
+  emitProgramDescriptorsAndMain(lines, programs);
 }

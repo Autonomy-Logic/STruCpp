@@ -22,7 +22,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { resolve, basename, dirname } from "path";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { compile, getVersion } from "./index.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
 import type { CompileOptions } from "./types.js";
@@ -54,7 +54,7 @@ function parseArgs(args: string[]): CLIOptions {
     showVersion: false,
     build: false,
     gpp: "g++",
-    cc: "cc",
+    cc: process.platform === "win32" ? "gcc" : "cc",
     cxxFlags: "",
   };
 
@@ -165,6 +165,16 @@ function extractIncludePaths(flags: string): string[] {
     }
   }
   return paths;
+}
+
+/**
+ * Split a --cxx-flags string into individual arguments,
+ * respecting double-quoted segments (e.g. '-I"/path with spaces"').
+ */
+function splitCxxFlags(flags: string): string[] {
+  if (!flags || !flags.trim()) return [];
+  const parts = flags.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+  return parts.map((p) => p.replace(/^"|"$/g, ""));
 }
 
 /**
@@ -348,53 +358,53 @@ function main(): void {
     console.log(`REPL main written to ${mainCppPath}`);
 
     // Derive binary output path (strip .cpp extension)
-    const binaryPath = outputPath.replace(/\.cpp$/i, "");
+    let binaryPath = outputPath.replace(/\.cpp$/i, "");
+    if (process.platform === "win32") binaryPath += ".exe";
     const isoclineObjPath = resolve(outputDir, "isocline.o");
 
-    // Step 1: Compile isocline.c as C
-    const ccCmd = [
-      options.cc,
-      "-c",
-      "-std=c11",
-      `-I"${replDir}"`,
-      `"${resolve(replDir, "isocline.c")}"`,
-      `-o "${isoclineObjPath}"`,
-    ].join(" ");
-
+    // Step 1: Compile isocline.c as C (uses execFileSync to avoid shell injection)
     console.log("Compiling isocline...");
     try {
-      execSync(ccCmd, { stdio: "inherit" });
-    } catch (err) {
+      execFileSync(options.cc, [
+        "-c",
+        "-std=c11",
+        `-I${replDir}`,
+        resolve(replDir, "isocline.c"),
+        "-o", isoclineObjPath,
+      ], { stdio: "inherit" });
+    } catch (err: unknown) {
+      const exitCode = (err as { status?: number }).status;
       console.error(
-        "Error: C compilation of isocline failed. " +
-          "Ensure a C compiler is available or specify one with --cc.",
+        `Error: C compilation of isocline failed (exit code ${exitCode ?? "unknown"}).`,
       );
+      console.error("Ensure a C compiler is available or specify one with --cc.");
       process.exit(1);
     }
 
-    // Step 2: Compile C++ and link with isocline.o
-    const gppCmd = [
-      options.gpp,
+    // Step 2: Compile C++ and link with isocline.o (uses execFileSync to avoid shell injection)
+    const gppArgs = [
       "-std=c++17",
-      `-I"${runtimeIncludeDir}"`,
-      `-I"${replDir}"`,
-      `-I"${outputDir}"`,
-      options.cxxFlags,
-      `"${mainCppPath}"`,
-      `"${outputPath}"`,
-      `"${isoclineObjPath}"`,
-      `-o "${binaryPath}"`,
-    ]
-      .filter((s) => s.length > 0)
-      .join(" ");
+      `-I${runtimeIncludeDir}`,
+      `-I${replDir}`,
+      `-I${outputDir}`,
+      ...splitCxxFlags(options.cxxFlags),
+      mainCppPath,
+      outputPath,
+      isoclineObjPath,
+      "-o", binaryPath,
+    ];
 
     console.log(`Building binary: ${basename(binaryPath)}`);
     try {
-      execSync(gppCmd, { stdio: "inherit" });
+      execFileSync(options.gpp, gppArgs, { stdio: "inherit" });
       console.log(`Binary built: ${binaryPath}`);
       console.log(`Run it with: ${binaryPath}`);
-    } catch (err) {
-      console.error("Error: g++ compilation failed");
+    } catch (err: unknown) {
+      const exitCode = (err as { status?: number }).status;
+      console.error(
+        `Error: g++ compilation failed (exit code ${exitCode ?? "unknown"}).`,
+      );
+      console.error("Check the compiler output above for details.");
       process.exit(1);
     }
   }

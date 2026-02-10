@@ -503,8 +503,9 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
     ic_style_def("type", "color=ansi-cyan");
     ic_style_def("error", "color=ansi-red");
 
-    // Set up completion state
-    ReplCompletionState comp_state = { programs, program_count };
+    // Set up completion state (static so the global pointer remains valid)
+    static ReplCompletionState comp_state;
+    comp_state = { programs, program_count };
     g_comp_state = &comp_state;
 
     ic_set_default_completer(repl_completer, nullptr);
