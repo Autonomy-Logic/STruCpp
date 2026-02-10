@@ -12,6 +12,7 @@
 #pragma once
 
 #include "iec_types.hpp"
+#include <utility>
 
 namespace strucpp {
 
@@ -156,6 +157,32 @@ public:
     IECVar& operator=(T v) noexcept {
         set(v);
         return *this;
+    }
+
+    // =========================================================================
+    // Container Access Forwarding (for array/struct types)
+    // =========================================================================
+
+    /** Forward operator[] to underlying type (1D array access) */
+    template<typename Index>
+    auto operator[](Index i) noexcept -> decltype(std::declval<T&>()[i]) {
+        return value_[i];
+    }
+
+    template<typename Index>
+    auto operator[](Index i) const noexcept -> decltype(std::declval<const T&>()[i]) {
+        return value_[i];
+    }
+
+    /** Forward operator() to underlying type (2D+ array access) */
+    template<typename... Args>
+    auto operator()(Args... args) noexcept -> decltype(std::declval<T&>()(args...)) {
+        return value_(args...);
+    }
+
+    template<typename... Args>
+    auto operator()(Args... args) const noexcept -> decltype(std::declval<const T&>()(args...)) {
+        return value_(args...);
     }
 
     // =========================================================================

@@ -437,6 +437,98 @@ int main() {
     expect(cppResult.success).toBe(true);
   });
 
+  it('should compile 2D array element access with subscripts', () => {
+    const source = `
+      TYPE
+        Matrix3x3 : ARRAY[0..2, 0..2] OF REAL;
+      END_TYPE
+
+      PROGRAM Test2DAccess
+        VAR
+          m : Matrix3x3;
+          i : INT;
+          j : INT;
+        END_VAR
+        m[0, 0] := 1.0;
+        m[1, 2] := 3.14;
+        m[i, j] := m[0, 0] + m[1, 2];
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify 2D access uses operator() syntax, not chained brackets
+    expect(result.cppCode).toContain('m(0, 0)');
+    expect(result.cppCode).toContain('m(1, 2)');
+    expect(result.cppCode).toContain('m(i, j)');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'array_2d_access');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile 2D array access in a loop', () => {
+    const source = `
+      TYPE
+        Matrix4x4 : ARRAY[1..4, 1..4] OF INT;
+      END_TYPE
+
+      PROGRAM Test2DLoop
+        VAR
+          m : Matrix4x4;
+          i : INT;
+          j : INT;
+        END_VAR
+        FOR i := 1 TO 4 DO
+          FOR j := 1 TO 4 DO
+            IF i = j THEN
+              m[i, j] := 1;
+            ELSE
+              m[i, j] := 0;
+            END_IF;
+          END_FOR;
+        END_FOR;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'array_2d_loop');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('should compile mixed 1D bracket and 2D call-syntax access', () => {
+    const source = `
+      TYPE
+        Row5 : ARRAY[1..5] OF INT;
+        Grid3x3 : ARRAY[1..3, 1..3] OF INT;
+      END_TYPE
+
+      PROGRAM TestMixedAccess
+        VAR
+          row : Row5;
+          grid : Grid3x3;
+          i : INT;
+        END_VAR
+        row[1] := 10;
+        row[2] := 20;
+        grid[1, 1] := row[1] + row[2];
+        FOR i := 1 TO 3 DO
+          grid[i, i] := row[i];
+        END_FOR;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // 1D uses brackets, 2D uses parenthesized call syntax
+    expect(result.cppCode).toContain('row[1]');
+    expect(result.cppCode).toContain('grid(1, 1)');
+    expect(result.cppCode).toContain('grid(i, i)');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'mixed_1d_2d_access');
+    expect(cppResult.success).toBe(true);
+  });
+
   it('should compile a subrange type', () => {
     const source = `
       TYPE

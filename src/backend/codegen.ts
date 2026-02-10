@@ -1080,6 +1080,10 @@ export class CodeGenerator {
       case "DeleteStatement":
         this.emit(`${indent}strucpp::iec_delete(${this.generateExpression(stmt.pointer)});`);
         break;
+      default: {
+        const _exhaustive: never = stmt;
+        throw new Error(`Unhandled statement kind: ${(_exhaustive as Statement).kind}`);
+      }
     }
   }
 
@@ -1366,8 +1370,14 @@ export class CodeGenerator {
         : expr.name;
 
     // Subscripts (array access)
-    for (const sub of expr.subscripts) {
-      result += `[${this.generateExpression(sub)}]`;
+    // 2D+ arrays use operator() syntax: arr(i, j) — 1D uses operator[]: arr[i]
+    if (expr.subscripts.length > 1) {
+      const args = expr.subscripts.map((sub) => this.generateExpression(sub));
+      result += `(${args.join(", ")})`;
+    } else {
+      for (const sub of expr.subscripts) {
+        result += `[${this.generateExpression(sub)}]`;
+      }
     }
 
     // Field access (struct members)
