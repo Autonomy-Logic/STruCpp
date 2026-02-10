@@ -338,6 +338,7 @@ function main(): void {
     console.log("Generating REPL harness...");
     const mainCppCode = generateReplMain(result.ast, result.projectModel, {
       headerFileName,
+      stSource: source,
     });
     writeFileSync(mainCppPath, mainCppCode, "utf-8");
     console.log(`REPL main written to ${mainCppPath}`);

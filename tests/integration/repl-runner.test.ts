@@ -76,6 +76,7 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
 
     const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
       headerFileName: 'generated.hpp',
+      stSource,
     });
     fs.writeFileSync(mainPath, mainCpp);
 
@@ -221,5 +222,134 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
     const output = buildAndRun(source, commands, 'real_type');
     expect(output).toContain('REAL');
     expect(output).toContain('3.14');
+  });
+
+  it('should show source line count in welcome banner', () => {
+    const source = `
+      PROGRAM Counter
+        VAR count : INT; END_VAR
+        count := count + 1;
+      END_PROGRAM
+    `;
+    const output = buildAndRun(source, 'quit', 'source_banner');
+    expect(output).toContain('lines loaded');
+  });
+
+  it('should execute step command as alias for run 1', () => {
+    const source = `
+      PROGRAM Counter
+        VAR count : INT; END_VAR
+        count := count + 1;
+      END_PROGRAM
+    `;
+    const commands = [
+      'step',
+      'step',
+      'get Counter.count',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'step_cmd');
+    expect(output).toContain('Executed 1 cycle(s)');
+    expect(output).toContain('2');
+  });
+
+  it('should display source code with code command', () => {
+    const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+    const commands = [
+      'code',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'code_cmd');
+    expect(output).toContain('PROGRAM Counter');
+    expect(output).toContain('count := count + 1');
+    // Should have line numbers
+    expect(output).toMatch(/\d+ \|/);
+  });
+
+  it('should display code around a specific line', () => {
+    const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+    const commands = [
+      'code 2',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'code_line');
+    expect(output).toContain('VAR count');
+  });
+
+  it('should add and display watched variables', () => {
+    const source = `
+      PROGRAM Counter
+        VAR count : INT; END_VAR
+        count := count + 1;
+      END_PROGRAM
+    `;
+    const commands = [
+      'watch Counter.count',
+      'run 3',
+      'watch list',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'watch_cmd');
+    expect(output).toContain('Watching:');
+    expect(output).toContain('--- watch ---');
+    expect(output).toContain('Counter.count');
+    expect(output).toContain('3');
+  });
+
+  it('should clear watch list', () => {
+    const source = `
+      PROGRAM Counter
+        VAR count : INT; END_VAR
+        count := count + 1;
+      END_PROGRAM
+    `;
+    const commands = [
+      'watch Counter.count',
+      'watch clear',
+      'watch list',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'watch_clear');
+    expect(output).toContain('Watch list cleared');
+    expect(output).toContain('Watch list is empty');
+  });
+
+  it('should show dashboard with variables and source', () => {
+    const source = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+    const commands = [
+      'run 5',
+      'dashboard',
+      'quit',
+    ].join('\n');
+    const output = buildAndRun(source, commands, 'dashboard_cmd');
+    expect(output).toContain('Dashboard');
+    expect(output).toContain('Cycle: 5');
+    expect(output).toContain('Variables');
+    expect(output).toContain('Counter.count');
+    expect(output).toContain('Source');
+    expect(output).toContain('PROGRAM Counter');
+  });
+
+  it('should show step and code in help text', () => {
+    const source = `
+      PROGRAM Test
+        VAR x : INT; END_VAR
+        x := 1;
+      END_PROGRAM
+    `;
+    const output = buildAndRun(source, 'help\nquit', 'help_new');
+    expect(output).toContain('step');
+    expect(output).toContain('code');
+    expect(output).toContain('watch');
+    expect(output).toContain('dashboard');
   });
 });

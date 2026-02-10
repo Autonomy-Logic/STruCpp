@@ -23,6 +23,8 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cinttypes>
+#include <vector>
+#include <utility>
 
 namespace strucpp {
 
@@ -271,8 +273,8 @@ inline void print_var_line(ProgramDescriptor& prog, VarDescriptor& v) {
 
 // Command names
 static const char* g_command_names[] = {
-    "run", "vars", "get", "set", "force", "unforce",
-    "programs", "help", "quit", "exit", nullptr
+    "run", "step", "vars", "get", "set", "force", "unforce",
+    "programs", "code", "watch", "dashboard", "help", "quit", "exit", nullptr
 };
 
 // Character class: word chars including dot (for Program.Variable)
@@ -339,6 +341,19 @@ static void complete_program_names(ic_completion_env_t* cenv, const char* prefix
     }
 }
 
+// Complete watch subcommands: "list", "clear", or program.variable names
+static void complete_watch_args(ic_completion_env_t* cenv, const char* prefix) {
+    // Try "list" and "clear" first
+    static const char* watch_subcmds[] = { "list", "clear", nullptr };
+    for (const char** s = watch_subcmds; *s; ++s) {
+        if (ic_istarts_with(*s, prefix)) {
+            ic_add_completion(cenv, *s);
+        }
+    }
+    // Also complete program.variable names
+    complete_prog_var_impl(cenv, prefix);
+}
+
 // Main completer: dispatches based on context
 // Note: `prefix` is the full input up to the cursor position
 static void repl_completer(ic_completion_env_t* cenv, const char* prefix) {
@@ -357,11 +372,14 @@ static void repl_completer(ic_completion_env_t* cenv, const char* prefix) {
         if (cmd == "get" || cmd == "set" || cmd == "force" || cmd == "unforce") {
             // Complete program.variable (dot is part of the word)
             ic_complete_word(cenv, prefix, complete_prog_var_impl, is_prog_var_char);
+        } else if (cmd == "watch") {
+            // Complete "list", "clear", or program.variable
+            ic_complete_word(cenv, prefix, complete_watch_args, is_prog_var_char);
         } else if (cmd == "vars") {
             // Complete program names
             ic_complete_word(cenv, prefix, complete_program_names, nullptr);
-        } else if (cmd == "run") {
-            // No completion for numeric argument
+        } else if (cmd == "run" || cmd == "step" || cmd == "code" || cmd == "dashboard") {
+            // No completion for numeric/free-form arguments
         }
     }
 }
@@ -392,7 +410,7 @@ static void repl_highlighter(ic_highlight_env_t* henv, const char* input, void* 
     }
 
     // Highlight program.variable references after the command
-    if (cmd_end < len && (cmd == "get" || cmd == "set" || cmd == "force" || cmd == "unforce")) {
+    if (cmd_end < len && (cmd == "get" || cmd == "set" || cmd == "force" || cmd == "unforce" || cmd == "watch")) {
         long arg_start = cmd_end;
         while (arg_start < len && input[arg_start] == ' ') arg_start++;
         if (arg_start < len) {
@@ -414,7 +432,8 @@ static void repl_highlighter(ic_highlight_env_t* henv, const char* input, void* 
 // REPL Entry Point
 // =============================================================================
 
-inline void repl_run(ProgramDescriptor* programs, size_t program_count) {
+inline void repl_run(ProgramDescriptor* programs, size_t program_count,
+                     const char* st_source = nullptr) {
     // Set up isocline
     ic_set_history(".strucpp_history", 200);
     ic_enable_auto_tab(true);
@@ -437,6 +456,25 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count) {
     ic_set_default_completer(repl_completer, nullptr);
     ic_set_default_highlighter(repl_highlighter, nullptr);
 
+    // Split source into lines for the code command
+    std::vector<std::string> source_lines;
+    if (st_source) {
+        std::string src(st_source);
+        size_t pos = 0;
+        while (pos < src.size()) {
+            size_t nl = src.find('\n', pos);
+            if (nl == std::string::npos) {
+                source_lines.push_back(src.substr(pos));
+                break;
+            }
+            source_lines.push_back(src.substr(pos, nl - pos));
+            pos = nl + 1;
+        }
+    }
+
+    // Watch list: pairs of (program index, var index)
+    std::vector<std::pair<size_t, size_t>> watch_list;
+
     // Welcome banner
     ic_println("");
     ic_println("[b]STruC++ Interactive PLC Test REPL[/]");
@@ -445,6 +483,9 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count) {
         ic_printf(" [b]%s[/][gray](%zu vars)[/]", programs[i].name, programs[i].var_count);
     }
     ic_println("");
+    if (!source_lines.empty()) {
+        ic_printf("[gray]Source:[/] %zu lines loaded\n", source_lines.size());
+    }
     ic_println("[gray]Type[/] [b]help[/] [gray]for commands,[/] [b]Tab[/] [gray]for completion,[/] [b]Ctrl+R[/] [gray]to search history.[/]");
     ic_println("");
 
@@ -492,12 +533,18 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count) {
         if (cmd == "help") {
             ic_println("[b]Commands:[/]");
             ic_println("  [b]run[/] [cyan]<N>[/]                  Execute N cycles (default 1)");
+            ic_println("  [b]step[/]                     Execute one cycle (alias for run 1)");
             ic_println("  [b]vars[/] [cyan]<program>[/]           List variables with current values");
             ic_println("  [b]get[/] [cyan]<program>.<var>[/]      Get variable value");
             ic_println("  [b]set[/] [cyan]<program>.<var> <v>[/]  Set variable value");
             ic_println("  [b]force[/] [cyan]<program>.<var> <v>[/] Force variable to value");
             ic_println("  [b]unforce[/] [cyan]<program>.<var>[/]  Remove forcing");
             ic_println("  [b]programs[/]                 List program instances");
+            ic_println("  [b]code[/] [cyan][line] [end][/]        Show ST source code with line numbers");
+            ic_println("  [b]watch[/] [cyan]<program>.<var>[/]    Add variable to watch list");
+            ic_println("  [b]watch list[/]               Show watched variables");
+            ic_println("  [b]watch clear[/]              Clear watch list");
+            ic_println("  [b]dashboard[/]                Show overview (variables + source)");
             ic_println("  [b]help[/]                     Show this help");
             ic_println("  [b]quit[/] / [b]exit[/]              Exit");
             ic_println("");
@@ -513,10 +560,10 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count) {
             continue;
         }
 
-        // --- run [N] ---
-        if (cmd == "run") {
+        // --- run [N] / step ---
+        if (cmd == "run" || cmd == "step") {
             int n = 1;
-            if (!args_str.empty()) {
+            if (cmd == "run" && !args_str.empty()) {
                 n = std::atoi(args_str.c_str());
                 if (n < 1) n = 1;
             }
@@ -527,6 +574,13 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count) {
                 cycle_count++;
             }
             ic_printf("[green]Executed %d cycle(s).[/] Total: [cyan]%llu[/]\n", n, cycle_count);
+            // Show watch list after run/step if non-empty
+            if (!watch_list.empty()) {
+                ic_println("  [gray]--- watch ---[/]");
+                for (auto& wp : watch_list) {
+                    print_var_line(programs[wp.first], programs[wp.first].vars[wp.second]);
+                }
+            }
             continue;
         }
 
@@ -621,6 +675,127 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count) {
             var_unforce(var->type, var->var_ptr);
             ic_printf("  [b]%s[/].%s [green]unforced[/]. Value: [green]%s[/]\n",
                 pn.c_str(), vn.c_str(), var_value_to_string(var->type, var->var_ptr).c_str());
+            continue;
+        }
+
+        // --- code [line] [end] ---
+        if (cmd == "code") {
+            if (source_lines.empty()) {
+                ic_println("[red]No source code embedded in this binary.[/]");
+                continue;
+            }
+            size_t from_line = 1;
+            size_t to_line = source_lines.size();
+            if (!args_str.empty()) {
+                // Parse "line" or "line end"
+                size_t sp2 = args_str.find(' ');
+                if (sp2 == std::string::npos) {
+                    // Single arg: center ±7 lines around it
+                    int center = std::atoi(args_str.c_str());
+                    if (center < 1) center = 1;
+                    from_line = static_cast<size_t>(center > 7 ? center - 7 : 1);
+                    to_line = static_cast<size_t>(center) + 7;
+                    if (to_line > source_lines.size()) to_line = source_lines.size();
+                } else {
+                    from_line = static_cast<size_t>(std::atoi(args_str.substr(0, sp2).c_str()));
+                    to_line = static_cast<size_t>(std::atoi(args_str.substr(sp2 + 1).c_str()));
+                    if (from_line < 1) from_line = 1;
+                    if (to_line > source_lines.size()) to_line = source_lines.size();
+                }
+            }
+            // Compute width needed for line numbers
+            int num_width = 1;
+            { size_t n = to_line; while (n >= 10) { num_width++; n /= 10; } }
+            for (size_t i = from_line; i <= to_line && i <= source_lines.size(); ++i) {
+                ic_printf("[gray]%*zu | [/]%s\n", num_width, i, source_lines[i - 1].c_str());
+            }
+            continue;
+        }
+
+        // --- watch [program.var | list | clear] ---
+        if (cmd == "watch") {
+            if (args_str.empty() || args_str == "list") {
+                if (watch_list.empty()) {
+                    ic_println("[gray]Watch list is empty. Use: watch <program>.<var>[/]");
+                } else {
+                    ic_println("  [gray]--- watch ---[/]");
+                    for (auto& wp : watch_list) {
+                        print_var_line(programs[wp.first], programs[wp.first].vars[wp.second]);
+                    }
+                }
+                continue;
+            }
+            if (args_str == "clear") {
+                watch_list.clear();
+                ic_println("[green]Watch list cleared.[/]");
+                continue;
+            }
+            // Add a variable to the watch list
+            std::string pn, vn;
+            if (!parse_qualified_name(args_str, pn, vn)) {
+                ic_println("[red]Usage: watch <program>.<var> | watch list | watch clear[/]");
+                continue;
+            }
+            // Find program index
+            size_t prog_idx = SIZE_MAX;
+            for (size_t i = 0; i < program_count; ++i) {
+                if (pn == programs[i].name) { prog_idx = i; break; }
+            }
+            if (prog_idx == SIZE_MAX) { ic_printf("[red]Unknown program: %s[/]\n", pn.c_str()); continue; }
+            // Find var index
+            size_t var_idx = SIZE_MAX;
+            for (size_t i = 0; i < programs[prog_idx].var_count; ++i) {
+                if (vn == programs[prog_idx].vars[i].name) { var_idx = i; break; }
+            }
+            if (var_idx == SIZE_MAX) { ic_printf("[red]Unknown variable: %s in %s[/]\n", vn.c_str(), pn.c_str()); continue; }
+            // Check for duplicates
+            bool dup = false;
+            for (auto& wp : watch_list) {
+                if (wp.first == prog_idx && wp.second == var_idx) { dup = true; break; }
+            }
+            if (!dup) {
+                watch_list.push_back({prog_idx, var_idx});
+            }
+            ic_printf("[green]Watching:[/] %s.%s\n", pn.c_str(), vn.c_str());
+            continue;
+        }
+
+        // --- dashboard ---
+        if (cmd == "dashboard") {
+            // Clear screen
+            ic_print("\033[2J\033[H");
+            ic_printf("[b]--- STruC++ Dashboard (Cycle: %llu) ---[/]\n\n", cycle_count);
+
+            // Programs summary
+            ic_print("[b]Programs:[/]");
+            for (size_t i = 0; i < program_count; ++i) {
+                ic_printf(" %s (%zu vars)", programs[i].name, programs[i].var_count);
+            }
+            ic_println("");
+
+            // Variables
+            ic_println("\n[b]--- Variables ---[/]");
+            for (size_t p = 0; p < program_count; ++p) {
+                for (size_t i = 0; i < programs[p].var_count; ++i) {
+                    print_var_line(programs[p], programs[p].vars[i]);
+                }
+            }
+
+            // Source (abbreviated to first 20 lines)
+            if (!source_lines.empty()) {
+                ic_println("\n[b]--- Source ---[/]");
+                size_t max_lines = source_lines.size() < 20 ? source_lines.size() : 20;
+                int num_width = 1;
+                { size_t n = source_lines.size(); while (n >= 10) { num_width++; n /= 10; } }
+                for (size_t i = 0; i < max_lines; ++i) {
+                    ic_printf("[gray]%*zu | [/]%s\n", num_width, i + 1, source_lines[i].c_str());
+                }
+                if (source_lines.size() > 20) {
+                    ic_printf("[gray]  ... (%zu more lines)[/]\n", source_lines.size() - 20);
+                }
+            }
+
+            ic_println("\n[gray]Type any command to continue.[/]");
             continue;
         }
 

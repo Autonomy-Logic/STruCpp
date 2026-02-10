@@ -77,7 +77,7 @@ describe('Phase 3.6 - REPL Main Generator', () => {
       expect(mainCpp).toContain('"Prog2"');
       expect(mainCpp).toContain('VarTypeTag::INT');
       expect(mainCpp).toContain('VarTypeTag::DINT');
-      expect(mainCpp).toContain('repl_run(programs, 2)');
+      expect(mainCpp).toContain('repl_run(programs, 2, g_st_source)');
     });
 
     it('should use custom header filename', () => {
@@ -204,6 +204,72 @@ describe('Phase 3.6 - REPL Main Generator', () => {
       expect(mainCpp).toContain('"counter1"');
       expect(mainCpp).toContain('VarTypeTag::INT');
       expect(mainCpp).toContain('repl_run(programs');
+    });
+  });
+
+  describe('ST Source Embedding', () => {
+    it('should embed ST source as raw string literal when provided', () => {
+      const stSource = `PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM`;
+      const result = compile(stSource);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource,
+      });
+
+      expect(mainCpp).toContain('g_st_source');
+      expect(mainCpp).toContain('R"STRUCPP_SRC(');
+      expect(mainCpp).toContain(')STRUCPP_SRC"');
+      expect(mainCpp).toContain('PROGRAM Counter');
+      expect(mainCpp).toContain('count := count + 1;');
+      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source)');
+    });
+
+    it('should emit nullptr when no source provided', () => {
+      const source = `
+        PROGRAM Test
+          VAR x : INT; END_VAR
+          x := 1;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!);
+
+      expect(mainCpp).toContain('g_st_source = nullptr');
+      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source)');
+    });
+
+    it('should pass g_st_source in configuration mode too', () => {
+      const source = `
+        PROGRAM Counter
+          VAR count : INT; END_VAR
+          count := count + 1;
+        END_PROGRAM
+
+        CONFIGURATION MyConfig
+          RESOURCE MyRes ON PLC
+            TASK MainTask(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM counter1 WITH MainTask : Counter;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      const mainCpp = generateReplMain(result.ast!, result.projectModel!, {
+        headerFileName: 'generated.hpp',
+        stSource: source,
+      });
+
+      expect(mainCpp).toContain('g_st_source');
+      expect(mainCpp).toContain('R"STRUCPP_SRC(');
+      expect(mainCpp).toContain('repl_run(programs, 1, g_st_source)');
     });
   });
 

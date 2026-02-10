@@ -11,6 +11,25 @@ import type { ProjectModel } from "../project-model.js";
 import { getProjectNamespace } from "../project-model.js";
 
 /**
+ * Escape ST source for embedding in a C++ raw string literal with delimiter STRUCPP_SRC.
+ * If the source contains the closing sequence `)STRUCPP_SRC"`, replace it with a safe variant.
+ */
+function escapeRawStringLiteral(source: string): string {
+  // The closing delimiter is )STRUCPP_SRC" — if this appears in the source, mangle it
+  let result = source;
+  let delimiter = "STRUCPP_SRC";
+  while (result.includes(`)${delimiter}"`)) {
+    delimiter += "_";
+  }
+  // If we had to change the delimiter, we can't use it — the caller emits a fixed delimiter.
+  // Instead, just strip the problematic sequence (extremely unlikely in real ST code).
+  if (delimiter !== "STRUCPP_SRC") {
+    result = result.replace(/\)STRUCPP_SRC"/g, ")STRUCPP_SRC_");
+  }
+  return result;
+}
+
+/**
  * Map of IEC type names to VarTypeTag enum values.
  */
 const TYPE_TAG_MAP: Record<string, string> = {
@@ -70,6 +89,8 @@ function collectVarsFromBlocks(
 export interface ReplMainGenOptions {
   /** Header filename to include (default: "generated.hpp") */
   headerFileName: string;
+  /** Original ST source to embed in the binary for the `code` command */
+  stSource?: string;
 }
 
 /**
@@ -91,6 +112,15 @@ export function generateReplMain(
   lines.push("using strucpp::VarTypeTag;");
   lines.push("using strucpp::VarDescriptor;");
   lines.push("using strucpp::ProgramDescriptor;");
+  lines.push("");
+
+  // Embed ST source as raw string literal
+  if (options.stSource) {
+    const safeSource = escapeRawStringLiteral(options.stSource);
+    lines.push(`static const char* g_st_source = R"STRUCPP_SRC(${safeSource})STRUCPP_SRC";`);
+  } else {
+    lines.push("static const char* g_st_source = nullptr;");
+  }
   lines.push("");
 
   const hasConfigurations = projectModel.configurations.length > 0;
@@ -161,7 +191,7 @@ function generateStandalone(
   // main()
   lines.push("int main() {");
   lines.push(
-    `    strucpp::repl_run(programs, ${programInfos.length});`,
+    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source);`,
   );
   lines.push("    return 0;");
   lines.push("}");
@@ -256,7 +286,7 @@ function generateWithConfiguration(
   // main()
   lines.push("int main() {");
   lines.push(
-    `    strucpp::repl_run(programs, ${programInfos.length});`,
+    `    strucpp::repl_run(programs, ${programInfos.length}, g_st_source);`,
   );
   lines.push("    return 0;");
   lines.push("}");
