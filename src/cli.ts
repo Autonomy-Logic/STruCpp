@@ -137,6 +137,54 @@ For more information, visit: https://github.com/Autonomy-Logic/STruCpp
 `);
 }
 
+/**
+ * Locate the runtime include directory by checking multiple candidate paths.
+ * Supports ESM dev mode, CJS esbuild bundles, and pkg standalone binaries.
+ */
+function findRuntimeIncludeDir(): string {
+  const candidates: string[] = [];
+
+  // From import.meta.url (ESM: src/cli.ts or dist/cli.js)
+  try {
+    if (typeof import.meta?.url === "string") {
+      const scriptDir = dirname(new URL(import.meta.url).pathname);
+      candidates.push(resolve(scriptDir, "runtime", "include"));
+      candidates.push(resolve(scriptDir, "..", "src", "runtime", "include"));
+    }
+  } catch {
+    // import.meta.url unavailable or invalid (CJS bundle / pkg binary)
+  }
+
+  // From __dirname (CJS bundle via esbuild)
+  if (typeof __dirname === "string") {
+    candidates.push(resolve(__dirname, "runtime", "include"));
+    candidates.push(resolve(__dirname, "..", "src", "runtime", "include"));
+  }
+
+  // Relative to the real binary location (pkg binary)
+  candidates.push(
+    resolve(dirname(process.execPath), "runtime", "include"),
+    resolve(dirname(process.execPath), "..", "src", "runtime", "include"),
+    resolve(dirname(process.execPath), "src", "runtime", "include"),
+  );
+
+  // Relative to CWD as last resort
+  candidates.push(resolve(process.cwd(), "src", "runtime", "include"));
+
+  for (const candidate of candidates) {
+    if (existsSync(resolve(candidate, "iec_types.hpp"))) {
+      return candidate;
+    }
+  }
+
+  // Fallback: let the user pass -I via --cxx-flags
+  console.error(
+    "Warning: Could not locate runtime include directory. " +
+      'Use --cxx-flags "-I/path/to/runtime/include" to specify it manually.',
+  );
+  return "runtime/include";
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
@@ -234,13 +282,11 @@ function main(): void {
     const mainCppPath = resolve(outputDir, "main.cpp");
 
     // Resolve runtime include directory
-    // When running from dist/cli.js, go up to project root then into src/runtime/include
-    // When running from src/cli.ts directly, go to src/runtime/include
-    const scriptDir = dirname(new URL(import.meta.url).pathname);
-    let runtimeIncludeDir = resolve(scriptDir, "runtime", "include");
-    if (!existsSync(runtimeIncludeDir)) {
-      runtimeIncludeDir = resolve(scriptDir, "..", "src", "runtime", "include");
-    }
+    // Try multiple candidate locations to support:
+    //   1. ESM dev mode (src/cli.ts or dist/cli.js via import.meta.url)
+    //   2. CJS esbuild bundle (dist/strucpp-bundle.cjs via __dirname)
+    //   3. pkg binary (via process.execPath on real filesystem)
+    const runtimeIncludeDir = findRuntimeIncludeDir();
 
     console.log("Generating REPL harness...");
     const mainCppCode = generateReplMain(result.ast, result.projectModel, {
