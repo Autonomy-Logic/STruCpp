@@ -29,7 +29,7 @@ Design and implement the foundational C++ runtime architecture. This phase is di
 - [Phase 1.6: Standard Functions and Library](phase-1.6-standard-functions.md) - Numeric, conversion, and variadic functions ✓
 
 ### Phase 2: Project Structure, Types, and Language Features
-**Status**: PARTIALLY COMPLETE | **Duration**: 10-14 weeks
+**Status**: COMPLETED | **Duration**: 10-14 weeks
 
 Parse IEC 61131-3 project structure, user-defined data types, and advanced language features, generating C++ class hierarchy for runtime scheduling, type definitions, and language constructs.
 
@@ -41,34 +41,35 @@ Parse IEC 61131-3 project structure, user-defined data types, and advanced langu
 - [Phase 2.5: Nested Comments](phase-2.5-nested-comments.md) - Support for nested comment blocks ✓
 - [Phase 2.6: Variable Modifiers](phase-2.6-variable-modifiers.md) - RETAIN and CONSTANT code generation ✓
 - [Phase 2.7: Namespaces](phase-2.7-namespaces.md) - Project-level namespace configuration (CODESYS-style) ✓
-- [Phase 2.8: Pragmas and External Code](phase-2.8-pragmas-external-code.md) - Attribute pragmas and inline C/C++ pass-through
+- [Phase 2.8: Pragmas and External Code](phase-2.8-pragmas-external-code.md) - Attribute pragmas and inline C/C++ pass-through ✓
 
 ### Phase 3: Core ST Translation
-**Status**: PENDING | **Duration**: 14-20 weeks
+**Status**: COMPLETED | **Duration**: 14-20 weeks
 
 Implement parser and code generator for ST expressions, assignments, statements, control flow, composite types, and dynamic memory.
 
 **Sub-phases**:
-- [Phase 3.1: Expressions and Assignments](phase-3-st-translation.md) - Basic expressions, assignments, literals
-- [Phase 3.2: Control Flow Statements](phase-3.2-control-flow.md) - IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN
-- [Phase 3.3: Composite Type Access](phase-3.3-composite-types.md) - Array subscripts, struct members, array literals, SIZEOF/LOWER_BOUND/UPPER_BOUND
-- [Phase 3.4: Variable-Length Arrays](phase-3.4-variable-length-arrays.md) - ARRAY[*] parameters (IEC 61131-3 Edition 3)
-- [Phase 3.5: Dynamic Memory Allocation](phase-3.5-dynamic-memory.md) - __NEW/__DELETE operators (CODESYS extension)
+- [Phase 3.1: Expressions and Assignments](phase-3-st-translation.md) - Basic expressions, assignments, literals ✓
+- [Phase 3.2: Control Flow Statements](phase-3.2-control-flow.md) - IF, CASE, FOR, WHILE, REPEAT, EXIT, RETURN ✓
+- [Phase 3.3: Composite Type Access](phase-3.3-composite-types.md) - Array subscripts, struct members, array literals, SIZEOF/LOWER_BOUND/UPPER_BOUND ✓
+- [Phase 3.4: Variable-Length Arrays](phase-3.4-variable-length-arrays.md) - ARRAY[*] parameters (IEC 61131-3 Edition 3) ✓
+- [Phase 3.5: Dynamic Memory Allocation](phase-3.5-dynamic-memory.md) - __NEW/__DELETE operators (CODESYS extension) ✓
+- [Phase 3.6: Interactive PLC Test Binary](phase-3.6-repl-runner.md) - `--build` CLI flag for interactive REPL binary ✓
 
 ### Phase 4: Functions and Function Calls
-**Status**: PENDING | **Duration**: 4-6 weeks
+**Status**: PARTIAL | **Duration**: 4-6 weeks
 
-Add support for user-defined functions and standard library functions.
+Add support for user-defined functions and standard library functions. FUNCTION declarations parse and generate C++ definitions, but function *calls* are not yet wired through the AST builder (CST nodes are silently dropped). No standard library function mapping, overload resolution, or argument type checking.
 
 **Document**: [phase-4-functions.md](phase-4-functions.md)
 
 ### Phase 5: Function Blocks and OOP
-**Status**: PENDING | **Duration**: 8-11 weeks
+**Status**: PARTIAL | **Duration**: 8-11 weeks
 
 Implement function blocks as C++ classes with state, methods, interfaces, and inheritance.
 
 **Sub-phases**:
-- [Phase 5.1: Function Blocks Core](phase-5.1-function-blocks.md) - FB declarations, instantiation, state, operator()
+- [Phase 5.1: Function Blocks Core](phase-5.1-function-blocks.md) - FB declarations and class skeleton codegen work; FB instantiation, named-parameter calls, and standard FBs not implemented
 - [Phase 5.2: OOP Extensions](phase-5.2-oop-extensions.md) - Methods, interfaces, inheritance, properties
 
 ### Phase 6: OpenPLC Integration
