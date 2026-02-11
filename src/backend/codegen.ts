@@ -120,6 +120,9 @@ export interface CodeGenOptions {
 
   /** Header filename to use in #include directive (default: "generated.hpp") */
   headerFileName: string;
+
+  /** Additional library headers to include in the generated header */
+  libraryHeaders: string[];
 }
 
 /**
@@ -131,6 +134,7 @@ export const defaultCodeGenOptions: CodeGenOptions = {
   indent: "    ",
   lineEnding: "\n",
   headerFileName: "generated.hpp",
+  libraryHeaders: [],
 };
 
 // =============================================================================
@@ -152,6 +156,14 @@ export interface CodeGenResult {
 
   /** Line mapping from ST to C++ header lines */
   headerLineMap: Map<number, LineMapEntry>;
+
+  /** Warnings emitted during code generation */
+  warnings: Array<{
+    message: string;
+    line?: number;
+    column?: number;
+    file?: string;
+  }>;
 }
 
 // =============================================================================
@@ -189,6 +201,14 @@ export class CodeGenerator {
 
   /** Standard function registry for name mapping and conversion resolution */
   private stdRegistry: StdFunctionRegistry;
+
+  /** Warnings collected during code generation */
+  private codegenWarnings: Array<{
+    message: string;
+    line?: number;
+    column?: number;
+    file?: string;
+  }> = [];
 
   constructor(
     private readonly _symbolTables: SymbolTables,
@@ -241,6 +261,7 @@ export class CodeGenerator {
     this.currentHeaderLine = 1;
     this.indentLevel = 0;
     this.locatedVars = [];
+    this.codegenWarnings = [];
     this.ast = ast; // Store AST for looking up program bodies
 
     // Generate header
@@ -254,6 +275,7 @@ export class CodeGenerator {
       headerCode: this.headerOutput.join(this.options.lineEnding),
       lineMap: this.lineMap,
       headerLineMap: this.headerLineMap,
+      warnings: this.codegenWarnings,
     };
   }
 
@@ -283,6 +305,16 @@ export class CodeGenerator {
     this.emitHeader("#include <array>");
     this.emitHeader("#include <cstddef>");
     this.emitHeader("#include <string>");
+
+    // Include library headers
+    if (this.options.libraryHeaders.length > 0) {
+      this.emitHeader("");
+      this.emitHeader("// Library headers");
+      for (const header of this.options.libraryHeaders) {
+        this.emitHeader(`#include "${header}"`);
+      }
+    }
+
     this.emitHeader("");
 
     // Open namespace
@@ -1629,6 +1661,8 @@ export class CodeGenerator {
 
   /**
    * Reorder named arguments to match function declaration parameter order.
+   * Positional args are placed first (in declaration order, skipping named slots),
+   * then named args fill their declared slots. Unfilled parameters get default values.
    * Returns null if function not found in AST.
    */
   private reorderNamedArguments(expr: FunctionCallExpression): string[] | null {
@@ -1640,8 +1674,12 @@ export class CodeGenerator {
     );
     if (!funcDecl) return null;
 
-    // Build parameter order from VAR_INPUT and VAR_IN_OUT blocks
-    const paramOrder: string[] = [];
+    // Build parameter info from VAR_INPUT, VAR_IN_OUT, VAR_OUTPUT blocks
+    const params: Array<{
+      name: string;
+      typeName: string;
+      defaultExpr?: string;
+    }> = [];
     for (const block of funcDecl.varBlocks) {
       if (
         block.blockType === "VAR_INPUT" ||
@@ -1650,40 +1688,89 @@ export class CodeGenerator {
       ) {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            paramOrder.push(name.toUpperCase());
+            const entry: {
+              name: string;
+              typeName: string;
+              defaultExpr?: string;
+            } = {
+              name: name.toUpperCase(),
+              typeName: decl.type.name,
+            };
+            if (decl.initialValue) {
+              entry.defaultExpr = this.generateExpression(decl.initialValue);
+            }
+            params.push(entry);
           }
         }
       }
     }
 
-    // Build a map of named arg -> generated expression
+    // Build set of parameter slots claimed by named arguments
     const namedArgs = new Map<string, string>();
-    const positionalArgs: string[] = [];
+    const claimedSlots = new Set<string>();
     for (const arg of expr.arguments) {
       if (arg.name !== undefined) {
-        namedArgs.set(
-          arg.name.toUpperCase(),
-          this.generateExpression(arg.value),
-        );
-      } else {
+        const upperName = arg.name.toUpperCase();
+        namedArgs.set(upperName, this.generateExpression(arg.value));
+        claimedSlots.add(upperName);
+      }
+    }
+
+    // Warn about named args that don't match any declared parameter
+    const paramNames = new Set(params.map((p) => p.name));
+    for (const [argName] of namedArgs) {
+      if (!paramNames.has(argName)) {
+        const span = expr.sourceSpan;
+        this.codegenWarnings.push({
+          message: `Named argument '${argName}' does not match any parameter of function '${expr.functionName}'`,
+          line: span.startLine,
+          column: span.startCol,
+          file: span.file,
+        });
+      }
+    }
+
+    // Collect positional args (preserving source order)
+    const positionalArgs: string[] = [];
+    for (const arg of expr.arguments) {
+      if (arg.name === undefined) {
         positionalArgs.push(this.generateExpression(arg.value));
       }
     }
 
-    // Reorder: positional args fill in order, named args go to their position
-    const result: string[] = [];
+    // Assign positional args to unclaimed parameter slots (in declaration order)
+    const result: string[] = new Array(params.length);
     let positionalIdx = 0;
-    for (const paramName of paramOrder) {
-      const named = namedArgs.get(paramName);
-      if (named !== undefined) {
-        result.push(named);
-      } else if (positionalIdx < positionalArgs.length) {
-        result.push(positionalArgs[positionalIdx]!);
+    for (let i = 0; i < params.length; i++) {
+      const param = params[i]!;
+      if (claimedSlots.has(param.name)) {
+        // This slot is reserved for a named arg - skip it for positional fill
+        continue;
+      }
+      if (positionalIdx < positionalArgs.length) {
+        result[i] = positionalArgs[positionalIdx]!;
         positionalIdx++;
       }
     }
 
-    return result;
+    // Fill named arg slots
+    for (let i = 0; i < params.length; i++) {
+      const param = params[i]!;
+      const named = namedArgs.get(param.name);
+      if (named !== undefined) {
+        result[i] = named;
+      }
+    }
+
+    // Fill any remaining unfilled slots with defaults
+    for (let i = 0; i < params.length; i++) {
+      if (result[i] === undefined) {
+        const param = params[i]!;
+        result[i] = param.defaultExpr ?? this.getDefaultValue(param.typeName);
+      }
+    }
+
+    return result as string[];
   }
 
   // ===========================================================================

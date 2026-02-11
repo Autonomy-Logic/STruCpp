@@ -14,6 +14,7 @@ import { SemanticAnalyzer } from "./semantic/analyzer.js";
 import { CodeGenerator } from "./backend/codegen.js";
 import type { CompilationUnit } from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
+import { registerLibrarySymbols } from "./library/library-loader.js";
 
 /**
  * Default compilation options
@@ -193,9 +194,17 @@ export function compile(
     };
   }
 
-  // Phase 3.5: Semantic analysis (located variables, type checking, etc.)
+  // Phase 3.5: Library loading & Semantic analysis
+  // If libraries are provided, pre-populate symbol tables with their symbols
+  let semanticSymbolTables: SymbolTables | undefined;
+  if (mergedOptions.libraries && mergedOptions.libraries.length > 0) {
+    semanticSymbolTables = new SymbolTables();
+    for (const manifest of mergedOptions.libraries) {
+      registerLibrarySymbols(manifest, semanticSymbolTables);
+    }
+  }
   const analyzer = new SemanticAnalyzer();
-  const semanticResult = analyzer.analyze(ast);
+  const semanticResult = analyzer.analyze(ast, semanticSymbolTables);
   for (const err of semanticResult.errors) {
     errors.push({
       message: err.message,
@@ -226,15 +235,42 @@ export function compile(
   }
 
   // Phase 4: Generate C++ code
+  // Collect library headers for #include directives
+  const libraryHeaders: string[] = [];
+  if (mergedOptions.libraries) {
+    for (const manifest of mergedOptions.libraries) {
+      for (const header of manifest.headers) {
+        if (!libraryHeaders.includes(header)) {
+          libraryHeaders.push(header);
+        }
+      }
+    }
+  }
+
   const codegenSymbolTables = new SymbolTables();
   const codegen = new CodeGenerator(codegenSymbolTables, {
     sourceComments: mergedOptions.debug,
     lineDirectives: mergedOptions.lineMapping,
     headerFileName: mergedOptions.headerFileName ?? "generated.hpp",
+    libraryHeaders,
   });
   codegen.setProjectModel(projectModelResult.model);
 
   const codeResult = codegen.generate(ast);
+
+  // Collect codegen warnings
+  for (const warn of codeResult.warnings) {
+    const entry: CompileError = {
+      message: warn.message,
+      line: warn.line ?? 0,
+      column: warn.column ?? 0,
+      severity: "warning",
+    };
+    if (warn.file !== undefined) {
+      entry.file = warn.file;
+    }
+    warnings.push(entry);
+  }
 
   return {
     success: true,
@@ -314,3 +350,16 @@ export function getVersion(): string {
 
 // Re-export types
 export type { CompileOptions, CompileResult, CompileError } from "./types.js";
+
+// Re-export library system
+export { compileLibrary } from "./library/library-compiler.js";
+export {
+  loadLibraryManifest,
+  registerLibrarySymbols,
+  LibraryManifestError,
+} from "./library/library-loader.js";
+export { getBuiltinStdlibManifest } from "./library/builtin-stdlib.js";
+export type {
+  LibraryManifest,
+  LibraryCompileResult,
+} from "./library/library-manifest.js";

@@ -7,8 +7,19 @@
 
 import type { LibraryManifest } from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
+import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type { ElementaryType, VarDeclaration } from "../frontend/ast.js";
 import { createDefaultSourceSpan } from "../frontend/ast.js";
+
+/**
+ * Error thrown when a library manifest fails validation.
+ */
+export class LibraryManifestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LibraryManifestError";
+  }
+}
 
 /** Dummy VarDeclaration for library-registered symbols. */
 function dummyDecl(): VarDeclaration {
@@ -53,24 +64,124 @@ function makeVarSymbol(
 
 /**
  * Load a library manifest from a JSON object.
+ * Validates required fields and structure.
  * (In production, this would read from a .stlib.json file on disk.)
+ *
+ * @throws {LibraryManifestError} if required fields are missing or invalid
  */
 export function loadLibraryManifest(json: unknown): LibraryManifest {
+  if (json === null || json === undefined || typeof json !== "object") {
+    throw new LibraryManifestError(
+      "Invalid library manifest: expected a JSON object",
+    );
+  }
+
   const obj = json as Record<string, unknown>;
 
+  // Validate required top-level fields
+  const name = obj.name;
+  if (typeof name !== "string" || name.length === 0) {
+    throw new LibraryManifestError(
+      "Invalid library manifest: 'name' must be a non-empty string",
+    );
+  }
+  const version = obj.version;
+  if (typeof version !== "string" || version.length === 0) {
+    throw new LibraryManifestError(
+      "Invalid library manifest: 'version' must be a non-empty string",
+    );
+  }
+  const namespace = obj.namespace;
+  if (typeof namespace !== "string" || namespace.length === 0) {
+    throw new LibraryManifestError(
+      "Invalid library manifest: 'namespace' must be a non-empty string",
+    );
+  }
+
+  // Validate functions array
+  const functions: LibraryManifest["functions"] = [];
+  if (Array.isArray(obj.functions)) {
+    for (let i = 0; i < obj.functions.length; i++) {
+      const fn = obj.functions[i] as Record<string, unknown>;
+      if (typeof fn.name !== "string" || fn.name.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: functions[${i}].name must be a non-empty string`,
+        );
+      }
+      if (typeof fn.returnType !== "string" || fn.returnType.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: functions[${i}].returnType must be a non-empty string`,
+        );
+      }
+      if (!Array.isArray(fn.parameters)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: functions[${i}].parameters must be an array`,
+        );
+      }
+      functions.push(fn as unknown as LibraryManifest["functions"][0]);
+    }
+  }
+
+  // Validate function blocks array
+  const functionBlocks: LibraryManifest["functionBlocks"] = [];
+  if (Array.isArray(obj.functionBlocks)) {
+    for (let i = 0; i < obj.functionBlocks.length; i++) {
+      const fb = obj.functionBlocks[i] as Record<string, unknown>;
+      if (typeof fb.name !== "string" || fb.name.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: functionBlocks[${i}].name must be a non-empty string`,
+        );
+      }
+      if (!Array.isArray(fb.inputs)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: functionBlocks[${i}].inputs must be an array`,
+        );
+      }
+      if (!Array.isArray(fb.outputs)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: functionBlocks[${i}].outputs must be an array`,
+        );
+      }
+      if (!Array.isArray(fb.inouts)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: functionBlocks[${i}].inouts must be an array`,
+        );
+      }
+      functionBlocks.push(
+        fb as unknown as LibraryManifest["functionBlocks"][0],
+      );
+    }
+  }
+
+  // Validate types array
+  const types: LibraryManifest["types"] = [];
+  if (Array.isArray(obj.types)) {
+    for (let i = 0; i < obj.types.length; i++) {
+      const t = obj.types[i] as Record<string, unknown>;
+      if (typeof t.name !== "string" || t.name.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: types[${i}].name must be a non-empty string`,
+        );
+      }
+      if (
+        typeof t.kind !== "string" ||
+        !["struct", "enum", "alias"].includes(t.kind)
+      ) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: types[${i}].kind must be "struct", "enum", or "alias"`,
+        );
+      }
+      types.push(t as unknown as LibraryManifest["types"][0]);
+    }
+  }
+
   const result: LibraryManifest = {
-    name: String(obj.name ?? ""),
-    version: String(obj.version ?? ""),
-    namespace: String(obj.namespace ?? ""),
-    functions: Array.isArray(obj.functions)
-      ? (obj.functions as LibraryManifest["functions"])
-      : [],
-    functionBlocks: Array.isArray(obj.functionBlocks)
-      ? (obj.functionBlocks as LibraryManifest["functionBlocks"])
-      : [],
-    types: Array.isArray(obj.types)
-      ? (obj.types as LibraryManifest["types"])
-      : [],
+    name,
+    version,
+    namespace,
+    functions,
+    functionBlocks,
+    types,
     headers: Array.isArray(obj.headers) ? (obj.headers as string[]) : [],
     isBuiltin: Boolean(obj.isBuiltin),
   };
@@ -124,8 +235,9 @@ export function registerLibrarySymbols(
           makeVarSymbol(p.name, p.type, p.direction),
         ),
       });
-    } catch {
-      // Symbol already exists - skip (first definition wins)
+    } catch (e) {
+      // Skip duplicate symbol errors (first definition wins), re-throw others
+      if (!(e instanceof DuplicateSymbolError)) throw e;
     }
   }
 
@@ -155,8 +267,8 @@ export function registerLibrarySymbols(
         },
         resolvedType,
       });
-    } catch {
-      // Symbol already exists - skip
+    } catch (e) {
+      if (!(e instanceof DuplicateSymbolError)) throw e;
     }
   }
 
@@ -178,8 +290,8 @@ export function registerLibrarySymbols(
         inouts: fb.inouts.map((io) => makeVarSymbol(io.name, io.type, "inout")),
         locals: [],
       });
-    } catch {
-      // Symbol already exists - skip
+    } catch (e) {
+      if (!(e instanceof DuplicateSymbolError)) throw e;
     }
   }
 }

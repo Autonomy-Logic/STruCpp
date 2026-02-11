@@ -10,10 +10,12 @@ import { compileLibrary } from "../../src/library/library-compiler.js";
 import {
   loadLibraryManifest,
   registerLibrarySymbols,
+  LibraryManifestError,
 } from "../../src/library/library-loader.js";
 import { getBuiltinStdlibManifest } from "../../src/library/builtin-stdlib.js";
 import { SymbolTables } from "../../src/semantic/symbol-table.js";
 import { StdFunctionRegistry } from "../../src/semantic/std-function-registry.js";
+import { compile } from "../../src/index.js";
 
 describe("Library System", () => {
   describe("compileLibrary", () => {
@@ -126,6 +128,102 @@ describe("Library System", () => {
       expect(manifest.description).toBeUndefined();
       expect(manifest.sourceFiles).toBeUndefined();
     });
+
+    it("should reject null input", () => {
+      expect(() => loadLibraryManifest(null)).toThrow(LibraryManifestError);
+    });
+
+    it("should reject missing name", () => {
+      expect(() =>
+        loadLibraryManifest({
+          version: "1.0.0",
+          namespace: "ns",
+        }),
+      ).toThrow("'name' must be a non-empty string");
+    });
+
+    it("should reject empty name", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "",
+          version: "1.0.0",
+          namespace: "ns",
+        }),
+      ).toThrow("'name' must be a non-empty string");
+    });
+
+    it("should reject missing version", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "lib",
+          namespace: "ns",
+        }),
+      ).toThrow("'version' must be a non-empty string");
+    });
+
+    it("should reject missing namespace", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "lib",
+          version: "1.0.0",
+        }),
+      ).toThrow("'namespace' must be a non-empty string");
+    });
+
+    it("should reject function entry without name", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "lib",
+          version: "1.0.0",
+          namespace: "ns",
+          functions: [{ returnType: "INT", parameters: [] }],
+        }),
+      ).toThrow("functions[0].name must be a non-empty string");
+    });
+
+    it("should reject function entry without returnType", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "lib",
+          version: "1.0.0",
+          namespace: "ns",
+          functions: [{ name: "Foo", parameters: [] }],
+        }),
+      ).toThrow("functions[0].returnType must be a non-empty string");
+    });
+
+    it("should reject function entry without parameters array", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "lib",
+          version: "1.0.0",
+          namespace: "ns",
+          functions: [{ name: "Foo", returnType: "INT" }],
+        }),
+      ).toThrow("functions[0].parameters must be an array");
+    });
+
+    it("should reject function block without inputs array", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "lib",
+          version: "1.0.0",
+          namespace: "ns",
+          functionBlocks: [{ name: "FB", outputs: [], inouts: [] }],
+        }),
+      ).toThrow("functionBlocks[0].inputs must be an array");
+    });
+
+    it("should reject type entry with invalid kind", () => {
+      expect(() =>
+        loadLibraryManifest({
+          name: "lib",
+          version: "1.0.0",
+          namespace: "ns",
+          types: [{ name: "T", kind: "invalid" }],
+        }),
+      ).toThrow('types[0].kind must be "struct", "enum", or "alias"');
+    });
   });
 
   describe("registerLibrarySymbols", () => {
@@ -203,6 +301,36 @@ describe("Library System", () => {
     });
   });
 
+  describe("registerLibrarySymbols - duplicate handling", () => {
+    it("should silently skip duplicate function symbols", () => {
+      const symbolTables = new SymbolTables();
+      const manifest = loadLibraryManifest({
+        name: "test",
+        version: "1.0.0",
+        namespace: "test",
+        functions: [
+          {
+            name: "DupeFunc",
+            returnType: "INT",
+            parameters: [],
+          },
+        ],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      });
+
+      // Register twice - should not throw
+      registerLibrarySymbols(manifest, symbolTables);
+      registerLibrarySymbols(manifest, symbolTables);
+
+      // First definition wins
+      const func = symbolTables.lookupFunction("DupeFunc");
+      expect(func).toBeDefined();
+    });
+  });
+
   describe("builtin stdlib", () => {
     it("should generate a manifest for the built-in stdlib", () => {
       const manifest = getBuiltinStdlibManifest();
@@ -217,6 +345,123 @@ describe("Library System", () => {
       const allFuncs = registry.getAll();
 
       expect(manifest.functions).toHaveLength(allFuncs.length);
+    });
+  });
+
+  describe("end-to-end library workflow", () => {
+    it("should compile a library and use its function in a program", () => {
+      // Step 1: Compile the library
+      const libResult = compileLibrary(
+        [
+          {
+            source: `
+              FUNCTION MathAdd : INT
+                VAR_INPUT a : INT; b : INT; END_VAR
+                MathAdd := a + b;
+              END_FUNCTION
+            `,
+            fileName: "math.st",
+          },
+        ],
+        { name: "math-lib", version: "1.0.0", namespace: "math" },
+      );
+      expect(libResult.success).toBe(true);
+
+      // Step 2: Compile a program that uses the library function
+      const mainSource = `
+        PROGRAM Main
+          VAR result : INT; END_VAR
+          result := MathAdd(a := 3, b := 4);
+        END_PROGRAM
+      `;
+      const result = compile(mainSource, {
+        libraries: [libResult.manifest],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain("MathAdd");
+    });
+
+    it("should compile a library and use its type in a program", () => {
+      // Step 1: Compile a library with a type
+      const libResult = compileLibrary(
+        [
+          {
+            source: `
+              TYPE
+                Point : STRUCT
+                  x : INT;
+                  y : INT;
+                END_STRUCT;
+              END_TYPE
+            `,
+            fileName: "point.st",
+          },
+        ],
+        { name: "geom-lib", version: "1.0.0", namespace: "geom" },
+      );
+      expect(libResult.success).toBe(true);
+
+      // Step 2: Compile a program that uses the library type
+      const mainSource = `
+        PROGRAM Main
+          VAR p : Point; END_VAR
+          p.x := 10;
+        END_PROGRAM
+      `;
+      const result = compile(mainSource, {
+        libraries: [libResult.manifest],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain("p.x = 10");
+    });
+
+    it("should include library headers in generated code", () => {
+      const libResult = compileLibrary(
+        [
+          {
+            source: `
+              FUNCTION LibHelper : INT
+                VAR_INPUT x : INT; END_VAR
+                LibHelper := x;
+              END_FUNCTION
+            `,
+            fileName: "helper.st",
+          },
+        ],
+        { name: "helper-lib", version: "1.0.0", namespace: "helper" },
+      );
+      expect(libResult.success).toBe(true);
+      // The manifest should have the library header
+      expect(libResult.manifest.headers).toContain("helper-lib.hpp");
+
+      // Step 2: Compile using the library
+      const mainSource = `
+        PROGRAM Main
+          VAR x : INT; END_VAR
+          x := LibHelper(x := 5);
+        END_PROGRAM
+      `;
+      const result = compile(mainSource, {
+        libraries: [libResult.manifest],
+      });
+
+      expect(result.success).toBe(true);
+      // The generated header should include the library header
+      expect(result.headerCode).toContain('#include "helper-lib.hpp"');
+    });
+
+    it("should compile without libraries (backward compatible)", () => {
+      const source = `
+        PROGRAM Main
+          VAR x : INT; END_VAR
+          x := 42;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain("x = 42");
     });
   });
 });

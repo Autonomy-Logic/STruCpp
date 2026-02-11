@@ -143,11 +143,22 @@ export class SemanticAnalyzer {
 
   /**
    * Analyze a compilation unit.
+   * @param ast The compilation unit to analyze
+   * @param existingSymbolTables Optional pre-populated symbol tables (e.g., with library symbols)
    */
-  analyze(ast: CompilationUnit): SemanticAnalysisResult {
+  analyze(
+    ast: CompilationUnit,
+    existingSymbolTables?: SymbolTables,
+  ): SemanticAnalysisResult {
     this.errors = [];
     this.warnings = [];
     this.locatedVars = [];
+
+    // Use provided symbol tables (with library symbols pre-registered) or create new ones
+    if (existingSymbolTables) {
+      this.symbolTables = existingSymbolTables;
+      this.typeChecker = new TypeChecker(this.symbolTables);
+    }
 
     // Pass 1: Build symbol tables
     this.buildSymbolTables(ast);
@@ -652,7 +663,10 @@ export class SemanticAnalyzer {
  * Analyze a compilation unit.
  * Convenience function that creates an analyzer and runs analysis.
  */
-export function analyze(ast: CompilationUnit): SemanticAnalysisResult {
+export function analyze(
+  ast: CompilationUnit,
+  existingSymbolTables?: SymbolTables,
+): SemanticAnalysisResult {
   const analyzer = new SemanticAnalyzer();
-  return analyzer.analyze(ast);
+  return analyzer.analyze(ast, existingSymbolTables);
 }

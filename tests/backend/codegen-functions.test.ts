@@ -168,4 +168,149 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toContain("Outer(Inner(");
     });
   });
+
+  describe("named argument reordering", () => {
+    it("should reorder named args to match declaration order", () => {
+      const result = compileAndCheck(`
+        FUNCTION Calc : INT
+          VAR_INPUT a : INT; b : INT; c : INT; END_VAR
+          Calc := a + b + c;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := Calc(c := 30, a := 10, b := 20);
+        END_PROGRAM
+      `);
+
+      // Named args should be reordered to (a, b, c) = (10, 20, 30)
+      expect(result.cppCode).toMatch(/Calc\(10, 20, 30\)/);
+    });
+
+    it("should handle positional args after named args correctly", () => {
+      const result = compileAndCheck(`
+        FUNCTION Calc : INT
+          VAR_INPUT a : INT; b : INT; c : INT; END_VAR
+          Calc := a + b + c;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := Calc(b := 20, 10, 30);
+        END_PROGRAM
+      `);
+
+      // b is claimed by named arg (20), positional 10 fills a, positional 30 fills c
+      expect(result.cppCode).toMatch(/Calc\(10, 20, 30\)/);
+    });
+
+    it("should fill unfilled parameters with zero default", () => {
+      const result = compileAndCheck(`
+        FUNCTION Calc : INT
+          VAR_INPUT a : INT; b : INT; c : INT; END_VAR
+          Calc := a + b + c;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := Calc(a := 10);
+        END_PROGRAM
+      `);
+
+      // a=10, b and c should get default 0
+      expect(result.cppCode).toMatch(/Calc\(10, 0, 0\)/);
+    });
+
+    it("should use declared default values for unfilled parameters", () => {
+      const result = compileAndCheck(`
+        FUNCTION Calc : INT
+          VAR_INPUT a : INT := 99; b : INT; c : INT := 77; END_VAR
+          Calc := a + b + c;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := Calc(b := 5);
+        END_PROGRAM
+      `);
+
+      // a defaults to 99, b=5, c defaults to 77
+      expect(result.cppCode).toMatch(/Calc\(99, 5, 77\)/);
+    });
+
+    it("should warn about named args referencing non-existent parameters", () => {
+      const result = compile(`
+        FUNCTION Calc : INT
+          VAR_INPUT x : INT; y : INT; END_VAR
+          Calc := x + y;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := Calc(xx := 5, yy := 10);
+        END_PROGRAM
+      `);
+
+      expect(result.success).toBe(true);
+      // Should have warnings for unrecognized param names
+      const typoWarnings = result.warnings.filter((w) =>
+        w.message.includes("does not match any parameter"),
+      );
+      expect(typoWarnings.length).toBe(2);
+      expect(typoWarnings[0]!.message).toContain("XX");
+      expect(typoWarnings[1]!.message).toContain("YY");
+    });
+
+    it("should fill all slots with defaults when named args have typos", () => {
+      const result = compile(`
+        FUNCTION Calc : INT
+          VAR_INPUT x : INT; y : INT; END_VAR
+          Calc := x + y;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := Calc(xx := 5, yy := 10);
+        END_PROGRAM
+      `);
+
+      expect(result.success).toBe(true);
+      // x and y are unfilled (typos don't match), so they get default 0
+      expect(result.cppCode).toMatch(/Calc\(0, 0\)/);
+    });
+
+    it("should handle mix of positional before named correctly", () => {
+      const result = compileAndCheck(`
+        FUNCTION Calc : INT
+          VAR_INPUT a : INT; b : INT; c : INT; END_VAR
+          Calc := a + b + c;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := Calc(10, c := 30);
+        END_PROGRAM
+      `);
+
+      // a=10 (positional), b=0 (unfilled default), c=30 (named)
+      expect(result.cppCode).toMatch(/Calc\(10, 0, 30\)/);
+    });
+
+    it("should handle REAL parameter defaults correctly", () => {
+      const result = compileAndCheck(`
+        FUNCTION Scale : REAL
+          VAR_INPUT value : REAL; factor : REAL; END_VAR
+          Scale := value * factor;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : REAL; END_VAR
+          r := Scale(value := 3.14);
+        END_PROGRAM
+      `);
+
+      // factor should default to 0.0 for REAL type
+      expect(result.cppCode).toMatch(/Scale\(3\.14, 0\.0\)/);
+    });
+  });
 });

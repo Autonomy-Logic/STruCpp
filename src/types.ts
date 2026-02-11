@@ -35,8 +35,11 @@ export interface CompileOptions {
     fileName: string;
   }>;
 
-  /** Library search paths (like -I in gcc) */
+  /** Library search paths (like -I in gcc) - reserved for future file-based loading */
   libraryPaths?: string[];
+
+  /** Pre-loaded library manifests to make available during compilation */
+  libraries?: import("./library/library-manifest.js").LibraryManifest[];
 }
 
 /**
