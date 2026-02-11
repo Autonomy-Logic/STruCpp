@@ -1739,7 +1739,9 @@ export class CodeGenerator {
     }
 
     // Assign positional args to unclaimed parameter slots (in declaration order)
-    const result: string[] = new Array(params.length);
+    const result: (string | undefined)[] = new Array<string | undefined>(
+      params.length,
+    );
     let positionalIdx = 0;
     for (let i = 0; i < params.length; i++) {
       const param = params[i]!;
@@ -1770,7 +1772,12 @@ export class CodeGenerator {
       }
     }
 
-    return result as string[];
+    return result.map(
+      (v, i) =>
+        v ??
+        params[i]!.defaultExpr ??
+        this.getDefaultValue(params[i]!.typeName),
+    );
   }
 
   // ===========================================================================
