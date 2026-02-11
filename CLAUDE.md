@@ -61,14 +61,12 @@ Generates two files: `.cpp` (implementation) and `.hpp` (header). All generated 
 ## Implementation Status
 
 - **Completed**: Phases 0-3.6 (C++ runtime, lexer, parser, AST, symbol tables, project structure, user-defined types, located variables, references, nested comments, variable modifiers, namespaces, pragmas, ST translation with all expressions/control flow/composite types/VLAs/dynamic memory, REPL binary generator)
-- **Partial**: Phase 4 (Functions) - declarations and definition codegen work; function *calls* are broken (AST builder drops them), no standard library functions, no overload resolution
+- **Completed**: Phase 4 (Functions) - full function call pipeline (AST builder, codegen), standard function registry with all IEC std functions, *_TO_* conversion mapping, multi-file compilation, library system with manifest/compiler/loader
 - **Partial**: Phase 5.1 (Function Blocks) - declarations and class skeleton codegen work; FB instantiation, FB calls, and standard FBs (TON/TOF/etc.) not implemented
 - **Pending**: Phase 5.2 (OOP extensions - methods, interfaces, inheritance, properties)
 - **Pending**: Phase 6 (OpenPLC runtime integration - located variable infrastructure already complete)
 - **Pending**: Phase 7 (optimizations and advanced debug support)
 - **Pending**: Phase 8 (IEC 61131-3 testing framework)
-
-**Key blocker for Phases 4-5**: `ast-builder.ts` has no `buildFunctionCallExpression()` method, so function/FB calls parsed from source are silently discarded during CST-to-AST conversion.
 
 ## TypeScript Conventions
 

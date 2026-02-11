@@ -38,6 +38,9 @@ import type {
   DrefExpression,
   NewExpression,
   DeleteStatement,
+  FunctionCallExpression,
+  FunctionCallStatement,
+  Argument,
   IfStatement,
   ElsifClause,
   ForStatement,
@@ -958,6 +961,11 @@ export class ASTBuilder {
     if (children.deleteStatement) {
       return this.buildDeleteStatement(getFirstNode(children.deleteStatement)!);
     }
+    if (children.functionCallStatement) {
+      return this.buildFunctionCallStatement(
+        getFirstNode(children.functionCallStatement)!,
+      );
+    }
 
     return undefined;
   }
@@ -1639,6 +1647,13 @@ export class ASTBuilder {
       return this.buildNewExpression(getFirstNode(children.newExpression)!);
     }
 
+    // Check for function call (before variable - both start with Identifier, parser disambiguates)
+    if (children.functionCall) {
+      return this.buildFunctionCallExpression(
+        getFirstNode(children.functionCall)!,
+      );
+    }
+
     // Check for variable
     if (children.variable) {
       return this.buildVariableExpression(getFirstNode(children.variable)!);
@@ -1972,6 +1987,87 @@ export class ASTBuilder {
   }
 
   /**
+   * Build a FunctionCallExpression from a functionCall CST node.
+   */
+  buildFunctionCallExpression(node: CstNode): FunctionCallExpression {
+    const children = node.children as CstChildren;
+    const nameToken = getFirstToken(children.Identifier);
+    const functionName = nameToken?.image ?? "";
+
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "FunctionCallExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      functionName,
+      arguments: args,
+    };
+  }
+
+  /**
+   * Build an Argument from an argument CST node.
+   */
+  buildArgument(node: CstNode): Argument {
+    const children = node.children as CstChildren;
+
+    let name: string | undefined;
+    let isOutput = false;
+
+    // Check for named argument: Identifier (Assign | OutputAssign)
+    const identToken = getFirstToken(children.Identifier);
+    if (identToken) {
+      // Named argument - check if it's input (:=) or output (=>)
+      if (children.Assign || children.OutputAssign) {
+        name = identToken.image;
+        isOutput = !!children.OutputAssign;
+      }
+    }
+
+    // Build the value expression
+    const exprNode = getFirstNode(children.expression);
+    const value = exprNode
+      ? (this.buildExpression(exprNode) ?? this.createDummyLiteral(node))
+      : this.createDummyLiteral(node);
+
+    return {
+      kind: "Argument",
+      sourceSpan: nodeToSourceSpan(node),
+      isOutput,
+      value,
+      ...(name !== undefined ? { name } : {}),
+    };
+  }
+
+  /**
+   * Build a FunctionCallStatement from a functionCallStatement CST node.
+   */
+  buildFunctionCallStatement(node: CstNode): FunctionCallStatement {
+    const children = node.children as CstChildren;
+    const callNode = getFirstNode(children.functionCall);
+    const call = callNode
+      ? this.buildFunctionCallExpression(callNode)
+      : {
+          kind: "FunctionCallExpression" as const,
+          sourceSpan: nodeToSourceSpan(node),
+          functionName: "",
+          arguments: [] as Argument[],
+        };
+
+    return {
+      kind: "FunctionCallStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      call,
+    };
+  }
+
+  /**
    * Create a dummy variable expression for error recovery.
    */
   private createDummyVariable(node: CstNode): VariableExpression {
@@ -2017,8 +2113,40 @@ export class ASTBuilder {
 /**
  * Build an AST from a CST.
  * Convenience function that creates a builder and builds the AST.
+ * @param cst - The Chevrotain CST root node
+ * @param fileName - Optional source file name to set on all sourceSpan.file fields
  */
-export function buildAST(cst: CstNode): CompilationUnit {
+export function buildAST(cst: CstNode, fileName?: string): CompilationUnit {
   const builder = new ASTBuilder();
-  return builder.buildCompilationUnit(cst);
+  const ast = builder.buildCompilationUnit(cst);
+  if (fileName) {
+    setFileOnSpans(ast, fileName);
+  }
+  return ast;
+}
+
+/**
+ * Recursively set the file field on all sourceSpan objects in an AST.
+ */
+function setFileOnSpans(node: unknown, fileName: string): void {
+  if (node === null || node === undefined || typeof node !== "object") return;
+
+  const obj = node as Record<string, unknown>;
+  if (
+    obj.sourceSpan &&
+    typeof obj.sourceSpan === "object" &&
+    "file" in (obj.sourceSpan as Record<string, unknown>)
+  ) {
+    (obj.sourceSpan as Record<string, unknown>).file = fileName;
+  }
+
+  for (const value of Object.values(obj)) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        setFileOnSpans(item, fileName);
+      }
+    } else if (typeof value === "object" && value !== null) {
+      setFileOnSpans(value, fileName);
+    }
+  }
 }

@@ -396,12 +396,19 @@ inline IECString<MaxLen> MID(const IECString<MaxLen>& s, size_t pos, size_t len)
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)> 
+inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
 CONCAT(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2) noexcept {
     constexpr size_t ResultLen = MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2;
     IECString<ResultLen> result(s1);
     result.append(s2);
     return result;
+}
+
+// Variadic CONCAT for 3+ arguments (IEC 61131-3 extensible function)
+template<size_t MaxLen1, size_t MaxLen2, typename... Args>
+inline auto
+CONCAT(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2, const Args&... rest) noexcept {
+    return CONCAT(CONCAT(s1, s2), rest...);
 }
 
 template<size_t MaxLen>

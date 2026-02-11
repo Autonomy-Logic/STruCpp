@@ -26,6 +26,7 @@ import type {
 } from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import type { LineMapEntry } from "../types.js";
+import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
 import type {
   ProjectModel,
   ConfigurationDecl,
@@ -186,11 +187,15 @@ export class CodeGenerator {
   /** Current function name (for redirecting function name := to result variable) */
   private currentFunctionName: string | undefined;
 
+  /** Standard function registry for name mapping and conversion resolution */
+  private stdRegistry: StdFunctionRegistry;
+
   constructor(
     private readonly _symbolTables: SymbolTables,
     options: Partial<CodeGenOptions> = {},
   ) {
     this.options = { ...defaultCodeGenOptions, ...options };
+    this.stdRegistry = new StdFunctionRegistry();
   }
 
   /** TypeCodeGenerator instance for type mapping */
@@ -537,6 +542,13 @@ export class CodeGenerator {
             } else {
               params.push(`${cppType}& ${name}`);
             }
+          }
+        }
+      } else if (block.blockType === "VAR_OUTPUT") {
+        for (const decl of block.declarations) {
+          const cppType = this.mapVarTypeToCpp(decl.type.name);
+          for (const name of decl.names) {
+            params.push(`${cppType}& ${name}`);
           }
         }
       }
@@ -1575,13 +1587,103 @@ export class CodeGenerator {
 
   /**
    * Generate C++ for a function call expression.
-   * Basic support - full function call codegen is Phase 4.
+   * Handles: standard functions, *_TO_* conversions, DELETE->DELETE_STR mapping,
+   * named argument reordering, and user-defined function calls.
    */
   private generateFunctionCallExpression(expr: FunctionCallExpression): string {
-    const args = expr.arguments.map((arg) => {
-      return this.generateExpression(arg.value);
-    });
+    const nameUpper = expr.functionName.toUpperCase();
+
+    // 1. Check for *_TO_* conversion pattern (e.g., INT_TO_REAL -> TO_REAL)
+    const conversion = this.stdRegistry.resolveConversion(nameUpper);
+    if (conversion) {
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
+      return `${conversion.cppName}(${args.join(", ")})`;
+    }
+
+    // 2. Check for standard function (may have different cppName)
+    const stdFunc = this.stdRegistry.lookup(nameUpper);
+    if (stdFunc) {
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
+      return `${stdFunc.cppName}(${args.join(", ")})`;
+    }
+
+    // 3. Check for named arguments that may need reordering
+    const hasNamedArgs = expr.arguments.some((arg) => arg.name !== undefined);
+    if (hasNamedArgs && this.ast) {
+      const reordered = this.reorderNamedArguments(expr);
+      if (reordered) {
+        return `${expr.functionName}(${reordered.join(", ")})`;
+      }
+    }
+
+    // 4. Default: emit as-is
+    const args = expr.arguments.map((arg) =>
+      this.generateExpression(arg.value),
+    );
     return `${expr.functionName}(${args.join(", ")})`;
+  }
+
+  /**
+   * Reorder named arguments to match function declaration parameter order.
+   * Returns null if function not found in AST.
+   */
+  private reorderNamedArguments(expr: FunctionCallExpression): string[] | null {
+    if (!this.ast) return null;
+
+    // Find the function declaration in the AST
+    const funcDecl = this.ast.functions.find(
+      (f) => f.name.toUpperCase() === expr.functionName.toUpperCase(),
+    );
+    if (!funcDecl) return null;
+
+    // Build parameter order from VAR_INPUT and VAR_IN_OUT blocks
+    const paramOrder: string[] = [];
+    for (const block of funcDecl.varBlocks) {
+      if (
+        block.blockType === "VAR_INPUT" ||
+        block.blockType === "VAR_IN_OUT" ||
+        block.blockType === "VAR_OUTPUT"
+      ) {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            paramOrder.push(name.toUpperCase());
+          }
+        }
+      }
+    }
+
+    // Build a map of named arg -> generated expression
+    const namedArgs = new Map<string, string>();
+    const positionalArgs: string[] = [];
+    for (const arg of expr.arguments) {
+      if (arg.name !== undefined) {
+        namedArgs.set(
+          arg.name.toUpperCase(),
+          this.generateExpression(arg.value),
+        );
+      } else {
+        positionalArgs.push(this.generateExpression(arg.value));
+      }
+    }
+
+    // Reorder: positional args fill in order, named args go to their position
+    const result: string[] = [];
+    let positionalIdx = 0;
+    for (const paramName of paramOrder) {
+      const named = namedArgs.get(paramName);
+      if (named !== undefined) {
+        result.push(named);
+      } else if (positionalIdx < positionalArgs.length) {
+        result.push(positionalArgs[positionalIdx]!);
+        positionalIdx++;
+      }
+    }
+
+    return result;
   }
 
   // ===========================================================================

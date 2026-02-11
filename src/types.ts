@@ -28,6 +28,15 @@ export interface CompileOptions {
 
   /** Header filename to use in #include directive (default: "generated.hpp") */
   headerFileName?: string;
+
+  /** Additional ST source files to compile together */
+  additionalSources?: Array<{
+    source: string;
+    fileName: string;
+  }>;
+
+  /** Library search paths (like -I in gcc) */
+  libraryPaths?: string[];
 }
 
 /**

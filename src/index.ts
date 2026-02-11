@@ -13,6 +13,7 @@ import { SymbolTables } from "./semantic/symbol-table.js";
 import { SemanticAnalyzer } from "./semantic/analyzer.js";
 import { CodeGenerator } from "./backend/codegen.js";
 import type { CompilationUnit } from "./frontend/ast.js";
+import { mergeCompilationUnits } from "./merge.js";
 
 /**
  * Default compilation options
@@ -81,7 +82,7 @@ export function compile(
     };
   }
 
-  // Phase 2: Build AST from CST
+  // Phase 2: Build AST from CST (supports multi-file via additionalSources)
   let ast: CompilationUnit;
   if (!parseResult.cst) {
     errors.push({
@@ -101,7 +102,48 @@ export function compile(
     };
   }
   try {
-    ast = buildAST(parseResult.cst);
+    const primaryAst = buildAST(parseResult.cst, "main.st");
+    const units: CompilationUnit[] = [primaryAst];
+
+    // Parse additional source files
+    if (mergedOptions.additionalSources) {
+      for (const addlSource of mergedOptions.additionalSources) {
+        const addlParseResult = parseSource(addlSource.source);
+        if (addlParseResult.errors.length > 0) {
+          for (const err of addlParseResult.errors) {
+            const errObj = err as {
+              message?: string;
+              token?: { startLine?: number; startColumn?: number };
+            };
+            errors.push({
+              message: errObj.message ?? "Parse error",
+              line: errObj.token?.startLine ?? 0,
+              column: errObj.token?.startColumn ?? 0,
+              severity: "error",
+              file: addlSource.fileName,
+            });
+          }
+          continue;
+        }
+        if (addlParseResult.cst) {
+          units.push(buildAST(addlParseResult.cst, addlSource.fileName));
+        }
+      }
+    }
+
+    if (errors.length > 0) {
+      return {
+        success: false,
+        cppCode: "",
+        headerCode: "",
+        lineMap: new Map(),
+        headerLineMap: new Map(),
+        errors,
+        warnings,
+      };
+    }
+
+    ast = mergeCompilationUnits(units);
   } catch (e) {
     errors.push({
       message: `AST building failed: ${e instanceof Error ? e.message : String(e)}`,
