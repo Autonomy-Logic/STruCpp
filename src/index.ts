@@ -75,6 +75,7 @@ export function compile(
       cppCode: "",
       headerCode: "",
       lineMap: new Map(),
+      headerLineMap: new Map(),
       errors,
       warnings,
     };
@@ -94,6 +95,7 @@ export function compile(
       cppCode: "",
       headerCode: "",
       lineMap: new Map(),
+      headerLineMap: new Map(),
       errors,
       warnings,
     };
@@ -112,6 +114,7 @@ export function compile(
       cppCode: "",
       headerCode: "",
       lineMap: new Map(),
+      headerLineMap: new Map(),
       errors,
       warnings,
     };
@@ -142,6 +145,7 @@ export function compile(
       cppCode: "",
       headerCode: "",
       lineMap: new Map(),
+      headerLineMap: new Map(),
       errors,
       warnings,
     };
@@ -173,6 +177,7 @@ export function compile(
       cppCode: "",
       headerCode: "",
       lineMap: new Map(),
+      headerLineMap: new Map(),
       errors,
       warnings,
     };
@@ -194,8 +199,11 @@ export function compile(
     cppCode: codeResult.cppCode,
     headerCode: codeResult.headerCode,
     lineMap: codeResult.lineMap,
+    headerLineMap: codeResult.headerLineMap,
     errors,
     warnings,
+    ast,
+    projectModel: projectModelResult.model,
   };
 }
 

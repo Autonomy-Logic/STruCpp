@@ -12,13 +12,19 @@
  *   --line-directives      Include #line directives
  *   --source-comments      Include ST source as comments
  *   -O, --optimize <level> Optimization level (0, 1, 2)
+ *   --build                Compile to executable binary with interactive REPL
+ *   --gpp <path>           Custom g++ path (default: g++)
+ *   --cc <path>            Custom C compiler path (default: cc)
+ *   --cxx-flags <flags>    Extra C++ compiler flags
  *   -v, --version          Show version
  *   -h, --help             Show help
  */
 
-import { readFileSync, writeFileSync } from "fs";
-import { resolve, basename } from "path";
+import { readFileSync, writeFileSync, existsSync } from "fs";
+import { resolve, basename, dirname } from "path";
+import { execFileSync } from "child_process";
 import { compile, getVersion } from "./index.js";
+import { generateReplMain } from "./backend/repl-main-gen.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
@@ -31,6 +37,10 @@ interface CLIOptions {
   optimizationLevel: 0 | 1 | 2;
   showHelp: boolean;
   showVersion: boolean;
+  build: boolean;
+  gpp: string;
+  cc: string;
+  cxxFlags: string;
 }
 
 function parseArgs(args: string[]): CLIOptions {
@@ -42,6 +52,10 @@ function parseArgs(args: string[]): CLIOptions {
     optimizationLevel: 0,
     showHelp: false,
     showVersion: false,
+    build: false,
+    gpp: "g++",
+    cc: process.platform === "win32" ? "gcc" : "cc",
+    cxxFlags: "",
   };
 
   let i = 0;
@@ -72,6 +86,26 @@ function parseArgs(args: string[]): CLIOptions {
       if (level >= 0 && level <= 2) {
         options.optimizationLevel = level as 0 | 1 | 2;
       }
+    } else if (arg === "--build") {
+      options.build = true;
+    } else if (arg === "--gpp") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.gpp = nextArg;
+      }
+    } else if (arg === "--cc") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.cc = nextArg;
+      }
+    } else if (arg === "--cxx-flags") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.cxxFlags = nextArg;
+      }
     } else if (arg !== undefined && !arg.startsWith("-")) {
       options.input = arg;
     }
@@ -96,16 +130,103 @@ Options:
   --line-directives      Include #line directives in output
   --source-comments      Include ST source as comments
   -O, --optimize <level> Optimization level (0, 1, 2)
+  --build                Compile to executable with interactive REPL
+  --gpp <path>           Custom g++ path (default: g++)
+  --cc <path>            Custom C compiler path (default: cc)
+  --cxx-flags <flags>    Extra C++ compiler flags
   -v, --version          Show version
   -h, --help             Show this help
 
 Examples:
   strucpp program.st -o program.cpp
   strucpp program.st -o program.cpp --debug --line-directives
+  strucpp program.st -o program.cpp --build
   strucpp program.st -O 2
 
 For more information, visit: https://github.com/Autonomy-Logic/STruCpp
 `);
+}
+
+/**
+ * Extract -I include paths from a compiler flags string.
+ * Handles: -I/path, -I /path, -I"/path with spaces"
+ */
+function extractIncludePaths(flags: string): string[] {
+  const paths: string[] = [];
+  const parts = flags.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+  for (let i = 0; i < parts.length; i++) {
+    const raw = parts[i] ?? "";
+    const part = raw.replace(/^"|"$/g, "");
+    if (part === "-I" && i + 1 < parts.length) {
+      i++;
+      paths.push((parts[i] ?? "").replace(/^"|"$/g, ""));
+    } else if (part.startsWith("-I")) {
+      paths.push(part.slice(2));
+    }
+  }
+  return paths;
+}
+
+/**
+ * Split a --cxx-flags string into individual arguments,
+ * respecting double-quoted segments (e.g. '-I"/path with spaces"').
+ */
+function splitCxxFlags(flags: string): string[] {
+  if (!flags || !flags.trim()) return [];
+  const parts = flags.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
+  return parts.map((p) => p.replace(/^"|"$/g, ""));
+}
+
+/**
+ * Locate the runtime include directory by auto-discovery or from --cxx-flags.
+ * Returns the resolved path or null if not found.
+ */
+function findRuntimeIncludeDir(cxxFlags: string): string | null {
+  const candidates: string[] = [];
+
+  // From import.meta.url (ESM dev mode)
+  try {
+    if (typeof import.meta?.url === "string") {
+      const scriptDir = dirname(new URL(import.meta.url).pathname);
+      candidates.push(resolve(scriptDir, "runtime", "include"));
+      candidates.push(resolve(scriptDir, "..", "src", "runtime", "include"));
+    }
+  } catch {
+    // unavailable in CJS bundle / pkg binary
+  }
+
+  // From __dirname (CJS bundle via esbuild)
+  if (typeof __dirname === "string") {
+    candidates.push(resolve(__dirname, "runtime", "include"));
+    candidates.push(resolve(__dirname, "..", "src", "runtime", "include"));
+  }
+
+  // Relative to binary (pkg binary may be in dist/bin/, dist/, or project root)
+  const execDir = dirname(process.execPath);
+  for (const base of [execDir, resolve(execDir, ".."), resolve(execDir, "..", "..")]) {
+    candidates.push(resolve(base, "runtime", "include"));
+    candidates.push(resolve(base, "src", "runtime", "include"));
+  }
+
+  // CWD
+  candidates.push(resolve(process.cwd(), "src", "runtime", "include"));
+
+  // Check auto-discovery candidates
+  for (const candidate of candidates) {
+    if (existsSync(resolve(candidate, "iec_types.hpp"))) {
+      return candidate;
+    }
+  }
+
+  // Fallback: check user-provided -I paths from --cxx-flags
+  for (const ipath of extractIncludePaths(cxxFlags)) {
+    const resolved = resolve(ipath);
+    if (existsSync(resolve(resolved, "iec_types.hpp"))) {
+      return resolved;
+    }
+  }
+
+  return null;
 }
 
 function main(): void {
@@ -193,6 +314,100 @@ function main(): void {
   }
 
   console.log("Compilation successful!");
+
+  // --build: generate main.cpp and invoke g++
+  if (options.build) {
+    if (!result.ast || !result.projectModel) {
+      console.error("Error: AST/ProjectModel not available for --build");
+      process.exit(1);
+    }
+
+    const outputDir = dirname(outputPath);
+    const mainCppPath = resolve(outputDir, "main.cpp");
+
+    // Resolve runtime include dir (auto-discovery + --cxx-flags fallback)
+    const runtimeIncludeDir = findRuntimeIncludeDir(options.cxxFlags);
+    if (!runtimeIncludeDir) {
+      console.error(
+        "Error: Could not locate runtime include directory.\n" +
+          '  Use --cxx-flags "-I/path/to/runtime/include" to specify it.',
+      );
+      process.exit(1);
+    }
+
+    // Derive repl dir as sibling of include dir (runtime/include → runtime/repl)
+    const replDir = resolve(dirname(runtimeIncludeDir), "repl");
+    if (!existsSync(resolve(replDir, "isocline.h"))) {
+      console.error(
+        `Error: REPL runtime not found at ${replDir}\n` +
+          "  Expected runtime/repl/ as sibling of runtime/include/.",
+      );
+      process.exit(1);
+    }
+
+    console.log("Generating REPL harness...");
+    const mainCppCode = generateReplMain(result.ast, result.projectModel, {
+      headerFileName,
+      stSource: source,
+      cppCode: result.cppCode,
+      headerCode: result.headerCode,
+      lineMap: result.lineMap,
+      headerLineMap: result.headerLineMap,
+    });
+    writeFileSync(mainCppPath, mainCppCode, "utf-8");
+    console.log(`REPL main written to ${mainCppPath}`);
+
+    // Derive binary output path (strip .cpp extension)
+    let binaryPath = outputPath.replace(/\.cpp$/i, "");
+    if (process.platform === "win32") binaryPath += ".exe";
+    const isoclineObjPath = resolve(outputDir, "isocline.o");
+
+    // Step 1: Compile isocline.c as C (uses execFileSync to avoid shell injection)
+    console.log("Compiling isocline...");
+    try {
+      execFileSync(options.cc, [
+        "-c",
+        "-std=c11",
+        `-I${replDir}`,
+        resolve(replDir, "isocline.c"),
+        "-o", isoclineObjPath,
+      ], { stdio: "inherit" });
+    } catch (err: unknown) {
+      const exitCode = (err as { status?: number }).status;
+      console.error(
+        `Error: C compilation of isocline failed (exit code ${exitCode ?? "unknown"}).`,
+      );
+      console.error("Ensure a C compiler is available or specify one with --cc.");
+      process.exit(1);
+    }
+
+    // Step 2: Compile C++ and link with isocline.o (uses execFileSync to avoid shell injection)
+    const gppArgs = [
+      "-std=c++17",
+      `-I${runtimeIncludeDir}`,
+      `-I${replDir}`,
+      `-I${outputDir}`,
+      ...splitCxxFlags(options.cxxFlags),
+      mainCppPath,
+      outputPath,
+      isoclineObjPath,
+      "-o", binaryPath,
+    ];
+
+    console.log(`Building binary: ${basename(binaryPath)}`);
+    try {
+      execFileSync(options.gpp, gppArgs, { stdio: "inherit" });
+      console.log(`Binary built: ${binaryPath}`);
+      console.log(`Run it with: ${binaryPath}`);
+    } catch (err: unknown) {
+      const exitCode = (err as { status?: number }).status;
+      console.error(
+        `Error: g++ compilation failed (exit code ${exitCode ?? "unknown"}).`,
+      );
+      console.error("Check the compiler output above for details.");
+      process.exit(1);
+    }
+  }
 }
 
 main();
