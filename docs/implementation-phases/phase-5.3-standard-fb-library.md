@@ -314,18 +314,14 @@ A new built-in function `TIME()` must be added to the C++ runtime and the standa
 ```cpp
 // Returns the absolute runtime time (elapsed since runtime start)
 // CODESYS-compatible: TIME() returns monotonic elapsed time
-// In OpenPLC integration, this reads from the runtime's time source
-// For standalone/REPL mode, uses std::chrono
+// Uses std::chrono — the compiler provides time access directly,
+// unlike MatIEC which injected a __CURRENT_TIME global
 inline IEC_TIME TIME() {
-    #ifdef OPENPLC_RUNTIME
-    return __CURRENT_TIME;  // Global provided by OpenPLC runtime
-    #else
     static auto start = std::chrono::steady_clock::now();
     auto now = std::chrono::steady_clock::now();
     return IEC_TIME::from_ns(
         std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count()
     );
-    #endif
 }
 ```
 
@@ -373,7 +369,7 @@ inline IEC_TIME TIME() {
 - **Phase 4.5**: Library system provides the compilation/loading infrastructure
 - **Phase 5.1**: FB instance and invocation mechanics must work first
 - **Phase 5.2**: Not required -- standard FBs don't use OOP features
-- **Phase 6**: OpenPLC integration provides the actual `__CURRENT_TIME` value for timers
+- **Phase 6**: OpenPLC runtime integration (TIME() is compiler-provided via `std::chrono`, not runtime-dependent)
 
 ### Why Not C++ Built-in?
 
