@@ -33,13 +33,17 @@ export class STParser extends CstParser {
    */
   public compilationUnit = this.RULE("compilationUnit", () => {
     this.MANY(() => {
-      this.OR([
-        { ALT: () => this.SUBRULE(this.programDeclaration) },
-        { ALT: () => this.SUBRULE(this.functionDeclaration) },
-        { ALT: () => this.SUBRULE(this.functionBlockDeclaration) },
-        { ALT: () => this.SUBRULE(this.typeDeclaration) },
-        { ALT: () => this.SUBRULE(this.configurationDeclaration) },
-      ]);
+      this.OR({
+        DEF: [
+          { ALT: () => this.SUBRULE(this.programDeclaration) },
+          { ALT: () => this.SUBRULE(this.functionDeclaration) },
+          { ALT: () => this.SUBRULE(this.functionBlockDeclaration) },
+          { ALT: () => this.SUBRULE(this.interfaceDeclaration) },
+          { ALT: () => this.SUBRULE(this.typeDeclaration) },
+          { ALT: () => this.SUBRULE(this.configurationDeclaration) },
+        ],
+        IGNORE_AMBIGUITIES: true,
+      });
     });
   });
 
@@ -80,22 +84,226 @@ export class STParser extends CstParser {
   });
 
   /**
-   * FUNCTION_BLOCK declaration
+   * FUNCTION_BLOCK declaration with OOP extensions
+   * Supports: ABSTRACT, FINAL, EXTENDS, IMPLEMENTS, methods, properties
    */
   public functionBlockDeclaration = this.RULE(
     "functionBlockDeclaration",
     () => {
       this.CONSUME(tokens.FUNCTION_BLOCK);
-      this.CONSUME(tokens.Identifier);
-      this.MANY(() => {
-        this.SUBRULE(this.varBlock);
-      });
+      // Optional ABSTRACT or FINAL modifier (before or after FB name per IEC spec)
       this.OPTION(() => {
+        this.OR({
+          DEF: [
+            { ALT: () => this.CONSUME(tokens.ABSTRACT) },
+            { ALT: () => this.CONSUME(tokens.FINAL) },
+          ],
+          IGNORE_AMBIGUITIES: true,
+        });
+      });
+      this.CONSUME(tokens.Identifier);
+      // Optional EXTENDS clause
+      this.OPTION2(() => {
+        this.CONSUME(tokens.EXTENDS);
+        this.CONSUME2(tokens.Identifier);
+      });
+      // Optional IMPLEMENTS clause
+      this.OPTION3(() => {
+        this.CONSUME(tokens.IMPLEMENTS);
+        this.AT_LEAST_ONE_SEP({
+          SEP: tokens.Comma,
+          DEF: () => this.CONSUME3(tokens.Identifier),
+        });
+      });
+      // VAR blocks, methods, properties interleaved (before body)
+      this.MANY(() => {
+        this.OR2({
+          DEF: [
+            { ALT: () => this.SUBRULE(this.varBlock) },
+            { ALT: () => this.SUBRULE(this.methodDeclaration) },
+            { ALT: () => this.SUBRULE(this.propertyDeclaration) },
+          ],
+          IGNORE_AMBIGUITIES: true,
+        });
+      });
+      // Optional body statements (the FB's operator() body)
+      this.OPTION4(() => {
         this.SUBRULE(this.statementList);
       });
       this.CONSUME(tokens.END_FUNCTION_BLOCK);
     },
   );
+
+  // ==========================================================================
+  // OOP Extensions (IEC 61131-3 Edition 3)
+  // ==========================================================================
+
+  /**
+   * INTERFACE declaration
+   */
+  public interfaceDeclaration = this.RULE("interfaceDeclaration", () => {
+    this.CONSUME(tokens.INTERFACE);
+    this.CONSUME(tokens.Identifier);
+    // Optional EXTENDS clause (interface inheritance)
+    this.OPTION(() => {
+      this.CONSUME(tokens.EXTENDS);
+      this.AT_LEAST_ONE_SEP({
+        SEP: tokens.Comma,
+        DEF: () => this.CONSUME2(tokens.Identifier),
+      });
+    });
+    // Interface methods (abstract, no body)
+    this.MANY(() => {
+      this.SUBRULE(this.interfaceMethodDeclaration);
+    });
+    this.CONSUME(tokens.END_INTERFACE);
+  });
+
+  /**
+   * Interface method declaration (no body, implicitly abstract)
+   */
+  public interfaceMethodDeclaration = this.RULE(
+    "interfaceMethodDeclaration",
+    () => {
+      this.CONSUME(tokens.METHOD);
+      this.CONSUME(tokens.Identifier);
+      // Optional return type
+      this.OPTION(() => {
+        this.CONSUME(tokens.Colon);
+        this.SUBRULE(this.dataType);
+      });
+      // Optional VAR_INPUT blocks
+      this.MANY(() => {
+        this.SUBRULE(this.varBlock);
+      });
+      this.CONSUME(tokens.END_METHOD);
+    },
+  );
+
+  /**
+   * METHOD declaration within a Function Block
+   */
+  public methodDeclaration = this.RULE("methodDeclaration", () => {
+    this.CONSUME(tokens.METHOD);
+    // Optional visibility modifier
+    this.OPTION(() => {
+      this.OR({
+        DEF: [
+          { ALT: () => this.CONSUME(tokens.PUBLIC) },
+          { ALT: () => this.CONSUME(tokens.PRIVATE) },
+          { ALT: () => this.CONSUME(tokens.PROTECTED) },
+        ],
+        IGNORE_AMBIGUITIES: true,
+      });
+    });
+    // Optional ABSTRACT/FINAL/OVERRIDE
+    this.OPTION2(() => {
+      this.OR2({
+        DEF: [
+          { ALT: () => this.CONSUME(tokens.ABSTRACT) },
+          { ALT: () => this.CONSUME(tokens.FINAL) },
+          { ALT: () => this.CONSUME(tokens.OVERRIDE) },
+        ],
+        IGNORE_AMBIGUITIES: true,
+      });
+    });
+    this.CONSUME(tokens.Identifier);
+    // Optional return type
+    this.OPTION3(() => {
+      this.CONSUME(tokens.Colon);
+      this.SUBRULE(this.dataType);
+    });
+    // VAR blocks inside method
+    this.MANY(() => {
+      this.SUBRULE(this.methodVarBlock);
+    });
+    // Method body (unless abstract)
+    this.OPTION4(() => {
+      this.SUBRULE(this.statementList);
+    });
+    this.CONSUME(tokens.END_METHOD);
+  });
+
+  /**
+   * Variable block inside a method (supports VAR_INST in addition to standard blocks)
+   */
+  public methodVarBlock = this.RULE("methodVarBlock", () => {
+    this.OR({
+      DEF: [
+        { ALT: () => this.CONSUME(tokens.VAR) },
+        { ALT: () => this.CONSUME(tokens.VAR_INPUT) },
+        { ALT: () => this.CONSUME(tokens.VAR_OUTPUT) },
+        { ALT: () => this.CONSUME(tokens.VAR_IN_OUT) },
+        { ALT: () => this.CONSUME(tokens.VAR_TEMP) },
+        { ALT: () => this.CONSUME(tokens.VAR_INST) },
+      ],
+      IGNORE_AMBIGUITIES: true,
+    });
+    this.OPTION(() => {
+      this.OR2([
+        { ALT: () => this.CONSUME(tokens.CONSTANT) },
+        { ALT: () => this.CONSUME(tokens.RETAIN) },
+      ]);
+    });
+    this.MANY(() => {
+      this.SUBRULE(this.varDeclaration);
+    });
+    this.CONSUME(tokens.END_VAR);
+  });
+
+  /**
+   * PROPERTY declaration within a Function Block
+   */
+  public propertyDeclaration = this.RULE("propertyDeclaration", () => {
+    this.CONSUME(tokens.PROPERTY);
+    // Optional visibility modifier
+    this.OPTION(() => {
+      this.OR({
+        DEF: [
+          { ALT: () => this.CONSUME(tokens.PUBLIC) },
+          { ALT: () => this.CONSUME(tokens.PRIVATE) },
+          { ALT: () => this.CONSUME(tokens.PROTECTED) },
+        ],
+        IGNORE_AMBIGUITIES: true,
+      });
+    });
+    this.CONSUME(tokens.Identifier);
+    this.CONSUME(tokens.Colon);
+    this.SUBRULE(this.dataType);
+    // GET and/or SET blocks
+    this.MANY(() => {
+      this.OR2({
+        DEF: [
+          { ALT: () => this.SUBRULE(this.propertyGetter) },
+          { ALT: () => this.SUBRULE(this.propertySetter) },
+        ],
+        IGNORE_AMBIGUITIES: true,
+      });
+    });
+    this.CONSUME(tokens.END_PROPERTY);
+  });
+
+  /**
+   * Property GET accessor
+   */
+  public propertyGetter = this.RULE("propertyGetter", () => {
+    this.CONSUME(tokens.GET);
+    this.OPTION(() => {
+      this.SUBRULE(this.statementList);
+    });
+    this.CONSUME(tokens.END_GET);
+  });
+
+  /**
+   * Property SET accessor
+   */
+  public propertySetter = this.RULE("propertySetter", () => {
+    this.CONSUME(tokens.SET);
+    this.OPTION(() => {
+      this.SUBRULE(this.statementList);
+    });
+    this.CONSUME(tokens.END_SET);
+  });
 
   // ==========================================================================
   // Variable declarations
@@ -439,23 +647,119 @@ export class STParser extends CstParser {
    * Single statement
    */
   public statement = this.RULE("statement", () => {
+    this.OR({
+      DEF: [
+        {
+          ALT: () => this.SUBRULE(this.refAssignStatement),
+          GATE: () => this.isRefAssignAhead(),
+        },
+        {
+          ALT: () => this.SUBRULE(this.thisStatement),
+          GATE: () => this.LA(1).tokenType === tokens.THIS,
+        },
+        {
+          ALT: () => this.SUBRULE(this.superCallStatement),
+          GATE: () => this.LA(1).tokenType === tokens.SUPER,
+        },
+        { ALT: () => this.SUBRULE(this.assignmentStatement) },
+        { ALT: () => this.SUBRULE(this.ifStatement) },
+        { ALT: () => this.SUBRULE(this.caseStatement) },
+        { ALT: () => this.SUBRULE(this.forStatement) },
+        { ALT: () => this.SUBRULE(this.whileStatement) },
+        { ALT: () => this.SUBRULE(this.repeatStatement) },
+        { ALT: () => this.SUBRULE(this.exitStatement) },
+        { ALT: () => this.SUBRULE(this.returnStatement) },
+        { ALT: () => this.SUBRULE(this.deleteStatement) },
+        { ALT: () => this.SUBRULE(this.functionCallStatement) },
+        {
+          ALT: () => this.SUBRULE(this.methodCallStatement),
+          GATE: () => this.isMethodCallAhead(),
+        },
+        { ALT: () => this.SUBRULE(this.externalCodePragma) },
+      ],
+      IGNORE_AMBIGUITIES: true,
+    });
+  });
+
+  /**
+   * THIS.member := expr; or THIS.method(args); statement
+   */
+  public thisStatement = this.RULE("thisStatement", () => {
+    this.CONSUME(tokens.THIS);
+    this.CONSUME(tokens.Dot);
+    this.CONSUME(tokens.Identifier);
+    // Determine if this is an assignment or method call
     this.OR([
       {
-        ALT: () => this.SUBRULE(this.refAssignStatement),
-        GATE: () => this.isRefAssignAhead(),
+        // Assignment: THIS.member := expression;
+        ALT: () => {
+          this.CONSUME(tokens.Assign);
+          this.SUBRULE(this.expression);
+          this.CONSUME(tokens.Semicolon);
+        },
       },
-      { ALT: () => this.SUBRULE(this.assignmentStatement) },
-      { ALT: () => this.SUBRULE(this.ifStatement) },
-      { ALT: () => this.SUBRULE(this.caseStatement) },
-      { ALT: () => this.SUBRULE(this.forStatement) },
-      { ALT: () => this.SUBRULE(this.whileStatement) },
-      { ALT: () => this.SUBRULE(this.repeatStatement) },
-      { ALT: () => this.SUBRULE(this.exitStatement) },
-      { ALT: () => this.SUBRULE(this.returnStatement) },
-      { ALT: () => this.SUBRULE(this.deleteStatement) },
-      { ALT: () => this.SUBRULE(this.functionCallStatement) },
-      { ALT: () => this.SUBRULE(this.externalCodePragma) },
+      {
+        // Method call: THIS.method(args);
+        ALT: () => {
+          this.CONSUME(tokens.LParen);
+          this.OPTION(() => {
+            this.SUBRULE(this.argumentList);
+          });
+          this.CONSUME(tokens.RParen);
+          this.CONSUME2(tokens.Semicolon);
+        },
+      },
+      {
+        // Simple semicolon: THIS.method; (no-arg call)
+        ALT: () => {
+          this.CONSUME3(tokens.Semicolon);
+        },
+      },
     ]);
+  });
+
+  /**
+   * Lookahead helper to detect if we're parsing a method call: Ident.Ident(
+   */
+  private isMethodCallAhead(): boolean {
+    return (
+      this.LA(1).tokenType === tokens.Identifier &&
+      this.LA(2).tokenType === tokens.Dot &&
+      this.LA(3).tokenType === tokens.Identifier &&
+      this.LA(4)?.tokenType === tokens.LParen
+    );
+  }
+
+  /**
+   * instance.method(args); statement
+   */
+  public methodCallStatement = this.RULE("methodCallStatement", () => {
+    this.CONSUME(tokens.Identifier); // instance name
+    this.CONSUME(tokens.Dot);
+    this.CONSUME2(tokens.Identifier); // method name
+    this.CONSUME(tokens.LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.argumentList);
+    });
+    this.CONSUME(tokens.RParen);
+    this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
+   * SUPER.method(args); statement
+   */
+  public superCallStatement = this.RULE("superCallStatement", () => {
+    this.CONSUME(tokens.SUPER);
+    this.CONSUME(tokens.Dot);
+    this.CONSUME(tokens.Identifier);
+    this.OPTION(() => {
+      this.CONSUME(tokens.LParen);
+      this.OPTION2(() => {
+        this.SUBRULE(this.argumentList);
+      });
+      this.CONSUME(tokens.RParen);
+    });
+    this.CONSUME(tokens.Semicolon);
   });
 
   /**
@@ -782,21 +1086,78 @@ export class STParser extends CstParser {
    * Primary expression
    */
   public primaryExpression = this.RULE("primaryExpression", () => {
-    this.OR([
-      { ALT: () => this.SUBRULE(this.literal) },
-      { ALT: () => this.SUBRULE(this.refExpression) },
-      { ALT: () => this.SUBRULE(this.drefExpression) },
-      { ALT: () => this.SUBRULE(this.newExpression) },
-      { ALT: () => this.SUBRULE(this.functionCall) },
-      { ALT: () => this.SUBRULE(this.variable) },
-      {
-        ALT: () => {
-          this.CONSUME(tokens.LParen);
-          this.SUBRULE(this.expression);
-          this.CONSUME(tokens.RParen);
+    this.OR({
+      DEF: [
+        { ALT: () => this.SUBRULE(this.literal) },
+        { ALT: () => this.SUBRULE(this.refExpression) },
+        { ALT: () => this.SUBRULE(this.drefExpression) },
+        { ALT: () => this.SUBRULE(this.newExpression) },
+        { ALT: () => this.SUBRULE(this.thisAccess) },
+        { ALT: () => this.SUBRULE(this.superAccess) },
+        {
+          ALT: () => this.SUBRULE(this.methodCall),
+          GATE: () => this.isMethodCallAhead(),
         },
-      },
-    ]);
+        { ALT: () => this.SUBRULE(this.functionCall) },
+        { ALT: () => this.SUBRULE(this.variable) },
+        {
+          ALT: () => {
+            this.CONSUME(tokens.LParen);
+            this.SUBRULE(this.expression);
+            this.CONSUME(tokens.RParen);
+          },
+        },
+      ],
+      IGNORE_AMBIGUITIES: true,
+    });
+  });
+
+  /**
+   * instance.method(args) expression
+   */
+  public methodCall = this.RULE("methodCall", () => {
+    this.CONSUME(tokens.Identifier); // instance name
+    this.CONSUME(tokens.Dot);
+    this.CONSUME2(tokens.Identifier); // method name
+    this.CONSUME(tokens.LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.argumentList);
+    });
+    this.CONSUME(tokens.RParen);
+  });
+
+  /**
+   * THIS.member or THIS.method(args) access
+   */
+  public thisAccess = this.RULE("thisAccess", () => {
+    this.CONSUME(tokens.THIS);
+    this.CONSUME(tokens.Dot);
+    this.CONSUME(tokens.Identifier);
+    // Optional function call: THIS.Method(args)
+    this.OPTION(() => {
+      this.CONSUME(tokens.LParen);
+      this.OPTION2(() => {
+        this.SUBRULE(this.argumentList);
+      });
+      this.CONSUME(tokens.RParen);
+    });
+  });
+
+  /**
+   * SUPER.method(args) access
+   */
+  public superAccess = this.RULE("superAccess", () => {
+    this.CONSUME(tokens.SUPER);
+    this.CONSUME(tokens.Dot);
+    this.CONSUME(tokens.Identifier);
+    // Optional function call: SUPER.Method(args)
+    this.OPTION(() => {
+      this.CONSUME(tokens.LParen);
+      this.OPTION2(() => {
+        this.SUBRULE(this.argumentList);
+      });
+      this.CONSUME(tokens.RParen);
+    });
   });
 
   /**

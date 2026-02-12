@@ -11,6 +11,10 @@ import type {
   ProgramDeclaration,
   FunctionDeclaration,
   FunctionBlockDeclaration,
+  InterfaceDeclaration,
+  MethodDeclaration,
+  PropertyDeclaration,
+  Visibility,
   TypeDeclaration,
   TypeDefinition,
   StructDefinition,
@@ -175,6 +179,7 @@ export class ASTBuilder {
     const programs: ProgramDeclaration[] = [];
     const functions: FunctionDeclaration[] = [];
     const functionBlocks: FunctionBlockDeclaration[] = [];
+    const interfaces: InterfaceDeclaration[] = [];
     const types: TypeDeclaration[] = [];
     const configurations: ConfigurationDeclaration[] = [];
 
@@ -193,6 +198,11 @@ export class ASTBuilder {
       functionBlocks.push(this.buildFunctionBlockDeclaration(node));
     }
 
+    // Process interface declarations
+    for (const node of getAllNodes(children.interfaceDeclaration)) {
+      interfaces.push(this.buildInterfaceDeclaration(node));
+    }
+
     // Process type declarations (TYPE...END_TYPE blocks can contain multiple types)
     for (const node of getAllNodes(children.typeDeclaration)) {
       types.push(...this.buildTypeDeclarationBlock(node));
@@ -209,6 +219,7 @@ export class ASTBuilder {
       programs,
       functions,
       functionBlocks,
+      interfaces,
       types,
       configurations,
     };
@@ -302,12 +313,46 @@ export class ASTBuilder {
    */
   buildFunctionBlockDeclaration(node: CstNode): FunctionBlockDeclaration {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+
+    // FB name is the first Identifier (after optional ABSTRACT/FINAL)
+    const allIdentifiers = getAllTokens(children.Identifier);
+    const name = allIdentifiers[0]?.image ?? "";
+
+    // Check for ABSTRACT/FINAL modifiers
+    const isAbstract = !!children.ABSTRACT;
+    const isFinal = !!children.FINAL;
+
+    // Check for EXTENDS clause (second Identifier if EXTENDS token present)
+    let extendsName: string | undefined;
+    if (children.EXTENDS) {
+      // The identifier after EXTENDS is at index 1
+      extendsName = allIdentifiers[1]?.image;
+    }
+
+    // Check for IMPLEMENTS clause (identifiers after IMPLEMENTS keyword)
+    let implementsList: string[] | undefined;
+    if (children.IMPLEMENTS) {
+      // Identifiers after IMPLEMENTS - skip FB name and optional EXTENDS name
+      const startIdx = extendsName ? 2 : 1;
+      const implNames = allIdentifiers.slice(startIdx).map((t) => t.image);
+      if (implNames.length > 0) {
+        implementsList = implNames;
+      }
+    }
 
     const varBlocks: VarBlock[] = [];
     for (const varBlockNode of getAllNodes(children.varBlock)) {
       varBlocks.push(this.buildVarBlock(varBlockNode));
+    }
+
+    const methods: MethodDeclaration[] = [];
+    for (const methodNode of getAllNodes(children.methodDeclaration)) {
+      methods.push(this.buildMethodDeclaration(methodNode));
+    }
+
+    const properties: PropertyDeclaration[] = [];
+    for (const propNode of getAllNodes(children.propertyDeclaration)) {
+      properties.push(this.buildPropertyDeclaration(propNode));
     }
 
     const body: Statement[] = [];
@@ -325,8 +370,223 @@ export class ASTBuilder {
       kind: "FunctionBlockDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
+      isAbstract,
+      isFinal,
+      varBlocks,
+      methods,
+      properties,
+      body,
+      ...(extendsName !== undefined ? { extends: extendsName } : {}),
+      ...(implementsList !== undefined ? { implements: implementsList } : {}),
+    };
+  }
+
+  /**
+   * Build an InterfaceDeclaration from a CST node.
+   */
+  buildInterfaceDeclaration(node: CstNode): InterfaceDeclaration {
+    const children = node.children as CstChildren;
+    const allIdentifiers = getAllTokens(children.Identifier);
+    const name = allIdentifiers[0]?.image ?? "";
+
+    // Check for EXTENDS clause
+    let extendsList: string[] | undefined;
+    if (children.EXTENDS) {
+      const extNames = allIdentifiers.slice(1).map((t) => t.image);
+      if (extNames.length > 0) {
+        extendsList = extNames;
+      }
+    }
+
+    // Build interface methods
+    const methods: MethodDeclaration[] = [];
+    for (const methodNode of getAllNodes(children.interfaceMethodDeclaration)) {
+      methods.push(this.buildInterfaceMethodDeclaration(methodNode));
+    }
+
+    return {
+      kind: "InterfaceDeclaration",
+      sourceSpan: nodeToSourceSpan(node),
+      name,
+      methods,
+      ...(extendsList !== undefined ? { extends: extendsList } : {}),
+    };
+  }
+
+  /**
+   * Build a MethodDeclaration from an interface method CST node.
+   * Interface methods are implicitly public and abstract.
+   */
+  buildInterfaceMethodDeclaration(node: CstNode): MethodDeclaration {
+    const children = node.children as CstChildren;
+    const nameToken = getAllTokens(children.Identifier)[0];
+    const name = nameToken?.image ?? "";
+
+    // Optional return type
+    let returnType: TypeReference | undefined;
+    const dataTypeNode = getFirstNode(children.dataType);
+    if (dataTypeNode) {
+      returnType = this.buildTypeReference(dataTypeNode);
+    }
+
+    // VAR blocks (VAR_INPUT)
+    const varBlocks: VarBlock[] = [];
+    for (const varBlockNode of getAllNodes(children.varBlock)) {
+      varBlocks.push(this.buildVarBlock(varBlockNode));
+    }
+
+    return {
+      kind: "MethodDeclaration",
+      sourceSpan: nodeToSourceSpan(node),
+      name,
+      visibility: "PUBLIC",
+      isAbstract: true,
+      isFinal: false,
+      isOverride: false,
+      varBlocks,
+      body: [],
+      ...(returnType !== undefined ? { returnType } : {}),
+    };
+  }
+
+  /**
+   * Build a MethodDeclaration from a methodDeclaration CST node.
+   */
+  buildMethodDeclaration(node: CstNode): MethodDeclaration {
+    const children = node.children as CstChildren;
+    const nameToken = getAllTokens(children.Identifier)[0];
+    const name = nameToken?.image ?? "";
+
+    // Visibility modifier
+    let visibility: Visibility = "PUBLIC";
+    if (children.PRIVATE) visibility = "PRIVATE";
+    else if (children.PROTECTED) visibility = "PROTECTED";
+
+    // Modifiers
+    const isAbstract = !!children.ABSTRACT;
+    const isFinal = !!children.FINAL;
+    const isOverride = !!children.OVERRIDE;
+
+    // Optional return type
+    let returnType: TypeReference | undefined;
+    const dataTypeNode = getFirstNode(children.dataType);
+    if (dataTypeNode) {
+      returnType = this.buildTypeReference(dataTypeNode);
+    }
+
+    // VAR blocks (uses methodVarBlock which supports VAR_INST)
+    const varBlocks: VarBlock[] = [];
+    for (const varBlockNode of getAllNodes(children.methodVarBlock)) {
+      varBlocks.push(this.buildMethodVarBlock(varBlockNode));
+    }
+
+    // Method body
+    const body: Statement[] = [];
+    const stmtListNode = getFirstNode(children.statementList);
+    if (stmtListNode) {
+      const stmtListChildren = stmtListNode.children as CstChildren;
+      for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
+        const stmt = this.buildStatement(stmtNode);
+        if (stmt) body.push(stmt);
+      }
+    }
+
+    return {
+      kind: "MethodDeclaration",
+      sourceSpan: nodeToSourceSpan(node),
+      name,
+      visibility,
+      isAbstract,
+      isFinal,
+      isOverride,
       varBlocks,
       body,
+      ...(returnType !== undefined ? { returnType } : {}),
+    };
+  }
+
+  /**
+   * Build a VarBlock from a methodVarBlock CST node (supports VAR_INST).
+   */
+  buildMethodVarBlock(node: CstNode): VarBlock {
+    const children = node.children as CstChildren;
+
+    let blockType: VarBlockType = "VAR";
+    if (children.VAR_INPUT) blockType = "VAR_INPUT";
+    else if (children.VAR_OUTPUT) blockType = "VAR_OUTPUT";
+    else if (children.VAR_IN_OUT) blockType = "VAR_IN_OUT";
+    else if (children.VAR_TEMP) blockType = "VAR_TEMP";
+    else if (children.VAR_INST) blockType = "VAR_INST";
+
+    const isConstant = !!children.CONSTANT;
+    const isRetain = !!children.RETAIN;
+
+    const declarations: VarDeclaration[] = [];
+    for (const declNode of getAllNodes(children.varDeclaration)) {
+      declarations.push(this.buildVarDeclaration(declNode));
+    }
+
+    return {
+      kind: "VarBlock",
+      sourceSpan: nodeToSourceSpan(node),
+      blockType,
+      isConstant,
+      isRetain,
+      declarations,
+    };
+  }
+
+  /**
+   * Build a PropertyDeclaration from a propertyDeclaration CST node.
+   */
+  buildPropertyDeclaration(node: CstNode): PropertyDeclaration {
+    const children = node.children as CstChildren;
+    const nameToken = getAllTokens(children.Identifier)[0];
+    const name = nameToken?.image ?? "";
+
+    // Visibility modifier
+    let visibility: Visibility = "PUBLIC";
+    if (children.PRIVATE) visibility = "PRIVATE";
+    else if (children.PROTECTED) visibility = "PROTECTED";
+
+    // Property type
+    const dataTypeNode = getFirstNode(children.dataType);
+    const type: TypeReference = dataTypeNode
+      ? this.buildTypeReference(dataTypeNode)
+      : {
+          kind: "TypeReference",
+          sourceSpan: nodeToSourceSpan(node),
+          name: "INT",
+          isReference: false,
+          referenceKind: "none",
+        };
+
+    // GET block
+    let getter: Statement[] | undefined;
+    const getterNode = getFirstNode(children.propertyGetter);
+    if (getterNode) {
+      const getterChildren = getterNode.children as CstChildren;
+      const getterStmtList = getFirstNode(getterChildren.statementList);
+      getter = this.extractStatementsFromList(getterStmtList);
+    }
+
+    // SET block
+    let setter: Statement[] | undefined;
+    const setterNode = getFirstNode(children.propertySetter);
+    if (setterNode) {
+      const setterChildren = setterNode.children as CstChildren;
+      const setterStmtList = getFirstNode(setterChildren.statementList);
+      setter = this.extractStatementsFromList(setterStmtList);
+    }
+
+    return {
+      kind: "PropertyDeclaration",
+      sourceSpan: nodeToSourceSpan(node),
+      name,
+      type,
+      visibility,
+      ...(getter !== undefined ? { getter } : {}),
+      ...(setter !== undefined ? { setter } : {}),
     };
   }
 
@@ -964,6 +1224,19 @@ export class ASTBuilder {
     if (children.functionCallStatement) {
       return this.buildFunctionCallStatement(
         getFirstNode(children.functionCallStatement)!,
+      );
+    }
+    if (children.methodCallStatement) {
+      return this.buildMethodCallStatement(
+        getFirstNode(children.methodCallStatement)!,
+      );
+    }
+    if (children.thisStatement) {
+      return this.buildThisStatement(getFirstNode(children.thisStatement)!);
+    }
+    if (children.superCallStatement) {
+      return this.buildSuperCallStatement(
+        getFirstNode(children.superCallStatement)!,
       );
     }
 
@@ -1647,6 +1920,23 @@ export class ASTBuilder {
       return this.buildNewExpression(getFirstNode(children.newExpression)!);
     }
 
+    // Check for THIS access expression
+    if (children.thisAccess) {
+      return this.buildThisAccessExpression(getFirstNode(children.thisAccess)!);
+    }
+
+    // Check for SUPER access expression
+    if (children.superAccess) {
+      return this.buildSuperAccessExpression(
+        getFirstNode(children.superAccess)!,
+      );
+    }
+
+    // Check for method call expression: instance.method(args)
+    if (children.methodCall) {
+      return this.buildMethodCallExpression(getFirstNode(children.methodCall)!);
+    }
+
     // Check for function call (before variable - both start with Identifier, parser disambiguates)
     if (children.functionCall) {
       return this.buildFunctionCallExpression(
@@ -1987,6 +2277,111 @@ export class ASTBuilder {
   }
 
   /**
+   * Build a THIS access expression from a thisAccess CST node.
+   * THIS.member -> VariableExpression { name: "THIS", fieldAccess: ["member"] }
+   * THIS.method(args) -> FunctionCallExpression { functionName: "THIS.method", ... }
+   */
+  buildThisAccessExpression(node: CstNode): Expression {
+    const children = node.children as CstChildren;
+    const identifiers = getAllTokens(children.Identifier);
+    const memberName = identifiers[0]?.image ?? "";
+
+    // If there's a LParen, it's a method call
+    if (children.LParen) {
+      const args: Argument[] = [];
+      const argListNode = getFirstNode(children.argumentList);
+      if (argListNode) {
+        const argListChildren = argListNode.children as CstChildren;
+        for (const argNode of getAllNodes(argListChildren.argument)) {
+          args.push(this.buildArgument(argNode));
+        }
+      }
+      return {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: `THIS.${memberName}`,
+        arguments: args,
+      };
+    }
+
+    // Otherwise it's member access
+    return {
+      kind: "VariableExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      name: "THIS",
+      subscripts: [],
+      fieldAccess: [memberName],
+      isDereference: false,
+    };
+  }
+
+  /**
+   * Build a SUPER access expression from a superAccess CST node.
+   * SUPER.method(args) -> FunctionCallExpression { functionName: "SUPER.method", ... }
+   * SUPER.member -> VariableExpression { name: "SUPER", fieldAccess: ["member"] }
+   */
+  buildSuperAccessExpression(node: CstNode): Expression {
+    const children = node.children as CstChildren;
+    const identifiers = getAllTokens(children.Identifier);
+    const memberName = identifiers[0]?.image ?? "";
+
+    // If there's a LParen, it's a method call
+    if (children.LParen) {
+      const args: Argument[] = [];
+      const argListNode = getFirstNode(children.argumentList);
+      if (argListNode) {
+        const argListChildren = argListNode.children as CstChildren;
+        for (const argNode of getAllNodes(argListChildren.argument)) {
+          args.push(this.buildArgument(argNode));
+        }
+      }
+      return {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: `SUPER.${memberName}`,
+        arguments: args,
+      };
+    }
+
+    // Otherwise it's member access
+    return {
+      kind: "VariableExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      name: "SUPER",
+      subscripts: [],
+      fieldAccess: [memberName],
+      isDereference: false,
+    };
+  }
+
+  /**
+   * Build a method call expression: instance.method(args)
+   * Maps to FunctionCallExpression with functionName = "instance.method"
+   */
+  buildMethodCallExpression(node: CstNode): FunctionCallExpression {
+    const children = node.children as CstChildren;
+    const identifiers = getAllTokens(children.Identifier);
+    const instanceName = identifiers[0]?.image ?? "";
+    const methodName = identifiers[1]?.image ?? "";
+
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "FunctionCallExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      functionName: `${instanceName}.${methodName}`,
+      arguments: args,
+    };
+  }
+
+  /**
    * Build a FunctionCallExpression from a functionCall CST node.
    */
   buildFunctionCallExpression(node: CstNode): FunctionCallExpression {
@@ -2064,6 +2459,122 @@ export class ASTBuilder {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),
       call,
+    };
+  }
+
+  /**
+   * Build a method call statement: instance.method(args);
+   * Maps to FunctionCallStatement with functionName = "instance.method"
+   */
+  buildMethodCallStatement(node: CstNode): FunctionCallStatement {
+    const children = node.children as CstChildren;
+    const identifiers = getAllTokens(children.Identifier);
+    const instanceName = identifiers[0]?.image ?? "";
+    const methodName = identifiers[1]?.image ?? "";
+
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "FunctionCallStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      call: {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: `${instanceName}.${methodName}`,
+        arguments: args,
+      },
+    };
+  }
+
+  /**
+   * Build a THIS statement: THIS.member := expr; or THIS.method(args);
+   * Assignment maps to AssignmentStatement; method call maps to FunctionCallStatement.
+   */
+  buildThisStatement(node: CstNode): Statement {
+    const children = node.children as CstChildren;
+    const identifiers = getAllTokens(children.Identifier);
+    const memberName = identifiers[0]?.image ?? "";
+
+    // Check if it's an assignment (has Assign token)
+    if (children.Assign) {
+      const exprNode = getFirstNode(children.expression);
+      const value = exprNode
+        ? (this.buildExpression(exprNode) ?? this.createDummyLiteral(node))
+        : this.createDummyLiteral(node);
+
+      const target: VariableExpression = {
+        kind: "VariableExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        name: "THIS",
+        subscripts: [],
+        fieldAccess: [memberName],
+        isDereference: false,
+      };
+
+      return {
+        kind: "AssignmentStatement",
+        sourceSpan: nodeToSourceSpan(node),
+        target,
+        value,
+      } as AssignmentStatement;
+    }
+
+    // Otherwise it's a method call: THIS.method(args);
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "FunctionCallStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      call: {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: `THIS.${memberName}`,
+        arguments: args,
+      },
+    } as FunctionCallStatement;
+  }
+
+  /**
+   * Build a SUPER call statement: SUPER.method(args);
+   * Maps to FunctionCallStatement with functionName = "SUPER.method"
+   */
+  buildSuperCallStatement(node: CstNode): FunctionCallStatement {
+    const children = node.children as CstChildren;
+    const identifiers = getAllTokens(children.Identifier);
+    const methodName = identifiers[0]?.image ?? "";
+
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "FunctionCallStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      call: {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: `SUPER.${methodName}`,
+        arguments: args,
+      },
     };
   }
 

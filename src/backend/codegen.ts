@@ -23,6 +23,10 @@ import type {
   LiteralExpression,
   VariableExpression,
   ExternalCodePragma,
+  MethodDeclaration,
+  InterfaceDeclaration,
+  PropertyDeclaration,
+  Visibility,
 } from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import type { LineMapEntry } from "../types.js";
@@ -222,6 +226,12 @@ export class CodeGenerator {
   /** Map of variable name (upper case) → type name (original case) for current scope */
   private currentScopeVarTypes: Map<string, string> = new Map();
 
+  /** Parent class name of current FB (for SUPER resolution) */
+  private currentFBExtends: string | undefined;
+
+  /** Mapping of VAR_INST names (upper case) to mangled class member names */
+  private varInstMangledNames: Map<string, string> = new Map();
+
   constructor(
     private readonly _symbolTables: SymbolTables,
     options: Partial<CodeGenOptions> = {},
@@ -361,6 +371,9 @@ export class CodeGenerator {
     }
 
     // Generate forward declarations
+    for (const iface of ast.interfaces) {
+      this.emitHeader(`class ${iface.name};`);
+    }
     for (const fb of ast.functionBlocks) {
       this.emitHeader(`class ${fb.name};`);
     }
@@ -371,11 +384,17 @@ export class CodeGenerator {
       this.emitHeader(`class Configuration_${config.name};`);
     }
     if (
+      ast.interfaces.length > 0 ||
       ast.functionBlocks.length > 0 ||
       ast.programs.length > 0 ||
       ast.configurations.length > 0
     ) {
       this.emitHeader("");
+    }
+
+    // Generate interface declarations (before FBs since FBs may implement interfaces)
+    for (const iface of ast.interfaces) {
+      this.generateInterfaceHeaderDeclaration(iface);
     }
 
     // Generate function block class declarations
@@ -481,7 +500,20 @@ export class CodeGenerator {
   private generateFBHeaderDeclaration(
     fb: CompilationUnit["functionBlocks"][0],
   ): void {
-    this.emitHeader(`class ${fb.name} {`);
+    // Build inheritance clause
+    const bases: string[] = [];
+    if (fb.extends) {
+      bases.push(`public ${fb.extends}`);
+    }
+    if (fb.implements) {
+      for (const iface of fb.implements) {
+        bases.push(`public ${iface}`);
+      }
+    }
+    const inheritance = bases.length > 0 ? ` : ${bases.join(", ")}` : "";
+    const finalSpec = fb.isFinal ? " final" : "";
+
+    this.emitHeader(`class ${fb.name}${finalSpec}${inheritance} {`);
     this.emitHeader("public:");
 
     // Generate member variables
@@ -508,12 +540,41 @@ export class CodeGenerator {
       }
     }
 
+    // Generate VAR_INST mangled members from methods
+    const varInstMembers = this.collectVarInstMembers(fb);
+    if (varInstMembers.length > 0) {
+      this.emitHeader("");
+      this.emitHeader("    // Method instance variables (VAR_INST)");
+      for (const m of varInstMembers) {
+        this.emitHeader(`    ${m.cppType} ${m.mangledName};`);
+      }
+    }
+
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     this.emitHeader(`    ${fb.name}();`);
     this.emitHeader("");
     this.emitHeader("    // Execute function block");
     this.emitHeader("    void operator()();");
+
+    // Generate method declarations (grouped by visibility)
+    if (fb.methods.length > 0) {
+      this.emitHeader("");
+      this.generateMethodDeclarations(fb.methods);
+    }
+
+    // Generate property declarations
+    if (fb.properties.length > 0) {
+      this.emitHeader("");
+      this.generatePropertyDeclarations(fb.properties);
+    }
+
+    // Virtual destructor (needed for classes with virtual methods)
+    if (fb.methods.length > 0 || fb.properties.length > 0 || !fb.isFinal) {
+      this.emitHeader("");
+      this.emitHeader(`    virtual ~${fb.name}() = default;`);
+    }
+
     this.emitHeader("};");
     this.emitHeader("");
   }
@@ -615,6 +676,277 @@ export class CodeGenerator {
     return params;
   }
 
+  // ===========================================================================
+  // OOP Code Generation (Phase 5.2)
+  // ===========================================================================
+
+  /**
+   * Generate header declaration for an interface.
+   * Interfaces become abstract classes with pure virtual methods.
+   */
+  private generateInterfaceHeaderDeclaration(
+    iface: InterfaceDeclaration,
+  ): void {
+    const extendsClause =
+      iface.extends && iface.extends.length > 0
+        ? ` : ${iface.extends.map((e) => `public ${e}`).join(", ")}`
+        : "";
+
+    this.emitHeader(`class ${iface.name}${extendsClause} {`);
+    this.emitHeader("public:");
+    this.emitHeader(`    virtual ~${iface.name}() = default;`);
+
+    for (const method of iface.methods) {
+      const returnType = method.returnType
+        ? `IEC_${method.returnType.name}`
+        : "void";
+      const params = this.generateMethodParamList(method);
+      this.emitHeader(
+        `    virtual ${returnType} ${method.name}(${params}) = 0;`,
+      );
+    }
+
+    this.emitHeader("};");
+    this.emitHeader("");
+  }
+
+  /**
+   * Collect VAR_INST members from all methods of a function block.
+   * These become name-mangled class members: __MethodName__varName
+   */
+  private collectVarInstMembers(
+    fb: CompilationUnit["functionBlocks"][0],
+  ): Array<{ mangledName: string; cppType: string }> {
+    const result: Array<{ mangledName: string; cppType: string }> = [];
+    for (const method of fb.methods) {
+      for (const block of method.varBlocks) {
+        if (block.blockType === "VAR_INST") {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              result.push({
+                mangledName: `__${method.name}__${name}`,
+                cppType: `IEC_${decl.type.name}`,
+              });
+            }
+          }
+        }
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Generate method declarations in the class header, grouped by visibility.
+   */
+  private generateMethodDeclarations(methods: MethodDeclaration[]): void {
+    // Group by visibility
+    const groups: Record<Visibility, MethodDeclaration[]> = {
+      PUBLIC: [],
+      PRIVATE: [],
+      PROTECTED: [],
+    };
+    for (const method of methods) {
+      groups[method.visibility].push(method);
+    }
+
+    // Track current visibility section (class starts as public:)
+    let currentVisibility = "public";
+
+    for (const [visibility, visMethods] of Object.entries(groups) as [
+      Visibility,
+      MethodDeclaration[],
+    ][]) {
+      if (visMethods.length === 0) continue;
+
+      const cppVisibility = visibility.toLowerCase();
+      if (cppVisibility !== currentVisibility) {
+        this.emitHeader(`${cppVisibility}:`);
+        currentVisibility = cppVisibility;
+      }
+
+      for (const method of visMethods) {
+        const returnType = method.returnType
+          ? `IEC_${method.returnType.name}`
+          : "void";
+        const params = this.generateMethodParamList(method);
+
+        // Build declaration with appropriate specifiers
+        let prefix: string;
+        let suffix: string;
+
+        if (method.isAbstract) {
+          prefix = "virtual ";
+          suffix = " = 0";
+        } else if (method.isOverride) {
+          prefix = "";
+          suffix = " override";
+          if (method.isFinal) suffix += " final";
+        } else {
+          prefix = "virtual ";
+          suffix = method.isFinal ? " final" : "";
+        }
+
+        this.emitHeader(
+          `    ${prefix}${returnType} ${method.name}(${params})${suffix};`,
+        );
+      }
+    }
+
+    // Restore public section if we changed it (for destructor etc.)
+    if (currentVisibility !== "public") {
+      this.emitHeader("public:");
+    }
+  }
+
+  /**
+   * Generate parameter list string for a method declaration.
+   * VAR_INPUT, VAR_OUTPUT (by ref), VAR_IN_OUT (by ref) become C++ params.
+   */
+  private generateMethodParamList(method: MethodDeclaration): string {
+    const params: string[] = [];
+    for (const block of method.varBlocks) {
+      if (block.blockType === "VAR_INPUT") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            params.push(`IEC_${decl.type.name} ${name}`);
+          }
+        }
+      } else if (block.blockType === "VAR_IN_OUT") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            params.push(`IEC_${decl.type.name}& ${name}`);
+          }
+        }
+      } else if (block.blockType === "VAR_OUTPUT") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            params.push(`IEC_${decl.type.name}& ${name}`);
+          }
+        }
+      }
+    }
+    return params.join(", ");
+  }
+
+  /**
+   * Generate property getter/setter declarations in the class header.
+   */
+  private generatePropertyDeclarations(
+    properties: PropertyDeclaration[],
+  ): void {
+    this.emitHeader("    // Properties");
+    for (const prop of properties) {
+      const type = `IEC_${prop.type.name}`;
+      if (prop.getter) {
+        this.emitHeader(`    virtual ${type} get_${prop.name}() const;`);
+      }
+      if (prop.setter) {
+        this.emitHeader(
+          `    virtual void set_${prop.name}(${type} ${prop.name});`,
+        );
+      }
+    }
+  }
+
+  /**
+   * Generate implementation for a method (in the .cpp file).
+   * Follows the same return-variable pattern as functions.
+   */
+  private generateMethodImplementation(
+    method: MethodDeclaration,
+    className: string,
+  ): void {
+    const returnType = method.returnType
+      ? `IEC_${method.returnType.name}`
+      : "void";
+    const params = this.generateMethodParamList(method);
+
+    this.emit(`${returnType} ${className}::${method.name}(${params}) {`);
+
+    // Declare return variable if method has return type
+    if (method.returnType) {
+      this.emit(`    IEC_${method.returnType.name} ${method.name}_result;`);
+      this.currentFunctionName = method.name;
+    }
+
+    // Set up VAR_INST name mangling
+    this.varInstMangledNames.clear();
+    for (const block of method.varBlocks) {
+      if (block.blockType === "VAR_INST") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            this.varInstMangledNames.set(
+              name.toUpperCase(),
+              `__${method.name}__${name}`,
+            );
+          }
+        }
+      }
+    }
+
+    // Declare local variables (VAR, VAR_TEMP)
+    for (const block of method.varBlocks) {
+      if (block.blockType === "VAR" || block.blockType === "VAR_TEMP") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            const initValue = decl.initialValue
+              ? ` = ${this.generateExpression(decl.initialValue)}`
+              : "";
+            this.emit(`    IEC_${decl.type.name} ${name}${initValue};`);
+          }
+        }
+      }
+    }
+
+    // Generate body
+    if (method.body.length > 0) {
+      this.generateStatements(method.body);
+    }
+
+    // Return if method has return type
+    if (method.returnType) {
+      this.emit(`    return ${method.name}_result;`);
+      this.currentFunctionName = undefined;
+    }
+
+    // Clean up
+    this.varInstMangledNames.clear();
+
+    this.emit("}");
+    this.emit("");
+  }
+
+  /**
+   * Generate implementation for a property (getter and/or setter in the .cpp file).
+   */
+  private generatePropertyImplementation(
+    prop: PropertyDeclaration,
+    className: string,
+  ): void {
+    const type = `IEC_${prop.type.name}`;
+
+    // Getter
+    if (prop.getter) {
+      this.emit(`${type} ${className}::get_${prop.name}() const {`);
+      this.emit(`    ${type} ${prop.name}_result;`);
+      this.currentFunctionName = prop.name;
+      this.generateStatements(prop.getter);
+      this.emit(`    return ${prop.name}_result;`);
+      this.currentFunctionName = undefined;
+      this.emit("}");
+      this.emit("");
+    }
+
+    // Setter
+    if (prop.setter) {
+      this.emit(`void ${className}::set_${prop.name}(${type} ${prop.name}) {`);
+      // In setter, prop.name refers to the input parameter (no redirection)
+      this.generateStatements(prop.setter);
+      this.emit("}");
+      this.emit("");
+    }
+  }
+
   /**
    * Generate implementation for a program.
    */
@@ -664,6 +996,8 @@ export class CodeGenerator {
   private generateFBImplementation(
     fb: CompilationUnit["functionBlocks"][0],
   ): void {
+    this.currentFBExtends = fb.extends;
+
     // Constructor
     this.emit(`${fb.name}::${fb.name}() {`);
     this.emit("    // Initialize variables");
@@ -674,7 +1008,6 @@ export class CodeGenerator {
     this.emit(`void ${fb.name}::operator()() {`);
     this.enterScope(fb.varBlocks);
     if (fb.body.length > 0) {
-      // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
       this.generateStatements(fb.body);
     } else if (this.options.sourceComments) {
       this.emit("    // Empty function block body");
@@ -682,6 +1015,20 @@ export class CodeGenerator {
     this.exitScope();
     this.emit("}");
     this.emit("");
+
+    // Method implementations
+    for (const method of fb.methods) {
+      if (!method.isAbstract) {
+        this.generateMethodImplementation(method, fb.name);
+      }
+    }
+
+    // Property implementations
+    for (const prop of fb.properties) {
+      this.generatePropertyImplementation(prop, fb.name);
+    }
+
+    this.currentFBExtends = undefined;
   }
 
   /**
@@ -1585,12 +1932,51 @@ export class CodeGenerator {
    * Generate C++ for a variable expression.
    */
   private generateVariableExpression(expr: VariableExpression): string {
-    // In function bodies, references to the function name redirect to the result variable
-    let result =
+    const nameUpper = expr.name.toUpperCase();
+
+    // Handle THIS reference → this->member
+    if (nameUpper === "THIS") {
+      let result = "this->";
+      if (expr.fieldAccess.length > 0) {
+        result += expr.fieldAccess[0];
+        for (let i = 1; i < expr.fieldAccess.length; i++) {
+          result += `.${expr.fieldAccess[i]}`;
+        }
+      }
+      if (expr.isDereference) {
+        result += ".deref()";
+      }
+      return result;
+    }
+
+    // Handle SUPER reference → BaseClass::member
+    if (nameUpper === "SUPER" && this.currentFBExtends) {
+      let result = `${this.currentFBExtends}::`;
+      if (expr.fieldAccess.length > 0) {
+        result += expr.fieldAccess[0];
+        for (let i = 1; i < expr.fieldAccess.length; i++) {
+          result += `.${expr.fieldAccess[i]}`;
+        }
+      }
+      return result;
+    }
+
+    // In function/method bodies, references to the function/method name redirect to the result variable
+    let result: string;
+    if (
       this.currentFunctionName &&
-      expr.name.toUpperCase() === this.currentFunctionName.toUpperCase()
-        ? `${this.currentFunctionName}_result`
-        : expr.name;
+      nameUpper === this.currentFunctionName.toUpperCase()
+    ) {
+      result = `${this.currentFunctionName}_result`;
+    } else {
+      // Check for VAR_INST name mangling
+      const mangledName = this.varInstMangledNames.get(nameUpper);
+      if (mangledName) {
+        result = mangledName;
+      } else {
+        result = expr.name;
+      }
+    }
 
     // Subscripts (array access)
     // 2D+ arrays use operator() syntax: arr(i, j) — 1D uses operator[]: arr[i]
@@ -1670,10 +2056,30 @@ export class CodeGenerator {
 
   /**
    * Generate C++ for a function call expression.
-   * Handles: standard functions, *_TO_* conversions, DELETE->DELETE_STR mapping,
+   * Handles: dotted method calls (THIS.method, SUPER.method, instance.method),
+   * standard functions, *_TO_* conversions, DELETE->DELETE_STR mapping,
    * named argument reordering, and user-defined function calls.
    */
   private generateFunctionCallExpression(expr: FunctionCallExpression): string {
+    // Handle dotted method calls: THIS.method, SUPER.method, instance.method
+    if (expr.functionName.includes(".")) {
+      const dotIdx = expr.functionName.indexOf(".");
+      const prefix = expr.functionName.substring(0, dotIdx);
+      const methodName = expr.functionName.substring(dotIdx + 1);
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
+
+      if (prefix.toUpperCase() === "THIS") {
+        return `this->${methodName}(${args.join(", ")})`;
+      } else if (prefix.toUpperCase() === "SUPER" && this.currentFBExtends) {
+        return `${this.currentFBExtends}::${methodName}(${args.join(", ")})`;
+      } else {
+        // instance.method() call
+        return `${prefix}.${methodName}(${args.join(", ")})`;
+      }
+    }
+
     const nameUpper = expr.functionName.toUpperCase();
 
     // 1. Check for *_TO_* conversion pattern (e.g., INT_TO_REAL -> TO_REAL)

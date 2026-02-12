@@ -112,6 +112,7 @@ export interface CompilationUnit extends ASTNode {
   programs: ProgramDeclaration[];
   functions: FunctionDeclaration[];
   functionBlocks: FunctionBlockDeclaration[];
+  interfaces: InterfaceDeclaration[];
   types: TypeDeclaration[];
   configurations: ConfigurationDeclaration[];
 }
@@ -147,8 +148,56 @@ export interface FunctionDeclaration extends ASTNode {
 export interface FunctionBlockDeclaration extends ASTNode {
   kind: "FunctionBlockDeclaration";
   name: string;
+  isAbstract: boolean;
+  isFinal: boolean;
+  extends?: string;
+  implements?: string[];
+  varBlocks: VarBlock[];
+  methods: MethodDeclaration[];
+  properties: PropertyDeclaration[];
+  body: Statement[];
+}
+
+/**
+ * Visibility modifier for OOP members
+ */
+export type Visibility = "PUBLIC" | "PRIVATE" | "PROTECTED";
+
+/**
+ * METHOD declaration within a Function Block
+ */
+export interface MethodDeclaration extends ASTNode {
+  kind: "MethodDeclaration";
+  name: string;
+  visibility: Visibility;
+  isAbstract: boolean;
+  isFinal: boolean;
+  isOverride: boolean;
+  returnType?: TypeReference;
   varBlocks: VarBlock[];
   body: Statement[];
+}
+
+/**
+ * INTERFACE declaration (top-level POU)
+ */
+export interface InterfaceDeclaration extends ASTNode {
+  kind: "InterfaceDeclaration";
+  name: string;
+  extends?: string[];
+  methods: MethodDeclaration[];
+}
+
+/**
+ * PROPERTY declaration within a Function Block
+ */
+export interface PropertyDeclaration extends ASTNode {
+  kind: "PropertyDeclaration";
+  name: string;
+  type: TypeReference;
+  visibility: Visibility;
+  getter?: Statement[];
+  setter?: Statement[];
 }
 
 // =============================================================================
@@ -165,7 +214,8 @@ export type VarBlockType =
   | "VAR_IN_OUT"
   | "VAR_EXTERNAL"
   | "VAR_GLOBAL"
-  | "VAR_TEMP";
+  | "VAR_TEMP"
+  | "VAR_INST";
 
 /**
  * Variable block (VAR, VAR_INPUT, etc.)
@@ -671,6 +721,7 @@ export function createCompilationUnit(): CompilationUnit {
     programs: [],
     functions: [],
     functionBlocks: [],
+    interfaces: [],
     types: [],
     configurations: [],
   };

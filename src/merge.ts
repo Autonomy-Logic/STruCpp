@@ -30,6 +30,7 @@ export function mergeCompilationUnits(
     merged.programs.push(...unit.programs);
     merged.functions.push(...unit.functions);
     merged.functionBlocks.push(...unit.functionBlocks);
+    merged.interfaces.push(...unit.interfaces);
     merged.types.push(...unit.types);
     merged.configurations.push(...unit.configurations);
   }

@@ -347,6 +347,50 @@ export const NULL = createToken({ name: "NULL", pattern: /NULL/i });
 export const __NEW = createToken({ name: "__NEW", pattern: /__NEW/i });
 export const __DELETE = createToken({ name: "__DELETE", pattern: /__DELETE/i });
 
+// OOP extensions (IEC 61131-3 Edition 3)
+export const METHOD = createToken({ name: "METHOD", pattern: /METHOD/i });
+export const END_METHOD = createToken({
+  name: "END_METHOD",
+  pattern: /END_METHOD/i,
+});
+export const INTERFACE = createToken({
+  name: "INTERFACE",
+  pattern: /INTERFACE/i,
+});
+export const END_INTERFACE = createToken({
+  name: "END_INTERFACE",
+  pattern: /END_INTERFACE/i,
+});
+export const EXTENDS = createToken({ name: "EXTENDS", pattern: /EXTENDS/i });
+export const IMPLEMENTS = createToken({
+  name: "IMPLEMENTS",
+  pattern: /IMPLEMENTS/i,
+});
+export const THIS = createToken({ name: "THIS", pattern: /THIS/i });
+export const SUPER = createToken({ name: "SUPER", pattern: /SUPER/i });
+export const PROPERTY = createToken({ name: "PROPERTY", pattern: /PROPERTY/i });
+export const END_PROPERTY = createToken({
+  name: "END_PROPERTY",
+  pattern: /END_PROPERTY/i,
+});
+export const GET = createToken({ name: "GET", pattern: /GET/i });
+export const END_GET = createToken({ name: "END_GET", pattern: /END_GET/i });
+export const SET = createToken({ name: "SET", pattern: /SET/i });
+export const END_SET = createToken({ name: "END_SET", pattern: /END_SET/i });
+export const ABSTRACT = createToken({ name: "ABSTRACT", pattern: /ABSTRACT/i });
+export const FINAL = createToken({ name: "FINAL", pattern: /FINAL/i });
+export const OVERRIDE = createToken({ name: "OVERRIDE", pattern: /OVERRIDE/i });
+export const PUBLIC = createToken({ name: "PUBLIC", pattern: /PUBLIC/i });
+export const PRIVATE = createToken({ name: "PRIVATE", pattern: /PRIVATE/i });
+export const PROTECTED = createToken({
+  name: "PROTECTED",
+  pattern: /PROTECTED/i,
+});
+export const VAR_INST = createToken({
+  name: "VAR_INST",
+  pattern: /VAR_INST/i,
+});
+
 // =============================================================================
 // Literals
 // =============================================================================
@@ -529,6 +573,27 @@ const keywordTokens = [
   NULL,
   __NEW,
   __DELETE,
+  METHOD,
+  END_METHOD,
+  INTERFACE,
+  END_INTERFACE,
+  EXTENDS,
+  IMPLEMENTS,
+  THIS,
+  SUPER,
+  PROPERTY,
+  END_PROPERTY,
+  GET,
+  END_GET,
+  SET,
+  END_SET,
+  ABSTRACT,
+  FINAL,
+  OVERRIDE,
+  PUBLIC,
+  PRIVATE,
+  PROTECTED,
+  VAR_INST,
 ];
 
 // Set longer_alt for all keywords
@@ -587,6 +652,7 @@ export const allTokens = [
   VAR_EXTERNAL,
   VAR_GLOBAL,
   VAR_TEMP,
+  VAR_INST,
   VAR,
   CONSTANT,
   RETAIN,
@@ -626,6 +692,26 @@ export const allTokens = [
   NULL,
   __NEW,
   __DELETE,
+  END_METHOD,
+  END_INTERFACE,
+  END_PROPERTY,
+  END_GET,
+  END_SET,
+  METHOD,
+  INTERFACE,
+  EXTENDS,
+  IMPLEMENTS,
+  THIS,
+  SUPER,
+  PROPERTY,
+  GET,
+  SET,
+  ABSTRACT,
+  FINAL,
+  OVERRIDE,
+  PUBLIC,
+  PRIVATE,
+  PROTECTED,
 
   // Literals
   TimeLiteral,
