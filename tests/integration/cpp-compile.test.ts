@@ -643,6 +643,37 @@ int main() {
   });
 
   // =============================================================================
+  // Function VAR_OUTPUT Call-Site Tests (Phase 4.3)
+  // =============================================================================
+
+  it('should compile a function with VAR_OUTPUT and => call syntax', () => {
+    const source = `
+      FUNCTION Divide : INT
+        VAR_INPUT dividend : INT; divisor : INT; END_VAR
+        VAR_OUTPUT remainder : INT; END_VAR
+        remainder := dividend MOD divisor;
+        Divide := dividend / divisor;
+      END_FUNCTION
+
+      PROGRAM Main
+        VAR q : INT; r : INT; END_VAR
+        q := Divide(dividend := 10, divisor := 3, remainder => r);
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify the function signature has reference parameter
+    expect(result.headerCode).toContain('IEC_INT& remainder');
+
+    // Verify the call site passes r directly
+    expect(result.cppCode).toContain('Divide(10, 3, r)');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'func_var_output');
+    expect(cppResult.success).toBe(true);
+  });
+
+  // =============================================================================
   // Nested Comments Tests (Phase 2.5)
   // =============================================================================
 
@@ -1445,6 +1476,93 @@ int main() {
     expect(Number(match10![1])).toBe(10000000);      // 10ms in ns
     expect(Number(match500![1])).toBe(500000000);   // 500ms in ns
     expect(Number(match1s![1])).toBe(1000000000);   // 1s in ns
+  });
+
+  it('should execute function with omitted VAR_OUTPUT using temp variable', () => {
+    const source = `
+      FUNCTION Divide : INT
+        VAR_INPUT dividend : INT; divisor : INT; END_VAR
+        VAR_OUTPUT remainder : INT; END_VAR
+        remainder := dividend MOD divisor;
+        Divide := dividend / divisor;
+      END_FUNCTION
+
+      PROGRAM Main
+        VAR q : INT; END_VAR
+        q := Divide(10, 3);
+      END_PROGRAM
+    `;
+
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // Verify a temp variable is emitted
+    expect(result.cppCode).toContain('__output_tmp_');
+
+    const mainCode = `
+#include <iostream>
+
+int main() {
+    using namespace strucpp;
+
+    Program_Main prog;
+    prog.run();
+
+    std::cout << "q=" << static_cast<int>(prog.q.get()) << std::endl;
+
+    return 0;
+}
+`;
+
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'var_output_omitted');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toBeDefined();
+
+    // 10 / 3 = 3
+    expect(runResult.output).toContain('q=3');
+  });
+
+  it('should execute function with VAR_OUTPUT and => call-site syntax correctly', () => {
+    const source = `
+      FUNCTION Divide : INT
+        VAR_INPUT dividend : INT; divisor : INT; END_VAR
+        VAR_OUTPUT remainder : INT; END_VAR
+        remainder := dividend MOD divisor;
+        Divide := dividend / divisor;
+      END_FUNCTION
+
+      PROGRAM Main
+        VAR q : INT; r : INT; END_VAR
+        q := Divide(dividend := 10, divisor := 3, remainder => r);
+      END_PROGRAM
+    `;
+
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const mainCode = `
+#include <iostream>
+
+int main() {
+    using namespace strucpp;
+
+    Program_Main prog;
+    prog.run();
+
+    std::cout << "q=" << static_cast<int>(prog.q.get()) << std::endl;
+    std::cout << "r=" << static_cast<int>(prog.r.get()) << std::endl;
+
+    return 0;
+}
+`;
+
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'var_output_runtime');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toBeDefined();
+
+    // 10 / 3 = 3, 10 MOD 3 = 1
+    expect(runResult.output).toContain('q=3');
+    expect(runResult.output).toContain('r=1');
   });
 });
 

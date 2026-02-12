@@ -146,6 +146,179 @@ describe("Codegen - Function Calls", () => {
     });
   });
 
+  describe("VAR_OUTPUT call-site codegen", () => {
+    it("should pass variable as-is for output argument at call site", () => {
+      const result = compileAndCheck(`
+        FUNCTION Divide : INT
+          VAR_INPUT dividend : INT; divisor : INT; END_VAR
+          VAR_OUTPUT remainder : INT; END_VAR
+          remainder := dividend MOD divisor;
+          Divide := dividend / divisor;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR q : INT; r : INT; END_VAR
+          q := Divide(dividend := 10, divisor := 3, remainder => r);
+        END_PROGRAM
+      `);
+
+      // The output argument r should be passed directly (no copies or temporaries)
+      expect(result.cppCode).toMatch(/Divide\(10, 3, r\)/);
+    });
+
+    it("should handle mixed input/output with reordering", () => {
+      const result = compileAndCheck(`
+        FUNCTION Divide : INT
+          VAR_INPUT dividend : INT; divisor : INT; END_VAR
+          VAR_OUTPUT remainder : INT; END_VAR
+          remainder := dividend MOD divisor;
+          Divide := dividend / divisor;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR q : INT; r : INT; END_VAR
+          q := Divide(remainder => r, dividend := 10, divisor := 3);
+        END_PROGRAM
+      `);
+
+      // Named args should be reordered to declaration order: (dividend, divisor, remainder)
+      expect(result.cppCode).toMatch(/Divide\(10, 3, r\)/);
+    });
+
+    it("should warn when output argument is not a variable", () => {
+      const result = compile(`
+        FUNCTION Divide : INT
+          VAR_INPUT dividend : INT; divisor : INT; END_VAR
+          VAR_OUTPUT remainder : INT; END_VAR
+          remainder := dividend MOD divisor;
+          Divide := dividend / divisor;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR q : INT; END_VAR
+          q := Divide(dividend := 10, divisor := 3, remainder => (1 + 2));
+        END_PROGRAM
+      `);
+
+      expect(result.success).toBe(true);
+      const outputWarnings = result.warnings.filter((w) =>
+        w.message.includes("should be a variable"),
+      );
+      expect(outputWarnings.length).toBe(1);
+      expect(outputWarnings[0]!.message).toContain("remainder");
+    });
+
+    it("should warn when => is used on a VAR_INPUT parameter", () => {
+      const result = compile(`
+        FUNCTION Divide : INT
+          VAR_INPUT dividend : INT; divisor : INT; END_VAR
+          VAR_OUTPUT remainder : INT; END_VAR
+          remainder := dividend MOD divisor;
+          Divide := dividend / divisor;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR q : INT; r : INT; END_VAR
+          q := Divide(dividend => r, divisor := 3, remainder => r);
+        END_PROGRAM
+      `);
+
+      expect(result.success).toBe(true);
+      const directionWarnings = result.warnings.filter((w) =>
+        w.message.includes("did you mean"),
+      );
+      expect(directionWarnings.length).toBe(1);
+      expect(directionWarnings[0]!.message).toContain("dividend");
+    });
+  });
+
+  describe("omitted VAR_OUTPUT arguments", () => {
+    it("should generate temp variable for positional call omitting VAR_OUTPUT", () => {
+      const result = compileAndCheck(`
+        FUNCTION Divide : INT
+          VAR_INPUT dividend : INT; divisor : INT; END_VAR
+          VAR_OUTPUT remainder : INT; END_VAR
+          remainder := dividend MOD divisor;
+          Divide := dividend / divisor;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR q : INT; END_VAR
+          q := Divide(10, 3);
+        END_PROGRAM
+      `);
+
+      // Should emit a temp variable declaration and pass it
+      expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
+      expect(result.cppCode).toMatch(/Divide\(10, 3, __output_tmp_0\)/);
+    });
+
+    it("should generate temp variable for named call omitting VAR_OUTPUT", () => {
+      const result = compileAndCheck(`
+        FUNCTION Divide : INT
+          VAR_INPUT dividend : INT; divisor : INT; END_VAR
+          VAR_OUTPUT remainder : INT; END_VAR
+          remainder := dividend MOD divisor;
+          Divide := dividend / divisor;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR q : INT; END_VAR
+          q := Divide(dividend := 10, divisor := 3);
+        END_PROGRAM
+      `);
+
+      // Should emit a temp variable declaration and pass it
+      expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
+      expect(result.cppCode).toMatch(/Divide\(10, 3, __output_tmp_0\)/);
+    });
+
+    it("should generate multiple temp variables for multiple omitted VAR_OUTPUT", () => {
+      const result = compileAndCheck(`
+        FUNCTION MultiOut : INT
+          VAR_INPUT x : INT; END_VAR
+          VAR_OUTPUT y : INT; z : REAL; END_VAR
+          y := x * 2;
+          z := 3.14;
+          MultiOut := x;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; END_VAR
+          r := MultiOut(5);
+        END_PROGRAM
+      `);
+
+      // Should emit two temp variables
+      expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
+      expect(result.cppCode).toContain("IEC_REAL __output_tmp_1;");
+      expect(result.cppCode).toMatch(
+        /MultiOut\(5, __output_tmp_0, __output_tmp_1\)/,
+      );
+    });
+
+    it("should handle partial omit — some VAR_OUTPUT provided, some not", () => {
+      const result = compileAndCheck(`
+        FUNCTION DivMod : INT
+          VAR_INPUT a : INT; b : INT; END_VAR
+          VAR_OUTPUT quotient : INT; remainder : INT; END_VAR
+          quotient := a / b;
+          remainder := a MOD b;
+          DivMod := a;
+        END_FUNCTION
+
+        PROGRAM Main
+          VAR r : INT; q : INT; END_VAR
+          r := DivMod(a := 10, b := 3, quotient => q);
+        END_PROGRAM
+      `);
+
+      // quotient is provided (q), remainder should get a temp
+      expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
+      expect(result.cppCode).toMatch(/DivMod\(10, 3, q, __output_tmp_0\)/);
+    });
+  });
+
   describe("nested function calls", () => {
     it("should generate nested calls correctly", () => {
       const result = compileAndCheck(`

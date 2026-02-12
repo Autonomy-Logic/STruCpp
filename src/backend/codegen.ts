@@ -210,6 +210,12 @@ export class CodeGenerator {
     file?: string;
   }> = [];
 
+  /** Counter for generating unique temporary variable names */
+  private tempVarCounter = 0;
+
+  /** Current statement indent level (set by generateStatement before expression generation) */
+  private currentStatementIndent = "    ";
+
   constructor(
     private readonly _symbolTables: SymbolTables,
     options: Partial<CodeGenOptions> = {},
@@ -262,6 +268,7 @@ export class CodeGenerator {
     this.indentLevel = 0;
     this.locatedVars = [];
     this.codegenWarnings = [];
+    this.tempVarCounter = 0;
     this.ast = ast; // Store AST for looking up program bodies
 
     // Generate header
@@ -1143,6 +1150,7 @@ export class CodeGenerator {
    * Generate code for a statement.
    */
   protected generateStatement(stmt: Statement, indent: string = "    "): void {
+    this.currentStatementIndent = indent;
     const cppStartLine = this.currentLine;
     // Compound statements handle their own line mappings internally
     let isCompound = false;
@@ -1652,10 +1660,57 @@ export class CodeGenerator {
       }
     }
 
-    // 4. Default: emit as-is
-    const args = expr.arguments.map((arg) =>
-      this.generateExpression(arg.value),
-    );
+    // 4. Default: emit as-is (with output argument validation)
+    const args = expr.arguments.map((arg) => {
+      const generated = this.generateExpression(arg.value);
+      if (arg.isOutput && arg.value.kind !== "VariableExpression") {
+        this.codegenWarnings.push({
+          message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
+          line: arg.sourceSpan.startLine,
+          column: arg.sourceSpan.startCol,
+          file: arg.sourceSpan.file,
+        });
+      }
+      return generated;
+    });
+
+    // Pad missing trailing VAR_OUTPUT/VAR_IN_OUT params with temp variables
+    if (this.ast) {
+      const funcDecl = this.ast.functions.find(
+        (f) => f.name.toUpperCase() === nameUpper,
+      );
+      if (funcDecl) {
+        const paramInfo: Array<{ blockType: string; typeName: string }> = [];
+        for (const block of funcDecl.varBlocks) {
+          if (
+            block.blockType === "VAR_INPUT" ||
+            block.blockType === "VAR_IN_OUT" ||
+            block.blockType === "VAR_OUTPUT"
+          ) {
+            for (const decl of block.declarations) {
+              for (const _name of decl.names) {
+                paramInfo.push({
+                  blockType: block.blockType,
+                  typeName: decl.type.name,
+                });
+              }
+            }
+          }
+        }
+        while (args.length < paramInfo.length) {
+          const param = paramInfo[args.length]!;
+          if (
+            param.blockType === "VAR_OUTPUT" ||
+            param.blockType === "VAR_IN_OUT"
+          ) {
+            args.push(this.emitOutputTempVar(param.typeName));
+          } else {
+            args.push(this.getDefaultValue(param.typeName));
+          }
+        }
+      }
+    }
+
     return `${expr.functionName}(${args.join(", ")})`;
   }
 
@@ -1678,6 +1733,7 @@ export class CodeGenerator {
     const params: Array<{
       name: string;
       typeName: string;
+      blockType: string;
       defaultExpr?: string;
     }> = [];
     for (const block of funcDecl.varBlocks) {
@@ -1691,10 +1747,12 @@ export class CodeGenerator {
             const entry: {
               name: string;
               typeName: string;
+              blockType: string;
               defaultExpr?: string;
             } = {
               name: name.toUpperCase(),
               typeName: decl.type.name,
+              blockType: block.blockType,
             };
             if (decl.initialValue) {
               entry.defaultExpr = this.generateExpression(decl.initialValue);
@@ -1706,23 +1764,46 @@ export class CodeGenerator {
     }
 
     // Build set of parameter slots claimed by named arguments
-    const namedArgs = new Map<string, string>();
+    const namedArgs = new Map<string, { expr: string; isOutput: boolean }>();
     const claimedSlots = new Set<string>();
     for (const arg of expr.arguments) {
       if (arg.name !== undefined) {
         const upperName = arg.name.toUpperCase();
-        namedArgs.set(upperName, this.generateExpression(arg.value));
+        namedArgs.set(upperName, {
+          expr: this.generateExpression(arg.value),
+          isOutput: arg.isOutput,
+        });
         claimedSlots.add(upperName);
+
+        // Validate output argument is a variable
+        if (arg.isOutput && arg.value.kind !== "VariableExpression") {
+          this.codegenWarnings.push({
+            message: `Output argument '${arg.name}' should be a variable, not an expression`,
+            line: arg.sourceSpan.startLine,
+            column: arg.sourceSpan.startCol,
+            file: arg.sourceSpan.file,
+          });
+        }
       }
     }
 
-    // Warn about named args that don't match any declared parameter
-    const paramNames = new Set(params.map((p) => p.name));
-    for (const [argName] of namedArgs) {
-      if (!paramNames.has(argName)) {
+    // Warn about named args that don't match any declared parameter,
+    // and check for direction mismatches (=> on VAR_INPUT)
+    const paramLookup = new Map(params.map((p) => [p.name, p]));
+    for (const [argName, argInfo] of namedArgs) {
+      const param = paramLookup.get(argName);
+      if (!param) {
         const span = expr.sourceSpan;
         this.codegenWarnings.push({
           message: `Named argument '${argName}' does not match any parameter of function '${expr.functionName}'`,
+          line: span.startLine,
+          column: span.startCol,
+          file: span.file,
+        });
+      } else if (argInfo.isOutput && param.blockType === "VAR_INPUT") {
+        const span = expr.sourceSpan;
+        this.codegenWarnings.push({
+          message: `Output argument '=>' used for input parameter '${param.name.toLowerCase()}' — did you mean ':='?`,
           line: span.startLine,
           column: span.startCol,
           file: span.file,
@@ -1760,29 +1841,50 @@ export class CodeGenerator {
       const param = params[i]!;
       const named = namedArgs.get(param.name);
       if (named !== undefined) {
-        result[i] = named;
+        result[i] = named.expr;
       }
     }
 
-    // Fill any remaining unfilled slots with defaults
+    // Fill any remaining unfilled slots with defaults (or temp vars for output params)
     for (let i = 0; i < params.length; i++) {
       if (result[i] === undefined) {
         const param = params[i]!;
-        result[i] = param.defaultExpr ?? this.getDefaultValue(param.typeName);
+        if (
+          param.blockType === "VAR_OUTPUT" ||
+          param.blockType === "VAR_IN_OUT"
+        ) {
+          result[i] = this.emitOutputTempVar(param.typeName);
+        } else {
+          result[i] = param.defaultExpr ?? this.getDefaultValue(param.typeName);
+        }
       }
     }
 
-    return result.map(
-      (v, i) =>
-        v ??
-        params[i]!.defaultExpr ??
-        this.getDefaultValue(params[i]!.typeName),
-    );
+    return result.map((v, i) => {
+      if (v !== undefined) return v;
+      const param = params[i]!;
+      if (param.blockType === "VAR_OUTPUT" || param.blockType === "VAR_IN_OUT") {
+        return this.emitOutputTempVar(param.typeName);
+      }
+      return param.defaultExpr ?? this.getDefaultValue(param.typeName);
+    });
   }
 
   // ===========================================================================
   // Helper Methods
   // ===========================================================================
+
+  /**
+   * Emit a temporary variable declaration for an omitted VAR_OUTPUT/VAR_IN_OUT argument.
+   * The temp is emitted before the current statement line (since generateExpression()
+   * runs before the statement's emit() call). Returns the temp variable name.
+   */
+  private emitOutputTempVar(typeName: string): string {
+    const name = `__output_tmp_${this.tempVarCounter++}`;
+    const cppType = this.mapVarTypeToCpp(typeName);
+    this.emit(`${this.currentStatementIndent}${cppType} ${name};`);
+    return name;
+  }
 
   /**
    * Get the default value for a type.
