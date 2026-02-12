@@ -73,6 +73,7 @@ Implement function blocks as C++ classes with state, OOP extensions (methods, in
 - [Phase 5.2: OOP Extensions](phase-5.2-oop-extensions.md) - Methods, interfaces, inheritance, properties, access modifiers, ABSTRACT/FINAL/OVERRIDE, THIS/SUPER, VAR_INST
 - [Phase 5.3: IEC 61131-3 Standard Function Block Library](phase-5.3-standard-fb-library.md) - Standard FBs (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS) as a compiled ST library
 - [Phase 5.4: Testing Strategy](phase-5.4-testing-strategy.md) - Comprehensive test coverage for FB and OOP features (runs throughout 5.1-5.3)
+- [Phase 5.5: Advanced FB Patterns and CODESYS Compatibility](phase-5.5-advanced-fb-patterns.md) - Parameterized string types `STRING(n)`, pointer dereference `THIS^`, method chaining (fluent interface), and CODESYS system functions (`ADR`, `SIZEOF`, `memcpy`)
 
 ### Phase 6: OpenPLC Integration
 **Status**: PENDING | **Duration**: 3-4 weeks
