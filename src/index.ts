@@ -19,6 +19,7 @@ import {
   discoverLibraries,
   LibraryManifestError,
 } from "./library/library-loader.js";
+import { getStdFBLibraryManifest } from "./library/builtin-stdlib.js";
 
 /**
  * Default compilation options
@@ -234,10 +235,14 @@ export function compile(
     };
   }
 
-  // If libraries are provided, pre-populate symbol tables with their symbols
+  // Pre-populate symbol tables with built-in standard FB library and any user libraries
   let semanticSymbolTables: SymbolTables | undefined;
-  if (allLibraries.length > 0) {
+  if (allLibraries.length > 0 || !mergedOptions.noStdFBLibrary) {
     semanticSymbolTables = new SymbolTables();
+    // Always register standard FB library (TON, CTU, R_TRIG, etc.) unless opted out
+    if (!mergedOptions.noStdFBLibrary) {
+      registerLibrarySymbols(getStdFBLibraryManifest(), semanticSymbolTables);
+    }
     for (const manifest of allLibraries) {
       registerLibrarySymbols(manifest, semanticSymbolTables);
     }
@@ -397,7 +402,10 @@ export {
   registerLibrarySymbols,
   LibraryManifestError,
 } from "./library/library-loader.js";
-export { getBuiltinStdlibManifest } from "./library/builtin-stdlib.js";
+export {
+  getBuiltinStdlibManifest,
+  getStdFBLibraryManifest,
+} from "./library/builtin-stdlib.js";
 export type {
   LibraryManifest,
   LibraryCompileResult,

@@ -737,6 +737,20 @@ export class StdFunctionRegistry {
   // ---------------------------------------------------------------------------
 
   private registerTimeFunctions(): void {
+    // TIME() - returns absolute runtime time (elapsed since start)
+    // CODESYS-compatible: TIME() with no args returns monotonic elapsed time
+    this.register({
+      name: "TIME",
+      cppName: "TIME",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "TIME",
+      params: [],
+      isVariadic: false,
+      isConversion: false,
+      category: "time",
+    });
+
     this.register({
       name: "TIME_FROM_MS",
       cppName: "TIME_FROM_MS",

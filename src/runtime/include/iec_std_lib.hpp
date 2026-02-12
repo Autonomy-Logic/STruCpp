@@ -21,6 +21,7 @@
 #include "iec_retain.hpp"
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <type_traits>
 
@@ -777,6 +778,22 @@ inline IEC_BOOL LT_CHAIN(T first, T second, Args... rest) noexcept {
     } else {
         return IEC_BOOL(true);
     }
+}
+
+// =============================================================================
+// TIME() - Absolute Runtime Time (CODESYS-compatible)
+// =============================================================================
+
+/**
+ * Returns the absolute runtime time (elapsed since runtime start).
+ * CODESYS-compatible: TIME() returns monotonic elapsed time.
+ * Uses std::chrono::steady_clock for monotonic timing.
+ */
+inline IEC_TIME TIME() {
+    static auto start = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
+    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
+    return IEC_TIME(static_cast<TIME_t>(ns));
 }
 
 } // namespace strucpp

@@ -43,6 +43,9 @@ export interface CompileOptions {
 
   /** Pre-loaded library manifests to make available during compilation */
   libraries?: import("./library/library-manifest.js").LibraryManifest[];
+
+  /** Disable auto-loading of IEC standard function block library (TON, CTU, R_TRIG, etc.) */
+  noStdFBLibrary?: boolean;
 }
 
 /**

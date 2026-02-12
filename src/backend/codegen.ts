@@ -36,7 +36,7 @@ import type {
   ConfigurationDecl,
   ProgramDecl,
 } from "../project-model.js";
-import { getProjectNamespace } from "../project-model.js";
+import { getProjectNamespace, parseTimeLiteral } from "../project-model.js";
 import { TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator } from "./type-codegen.js";
 
@@ -1916,7 +1916,10 @@ export class CodeGenerator {
         return `"${expr.rawValue}"`;
       case "WSTRING":
         return `L"${expr.rawValue}"`;
-      case "TIME":
+      case "TIME": {
+        const timeVal = parseTimeLiteral(String(expr.value));
+        return `${timeVal.nanoseconds}LL`;
+      }
       case "DATE":
       case "TIME_OF_DAY":
       case "DATE_AND_TIME":

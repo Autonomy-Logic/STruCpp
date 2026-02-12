@@ -44,6 +44,9 @@ export function compileLibrary(
 
   const result = compile(primarySource.source, {
     additionalSources,
+    // Disable auto-loading of standard FB library when compiling a library,
+    // since the library itself may be defining those same FBs.
+    noStdFBLibrary: true,
   });
 
   if (!result.success) {
