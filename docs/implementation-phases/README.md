@@ -57,20 +57,22 @@ Implement parser and code generator for ST expressions, assignments, statements,
 - [Phase 3.6: Interactive PLC Test Binary](phase-3.6-repl-runner.md) - `--build` CLI flag for interactive REPL binary ✓
 
 ### Phase 4: Functions and Function Calls
-**Status**: PARTIAL | **Duration**: 4-6 weeks
+**Status**: COMPLETED | **Duration**: 4-6 weeks
 
-Add support for user-defined functions and standard library functions. FUNCTION declarations parse and generate C++ definitions, but function *calls* are not yet wired through the AST builder (CST nodes are silently dropped). No standard library function mapping, overload resolution, or argument type checking.
+Full function support: user-defined functions, standard function registry, multi-file compilation, and library system.
 
 **Document**: [phase-4-functions.md](phase-4-functions.md)
 
-### Phase 5: Function Blocks and OOP
-**Status**: PARTIAL | **Duration**: 8-11 weeks
+### Phase 5: Function Blocks, OOP, and Standard FB Library
+**Status**: PARTIAL | **Duration**: 10-15 weeks
 
-Implement function blocks as C++ classes with state, methods, interfaces, and inheritance.
+Implement function blocks as C++ classes with state, OOP extensions (methods, interfaces, inheritance), and the IEC 61131-3 standard function block library.
 
 **Sub-phases**:
-- [Phase 5.1: Function Blocks Core](phase-5.1-function-blocks.md) - FB declarations and class skeleton codegen work; FB instantiation, named-parameter calls, and standard FBs not implemented
-- [Phase 5.2: OOP Extensions](phase-5.2-oop-extensions.md) - Methods, interfaces, inheritance, properties
+- [Phase 5.1: Function Block Instances and Invocations](phase-5.1-function-blocks.md) - FB declarations and class skeleton codegen work (PARTIAL); FB instantiation, invocation, member access, and composition pending
+- [Phase 5.2: OOP Extensions](phase-5.2-oop-extensions.md) - Methods, interfaces, inheritance, properties, access modifiers, ABSTRACT/FINAL/OVERRIDE, THIS/SUPER, VAR_INST
+- [Phase 5.3: IEC 61131-3 Standard Function Block Library](phase-5.3-standard-fb-library.md) - Standard FBs (TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS) as a compiled ST library
+- [Phase 5.4: Testing Strategy](phase-5.4-testing-strategy.md) - Comprehensive test coverage for FB and OOP features (runs throughout 5.1-5.3)
 
 ### Phase 6: OpenPLC Integration
 **Status**: PENDING | **Duration**: 3-4 weeks
