@@ -107,7 +107,7 @@ export function compile(
     };
   }
   try {
-    const primaryAst = buildAST(parseResult.cst, "main.st");
+    const primaryAst = buildAST(parseResult.cst, mergedOptions.fileName ?? "main.st");
     const units: CompilationUnit[] = [primaryAst];
 
     // Parse additional source files

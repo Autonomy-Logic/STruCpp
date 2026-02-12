@@ -428,6 +428,7 @@ function main(): void {
     sourceComments: options.sourceComments,
     optimizationLevel: options.optimizationLevel,
     headerFileName,
+    fileName: basename(inputPath),
   };
   if (additionalSources.length > 0) {
     compileOptions.additionalSources = additionalSources;

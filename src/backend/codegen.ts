@@ -1688,7 +1688,7 @@ export class CodeGenerator {
             block.blockType === "VAR_OUTPUT"
           ) {
             for (const decl of block.declarations) {
-              for (const _name of decl.names) {
+              for (let ni = 0; ni < decl.names.length; ni++) {
                 paramInfo.push({
                   blockType: block.blockType,
                   typeName: decl.type.name,
