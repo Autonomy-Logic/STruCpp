@@ -272,6 +272,16 @@ export class CodeGenerator {
   }
 
   /**
+   * Register additional FB type names (e.g. from libraries) so that
+   * codegen can distinguish FB invocations from regular function calls.
+   */
+  registerLibraryFBTypes(names: string[]): void {
+    for (const name of names) {
+      this.knownFBTypes.add(name.toUpperCase());
+    }
+  }
+
+  /**
    * Generate C++ code from a compilation unit.
    */
   generate(ast: CompilationUnit): CodeGenResult {
@@ -287,8 +297,8 @@ export class CodeGenerator {
     this.tempVarCounter = 0;
     this.ast = ast; // Store AST for looking up program bodies
 
-    // Build set of known FB types from AST
-    this.knownFBTypes.clear();
+    // Build set of known FB types from AST (library FB types already registered
+    // via registerLibraryFBTypes() before generate() is called)
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
     }
@@ -884,6 +894,9 @@ export class CodeGenerator {
       }
     }
 
+    // Populate scope for FB instance detection inside method bodies
+    this.enterScope(method.varBlocks);
+
     // Declare local variables (VAR, VAR_TEMP)
     for (const block of method.varBlocks) {
       if (block.blockType === "VAR" || block.blockType === "VAR_TEMP") {
@@ -910,6 +923,7 @@ export class CodeGenerator {
     }
 
     // Clean up
+    this.exitScope();
     this.varInstMangledNames.clear();
 
     this.emit("}");
@@ -1023,9 +1037,11 @@ export class CodeGenerator {
       }
     }
 
-    // Property implementations
+    // Property implementations (enter FB scope so FB member types are visible)
     for (const prop of fb.properties) {
+      this.enterScope(fb.varBlocks);
       this.generatePropertyImplementation(prop, fb.name);
+      this.exitScope();
     }
 
     this.currentFBExtends = undefined;

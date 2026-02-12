@@ -336,7 +336,7 @@ describe("Standard FB Library", () => {
     });
   });
 
-  // ─── Hardcoded Manifest Tests ──────────────────────────────────────
+  // ─── Generated Manifest Tests ─────────────────────────────────────
 
   describe("getStdFBLibraryManifest()", () => {
     it("should return a valid manifest with name 'iec-standard-fb'", () => {
@@ -648,6 +648,50 @@ describe("Standard FB Library", () => {
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
+    });
+  });
+
+  // ─── Manifest Cross-Validation ──────────────────────────────────────
+
+  describe("manifest cross-validation against ST sources", () => {
+    it("should match compiled library output for all standard FBs", () => {
+      // Compile all ST source files into a library
+      const compiledResult = compileLibrary(
+        [
+          { source: edgeDetST, fileName: "edge_detection.st" },
+          { source: bistableST, fileName: "bistable.st" },
+          { source: counterST, fileName: "counter.st" },
+          { source: timerST, fileName: "timer.st" },
+        ],
+        {
+          name: "iec-standard-fb",
+          version: "1.0.0",
+          namespace: "strucpp",
+        },
+      );
+      expect(compiledResult.success).toBe(true);
+
+      // Get the generated manifest loaded at runtime
+      const loadedManifest = getStdFBLibraryManifest();
+
+      // Compare FB count
+      expect(loadedManifest.functionBlocks).toHaveLength(
+        compiledResult.manifest.functionBlocks.length,
+      );
+
+      // Compare each FB's signature
+      for (const compiledFB of compiledResult.manifest.functionBlocks) {
+        const loadedFB = loadedManifest.functionBlocks.find(
+          (fb) => fb.name === compiledFB.name,
+        );
+        expect(
+          loadedFB,
+          `FB '${compiledFB.name}' missing from generated manifest`,
+        ).toBeDefined();
+        expect(loadedFB!.inputs).toEqual(compiledFB.inputs);
+        expect(loadedFB!.outputs).toEqual(compiledFB.outputs);
+        expect(loadedFB!.inouts).toEqual(compiledFB.inouts);
+      }
     });
   });
 });

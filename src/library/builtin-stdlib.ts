@@ -1,192 +1,66 @@
 /**
  * STruC++ Built-in Standard Library
  *
- * Generates a LibraryManifest representing the built-in IEC 61131-3 standard
- * functions. These are always available and backed by C++ runtime templates.
+ * Provides LibraryManifest objects for the built-in IEC 61131-3 standard
+ * functions and standard function blocks.
  */
 
+import { readFileSync, existsSync } from "fs";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
 import type { LibraryManifest } from "./library-manifest.js";
 import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
 
 /**
- * Generate a LibraryManifest for the IEC 61131-3 standard function blocks.
- * These FBs are auto-loaded so users can reference TON, CTU, R_TRIG, etc.
- * without any import directive.
+ * Find the generated manifest file. It lives in src/stdlib/iec-standard-fb/
+ * and is reachable from both src/ (test imports) and dist/ (production).
+ */
+function findManifestPath(): string {
+  const __dir = dirname(fileURLToPath(import.meta.url));
+
+  // When running from src/library/ → ../stdlib/iec-standard-fb/manifest.json
+  const fromSrc = resolve(__dir, "../stdlib/iec-standard-fb/manifest.json");
+  if (existsSync(fromSrc)) return fromSrc;
+
+  // When running from dist/library/ → ../../src/stdlib/iec-standard-fb/manifest.json
+  const fromDist = resolve(
+    __dir,
+    "../../src/stdlib/iec-standard-fb/manifest.json",
+  );
+  if (existsSync(fromDist)) return fromDist;
+
+  throw new Error(
+    `Standard FB library manifest not found. Run 'npm run build' to generate it.\n` +
+      `  Searched: ${fromSrc}\n  Searched: ${fromDist}`,
+  );
+}
+
+/** Cached manifest loaded from the generated JSON file */
+let cachedStdFBManifest: LibraryManifest | undefined;
+
+/**
+ * Load the IEC 61131-3 standard function block library manifest.
  *
- * The actual ST source files live in src/stdlib/iec-standard-fb/ and can be
- * compiled independently via compileLibrary(). This hardcoded manifest avoids
- * a build-time compilation step while keeping the FB signatures available.
+ * The manifest is generated at build time from the ST source files in
+ * src/stdlib/iec-standard-fb/ by scripts/generate-stdlib-manifest.mjs.
+ * This ensures the manifest always matches the actual ST source signatures.
+ *
+ * Users can reference TON, CTU, R_TRIG, etc. without any import directive.
  */
 export function getStdFBLibraryManifest(): LibraryManifest {
-  return {
-    name: "iec-standard-fb",
-    version: "1.0.0",
-    description: "IEC 61131-3 Standard Function Blocks",
-    namespace: "strucpp",
-    functions: [],
-    functionBlocks: [
-      // Edge Detection
-      {
-        name: "R_TRIG",
-        inputs: [{ name: "CLK", type: "BOOL" }],
-        outputs: [{ name: "Q", type: "BOOL" }],
-        inouts: [],
-      },
-      {
-        name: "F_TRIG",
-        inputs: [{ name: "CLK", type: "BOOL" }],
-        outputs: [{ name: "Q", type: "BOOL" }],
-        inouts: [],
-      },
-      // Bistable Latches
-      {
-        name: "SR",
-        inputs: [
-          { name: "S1", type: "BOOL" },
-          { name: "R", type: "BOOL" },
-        ],
-        outputs: [{ name: "Q1", type: "BOOL" }],
-        inouts: [],
-      },
-      {
-        name: "RS",
-        inputs: [
-          { name: "S", type: "BOOL" },
-          { name: "R1", type: "BOOL" },
-        ],
-        outputs: [{ name: "Q1", type: "BOOL" }],
-        inouts: [],
-      },
-      // Counters (INT)
-      {
-        name: "CTU",
-        inputs: [
-          { name: "CU", type: "BOOL" },
-          { name: "R", type: "BOOL" },
-          { name: "PV", type: "INT" },
-        ],
-        outputs: [
-          { name: "Q", type: "BOOL" },
-          { name: "CV", type: "INT" },
-        ],
-        inouts: [],
-      },
-      {
-        name: "CTD",
-        inputs: [
-          { name: "CD", type: "BOOL" },
-          { name: "LD", type: "BOOL" },
-          { name: "PV", type: "INT" },
-        ],
-        outputs: [
-          { name: "Q", type: "BOOL" },
-          { name: "CV", type: "INT" },
-        ],
-        inouts: [],
-      },
-      {
-        name: "CTUD",
-        inputs: [
-          { name: "CU", type: "BOOL" },
-          { name: "CD", type: "BOOL" },
-          { name: "R", type: "BOOL" },
-          { name: "LD", type: "BOOL" },
-          { name: "PV", type: "INT" },
-        ],
-        outputs: [
-          { name: "QU", type: "BOOL" },
-          { name: "QD", type: "BOOL" },
-          { name: "CV", type: "INT" },
-        ],
-        inouts: [],
-      },
-      // Counter type variants (DINT, LINT, UDINT, ULINT)
-      ...["DINT", "LINT", "UDINT", "ULINT"].flatMap((t) => [
-        {
-          name: `CTU_${t}`,
-          inputs: [
-            { name: "CU", type: "BOOL" },
-            { name: "R", type: "BOOL" },
-            { name: "PV", type: t },
-          ],
-          outputs: [
-            { name: "Q", type: "BOOL" },
-            { name: "CV", type: t },
-          ],
-          inouts: [],
-        },
-        {
-          name: `CTD_${t}`,
-          inputs: [
-            { name: "CD", type: "BOOL" },
-            { name: "LD", type: "BOOL" },
-            { name: "PV", type: t },
-          ],
-          outputs: [
-            { name: "Q", type: "BOOL" },
-            { name: "CV", type: t },
-          ],
-          inouts: [],
-        },
-        {
-          name: `CTUD_${t}`,
-          inputs: [
-            { name: "CU", type: "BOOL" },
-            { name: "CD", type: "BOOL" },
-            { name: "R", type: "BOOL" },
-            { name: "LD", type: "BOOL" },
-            { name: "PV", type: t },
-          ],
-          outputs: [
-            { name: "QU", type: "BOOL" },
-            { name: "QD", type: "BOOL" },
-            { name: "CV", type: t },
-          ],
-          inouts: [],
-        },
-      ]),
-      // Timers
-      {
-        name: "TON",
-        inputs: [
-          { name: "IN", type: "BOOL" },
-          { name: "PT", type: "TIME" },
-        ],
-        outputs: [
-          { name: "Q", type: "BOOL" },
-          { name: "ET", type: "TIME" },
-        ],
-        inouts: [],
-      },
-      {
-        name: "TOF",
-        inputs: [
-          { name: "IN", type: "BOOL" },
-          { name: "PT", type: "TIME" },
-        ],
-        outputs: [
-          { name: "Q", type: "BOOL" },
-          { name: "ET", type: "TIME" },
-        ],
-        inouts: [],
-      },
-      {
-        name: "TP",
-        inputs: [
-          { name: "IN", type: "BOOL" },
-          { name: "PT", type: "TIME" },
-        ],
-        outputs: [
-          { name: "Q", type: "BOOL" },
-          { name: "ET", type: "TIME" },
-        ],
-        inouts: [],
-      },
-    ],
-    types: [],
-    headers: [],
-    isBuiltin: true,
-  };
+  if (cachedStdFBManifest) return cachedStdFBManifest;
+
+  const manifestPath = findManifestPath();
+  const json = readFileSync(manifestPath, "utf-8");
+  cachedStdFBManifest = JSON.parse(json) as LibraryManifest;
+  return cachedStdFBManifest;
+}
+
+/**
+ * Reset the cached manifest (used by tests after regeneration).
+ */
+export function resetStdFBManifestCache(): void {
+  cachedStdFBManifest = undefined;
 }
 
 /**

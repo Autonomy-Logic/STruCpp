@@ -298,6 +298,20 @@ export function compile(
   });
   codegen.setProjectModel(projectModelResult.model);
 
+  // Register library FB type names so codegen can distinguish FB invocations
+  // from regular function calls (library FBs are not in the user AST)
+  if (!mergedOptions.noStdFBLibrary) {
+    const stdFBManifest = getStdFBLibraryManifest();
+    codegen.registerLibraryFBTypes(
+      stdFBManifest.functionBlocks.map((fb) => fb.name),
+    );
+  }
+  for (const manifest of allLibraries) {
+    codegen.registerLibraryFBTypes(
+      manifest.functionBlocks.map((fb) => fb.name),
+    );
+  }
+
   const codeResult = codegen.generate(ast);
 
   // Collect codegen warnings

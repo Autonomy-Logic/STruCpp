@@ -35,12 +35,30 @@ export class STParser extends CstParser {
     this.MANY(() => {
       this.OR({
         DEF: [
-          { ALT: () => this.SUBRULE(this.programDeclaration) },
-          { ALT: () => this.SUBRULE(this.functionDeclaration) },
-          { ALT: () => this.SUBRULE(this.functionBlockDeclaration) },
-          { ALT: () => this.SUBRULE(this.interfaceDeclaration) },
-          { ALT: () => this.SUBRULE(this.typeDeclaration) },
-          { ALT: () => this.SUBRULE(this.configurationDeclaration) },
+          {
+            ALT: () => this.SUBRULE(this.programDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.PROGRAM,
+          },
+          {
+            ALT: () => this.SUBRULE(this.functionDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.FUNCTION,
+          },
+          {
+            ALT: () => this.SUBRULE(this.functionBlockDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.FUNCTION_BLOCK,
+          },
+          {
+            ALT: () => this.SUBRULE(this.interfaceDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.INTERFACE,
+          },
+          {
+            ALT: () => this.SUBRULE(this.typeDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.TYPE,
+          },
+          {
+            ALT: () => this.SUBRULE(this.configurationDeclaration),
+            GATE: () => this.LA(1).tokenType === tokens.CONFIGURATION,
+          },
         ],
         IGNORE_AMBIGUITIES: true,
       });
@@ -119,9 +137,18 @@ export class STParser extends CstParser {
       this.MANY(() => {
         this.OR2({
           DEF: [
-            { ALT: () => this.SUBRULE(this.varBlock) },
-            { ALT: () => this.SUBRULE(this.methodDeclaration) },
-            { ALT: () => this.SUBRULE(this.propertyDeclaration) },
+            {
+              ALT: () => this.SUBRULE(this.varBlock),
+              GATE: () => this.isVarBlockAhead(),
+            },
+            {
+              ALT: () => this.SUBRULE(this.methodDeclaration),
+              GATE: () => this.LA(1).tokenType === tokens.METHOD,
+            },
+            {
+              ALT: () => this.SUBRULE(this.propertyDeclaration),
+              GATE: () => this.LA(1).tokenType === tokens.PROPERTY,
+            },
           ],
           IGNORE_AMBIGUITIES: true,
         });
@@ -661,21 +688,50 @@ export class STParser extends CstParser {
           ALT: () => this.SUBRULE(this.superCallStatement),
           GATE: () => this.LA(1).tokenType === tokens.SUPER,
         },
+        // assignmentStatement and functionCallStatement both start with Identifier;
+        // Chevrotain resolves by trying assignmentStatement first (it has := after the LHS)
         { ALT: () => this.SUBRULE(this.assignmentStatement) },
-        { ALT: () => this.SUBRULE(this.ifStatement) },
-        { ALT: () => this.SUBRULE(this.caseStatement) },
-        { ALT: () => this.SUBRULE(this.forStatement) },
-        { ALT: () => this.SUBRULE(this.whileStatement) },
-        { ALT: () => this.SUBRULE(this.repeatStatement) },
-        { ALT: () => this.SUBRULE(this.exitStatement) },
-        { ALT: () => this.SUBRULE(this.returnStatement) },
-        { ALT: () => this.SUBRULE(this.deleteStatement) },
+        {
+          ALT: () => this.SUBRULE(this.ifStatement),
+          GATE: () => this.LA(1).tokenType === tokens.IF,
+        },
+        {
+          ALT: () => this.SUBRULE(this.caseStatement),
+          GATE: () => this.LA(1).tokenType === tokens.CASE,
+        },
+        {
+          ALT: () => this.SUBRULE(this.forStatement),
+          GATE: () => this.LA(1).tokenType === tokens.FOR,
+        },
+        {
+          ALT: () => this.SUBRULE(this.whileStatement),
+          GATE: () => this.LA(1).tokenType === tokens.WHILE,
+        },
+        {
+          ALT: () => this.SUBRULE(this.repeatStatement),
+          GATE: () => this.LA(1).tokenType === tokens.REPEAT,
+        },
+        {
+          ALT: () => this.SUBRULE(this.exitStatement),
+          GATE: () => this.LA(1).tokenType === tokens.EXIT,
+        },
+        {
+          ALT: () => this.SUBRULE(this.returnStatement),
+          GATE: () => this.LA(1).tokenType === tokens.RETURN,
+        },
+        {
+          ALT: () => this.SUBRULE(this.deleteStatement),
+          GATE: () => this.LA(1).tokenType === tokens.__DELETE,
+        },
         { ALT: () => this.SUBRULE(this.functionCallStatement) },
         {
           ALT: () => this.SUBRULE(this.methodCallStatement),
           GATE: () => this.isMethodCallAhead(),
         },
-        { ALT: () => this.SUBRULE(this.externalCodePragma) },
+        {
+          ALT: () => this.SUBRULE(this.externalCodePragma),
+          GATE: () => this.LA(1).tokenType === tokens.ExternalPragma,
+        },
       ],
       IGNORE_AMBIGUITIES: true,
     });
@@ -717,6 +773,22 @@ export class STParser extends CstParser {
       },
     ]);
   });
+
+  /**
+   * Lookahead helper to detect if next token starts a VAR block.
+   */
+  private isVarBlockAhead(): boolean {
+    const t = this.LA(1).tokenType;
+    return (
+      t === tokens.VAR ||
+      t === tokens.VAR_INPUT ||
+      t === tokens.VAR_OUTPUT ||
+      t === tokens.VAR_IN_OUT ||
+      t === tokens.VAR_EXTERNAL ||
+      t === tokens.VAR_GLOBAL ||
+      t === tokens.VAR_TEMP
+    );
+  }
 
   /**
    * Lookahead helper to detect if we're parsing a method call: Ident.Ident(
@@ -1089,15 +1161,32 @@ export class STParser extends CstParser {
     this.OR({
       DEF: [
         { ALT: () => this.SUBRULE(this.literal) },
-        { ALT: () => this.SUBRULE(this.refExpression) },
-        { ALT: () => this.SUBRULE(this.drefExpression) },
-        { ALT: () => this.SUBRULE(this.newExpression) },
-        { ALT: () => this.SUBRULE(this.thisAccess) },
-        { ALT: () => this.SUBRULE(this.superAccess) },
+        {
+          ALT: () => this.SUBRULE(this.refExpression),
+          GATE: () => this.LA(1).tokenType === tokens.REF,
+        },
+        {
+          ALT: () => this.SUBRULE(this.drefExpression),
+          GATE: () => this.LA(1).tokenType === tokens.DREF,
+        },
+        {
+          ALT: () => this.SUBRULE(this.newExpression),
+          GATE: () => this.LA(1).tokenType === tokens.__NEW,
+        },
+        {
+          ALT: () => this.SUBRULE(this.thisAccess),
+          GATE: () => this.LA(1).tokenType === tokens.THIS,
+        },
+        {
+          ALT: () => this.SUBRULE(this.superAccess),
+          GATE: () => this.LA(1).tokenType === tokens.SUPER,
+        },
         {
           ALT: () => this.SUBRULE(this.methodCall),
           GATE: () => this.isMethodCallAhead(),
         },
+        // functionCall and variable both start with Identifier;
+        // functionCall needs Ident( lookahead to disambiguate
         { ALT: () => this.SUBRULE(this.functionCall) },
         { ALT: () => this.SUBRULE(this.variable) },
         {
@@ -1106,6 +1195,7 @@ export class STParser extends CstParser {
             this.SUBRULE(this.expression);
             this.CONSUME(tokens.RParen);
           },
+          GATE: () => this.LA(1).tokenType === tokens.LParen,
         },
       ],
       IGNORE_AMBIGUITIES: true,

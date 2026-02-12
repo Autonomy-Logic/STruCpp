@@ -398,6 +398,9 @@ export class SemanticAnalyzer {
     // Validate CONSTANT assignment restrictions
     this.validateConstantAssignments(ast);
 
+    // Validate OOP property/member name collisions
+    this.validatePropertyNameCollisions(ast);
+
     // TODO: Implement additional semantic validation in Phase 3+
     // - Check that variables are declared before use
     // - Validate array bounds
@@ -643,6 +646,39 @@ export class SemanticAnalyzer {
       column,
       severity: "error",
     });
+  }
+
+  /**
+   * Validate that property names don't collide with member variable names
+   * within the same function block. A collision causes the setter parameter
+   * to silently shadow the member variable.
+   */
+  private validatePropertyNameCollisions(ast: CompilationUnit): void {
+    for (const fb of ast.functionBlocks) {
+      if (fb.properties.length === 0) continue;
+
+      // Collect all declared member variable names (case-insensitive)
+      const memberNames = new Set<string>();
+      for (const block of fb.varBlocks) {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            memberNames.add(name.toUpperCase());
+          }
+        }
+      }
+
+      // Check each property name against member names
+      for (const prop of fb.properties) {
+        if (memberNames.has(prop.name.toUpperCase())) {
+          this.addWarning(
+            `Property '${prop.name}' in FUNCTION_BLOCK '${fb.name}' has the same name as a member variable. ` +
+              `The setter parameter will shadow the member variable.`,
+            prop.sourceSpan.startLine,
+            prop.sourceSpan.startCol,
+          );
+        }
+      }
+    }
   }
 
   /**
