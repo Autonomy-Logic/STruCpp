@@ -14,7 +14,11 @@ import { SemanticAnalyzer } from "./semantic/analyzer.js";
 import { CodeGenerator } from "./backend/codegen.js";
 import type { CompilationUnit } from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
-import { registerLibrarySymbols } from "./library/library-loader.js";
+import {
+  registerLibrarySymbols,
+  discoverLibraries,
+  LibraryManifestError,
+} from "./library/library-loader.js";
 
 /**
  * Default compilation options
@@ -195,11 +199,43 @@ export function compile(
   }
 
   // Phase 3.5: Library loading & Semantic analysis
+  // Discover libraries from libraryPaths and combine with explicit libraries
+  const allLibraries = [...(mergedOptions.libraries ?? [])];
+  if (mergedOptions.libraryPaths) {
+    for (const libPath of mergedOptions.libraryPaths) {
+      try {
+        allLibraries.push(...discoverLibraries(libPath));
+      } catch (e) {
+        errors.push({
+          message:
+            e instanceof LibraryManifestError
+              ? e.message
+              : `Library loading failed: ${e instanceof Error ? e.message : String(e)}`,
+          line: 0,
+          column: 0,
+          severity: "error",
+        });
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      success: false,
+      cppCode: "",
+      headerCode: "",
+      lineMap: new Map(),
+      headerLineMap: new Map(),
+      errors,
+      warnings,
+    };
+  }
+
   // If libraries are provided, pre-populate symbol tables with their symbols
   let semanticSymbolTables: SymbolTables | undefined;
-  if (mergedOptions.libraries && mergedOptions.libraries.length > 0) {
+  if (allLibraries.length > 0) {
     semanticSymbolTables = new SymbolTables();
-    for (const manifest of mergedOptions.libraries) {
+    for (const manifest of allLibraries) {
       registerLibrarySymbols(manifest, semanticSymbolTables);
     }
   }
@@ -237,12 +273,10 @@ export function compile(
   // Phase 4: Generate C++ code
   // Collect library headers for #include directives
   const libraryHeaders: string[] = [];
-  if (mergedOptions.libraries) {
-    for (const manifest of mergedOptions.libraries) {
-      for (const header of manifest.headers) {
-        if (!libraryHeaders.includes(header)) {
-          libraryHeaders.push(header);
-        }
+  for (const manifest of allLibraries) {
+    for (const header of manifest.headers) {
+      if (!libraryHeaders.includes(header)) {
+        libraryHeaders.push(header);
       }
     }
   }
@@ -355,6 +389,8 @@ export type { CompileOptions, CompileResult, CompileError } from "./types.js";
 export { compileLibrary } from "./library/library-compiler.js";
 export {
   loadLibraryManifest,
+  loadLibraryFromFile,
+  discoverLibraries,
   registerLibrarySymbols,
   LibraryManifestError,
 } from "./library/library-loader.js";

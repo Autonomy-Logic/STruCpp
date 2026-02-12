@@ -5,6 +5,8 @@
  * for cross-library function resolution.
  */
 
+import { readFileSync, readdirSync } from "fs";
+import { resolve, join } from "path";
 import type { LibraryManifest } from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
@@ -194,6 +196,62 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
   }
 
   return result;
+}
+
+/**
+ * Load a library manifest from a `.stlib.json` file on disk.
+ *
+ * @param manifestPath - Path to the `.stlib.json` file
+ * @returns The validated library manifest
+ * @throws {LibraryManifestError} if the file cannot be read or is invalid
+ */
+export function loadLibraryFromFile(manifestPath: string): LibraryManifest {
+  let raw: string;
+  try {
+    raw = readFileSync(manifestPath, "utf-8");
+  } catch (e) {
+    throw new LibraryManifestError(
+      `Cannot read library manifest: ${manifestPath}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (e) {
+    throw new LibraryManifestError(
+      `Invalid JSON in library manifest: ${manifestPath}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  return loadLibraryManifest(json);
+}
+
+/**
+ * Discover and load all library manifests (`*.stlib.json`) in a directory.
+ *
+ * @param dirPath - Directory to scan for `.stlib.json` files
+ * @returns Array of loaded library manifests
+ * @throws {LibraryManifestError} if any manifest fails validation
+ */
+export function discoverLibraries(dirPath: string): LibraryManifest[] {
+  const resolvedDir = resolve(dirPath);
+  let entries: string[];
+  try {
+    entries = readdirSync(resolvedDir);
+  } catch (e) {
+    throw new LibraryManifestError(
+      `Cannot read library directory: ${resolvedDir}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  const manifests: LibraryManifest[] = [];
+  for (const entry of entries) {
+    if (entry.endsWith(".stlib.json")) {
+      manifests.push(loadLibraryFromFile(join(resolvedDir, entry)));
+    }
+  }
+  return manifests;
 }
 
 /**

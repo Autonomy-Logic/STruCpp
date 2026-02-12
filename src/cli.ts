@@ -3,32 +3,38 @@
  * STruC++ Command Line Interface
  *
  * Usage:
- *   strucpp <input.st> -o <output.cpp> [options]
+ *   strucpp <input.st> [input2.st ...] -o <output.cpp> [options]
+ *   strucpp --compile-lib <input.st> [...] -o <dir> --lib-name <name> [options]
  *
  * Options:
- *   -o, --output <file>    Output file path
- *   -d, --debug            Enable debug mode
- *   --no-line-mapping      Disable line mapping
- *   --line-directives      Include #line directives
- *   --source-comments      Include ST source as comments
- *   -O, --optimize <level> Optimization level (0, 1, 2)
- *   --build                Compile to executable binary with interactive REPL
- *   --gpp <path>           Custom g++ path (default: g++)
- *   --cc <path>            Custom C compiler path (default: cc)
- *   --cxx-flags <flags>    Extra C++ compiler flags
- *   -v, --version          Show version
- *   -h, --help             Show help
+ *   -o, --output <file>       Output file path or directory
+ *   -d, --debug               Enable debug mode
+ *   --no-line-mapping         Disable line mapping
+ *   --line-directives         Include #line directives
+ *   --source-comments         Include ST source as comments
+ *   -O, --optimize <level>    Optimization level (0, 1, 2)
+ *   --build                   Compile to executable binary with interactive REPL
+ *   --gpp <path>              Custom g++ path (default: g++)
+ *   --cc <path>               Custom C compiler path (default: cc)
+ *   --cxx-flags <flags>       Extra C++ compiler flags
+ *   -L, --lib-path <path>     Library search path (repeatable)
+ *   --compile-lib             Compile sources into a library
+ *   --lib-name <name>         Library name (required with --compile-lib)
+ *   --lib-version <version>   Library version (default: "1.0.0")
+ *   --lib-namespace <ns>      C++ namespace (default: derived from lib-name)
+ *   -v, --version             Show version
+ *   -h, --help                Show help
  */
 
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { resolve, basename, dirname } from "path";
 import { execFileSync } from "child_process";
-import { compile, getVersion } from "./index.js";
+import { compile, getVersion, compileLibrary } from "./index.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
-  input?: string;
+  inputs: string[];
   output?: string;
   debug: boolean;
   lineMapping: boolean;
@@ -41,10 +47,16 @@ interface CLIOptions {
   gpp: string;
   cc: string;
   cxxFlags: string;
+  libraryPaths: string[];
+  compileLib: boolean;
+  libName?: string;
+  libVersion: string;
+  libNamespace?: string;
 }
 
 function parseArgs(args: string[]): CLIOptions {
   const options: CLIOptions = {
+    inputs: [],
     debug: false,
     lineMapping: true,
     lineDirectives: false,
@@ -56,6 +68,9 @@ function parseArgs(args: string[]): CLIOptions {
     gpp: "g++",
     cc: process.platform === "win32" ? "gcc" : "cc",
     cxxFlags: "",
+    libraryPaths: [],
+    compileLib: false,
+    libVersion: "1.0.0",
   };
 
   let i = 0;
@@ -106,8 +121,34 @@ function parseArgs(args: string[]): CLIOptions {
       if (nextArg !== undefined) {
         options.cxxFlags = nextArg;
       }
+    } else if (arg === "-L" || arg === "--lib-path") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.libraryPaths.push(nextArg);
+      }
+    } else if (arg === "--compile-lib") {
+      options.compileLib = true;
+    } else if (arg === "--lib-name") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.libName = nextArg;
+      }
+    } else if (arg === "--lib-version") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.libVersion = nextArg;
+      }
+    } else if (arg === "--lib-namespace") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        options.libNamespace = nextArg;
+      }
     } else if (arg !== undefined && !arg.startsWith("-")) {
-      options.input = arg;
+      options.inputs.push(arg);
     }
 
     i++;
@@ -121,27 +162,37 @@ function showHelp(): void {
 STruC++ - IEC 61131-3 Structured Text to C++ Compiler
 
 Usage:
-  strucpp <input.st> -o <output.cpp> [options]
+  strucpp <input.st> [input2.st ...] -o <output.cpp> [options]
+  strucpp --compile-lib <input.st> [...] -o <dir> --lib-name <name> [options]
 
 Options:
-  -o, --output <file>    Output file path (default: <input>.cpp)
-  -d, --debug            Enable debug mode
-  --no-line-mapping      Disable line mapping
-  --line-directives      Include #line directives in output
-  --source-comments      Include ST source as comments
-  -O, --optimize <level> Optimization level (0, 1, 2)
-  --build                Compile to executable with interactive REPL
-  --gpp <path>           Custom g++ path (default: g++)
-  --cc <path>            Custom C compiler path (default: cc)
-  --cxx-flags <flags>    Extra C++ compiler flags
-  -v, --version          Show version
-  -h, --help             Show this help
+  -o, --output <file>       Output file path (default: <input>.cpp)
+  -d, --debug               Enable debug mode
+  --no-line-mapping         Disable line mapping
+  --line-directives         Include #line directives in output
+  --source-comments         Include ST source as comments
+  -O, --optimize <level>    Optimization level (0, 1, 2)
+  --build                   Compile to executable with interactive REPL
+  --gpp <path>              Custom g++ path (default: g++)
+  --cc <path>               Custom C compiler path (default: cc)
+  --cxx-flags <flags>       Extra C++ compiler flags
+  -L, --lib-path <path>     Library search path (repeatable)
+  -v, --version             Show version
+  -h, --help                Show this help
+
+Library compilation:
+  --compile-lib             Compile sources into a library
+  --lib-name <name>         Library name (required with --compile-lib)
+  --lib-version <version>   Library version (default: "1.0.0")
+  --lib-namespace <ns>      C++ namespace (default: derived from lib-name)
 
 Examples:
   strucpp program.st -o program.cpp
+  strucpp program.st utils.st -o program.cpp
+  strucpp program.st -o program.cpp -L ./libs/
   strucpp program.st -o program.cpp --debug --line-directives
   strucpp program.st -o program.cpp --build
-  strucpp program.st -O 2
+  strucpp --compile-lib math.st -o mathlib/ --lib-name math-lib
 
 For more information, visit: https://github.com/Autonomy-Logic/STruCpp
 `);
@@ -233,6 +284,85 @@ function findRuntimeIncludeDir(cxxFlags: string): string | null {
   return null;
 }
 
+/**
+ * Library compilation mode: compile ST sources into a library manifest + C++ output.
+ */
+function compileLibraryMode(options: CLIOptions): void {
+  if (!options.libName) {
+    console.error("Error: --lib-name is required with --compile-lib");
+    process.exit(1);
+  }
+
+  if (options.inputs.length === 0) {
+    console.error("Error: No input files specified");
+    process.exit(1);
+  }
+
+  const outputDir = options.output ? resolve(options.output) : process.cwd();
+  if (!existsSync(outputDir)) {
+    mkdirSync(outputDir, { recursive: true });
+  }
+
+  const libNamespace =
+    options.libNamespace ?? options.libName.replace(/[^a-zA-Z0-9_]/g, "_");
+
+  // Read all input files
+  const sources: Array<{ source: string; fileName: string }> = [];
+  for (const input of options.inputs) {
+    const inputPath = resolve(input);
+    try {
+      sources.push({
+        source: readFileSync(inputPath, "utf-8"),
+        fileName: basename(inputPath),
+      });
+    } catch {
+      console.error(`Error: Cannot read input file: ${inputPath}`);
+      process.exit(1);
+    }
+  }
+
+  console.log(
+    `Compiling library "${options.libName}" from ${sources.length} source file(s)...`,
+  );
+
+  const result = compileLibrary(sources, {
+    name: options.libName,
+    version: options.libVersion,
+    namespace: libNamespace,
+  });
+
+  if (!result.success) {
+    console.error("\nLibrary compilation failed:");
+    for (const error of result.errors) {
+      const location = error.file
+        ? `${error.file}:${error.line ?? 0}`
+        : `${error.line ?? 0}`;
+      console.error(`  ${location}: error: ${error.message}`);
+    }
+    process.exit(1);
+  }
+
+  // Write manifest
+  const manifestPath = resolve(outputDir, `${options.libName}.stlib.json`);
+  writeFileSync(manifestPath, JSON.stringify(result.manifest, null, 2), "utf-8");
+  console.log(`Manifest written to ${manifestPath}`);
+
+  // Write C++ files
+  if (result.headerCode) {
+    const headerPath = resolve(outputDir, `${options.libName}.hpp`);
+    writeFileSync(headerPath, result.headerCode, "utf-8");
+    console.log(`Header written to ${headerPath}`);
+  }
+
+  if (result.cppCode) {
+    const cppPath = resolve(outputDir, `${options.libName}.cpp`);
+    writeFileSync(cppPath, result.cppCode, "utf-8");
+    console.log(`Source written to ${cppPath}`);
+  }
+
+  console.log("Library compilation successful!");
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
@@ -247,13 +377,20 @@ function main(): void {
     process.exit(options.showHelp ? 0 : 1);
   }
 
-  if (!options.input) {
+  // Library compilation mode
+  if (options.compileLib) {
+    compileLibraryMode(options);
+    return;
+  }
+
+  if (options.inputs.length === 0) {
     console.error("Error: No input file specified");
     console.error('Run "strucpp --help" for usage information');
     process.exit(1);
   }
 
-  const inputPath = resolve(options.input);
+  const primaryInput = options.inputs[0]!;
+  const inputPath = resolve(primaryInput);
   const outputPath = options.output
     ? resolve(options.output)
     : inputPath.replace(/\.st$/i, ".cpp");
@@ -264,9 +401,24 @@ function main(): void {
   let source: string;
   try {
     source = readFileSync(inputPath, "utf-8");
-  } catch (err) {
+  } catch {
     console.error(`Error: Cannot read input file: ${inputPath}`);
     process.exit(1);
+  }
+
+  // Read additional source files
+  const additionalSources: Array<{ source: string; fileName: string }> = [];
+  for (const extra of options.inputs.slice(1)) {
+    const extraPath = resolve(extra);
+    try {
+      additionalSources.push({
+        source: readFileSync(extraPath, "utf-8"),
+        fileName: basename(extraPath),
+      });
+    } catch {
+      console.error(`Error: Cannot read input file: ${extraPath}`);
+      process.exit(1);
+    }
   }
 
   const compileOptions: Partial<CompileOptions> = {
@@ -277,8 +429,18 @@ function main(): void {
     optimizationLevel: options.optimizationLevel,
     headerFileName,
   };
+  if (additionalSources.length > 0) {
+    compileOptions.additionalSources = additionalSources;
+  }
+  if (options.libraryPaths.length > 0) {
+    compileOptions.libraryPaths = options.libraryPaths;
+  }
 
-  console.log(`Compiling ${basename(inputPath)}...`);
+  const fileLabel =
+    options.inputs.length > 1
+      ? `${options.inputs.length} files`
+      : basename(inputPath);
+  console.log(`Compiling ${fileLabel}...`);
 
   const result = compile(source, compileOptions);
 
@@ -312,7 +474,7 @@ function main(): void {
       writeFileSync(headerPath, result.headerCode, "utf-8");
       console.log(`Header written to ${headerPath}`);
     }
-  } catch (err) {
+  } catch {
     console.error(`Error: Cannot write output file: ${outputPath}`);
     process.exit(1);
   }
@@ -339,7 +501,7 @@ function main(): void {
       process.exit(1);
     }
 
-    // Derive repl dir as sibling of include dir (runtime/include → runtime/repl)
+    // Derive repl dir as sibling of include dir (runtime/include -> runtime/repl)
     const replDir = resolve(dirname(runtimeIncludeDir), "repl");
     if (!existsSync(resolve(replDir, "isocline.h"))) {
       console.error(
