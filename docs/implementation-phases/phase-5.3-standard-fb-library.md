@@ -29,7 +29,7 @@ This strategy provides:
 
 Some functions **cannot** be written in ST and must be built into the C++ runtime:
 - Type conversion functions (`*_TO_*`) -- require C++ template specialization
-- `TIME()` / `CURRENT_TIME` -- requires runtime system clock access
+- `TIME()` -- requires runtime system clock access (returns absolute runtime time, CODESYS-compatible)
 - Math functions (SIN, COS, etc.) -- require C++ `<cmath>`
 
 These are already handled by the Phase 4.2 standard function registry and the C++ runtime headers. Standard FBs can freely call these built-in functions.
@@ -121,30 +121,13 @@ END_FUNCTION_BLOCK
 
 ### Category 4: Timers
 
-Timers require access to the current system time. In the MatIEC implementation, this is done via a compiler pragma (`{__SET_VAR(data__->,CURRENT_TIME,,__CURRENT_TIME)}`). For STruC++, we need a cleaner mechanism.
+Timers require access to the current system time. In the MatIEC implementation, this is done via a compiler pragma (`{__SET_VAR(data__->,CURRENT_TIME,,__CURRENT_TIME)}`). STruC++ uses a built-in `TIME()` function instead, matching CODESYS behavior. `TIME()` returns the absolute time for the runtime (elapsed time since the runtime started). Timer FBs call `TIME()` from pure ST, and the C++ runtime provides the implementation. This keeps the library pure ST and decoupled from runtime specifics.
 
 | FB | Description | Inputs | Outputs |
 |----|-------------|--------|---------|
 | **TP** | Pulse timer | IN: BOOL; PT: TIME | Q: BOOL; ET: TIME |
 | **TON** | On-delay timer | IN: BOOL; PT: TIME | Q: BOOL; ET: TIME |
 | **TOF** | Off-delay timer | IN: BOOL; PT: TIME | Q: BOOL; ET: TIME |
-
-**Timer implementation strategy**:
-
-Timers need `CURRENT_TIME` -- the current PLC scan time. Two approaches:
-
-**Approach A: Built-in function**
-- Add `CURRENT_TIME()` as a built-in standard function (like ABS, SQRT)
-- Timer FBs call it from pure ST: `CURRENT_TIME := CURRENT_TIME();`
-- The C++ runtime provides the implementation
-- Clean, no pragmas needed
-
-**Approach B: Runtime injection**
-- The OpenPLC runtime provides `__CURRENT_TIME` as a global variable
-- Timer FBs reference it via `VAR_EXTERNAL`
-- Requires runtime integration (Phase 6 concern)
-
-**Recommendation: Approach A** for the library phase. Timer FBs call `CURRENT_TIME()` as a standard function. The C++ runtime `iec_std_lib.hpp` provides the implementation. This keeps the library pure ST and decoupled from runtime specifics.
 
 **TON example** (state machine implementation):
 ```st
@@ -163,7 +146,7 @@ FUNCTION_BLOCK TON
     CURRENT_TIME, START_TIME : TIME;
   END_VAR
 
-  CURRENT_TIME := CURRENT_TIME();
+  CURRENT_TIME := TIME();
 
   IF ((STATE = 0) AND NOT(PREV_IN) AND IN) THEN
     STATE := 1;
@@ -304,7 +287,7 @@ The MatIEC library at `/path/to/matiec/lib/` contains reference implementations:
 | `edge_detection.txt` | `edge_detection.st` | None -- pure ST |
 | `bistable.txt` | `bistable.st` | Remove license headers |
 | `counter.txt` | `counter.st` | None -- pure ST (uses R_TRIG composition) |
-| `timer.txt` | `timer.st` | Replace `{__SET_VAR(...)}` pragma with `CURRENT_TIME()` call |
+| `timer.txt` | `timer.st` | Replace `{__SET_VAR(...)}` pragma with `TIME()` call |
 | `derivative_st.txt` | `analog.st` | Replace TIME_TO_REAL with built-in conversion |
 | `integral_st.txt` | `analog.st` | Same as derivative |
 | `pid_st.txt` | `analog.st` | FB composition (uses INTEGRAL + DERIVATIVE) |
@@ -315,7 +298,7 @@ The MatIEC library at `/path/to/matiec/lib/` contains reference implementations:
 
 ### Key Adaptations
 
-1. **Timer pragma replacement**: MatIEC uses `{__SET_VAR(data__->,CURRENT_TIME,,__CURRENT_TIME)}` to inject the current time. STruC++ replaces this with a clean `CURRENT_TIME()` function call.
+1. **Timer pragma replacement**: MatIEC uses `{__SET_VAR(data__->,CURRENT_TIME,,__CURRENT_TIME)}` to inject the current time. STruC++ replaces this with a clean `TIME()` function call (CODESYS-compatible).
 
 2. **Counter type variants**: MatIEC defines CTU_DINT, CTU_LINT, etc. as separate FBs. These can be kept as-is (separate FBs) since IEC 61131-3 doesn't support generics.
 
@@ -323,16 +306,17 @@ The MatIEC library at `/path/to/matiec/lib/` contains reference implementations:
 
 ## C++ Runtime Additions
 
-### CURRENT_TIME Function
+### TIME Function
 
-A new built-in function `CURRENT_TIME()` must be added to the C++ runtime and the standard function registry:
+A new built-in function `TIME()` must be added to the C++ runtime and the standard function registry. This function returns the absolute runtime time (elapsed time since the runtime started), matching CODESYS behavior for maximum compatibility.
 
 **File: `src/runtime/include/iec_std_lib.hpp`** (or new header):
 ```cpp
-// Returns the current PLC scan time
+// Returns the absolute runtime time (elapsed since runtime start)
+// CODESYS-compatible: TIME() returns monotonic elapsed time
 // In OpenPLC integration, this reads from the runtime's time source
 // For standalone/REPL mode, uses std::chrono
-inline IEC_TIME CURRENT_TIME() {
+inline IEC_TIME TIME() {
     #ifdef OPENPLC_RUNTIME
     return __CURRENT_TIME;  // Global provided by OpenPLC runtime
     #else
@@ -347,8 +331,8 @@ inline IEC_TIME CURRENT_TIME() {
 
 **File: `src/semantic/std-function-registry.ts`**:
 ```typescript
-// Add to standard function registry
-{ name: 'CURRENT_TIME', cppName: 'CURRENT_TIME', returnConstraint: 'specific',
+// Add to standard function registry (CODESYS-compatible TIME function)
+{ name: 'TIME', cppName: 'TIME', returnConstraint: 'specific',
   returnMatchesFirstParam: false, params: [],
   isVariadic: false, isConversion: false, category: 'time',
   specificReturnType: 'TIME' }
@@ -364,8 +348,8 @@ inline IEC_TIME CURRENT_TIME() {
 | `src/stdlib/iec-standard-fb/timer.st` | Create | TP, TON, TOF |
 | `src/stdlib/iec-standard-fb/analog.st` | Create | DERIVATIVE, INTEGRAL, PID, HYSTERESIS, RAMP |
 | `src/stdlib/iec-standard-fb/utility.st` | Create | RTC, SEMA |
-| `src/runtime/include/iec_std_lib.hpp` | Modify | Add CURRENT_TIME() function |
-| `src/semantic/std-function-registry.ts` | Modify | Register CURRENT_TIME |
+| `src/runtime/include/iec_std_lib.hpp` | Modify | Add TIME() function |
+| `src/semantic/std-function-registry.ts` | Modify | Register TIME |
 | `src/library/builtin-stdlib.ts` | Modify | Add auto-loading of standard FB library |
 | `src/index.ts` | Modify | Wire standard FB library into compile pipeline |
 | `scripts/build-stdlib.ts` | Create | Build script to compile ST stdlib during npm run build |
@@ -378,7 +362,7 @@ inline IEC_TIME CURRENT_TIME() {
 - Library manifest is generated correctly with all FB entries
 - Standard FBs are auto-loaded and available in user programs without import
 - FB composition works (CTU uses R_TRIG internally)
-- Timer FBs work with CURRENT_TIME() function
+- Timer FBs work with TIME() function (CODESYS-compatible)
 - Counter type variants (CTU_DINT, etc.) all compile and work
 - Generated C++ compiles with g++
 - Standard FBs produce correct behavior in integration tests

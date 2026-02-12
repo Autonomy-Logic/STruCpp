@@ -216,6 +216,12 @@ export class CodeGenerator {
   /** Current statement indent level (set by generateStatement before expression generation) */
   private currentStatementIndent = "    ";
 
+  /** Set of known function block type names (upper case) for FB instance detection */
+  private knownFBTypes: Set<string> = new Set();
+
+  /** Map of variable name (upper case) → type name (original case) for current scope */
+  private currentScopeVarTypes: Map<string, string> = new Map();
+
   constructor(
     private readonly _symbolTables: SymbolTables,
     options: Partial<CodeGenOptions> = {},
@@ -270,6 +276,12 @@ export class CodeGenerator {
     this.codegenWarnings = [];
     this.tempVarCounter = 0;
     this.ast = ast; // Store AST for looking up program bodies
+
+    // Build set of known FB types from AST
+    this.knownFBTypes.clear();
+    for (const fb of ast.functionBlocks) {
+      this.knownFBTypes.add(fb.name.toUpperCase());
+    }
 
     // Generate header
     this.generateHeader(ast);
@@ -486,7 +498,12 @@ export class CodeGenerator {
       this.emitHeader(`    ${comment}`);
       for (const decl of block.declarations) {
         for (const name of decl.names) {
-          this.emitHeader(`    IEC_${decl.type.name} ${name};`);
+          if (this.isFBType(decl.type.name)) {
+            // FB instance: plain class member (no IECVar wrapper)
+            this.emitHeader(`    ${decl.type.name} ${name};`);
+          } else {
+            this.emitHeader(`    IEC_${decl.type.name} ${name};`);
+          }
         }
       }
     }
@@ -517,8 +534,11 @@ export class CodeGenerator {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           const memberLine = this.currentHeaderLine;
-          // Generate variable with optional address comment
-          if (decl.address) {
+          if (this.isFBType(decl.type.name)) {
+            // FB instance: plain class member (no IECVar wrapper)
+            this.emitHeader(`    ${decl.type.name} ${name};`);
+          } else if (decl.address) {
+            // Generate variable with optional address comment
             this.emitHeader(
               `    IEC_${decl.type.name} ${name};  // AT ${decl.address}`,
             );
@@ -624,12 +644,14 @@ export class CodeGenerator {
 
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
+    this.enterScope(prog.varBlocks);
     if (prog.body.length > 0) {
       // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
       this.generateStatements(prog.body);
     } else if (this.options.sourceComments) {
       this.emit("    // Empty program body");
     }
+    this.exitScope();
     const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
@@ -650,12 +672,14 @@ export class CodeGenerator {
 
     // Operator()
     this.emit(`void ${fb.name}::operator()() {`);
+    this.enterScope(fb.varBlocks);
     if (fb.body.length > 0) {
       // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
       this.generateStatements(fb.body);
     } else if (this.options.sourceComments) {
       this.emit("    // Empty function block body");
     }
+    this.exitScope();
     this.emit("}");
     this.emit("");
   }
@@ -730,16 +754,20 @@ export class CodeGenerator {
       this.emitHeader("    // Local variables");
       for (const decl of prog.varDeclarations) {
         const constQualifier = decl.isConstant ? "const " : "";
-        const cppType = `IEC_${decl.typeName}`;
 
         const memberLine = this.currentHeaderLine;
-        if (decl.address) {
+        if (this.isFBType(decl.typeName)) {
+          // FB instance: plain class member (no IECVar wrapper)
+          this.emitHeader(`    ${decl.typeName} ${decl.name};`);
+        } else if (decl.address) {
+          const cppType = `IEC_${decl.typeName}`;
           this.emitHeader(
             `    ${constQualifier}${cppType} ${decl.name};  // AT ${decl.address}`,
           );
           // Collect located variable info
           this.collectLocatedVarFromModel(decl, prog.name);
         } else {
+          const cppType = `IEC_${decl.typeName}`;
           this.emitHeader(`    ${constQualifier}${cppType} ${decl.name};`);
         }
 
@@ -751,7 +779,10 @@ export class CodeGenerator {
 
         // Collect retain variables
         if (decl.isRetain) {
-          retainVars.push({ name: decl.name, typeName: cppType });
+          const retainType = this.isFBType(decl.typeName)
+            ? decl.typeName
+            : `IEC_${decl.typeName}`;
+          retainVars.push({ name: decl.name, typeName: retainType });
         }
       }
     }
@@ -864,11 +895,17 @@ export class CodeGenerator {
 
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
+    if (astProg) {
+      this.enterScope(astProg.varBlocks);
+    }
     if (astProg && astProg.body.length > 0) {
       // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
       this.generateStatements(astProg.body);
     } else if (this.options.sourceComments) {
       this.emit("    // Empty program body");
+    }
+    if (astProg) {
+      this.exitScope();
     }
     const closingBraceLine = this.currentLine;
     this.emit("}");
@@ -1161,9 +1198,15 @@ export class CodeGenerator {
       case "RefAssignStatement":
         this.generateRefAssignStatement(stmt, indent);
         break;
-      case "FunctionCallStatement":
-        this.emit(`${indent}${this.generateExpression(stmt.call)};`);
+      case "FunctionCallStatement": {
+        const fbType = this.getFBInvocationType(stmt.call.functionName);
+        if (fbType) {
+          this.generateFBInvocation(stmt.call, indent);
+        } else {
+          this.emit(`${indent}${this.generateExpression(stmt.call)};`);
+        }
         break;
+      }
       case "IfStatement":
         this.generateIfStatement(stmt, indent);
         isCompound = true;
@@ -1887,6 +1930,81 @@ export class CodeGenerator {
     const cppType = this.mapVarTypeToCpp(typeName);
     this.emit(`${this.currentStatementIndent}${cppType} ${name};`);
     return name;
+  }
+
+  /**
+   * Check if a type name refers to a known function block type.
+   */
+  private isFBType(typeName: string): boolean {
+    return this.knownFBTypes.has(typeName.toUpperCase());
+  }
+
+  /**
+   * Enter a new scope for code generation. Populates currentScopeVarTypes
+   * from the variable blocks of a program or function block.
+   */
+  private enterScope(
+    varBlocks: CompilationUnit["programs"][0]["varBlocks"],
+  ): void {
+    this.currentScopeVarTypes.clear();
+    for (const block of varBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
+        }
+      }
+    }
+  }
+
+  /**
+   * Exit the current scope, clearing variable type tracking.
+   */
+  private exitScope(): void {
+    this.currentScopeVarTypes.clear();
+  }
+
+  /**
+   * Check if a function call statement is actually an FB invocation.
+   * Returns the FB type name if it is, undefined otherwise.
+   */
+  private getFBInvocationType(functionName: string): string | undefined {
+    const varType = this.currentScopeVarTypes.get(functionName.toUpperCase());
+    if (varType && this.isFBType(varType)) {
+      return varType;
+    }
+    return undefined;
+  }
+
+  /**
+   * Generate code for an FB invocation.
+   * Pattern: assign inputs → call operator() → capture outputs
+   */
+  private generateFBInvocation(
+    call: FunctionCallExpression,
+    indent: string,
+  ): void {
+    const instanceName = call.functionName;
+
+    // Assign each named input parameter
+    for (const arg of call.arguments) {
+      if (arg.name && !arg.isOutput) {
+        this.emit(
+          `${indent}${instanceName}.${arg.name} = ${this.generateExpression(arg.value)};`,
+        );
+      }
+    }
+
+    // Call the FB execution body
+    this.emit(`${indent}${instanceName}();`);
+
+    // Capture output arguments (=> syntax)
+    for (const arg of call.arguments) {
+      if (arg.name && arg.isOutput) {
+        this.emit(
+          `${indent}${this.generateExpression(arg.value)} = ${instanceName}.${arg.name};`,
+        );
+      }
+    }
   }
 
   /**
