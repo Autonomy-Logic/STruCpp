@@ -5,10 +5,20 @@
  * Covers Phase 4.5: Library System.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeAll } from "vitest";
+import {
+  mkdirSync,
+  writeFileSync,
+  existsSync,
+  rmSync,
+} from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 import { compileLibrary } from "../../src/library/library-compiler.js";
 import {
   loadLibraryManifest,
+  loadLibraryFromFile,
+  discoverLibraries,
   registerLibrarySymbols,
   LibraryManifestError,
 } from "../../src/library/library-loader.js";
@@ -16,6 +26,15 @@ import { getBuiltinStdlibManifest } from "../../src/library/builtin-stdlib.js";
 import { SymbolTables } from "../../src/semantic/symbol-table.js";
 import { StdFunctionRegistry } from "../../src/semantic/std-function-registry.js";
 import { compile } from "../../src/index.js";
+
+const TMP_BASE = join(tmpdir(), "strucpp-lib-unit-tests");
+
+function freshDir(name: string): string {
+  const dir = join(TMP_BASE, name);
+  if (existsSync(dir)) rmSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
 
 describe("Library System", () => {
   describe("compileLibrary", () => {
@@ -462,6 +481,265 @@ describe("Library System", () => {
       const result = compile(source);
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain("x = 42");
+    });
+  });
+
+  describe("loadLibraryFromFile", () => {
+    beforeAll(() => {
+      if (existsSync(TMP_BASE)) rmSync(TMP_BASE, { recursive: true });
+      mkdirSync(TMP_BASE, { recursive: true });
+    });
+
+    it("should load a valid manifest from a .stlib.json file", () => {
+      const dir = freshDir("load-valid");
+      const manifestPath = join(dir, "test.stlib.json");
+      writeFileSync(
+        manifestPath,
+        JSON.stringify({
+          name: "file-lib",
+          version: "1.0.0",
+          namespace: "filelib",
+          functions: [
+            {
+              name: "FileFunc",
+              returnType: "INT",
+              parameters: [{ name: "x", type: "INT", direction: "input" }],
+            },
+          ],
+          functionBlocks: [],
+          types: [],
+          headers: ["file-lib.hpp"],
+          isBuiltin: false,
+        }),
+      );
+
+      const manifest = loadLibraryFromFile(manifestPath);
+      expect(manifest.name).toBe("file-lib");
+      expect(manifest.version).toBe("1.0.0");
+      expect(manifest.functions).toHaveLength(1);
+      expect(manifest.functions[0]!.name).toBe("FileFunc");
+    });
+
+    it("should throw LibraryManifestError for nonexistent file", () => {
+      expect(() => loadLibraryFromFile("/nonexistent/path.stlib.json")).toThrow(
+        LibraryManifestError,
+      );
+      expect(() => loadLibraryFromFile("/nonexistent/path.stlib.json")).toThrow(
+        "Cannot read library manifest",
+      );
+    });
+
+    it("should throw LibraryManifestError for invalid JSON", () => {
+      const dir = freshDir("load-bad-json");
+      const manifestPath = join(dir, "bad.stlib.json");
+      writeFileSync(manifestPath, "not valid json {{{");
+
+      expect(() => loadLibraryFromFile(manifestPath)).toThrow(
+        LibraryManifestError,
+      );
+      expect(() => loadLibraryFromFile(manifestPath)).toThrow(
+        "Invalid JSON in library manifest",
+      );
+    });
+
+    it("should throw LibraryManifestError for valid JSON with missing fields", () => {
+      const dir = freshDir("load-incomplete");
+      const manifestPath = join(dir, "incomplete.stlib.json");
+      writeFileSync(manifestPath, JSON.stringify({ name: "x" }));
+
+      expect(() => loadLibraryFromFile(manifestPath)).toThrow(
+        LibraryManifestError,
+      );
+    });
+  });
+
+  describe("discoverLibraries", () => {
+    beforeAll(() => {
+      if (existsSync(TMP_BASE)) rmSync(TMP_BASE, { recursive: true });
+      mkdirSync(TMP_BASE, { recursive: true });
+    });
+
+    it("should discover all .stlib.json files in a directory", () => {
+      const dir = freshDir("discover-multi");
+      const manifest1 = {
+        name: "lib-a",
+        version: "1.0.0",
+        namespace: "a",
+        functions: [],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      };
+      const manifest2 = {
+        name: "lib-b",
+        version: "2.0.0",
+        namespace: "b",
+        functions: [],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      };
+      writeFileSync(
+        join(dir, "lib-a.stlib.json"),
+        JSON.stringify(manifest1),
+      );
+      writeFileSync(
+        join(dir, "lib-b.stlib.json"),
+        JSON.stringify(manifest2),
+      );
+      // Non-manifest file should be ignored
+      writeFileSync(join(dir, "readme.txt"), "not a manifest");
+
+      const result = discoverLibraries(dir);
+      expect(result).toHaveLength(2);
+      const names = result.map((m) => m.name).sort();
+      expect(names).toEqual(["lib-a", "lib-b"]);
+    });
+
+    it("should return empty array for directory with no manifests", () => {
+      const dir = freshDir("discover-empty");
+      writeFileSync(join(dir, "some-file.txt"), "hello");
+
+      const result = discoverLibraries(dir);
+      expect(result).toEqual([]);
+    });
+
+    it("should throw LibraryManifestError for nonexistent directory", () => {
+      expect(() =>
+        discoverLibraries(join(TMP_BASE, "nonexistent-dir")),
+      ).toThrow(LibraryManifestError);
+      expect(() =>
+        discoverLibraries(join(TMP_BASE, "nonexistent-dir")),
+      ).toThrow("Cannot read library directory");
+    });
+
+    it("should throw LibraryManifestError if a manifest file is invalid", () => {
+      const dir = freshDir("discover-bad-manifest");
+      writeFileSync(join(dir, "bad.stlib.json"), "not json");
+
+      expect(() => discoverLibraries(dir)).toThrow(LibraryManifestError);
+    });
+  });
+
+  describe("compile() with libraryPaths option", () => {
+    beforeAll(() => {
+      if (existsSync(TMP_BASE)) rmSync(TMP_BASE, { recursive: true });
+      mkdirSync(TMP_BASE, { recursive: true });
+    });
+
+    it("should load libraries from libraryPaths and resolve symbols", () => {
+      const dir = freshDir("compile-libpaths");
+      const manifest = {
+        name: "ext-lib",
+        version: "1.0.0",
+        namespace: "ext",
+        functions: [
+          {
+            name: "ExtFunc",
+            returnType: "INT",
+            parameters: [{ name: "x", type: "INT", direction: "input" }],
+          },
+        ],
+        functionBlocks: [],
+        types: [],
+        headers: ["ext-lib.hpp"],
+        isBuiltin: false,
+      };
+      writeFileSync(
+        join(dir, "ext-lib.stlib.json"),
+        JSON.stringify(manifest),
+      );
+
+      const source = `
+        PROGRAM Main
+          VAR result : INT; END_VAR
+          result := ExtFunc(x := 42);
+        END_PROGRAM
+      `;
+      const result = compile(source, { libraryPaths: [dir] });
+
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain("ExtFunc");
+      expect(result.headerCode).toContain('#include "ext-lib.hpp"');
+    });
+
+    it("should return compile error for invalid libraryPaths", () => {
+      const source = `
+        PROGRAM Main
+          VAR x : INT; END_VAR
+          x := 1;
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraryPaths: [join(TMP_BASE, "does-not-exist")],
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]!.message).toContain(
+        "Cannot read library directory",
+      );
+    });
+
+    it("should combine libraryPaths with explicit libraries", () => {
+      const dir = freshDir("compile-combined");
+      const diskManifest = {
+        name: "disk-lib",
+        version: "1.0.0",
+        namespace: "disk",
+        functions: [
+          {
+            name: "DiskFunc",
+            returnType: "INT",
+            parameters: [{ name: "x", type: "INT", direction: "input" }],
+          },
+        ],
+        functionBlocks: [],
+        types: [],
+        headers: ["disk-lib.hpp"],
+        isBuiltin: false,
+      };
+      writeFileSync(
+        join(dir, "disk-lib.stlib.json"),
+        JSON.stringify(diskManifest),
+      );
+
+      const inlineManifest = loadLibraryManifest({
+        name: "inline-lib",
+        version: "1.0.0",
+        namespace: "inline",
+        functions: [
+          {
+            name: "InlineFunc",
+            returnType: "INT",
+            parameters: [{ name: "y", type: "INT", direction: "input" }],
+          },
+        ],
+        functionBlocks: [],
+        types: [],
+        headers: ["inline-lib.hpp"],
+        isBuiltin: false,
+      });
+
+      const source = `
+        PROGRAM Main
+          VAR a : INT; b : INT; END_VAR
+          a := DiskFunc(x := 1);
+          b := InlineFunc(y := 2);
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraryPaths: [dir],
+        libraries: [inlineManifest],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain("DiskFunc");
+      expect(result.cppCode).toContain("InlineFunc");
+      expect(result.headerCode).toContain('#include "disk-lib.hpp"');
+      expect(result.headerCode).toContain('#include "inline-lib.hpp"');
     });
   });
 });
