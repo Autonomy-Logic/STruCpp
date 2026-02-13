@@ -165,6 +165,12 @@ inline std::string var_value_to_string(VarTypeTag type, void* ptr) {
             if (abs_ns > 0) r += std::to_string(abs_ns) + "ns";
             return r;
         }
+        case VarTypeTag::STRING: {
+            // IECStringVar<N> layout: IECString<N> value_ { uint16_t length_; char data_[N+1]; } ...
+            // data_ is always null-terminated, starts at offset sizeof(uint16_t) from ptr
+            const char* str_data = reinterpret_cast<const char*>(ptr) + sizeof(uint16_t);
+            return std::string("'") + str_data + "'";
+        }
         default: return "<?>";
     }
 }
@@ -213,6 +219,22 @@ inline bool var_set_value(VarTypeTag type, void* ptr, const std::string& val) {
             case VarTypeTag::DWORD: static_cast<IECVar<DWORD_t>*>(ptr)->set(static_cast<DWORD_t>(std::stoul(val, nullptr, 0))); return true;
             case VarTypeTag::LWORD: static_cast<IECVar<LWORD_t>*>(ptr)->set(static_cast<LWORD_t>(std::stoull(val, nullptr, 0))); return true;
             case VarTypeTag::TIME:  static_cast<IECVar<TIME_t>*>(ptr)->set(static_cast<TIME_t>(std::stoll(val))); return true;
+            case VarTypeTag::STRING: {
+                // IECStringVar<N> layout: { IECString<N> value_ { uint16_t length_; char data_[N+1]; }, bool forced_, ... }
+                // Write directly to value_: set length_, copy data, null-terminate
+                // We don't know N, but we can read current capacity from the old data safely
+                // For safety, limit to 254 chars (default STRING max)
+                std::string s = val;
+                // Strip surrounding quotes if present
+                if (s.size() >= 2 && s.front() == '\'' && s.back() == '\'') s = s.substr(1, s.size() - 2);
+                uint16_t len = static_cast<uint16_t>(s.size() > 254 ? 254 : s.size());
+                auto* length_ptr = reinterpret_cast<uint16_t*>(ptr);
+                char* data_ptr = reinterpret_cast<char*>(ptr) + sizeof(uint16_t);
+                *length_ptr = len;
+                std::memcpy(data_ptr, s.c_str(), len);
+                data_ptr[len] = '\0';
+                return true;
+            }
             default: return false;
         }
     } catch (...) { return false; }
