@@ -1967,17 +1967,19 @@ export class CodeGenerator {
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
-    // Handle THIS reference → this->member
+    // Handle THIS reference
     if (nameUpper === "THIS") {
+      // THIS^ (dereference) with no field access → (*this)
+      if (expr.isDereference && expr.fieldAccess.length === 0) {
+        return "(*this)";
+      }
+      // THIS.member or THIS^.member → this->member
       let result = "this->";
       if (expr.fieldAccess.length > 0) {
         result += expr.fieldAccess[0];
         for (let i = 1; i < expr.fieldAccess.length; i++) {
           result += `.${expr.fieldAccess[i]}`;
         }
-      }
-      if (expr.isDereference) {
-        result += ".deref()";
       }
       return result;
     }
@@ -2027,9 +2029,9 @@ export class CodeGenerator {
       result += `.${field}`;
     }
 
-    // Dereference (^ operator → .deref())
+    // Dereference (^ operator → pointer dereference)
     if (expr.isDereference) {
-      result += ".deref()";
+      result = `(*${result})`;
     }
 
     return result;

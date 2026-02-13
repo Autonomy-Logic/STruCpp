@@ -1235,16 +1235,30 @@ export class STParser extends CstParser {
    */
   public thisAccess = this.RULE("thisAccess", () => {
     this.CONSUME(tokens.THIS);
-    this.CONSUME(tokens.Dot);
-    this.CONSUME(tokens.Identifier);
-    // Optional function call: THIS.Method(args)
-    this.OPTION(() => {
-      this.CONSUME(tokens.LParen);
-      this.OPTION2(() => {
-        this.SUBRULE(this.argumentList);
-      });
-      this.CONSUME(tokens.RParen);
-    });
+    this.OR([
+      {
+        // THIS^ (dereference - return self)
+        GATE: () => this.LA(1).tokenType === tokens.Caret,
+        ALT: () => {
+          this.CONSUME(tokens.Caret);
+        },
+      },
+      {
+        // THIS.member or THIS.method(args)
+        ALT: () => {
+          this.CONSUME(tokens.Dot);
+          this.CONSUME(tokens.Identifier);
+          // Optional function call: THIS.Method(args)
+          this.OPTION(() => {
+            this.CONSUME(tokens.LParen);
+            this.OPTION2(() => {
+              this.SUBRULE(this.argumentList);
+            });
+            this.CONSUME(tokens.RParen);
+          });
+        },
+      },
+    ]);
   });
 
   /**

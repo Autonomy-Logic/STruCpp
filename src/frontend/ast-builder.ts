@@ -2294,6 +2294,19 @@ export class ASTBuilder {
    */
   buildThisAccessExpression(node: CstNode): Expression {
     const children = node.children as CstChildren;
+
+    // THIS^ (dereference - return self)
+    if (children.Caret) {
+      return {
+        kind: "VariableExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        name: "THIS",
+        subscripts: [],
+        fieldAccess: [],
+        isDereference: true,
+      };
+    }
+
     const identifiers = getAllTokens(children.Identifier);
     const memberName = identifiers[0]?.image ?? "";
 
