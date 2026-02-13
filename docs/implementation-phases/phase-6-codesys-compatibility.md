@@ -640,7 +640,7 @@ __ENDTRY
 
 **Note**: C++ doesn't have `finally`; codegen must use RAII or a scope-guard pattern. Division-by-zero and access violations are not C++ exceptions by default -- this may require platform-specific signal handling or compile-time checks.
 
-### 6.5.2: `VAR_GENERIC CONSTANT` (Compile-Time Generics) [LOW | Complexity: XL]
+### 6.5.2: `VAR_GENERIC CONSTANT` (Compile-Time Generics) [LOW | Complexity: XL] - DO NOT IMPLEMENT: DEFERRED FOR LATER DUE TO XL COMPLEXITY
 
 CODESYS extension for template-like parameterization of FBs with compile-time constants.
 
@@ -769,9 +769,9 @@ CODESYS provides a rich preprocessor-like conditional compilation system.
 | `src/frontend/preprocessor.ts` | **New file**: Implement a preprocessing pass before parsing |
 | `src/semantic/analyzer.ts` | Provide symbol table queries for `defined(variable:)`, `hasattribute()`, etc. |
 
-**Implementation approach**: Two-pass -- preprocessor runs first, strips/includes code blocks, then feeds clean source to the parser.
+**Implementation approach**: Two-pass -- preprocessor runs first, strips/includes code blocks, then feeds clean source to the parser. Perhaps an easier approach could make use of C++ preprocessor directives like #ifdef and others instead of processing the code directly. Analyze if this is a better approach which could reduce significantly the complexity of this task.
 
-### 6.6.3: Extended Attribute Pragmas [LOW | Complexity: L]
+### 6.6.3: Extended Attribute Pragmas [LOW | Complexity: L] - DO NOT IMPLEMENT: DEFERRED FOR LATER DUE TO L COMPLEXITY
 
 CODESYS defines many predefined attribute pragmas that affect compilation behavior.
 
