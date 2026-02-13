@@ -95,14 +95,14 @@ Close the remaining gaps between STruC++ and CODESYS V3 Structured Text, enablin
 
 Full integration with OpenPLC runtime (located variables architecture already completed in Phase 2.3).
 
-**Document**: [phase-6-openplc-integration.md](phase-6-openplc-integration.md)
+**Document**: [phase-7-openplc-integration.md](phase-7-openplc-integration.md)
 
 ### Phase 8: Optimizations and Advanced Debug Support
 **Status**: PENDING | **Duration**: 4-6 weeks
 
 Optimize generated code and enhance debugging capabilities.
 
-**Document**: [phase-7-optimizations.md](phase-7-optimizations.md)
+**Document**: [phase-8-optimizations.md](phase-8-optimizations.md)
 
 ### Phase 9: IEC 61131-3 Testing Framework
 **Status**: PENDING | **Duration**: 8-12 weeks
@@ -110,12 +110,12 @@ Optimize generated code and enhance debugging capabilities.
 Vendor-agnostic, offline unit testing framework for IEC 61131-3 Structured Text programs, with tests written in ST itself. Inspired by the ceedling testing framework for embedded C. Single-command execution (`strucpp source.st --test test_source.st`) compiles, builds, runs, and reports results. Also serves as STruC++ self-validation suite for end-to-end compiler testing.
 
 **Sub-phases**:
-- [Phase 9.1: Core Test Infrastructure](phase-8.1-core-test-infrastructure.md) - TEST/END_TEST blocks, basic asserts, CLI `--test` flag, program testing
-- [Phase 9.2: Complete Assert Library and Test Organization](phase-8.2-assert-library.md) - Full assert set, SETUP/TEARDOWN, multiple test files, messages
-- [Phase 9.3: Function and Function Block Testing](phase-8.3-function-fb-testing.md) - Direct function calls, FB instantiation, method invocation (requires Phase 4+5)
-- [Phase 9.4: Mocking Framework](phase-8.4-mocking-framework.md) - Per-TEST MOCK declarations for FBs and Functions, mock verification, selective mocking (requires Phase 9.3)
-- [Phase 9.5: STruC++ Self-Validation Suite](phase-8.5-self-validation-suite.md) - ST test files for compiler validation, Vitest integration, CI pipeline
-- [Phase 9.6: Advanced Testing Features](phase-8.6-advanced-testing.md) - JUnit XML/TAP output, verbose mode, test filtering, timing
+- [Phase 9.1: Core Test Infrastructure](phase-9.1-core-test-infrastructure.md) - TEST/END_TEST blocks, basic asserts, CLI `--test` flag, program testing
+- [Phase 9.2: Complete Assert Library and Test Organization](phase-9.2-assert-library.md) - Full assert set, SETUP/TEARDOWN, multiple test files, messages
+- [Phase 9.3: Function and Function Block Testing](phase-9.3-function-fb-testing.md) - Direct function calls, FB instantiation, method invocation (requires Phase 4+5)
+- [Phase 9.4: Mocking Framework](phase-9.4-mocking-framework.md) - Per-TEST MOCK declarations for FBs and Functions, mock verification, selective mocking (requires Phase 9.3)
+- [Phase 9.5: STruC++ Self-Validation Suite](phase-9.5-self-validation-suite.md) - ST test files for compiler validation, Vitest integration, CI pipeline
+- [Phase 9.6: Advanced Testing Features](phase-9.6-advanced-testing.md) - JUnit XML/TAP output, verbose mode, test filtering, timing
 
 **Note**: STruC++ focuses exclusively on Structured Text (ST). Other IEC 61131-3 languages (IL, SFC, LD, FBD) are translated to ST by OpenPLC Editor before compilation.
 
