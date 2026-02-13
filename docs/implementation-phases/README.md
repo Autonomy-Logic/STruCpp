@@ -75,32 +75,47 @@ Implement function blocks as C++ classes with state, OOP extensions (methods, in
 - [Phase 5.4: Testing Strategy](phase-5.4-testing-strategy.md) - Comprehensive test coverage for FB and OOP features (runs throughout 5.1-5.3)
 - [Phase 5.5: Advanced FB Patterns and CODESYS Compatibility](phase-5.5-advanced-fb-patterns.md) - Parameterized string types `STRING(n)`, pointer dereference `THIS^`, method chaining (fluent interface), and CODESYS system functions (`ADR`, `SIZEOF`, `memcpy`)
 
-### Phase 6: OpenPLC Integration
+### Phase 6: CODESYS Compatibility
+**Status**: PENDING | **Duration**: 8-12 weeks
+
+Close the remaining gaps between STruC++ and CODESYS V3 Structured Text, enabling compilation of real-world CODESYS programs. 25 identified gaps organized into 6 sub-phases by impact and dependency.
+
+**Sub-phases**:
+- [Phase 6.1: Type System Gaps](phase-6-codesys-compatibility.md#sub-phase-61-type-system-gaps) - `POINTER TO` type declarations (CRITICAL), `UNION` type (HIGH)
+- [Phase 6.2: FB Lifecycle and Runtime Type System](phase-6-codesys-compatibility.md#sub-phase-62-fb-lifecycle-and-runtime-type-system) - `FB_Init`/`FB_Exit`/`FB_Reinit` (HIGH), `__QUERYINTERFACE`/`__QUERYPOINTER` (HIGH), `__ISVALIDREF`, `=>` output assignment
+- [Phase 6.3: Literals, Type Refinements, and Time Types](phase-6-codesys-compatibility.md#sub-phase-63-literals-type-refinements-and-time-types) - Bit access (MEDIUM), typed literals (MEDIUM), enum base types (MEDIUM), `INTERNAL`, 64-bit time types (MEDIUM), subrange types
+- [Phase 6.4: Control Flow and POU Extensions](phase-6-codesys-compatibility.md#sub-phase-64-control-flow-and-pou-extensions) - `ACTION` blocks (MEDIUM), `AND_THEN`/`OR_ELSE`, `JMP`/labels, `BIT` type
+- [Phase 6.5: CODESYS Extension Operators](phase-6-codesys-compatibility.md#sub-phase-65-codesys-extension-operators) - `__TRY`/`__CATCH`/`__FINALLY`, `VAR_GENERIC CONSTANT`, `INI`, `__POUNAME`/`__POSITION`, `BITADR`/`XSIZEOF`
+- [Phase 6.6: Advanced Pragmas, Atomics, and Miscellaneous](phase-6-codesys-compatibility.md#sub-phase-66-advanced-pragmas-atomics-and-miscellaneous) - Conditional compilation pragmas, extended attribute pragmas, multicore/atomic operators, GVL/interface properties
+
+**Document**: [phase-6-codesys-compatibility.md](phase-6-codesys-compatibility.md)
+
+### Phase 7: OpenPLC Integration
 **Status**: PENDING | **Duration**: 3-4 weeks
 
 Full integration with OpenPLC runtime (located variables architecture already completed in Phase 2.3).
 
 **Document**: [phase-6-openplc-integration.md](phase-6-openplc-integration.md)
 
-### Phase 7: Optimizations and Advanced Debug Support
+### Phase 8: Optimizations and Advanced Debug Support
 **Status**: PENDING | **Duration**: 4-6 weeks
 
 Optimize generated code and enhance debugging capabilities.
 
 **Document**: [phase-7-optimizations.md](phase-7-optimizations.md)
 
-### Phase 8: IEC 61131-3 Testing Framework
+### Phase 9: IEC 61131-3 Testing Framework
 **Status**: PENDING | **Duration**: 8-12 weeks
 
 Vendor-agnostic, offline unit testing framework for IEC 61131-3 Structured Text programs, with tests written in ST itself. Inspired by the ceedling testing framework for embedded C. Single-command execution (`strucpp source.st --test test_source.st`) compiles, builds, runs, and reports results. Also serves as STruC++ self-validation suite for end-to-end compiler testing.
 
 **Sub-phases**:
-- [Phase 8.1: Core Test Infrastructure](phase-8.1-core-test-infrastructure.md) - TEST/END_TEST blocks, basic asserts, CLI `--test` flag, program testing
-- [Phase 8.2: Complete Assert Library and Test Organization](phase-8.2-assert-library.md) - Full assert set, SETUP/TEARDOWN, multiple test files, messages
-- [Phase 8.3: Function and Function Block Testing](phase-8.3-function-fb-testing.md) - Direct function calls, FB instantiation, method invocation (requires Phase 4+5)
-- [Phase 8.4: Mocking Framework](phase-8.4-mocking-framework.md) - Per-TEST MOCK declarations for FBs and Functions, mock verification, selective mocking (requires Phase 8.3)
-- [Phase 8.5: STruC++ Self-Validation Suite](phase-8.5-self-validation-suite.md) - ST test files for compiler validation, Vitest integration, CI pipeline
-- [Phase 8.6: Advanced Testing Features](phase-8.6-advanced-testing.md) - JUnit XML/TAP output, verbose mode, test filtering, timing
+- [Phase 9.1: Core Test Infrastructure](phase-8.1-core-test-infrastructure.md) - TEST/END_TEST blocks, basic asserts, CLI `--test` flag, program testing
+- [Phase 9.2: Complete Assert Library and Test Organization](phase-8.2-assert-library.md) - Full assert set, SETUP/TEARDOWN, multiple test files, messages
+- [Phase 9.3: Function and Function Block Testing](phase-8.3-function-fb-testing.md) - Direct function calls, FB instantiation, method invocation (requires Phase 4+5)
+- [Phase 9.4: Mocking Framework](phase-8.4-mocking-framework.md) - Per-TEST MOCK declarations for FBs and Functions, mock verification, selective mocking (requires Phase 9.3)
+- [Phase 9.5: STruC++ Self-Validation Suite](phase-8.5-self-validation-suite.md) - ST test files for compiler validation, Vitest integration, CI pipeline
+- [Phase 9.6: Advanced Testing Features](phase-8.6-advanced-testing.md) - JUnit XML/TAP output, verbose mode, test filtering, timing
 
 **Note**: STruC++ focuses exclusively on Structured Text (ST). Other IEC 61131-3 languages (IL, SFC, LD, FBD) are translated to ST by OpenPLC Editor before compilation.
 

@@ -65,9 +65,10 @@ Generates two files: `.cpp` (implementation) and `.hpp` (header). All generated 
 - **Partial**: Phase 5.1 (Function Block Instances and Invocations) - declarations and class skeleton codegen work; FB instantiation, invocation, member access pending
 - **Pending**: Phase 5.2 (OOP extensions - methods, interfaces, inheritance, properties)
 - **Pending**: Phase 5.3 (IEC 61131-3 Standard FB Library - TON/TOF/TP/CTU/CTD/R_TRIG/F_TRIG/SR/RS as compiled ST library)
-- **Pending**: Phase 6 (OpenPLC runtime integration - located variable infrastructure already complete)
-- **Pending**: Phase 7 (optimizations and advanced debug support)
-- **Pending**: Phase 8 (IEC 61131-3 testing framework)
+- **Pending**: Phase 6 (CODESYS compatibility - POINTER TO, UNION, FB_Init/FB_Exit, __QUERYINTERFACE, bit access, typed literals, 64-bit time types, ACTION, exceptions, generics, conditional compilation)
+- **Pending**: Phase 7 (OpenPLC runtime integration - located variable infrastructure already complete)
+- **Pending**: Phase 8 (optimizations and advanced debug support)
+- **Pending**: Phase 9 (IEC 61131-3 testing framework)
 
 ## TypeScript Conventions
 
