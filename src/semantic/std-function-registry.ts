@@ -67,7 +67,8 @@ export interface StdFunctionDescriptor {
     | "conversion"
     | "arithmetic"
     | "string"
-    | "time";
+    | "time"
+    | "system";
 }
 
 /**
@@ -193,6 +194,7 @@ export class StdFunctionRegistry {
     this.registerConversionFunctions();
     this.registerStringFunctions();
     this.registerTimeFunctions();
+    this.registerSystemFunctions();
   }
 
   // ---------------------------------------------------------------------------
@@ -825,6 +827,59 @@ export class StdFunctionRegistry {
       isVariadic: false,
       isConversion: false,
       category: "time",
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // System Functions (CODESYS extensions)
+  // ---------------------------------------------------------------------------
+
+  private registerSystemFunctions(): void {
+    // ADR(variable) -> ULINT (address of variable)
+    this.register({
+      name: "ADR",
+      cppName: "ADR",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "ULINT",
+      params: [
+        { name: "IN", constraint: "ANY", isByRef: true },
+      ],
+      isVariadic: false,
+      isConversion: false,
+      category: "system",
+    });
+
+    // SIZEOF(variable) -> UDINT (size in bytes)
+    this.register({
+      name: "SIZEOF",
+      cppName: "sizeof",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "UDINT",
+      params: [
+        { name: "IN", constraint: "ANY", isByRef: false },
+      ],
+      isVariadic: false,
+      isConversion: false,
+      category: "system",
+    });
+
+    // MEMCPY(dest, src, n) -> ULINT (CODESYS memcpy)
+    this.register({
+      name: "MEMCPY",
+      cppName: "MEMCPY",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "ULINT",
+      params: [
+        { name: "DEST", constraint: "ANY", isByRef: false },
+        { name: "SRC", constraint: "ANY", isByRef: false },
+        { name: "N", constraint: "ANY_INT", isByRef: false },
+      ],
+      isVariadic: false,
+      isConversion: false,
+      category: "system",
     });
   }
 }

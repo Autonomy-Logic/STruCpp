@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <type_traits>
 
 namespace strucpp {
@@ -794,6 +795,31 @@ inline IEC_TIME TIME() {
     auto now = std::chrono::steady_clock::now();
     auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
     return IEC_TIME(static_cast<TIME_t>(ns));
+}
+
+// =============================================================================
+// CODESYS System Functions
+// =============================================================================
+
+/**
+ * ADR(variable) - Returns the memory address of a variable.
+ * CODESYS extension. Maps to address-of in C++, returning uintptr_t
+ * for compatibility with pointer arithmetic.
+ */
+template<typename T>
+inline IEC_ULINT ADR(T& var) {
+    return static_cast<IEC_ULINT>(reinterpret_cast<std::uintptr_t>(&var));
+}
+
+/**
+ * MEMCPY(dest, src, n) - Copies n bytes from src to dest.
+ * CODESYS extension. Accepts uintptr_t addresses from ADR() for
+ * pointer arithmetic compatibility.
+ */
+inline IEC_ULINT MEMCPY(IEC_ULINT dest, IEC_ULINT src, std::size_t n) {
+    std::memcpy(reinterpret_cast<void*>(static_cast<std::uintptr_t>(dest)),
+                reinterpret_cast<const void*>(static_cast<std::uintptr_t>(src)), n);
+    return dest;
 }
 
 } // namespace strucpp
