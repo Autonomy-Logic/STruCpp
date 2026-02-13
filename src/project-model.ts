@@ -65,6 +65,7 @@ export interface TimeValue {
 export interface ProjectVarDeclaration {
   name: string;
   typeName: string;
+  maxLength?: number; // For STRING(n) / WSTRING(n) parameterized length
   initialValue?: string;
   isConstant: boolean;
   isRetain: boolean;
@@ -651,6 +652,9 @@ export class ProjectModelBuilder {
       isRetain: block.isRetain,
       ...(initialValue !== undefined ? { initialValue } : {}),
       ...(decl.address !== undefined ? { address: decl.address } : {}),
+      ...(decl.type.maxLength !== undefined
+        ? { maxLength: decl.type.maxLength }
+        : {}),
     };
   }
 

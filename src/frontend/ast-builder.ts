@@ -1118,13 +1118,24 @@ export class ASTBuilder {
       referenceKind = "reference_to";
     }
 
-    return {
+    // Extract optional parameterized length: STRING(n) / WSTRING(n)
+    let maxLength: number | undefined;
+    const lengthToken = getFirstToken(children.IntegerLiteral);
+    if (lengthToken) {
+      maxLength = parseInt(lengthToken.image, 10);
+    }
+
+    const result: TypeReference = {
       kind: "TypeReference",
       sourceSpan: nodeToSourceSpan(node),
       name,
       isReference,
       referenceKind,
     };
+    if (maxLength !== undefined) {
+      result.maxLength = maxLength;
+    }
+    return result;
   }
 
   /**

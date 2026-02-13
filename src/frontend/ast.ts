@@ -336,6 +336,7 @@ export interface TypeReference extends ASTNode {
   name: string;
   isReference: boolean; // true for REF_TO (for backwards compat)
   referenceKind: ReferenceKind; // more specific: "none", "ref_to", or "reference_to"
+  maxLength?: number; // For STRING(n) / WSTRING(n) parameterized length
 }
 
 // =============================================================================

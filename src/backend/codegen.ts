@@ -253,7 +253,7 @@ export class CodeGenerator {
    * Handles VLA synthetic names (__VLA_1D_INT → ArrayView1D<INT_t>)
    * and regular types (INT → IEC_INT).
    */
-  private mapVarTypeToCpp(typeName: string): string {
+  private mapVarTypeToCpp(typeName: string, maxLength?: number): string {
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
     if (vlaMatch) {
@@ -261,7 +261,21 @@ export class CodeGenerator {
       const elemType = this.typeCodeGen.mapTypeToCpp(vlaMatch[2]!);
       return `ArrayView${ndims}D<${elemType}>`;
     }
+    // Handle parameterized STRING(n) / WSTRING(n)
+    if (maxLength !== undefined) {
+      const upper = typeName.toUpperCase();
+      if (upper === "STRING" || upper === "WSTRING") {
+        return `IEC_${upper}<${maxLength}>`;
+      }
+    }
     return `IEC_${typeName}`;
+  }
+
+  /**
+   * Map a TypeReference to its C++ type string, including parameterized length.
+   */
+  private mapTypeRefToCpp(typeRef: { name: string; maxLength?: number }): string {
+    return this.mapVarTypeToCpp(typeRef.name, typeRef.maxLength);
   }
 
   /**
@@ -544,7 +558,7 @@ export class CodeGenerator {
             // FB instance: plain class member (no IECVar wrapper)
             this.emitHeader(`    ${decl.type.name} ${name};`);
           } else {
-            this.emitHeader(`    IEC_${decl.type.name} ${name};`);
+            this.emitHeader(`    ${this.mapTypeRefToCpp(decl.type)} ${name};`);
           }
         }
       }
@@ -611,12 +625,12 @@ export class CodeGenerator {
           } else if (decl.address) {
             // Generate variable with optional address comment
             this.emitHeader(
-              `    IEC_${decl.type.name} ${name};  // AT ${decl.address}`,
+              `    ${this.mapTypeRefToCpp(decl.type)} ${name};  // AT ${decl.address}`,
             );
             // Collect located variable info
             this.collectLocatedVar(name, decl, prog.name);
           } else {
-            this.emitHeader(`    IEC_${decl.type.name} ${name};`);
+            this.emitHeader(`    ${this.mapTypeRefToCpp(decl.type)} ${name};`);
           }
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
@@ -642,7 +656,7 @@ export class CodeGenerator {
     const params = this.generateFunctionParams(func);
 
     this.emitHeader(
-      `IEC_${func.returnType.name} ${func.name}(${params.join(", ")});`,
+      `${this.mapTypeRefToCpp(func.returnType)} ${func.name}(${params.join(", ")});`,
     );
   }
 
@@ -659,12 +673,12 @@ export class CodeGenerator {
       if (block.blockType === "VAR_INPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`${this.mapVarTypeToCpp(decl.type.name)} ${name}`);
+            params.push(`${this.mapTypeRefToCpp(decl.type)} ${name}`);
           }
         }
       } else if (block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
-          const cppType = this.mapVarTypeToCpp(decl.type.name);
+          const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
             // VLA types (ArrayView) are already reference-like; others need &
             if (decl.type.name.startsWith("__VLA_")) {
@@ -676,7 +690,7 @@ export class CodeGenerator {
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
-          const cppType = this.mapVarTypeToCpp(decl.type.name);
+          const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
             params.push(`${cppType}& ${name}`);
           }
@@ -708,7 +722,7 @@ export class CodeGenerator {
 
     for (const method of iface.methods) {
       const returnType = method.returnType
-        ? `IEC_${method.returnType.name}`
+        ? this.mapTypeRefToCpp(method.returnType)
         : "void";
       const params = this.generateMethodParamList(method);
       this.emitHeader(
@@ -735,7 +749,7 @@ export class CodeGenerator {
             for (const name of decl.names) {
               result.push({
                 mangledName: `__${method.name}__${name}`,
-                cppType: `IEC_${decl.type.name}`,
+                cppType: this.mapTypeRefToCpp(decl.type),
               });
             }
           }
@@ -776,7 +790,7 @@ export class CodeGenerator {
 
       for (const method of visMethods) {
         const returnType = method.returnType
-          ? `IEC_${method.returnType.name}`
+          ? this.mapTypeRefToCpp(method.returnType)
           : "void";
         const params = this.generateMethodParamList(method);
 
@@ -818,19 +832,19 @@ export class CodeGenerator {
       if (block.blockType === "VAR_INPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`IEC_${decl.type.name} ${name}`);
+            params.push(`${this.mapTypeRefToCpp(decl.type)} ${name}`);
           }
         }
       } else if (block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`IEC_${decl.type.name}& ${name}`);
+            params.push(`${this.mapTypeRefToCpp(decl.type)}& ${name}`);
           }
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`IEC_${decl.type.name}& ${name}`);
+            params.push(`${this.mapTypeRefToCpp(decl.type)}& ${name}`);
           }
         }
       }
@@ -846,7 +860,7 @@ export class CodeGenerator {
   ): void {
     this.emitHeader("    // Properties");
     for (const prop of properties) {
-      const type = `IEC_${prop.type.name}`;
+      const type = this.mapTypeRefToCpp(prop.type);
       if (prop.getter) {
         this.emitHeader(`    virtual ${type} get_${prop.name}() const;`);
       }
@@ -867,7 +881,7 @@ export class CodeGenerator {
     className: string,
   ): void {
     const returnType = method.returnType
-      ? `IEC_${method.returnType.name}`
+      ? this.mapTypeRefToCpp(method.returnType)
       : "void";
     const params = this.generateMethodParamList(method);
 
@@ -875,7 +889,7 @@ export class CodeGenerator {
 
     // Declare return variable if method has return type
     if (method.returnType) {
-      this.emit(`    IEC_${method.returnType.name} ${method.name}_result;`);
+      this.emit(`    ${this.mapTypeRefToCpp(method.returnType)} ${method.name}_result;`);
       this.currentFunctionName = method.name;
     }
 
@@ -905,7 +919,7 @@ export class CodeGenerator {
             const initValue = decl.initialValue
               ? ` = ${this.generateExpression(decl.initialValue)}`
               : "";
-            this.emit(`    IEC_${decl.type.name} ${name}${initValue};`);
+            this.emit(`    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`);
           }
         }
       }
@@ -937,7 +951,7 @@ export class CodeGenerator {
     prop: PropertyDeclaration,
     className: string,
   ): void {
-    const type = `IEC_${prop.type.name}`;
+    const type = this.mapTypeRefToCpp(prop.type);
 
     // Getter
     if (prop.getter) {
@@ -1056,9 +1070,9 @@ export class CodeGenerator {
     const params = this.generateFunctionParams(func);
 
     this.emit(
-      `IEC_${func.returnType.name} ${func.name}(${params.join(", ")}) {`,
+      `${this.mapTypeRefToCpp(func.returnType)} ${func.name}(${params.join(", ")}) {`,
     );
-    this.emit(`    IEC_${func.returnType.name} ${func.name}_result;`);
+    this.emit(`    ${this.mapTypeRefToCpp(func.returnType)} ${func.name}_result;`);
     // Set function context so assignments to function name redirect to result variable
     this.currentFunctionName = func.name;
     if (func.body.length > 0) {
@@ -1123,14 +1137,14 @@ export class CodeGenerator {
           // FB instance: plain class member (no IECVar wrapper)
           this.emitHeader(`    ${decl.typeName} ${decl.name};`);
         } else if (decl.address) {
-          const cppType = `IEC_${decl.typeName}`;
+          const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
           this.emitHeader(
             `    ${constQualifier}${cppType} ${decl.name};  // AT ${decl.address}`,
           );
           // Collect located variable info
           this.collectLocatedVarFromModel(decl, prog.name);
         } else {
-          const cppType = `IEC_${decl.typeName}`;
+          const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
           this.emitHeader(`    ${constQualifier}${cppType} ${decl.name};`);
         }
 
@@ -1144,7 +1158,7 @@ export class CodeGenerator {
         if (decl.isRetain) {
           const retainType = this.isFBType(decl.typeName)
             ? decl.typeName
-            : `IEC_${decl.typeName}`;
+            : this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
           retainVars.push({ name: decl.name, typeName: retainType });
         }
       }
@@ -1493,7 +1507,7 @@ export class CodeGenerator {
         this.emitHeader("    // VAR_GLOBAL variables");
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            this.emitHeader(`    IEC_${decl.type.name} ${name};`);
+            this.emitHeader(`    ${this.mapTypeRefToCpp(decl.type)} ${name};`);
           }
         }
       }

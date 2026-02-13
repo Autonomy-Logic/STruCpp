@@ -582,6 +582,20 @@ export class STParser extends CstParser {
       ]);
     });
     this.CONSUME(tokens.Identifier);
+    // Optional parameterized length for STRING(n) / WSTRING(n)
+    // GATE: only consume ( IntegerLiteral ) -- avoid ( Identifier ) for typed enums
+    // and ( IntegerLiteral .. ) for subrange types
+    this.OPTION2({
+      GATE: () =>
+        this.LA(1).tokenType === tokens.LParen &&
+        this.LA(2).tokenType === tokens.IntegerLiteral &&
+        this.LA(3).tokenType === tokens.RParen,
+      DEF: () => {
+        this.CONSUME(tokens.LParen);
+        this.CONSUME(tokens.IntegerLiteral);
+        this.CONSUME(tokens.RParen);
+      },
+    });
   });
 
   // ==========================================================================
