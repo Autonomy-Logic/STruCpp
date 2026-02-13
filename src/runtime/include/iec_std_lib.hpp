@@ -427,11 +427,21 @@ inline T ROR(T in, IEC_INT n) noexcept {
 // =============================================================================
 
 /**
- * Generic type conversion
+ * Generic type conversion (IECVar → IECVar)
  */
 template<typename To, typename From>
-inline To CONVERT(From value) noexcept {
+inline auto CONVERT(From value) noexcept
+    -> std::enable_if_t<!std::is_arithmetic_v<From>, To> {
     return To(static_cast<typename To::value_type>(value.get()));
+}
+
+/**
+ * Generic type conversion (arithmetic → IECVar)
+ */
+template<typename To, typename From>
+inline auto CONVERT(From value) noexcept
+    -> std::enable_if_t<std::is_arithmetic_v<From>, To> {
+    return To(static_cast<typename To::value_type>(value));
 }
 
 // Specific conversion functions (aliases for clarity)

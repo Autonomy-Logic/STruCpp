@@ -363,8 +363,8 @@ public:
     using value_type = IECWString<MaxLen>;
 
     IECWStringVar() noexcept : value_{}, forced_{false}, forced_value_{} {}
-    explicit IECWStringVar(const value_type& v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
-    explicit IECWStringVar(const char16_t* str) noexcept : value_{str}, forced_{false}, forced_value_{} {}
+    IECWStringVar(const value_type& v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
+    IECWStringVar(const char16_t* str) noexcept : value_{str}, forced_{false}, forced_value_{} {}
     IECWStringVar(const IECWStringVar&) = default;
     IECWStringVar(IECWStringVar&&) = default;
     IECWStringVar& operator=(const IECWStringVar&) = default;
@@ -429,6 +429,10 @@ private:
 };
 
 using WSTRING_VAR = IECWStringVar<254>;
+
+// Non-template alias for codegen: IEC_WSTRING = IECWStringVar<254>
+// For parameterized WSTRING(N), codegen emits IECWStringVar<N> directly
+using IEC_WSTRING = IECWStringVar<254>;
 
 template<size_t MaxLen>
 inline size_t WLEN(const IECWString<MaxLen>& s) noexcept {

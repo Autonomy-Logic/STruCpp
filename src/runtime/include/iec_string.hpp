@@ -306,12 +306,19 @@ public:
     using value_type = IECString<MaxLen>;
 
     IECStringVar() noexcept : value_{}, forced_{false}, forced_value_{} {}
-    explicit IECStringVar(const value_type& v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
-    explicit IECStringVar(const char* str) noexcept : value_{str}, forced_{false}, forced_value_{} {}
+    IECStringVar(const value_type& v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
+    IECStringVar(const char* str) noexcept : value_{str}, forced_{false}, forced_value_{} {}
     IECStringVar(const IECStringVar&) = default;
     IECStringVar(IECStringVar&&) = default;
     IECStringVar& operator=(const IECStringVar&) = default;
     IECStringVar& operator=(IECStringVar&&) = default;
+
+    // Cross-size assignment (IEC 61131-3: STRING types are interoperable, truncation on overflow)
+    template<size_t OtherLen>
+    IECStringVar& operator=(const IECStringVar<OtherLen>& other) noexcept {
+        value_ = IECString<MaxLen>(other.get().c_str());
+        return *this;
+    }
 
     value_type get() const noexcept {
         return forced_ ? forced_value_ : value_;
@@ -373,9 +380,19 @@ private:
 
 using STRING_VAR = IECStringVar<254>;
 
+// Non-template alias for codegen: IEC_STRING = IECStringVar<254>
+// For parameterized STRING(N), codegen emits IECStringVar<N> directly
+using IEC_STRING = IECStringVar<254>;
+
 template<size_t MaxLen>
 inline size_t LEN(const IECString<MaxLen>& s) noexcept {
     return s.length();
+}
+
+// IECStringVar overload: template deduction doesn't go through implicit conversions
+template<size_t MaxLen>
+inline size_t LEN(const IECStringVar<MaxLen>& s) noexcept {
+    return s.get().length();
 }
 
 template<size_t MaxLen>

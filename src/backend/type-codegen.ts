@@ -67,8 +67,8 @@ const IEC_TO_CPP_TYPE: Record<string, string> = {
   LDT: "LDT_t",
   CHAR: "CHAR_t",
   WCHAR: "WCHAR_t",
-  STRING: "std::string",
-  WSTRING: "std::wstring",
+  STRING: "IECString<254>",
+  WSTRING: "IECWString<254>",
 };
 
 /**

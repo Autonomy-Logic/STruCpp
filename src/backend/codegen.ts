@@ -224,11 +224,24 @@ export class CodeGenerator {
   /** Set of known function block type names (upper case) for FB instance detection */
   private knownFBTypes: Set<string> = new Set();
 
+  /** Set of known interface type names (upper case) */
+  private knownInterfaceTypes: Set<string> = new Set();
+
+  /** Set of known struct/UDT type names (upper case) */
+  private knownStructTypes: Set<string> = new Set();
+
   /** Map of variable name (upper case) → type name (original case) for current scope */
   private currentScopeVarTypes: Map<string, string> = new Map();
 
   /** Parent class name of current FB (for SUPER resolution) */
   private currentFBExtends: string | undefined;
+
+  /** When generating a method that returns an interface type, assignments to the
+   *  result variable should be converted to return statements */
+  private interfaceReturnMethod = false;
+
+  /** Map of UPPER(typeName).UPPER(methodName) → declared method name for case normalization */
+  private methodNameMap: Map<string, string> = new Map();
 
   /** Mapping of VAR_INST names (upper case) to mangled class member names */
   private varInstMangledNames: Map<string, string> = new Map();
@@ -265,9 +278,16 @@ export class CodeGenerator {
     // Handle parameterized STRING(n) / WSTRING(n)
     if (maxLength !== undefined) {
       const upper = typeName.toUpperCase();
-      if (upper === "STRING" || upper === "WSTRING") {
-        return `IEC_${upper}<${maxLength}>`;
+      if (upper === "STRING") {
+        return `IECStringVar<${maxLength}>`;
       }
+      if (upper === "WSTRING") {
+        return `IECWStringVar<${maxLength}>`;
+      }
+    }
+    // User-defined types (FBs, interfaces, structs) use bare name - no IEC_ prefix
+    if (this.isUserDefinedType(typeName)) {
+      return typeName;
     }
     return `IEC_${typeName}`;
   }
@@ -318,6 +338,32 @@ export class CodeGenerator {
       this.knownFBTypes.add(fb.name.toUpperCase());
     }
 
+    // Build set of known interface types and method name map
+    for (const iface of ast.interfaces) {
+      this.knownInterfaceTypes.add(iface.name.toUpperCase());
+      for (const method of iface.methods) {
+        this.methodNameMap.set(
+          `${iface.name.toUpperCase()}.${method.name.toUpperCase()}`,
+          method.name,
+        );
+      }
+    }
+
+    // Build method name map for FBs
+    for (const fb of ast.functionBlocks) {
+      for (const method of fb.methods) {
+        this.methodNameMap.set(
+          `${fb.name.toUpperCase()}.${method.name.toUpperCase()}`,
+          method.name,
+        );
+      }
+    }
+
+    // Build set of known struct/UDT types
+    for (const td of ast.types) {
+      this.knownStructTypes.add(td.name.toUpperCase());
+    }
+
     // Generate header
     this.generateHeader(ast);
 
@@ -356,6 +402,8 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_std_lib.hpp"');
     this.emitHeader('#include "iec_enum.hpp"');
     this.emitHeader('#include "iec_memory.hpp"');
+    this.emitHeader('#include "iec_string.hpp"');
+    this.emitHeader('#include "iec_wstring.hpp"');
     this.emitHeader("#include <array>");
     this.emitHeader("#include <cstddef>");
     this.emitHeader("#include <string>");
@@ -555,12 +603,7 @@ export class CodeGenerator {
       this.emitHeader(`    ${comment}`);
       for (const decl of block.declarations) {
         for (const name of decl.names) {
-          if (this.isFBType(decl.type.name)) {
-            // FB instance: plain class member (no IECVar wrapper)
-            this.emitHeader(`    ${decl.type.name} ${name};`);
-          } else {
-            this.emitHeader(`    ${this.mapTypeRefToCpp(decl.type)} ${name};`);
-          }
+          this.emitHeader(`    ${this.mapTypeRefToCpp(decl.type)} ${name};`);
         }
       }
     }
@@ -620,10 +663,7 @@ export class CodeGenerator {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           const memberLine = this.currentHeaderLine;
-          if (this.isFBType(decl.type.name)) {
-            // FB instance: plain class member (no IECVar wrapper)
-            this.emitHeader(`    ${decl.type.name} ${name};`);
-          } else if (decl.address) {
+          if (decl.address) {
             // Generate variable with optional address comment
             this.emitHeader(
               `    ${this.mapTypeRefToCpp(decl.type)} ${name};  // AT ${decl.address}`,
@@ -679,20 +719,22 @@ export class CodeGenerator {
         }
       } else if (block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
-          const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
             // VLA types (ArrayView) are already reference-like; others need &
             if (decl.type.name.startsWith("__VLA_")) {
-              params.push(`${cppType} ${name}`);
+              params.push(`${this.mapTypeRefToCpp(decl.type)} ${name}`);
             } else {
+              // Strip maxLength for STRING/WSTRING so any size binds to the reference
+              const cppType = this.mapVarTypeToCpp(decl.type.name);
               params.push(`${cppType}& ${name}`);
             }
           }
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
-          const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
+            // Strip maxLength for STRING/WSTRING so any size binds to the reference
+            const cppType = this.mapVarTypeToCpp(decl.type.name);
             params.push(`${cppType}& ${name}`);
           }
         }
@@ -722,8 +764,9 @@ export class CodeGenerator {
     this.emitHeader(`    virtual ~${iface.name}() = default;`);
 
     for (const method of iface.methods) {
+      const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
       const returnType = method.returnType
-        ? this.mapTypeRefToCpp(method.returnType)
+        ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
         : "void";
       const params = this.generateMethodParamList(method);
       this.emitHeader(
@@ -790,8 +833,9 @@ export class CodeGenerator {
       }
 
       for (const method of visMethods) {
+        const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
         const returnType = method.returnType
-          ? this.mapTypeRefToCpp(method.returnType)
+          ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
           : "void";
         const params = this.generateMethodParamList(method);
 
@@ -839,13 +883,18 @@ export class CodeGenerator {
       } else if (block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`${this.mapTypeRefToCpp(decl.type)}& ${name}`);
+            // For STRING/WSTRING VAR_IN_OUT, strip maxLength to use base type
+            // so any STRING size can bind to the reference
+            const cppType = this.mapVarTypeToCpp(decl.type.name);
+            params.push(`${cppType}& ${name}`);
           }
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`${this.mapTypeRefToCpp(decl.type)}& ${name}`);
+            // For STRING/WSTRING VAR_OUTPUT, strip maxLength similarly
+            const cppType = this.mapVarTypeToCpp(decl.type.name);
+            params.push(`${cppType}& ${name}`);
           }
         }
       }
@@ -881,8 +930,9 @@ export class CodeGenerator {
     method: MethodDeclaration,
     className: string,
   ): void {
+    const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
     const returnType = method.returnType
-      ? this.mapTypeRefToCpp(method.returnType)
+      ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
       : "void";
     const params = this.generateMethodParamList(method);
 
@@ -890,7 +940,12 @@ export class CodeGenerator {
 
     // Declare return variable if method has return type
     if (method.returnType) {
-      this.emit(`    ${this.mapTypeRefToCpp(method.returnType)} ${method.name}_result;`);
+      if (isIfaceReturn) {
+        // Interface return: assignments to result become return statements
+        this.interfaceReturnMethod = true;
+      } else {
+        this.emit(`    ${this.mapTypeRefToCpp(method.returnType)} ${method.name}_result;`);
+      }
       this.currentFunctionName = method.name;
     }
 
@@ -933,8 +988,11 @@ export class CodeGenerator {
 
     // Return if method has return type
     if (method.returnType) {
-      this.emit(`    return ${method.name}_result;`);
+      if (!isIfaceReturn) {
+        this.emit(`    return ${method.name}_result;`);
+      }
       this.currentFunctionName = undefined;
+      this.interfaceReturnMethod = false;
     }
 
     // Clean up
@@ -1134,10 +1192,7 @@ export class CodeGenerator {
         const constQualifier = decl.isConstant ? "const " : "";
 
         const memberLine = this.currentHeaderLine;
-        if (this.isFBType(decl.typeName)) {
-          // FB instance: plain class member (no IECVar wrapper)
-          this.emitHeader(`    ${decl.typeName} ${decl.name};`);
-        } else if (decl.address) {
+        if (decl.address) {
           const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
           this.emitHeader(
             `    ${constQualifier}${cppType} ${decl.name};  // AT ${decl.address}`,
@@ -1157,10 +1212,7 @@ export class CodeGenerator {
 
         // Collect retain variables
         if (decl.isRetain) {
-          const retainType = this.isFBType(decl.typeName)
-            ? decl.typeName
-            : this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
-          retainVars.push({ name: decl.name, typeName: retainType });
+          retainVars.push({ name: decl.name, typeName: this.mapVarTypeToCpp(decl.typeName, decl.maxLength) });
         }
       }
     }
@@ -1169,7 +1221,7 @@ export class CodeGenerator {
     if (prog.varExternal.length > 0) {
       this.emitHeader("    // External variables (references to globals)");
       for (const ext of prog.varExternal) {
-        this.emitHeader(`    IEC_${ext.typeName}& ${ext.name};`);
+        this.emitHeader(`    ${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name};`);
       }
     }
 
@@ -1178,7 +1230,7 @@ export class CodeGenerator {
     if (prog.varExternal.length > 0) {
       // Constructor with external variable references
       const params = prog.varExternal
-        .map((ext) => `IEC_${ext.typeName}& ${ext.name}_ref`)
+        .map((ext) => `${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name}_ref`)
         .join(", ");
       this.emitHeader(`    explicit ${className}(${params});`);
     } else {
@@ -1222,7 +1274,7 @@ export class CodeGenerator {
     // Constructor
     if (prog.varExternal.length > 0) {
       const params = prog.varExternal
-        .map((ext) => `IEC_${ext.typeName}& ${ext.name}_ref`)
+        .map((ext) => `${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name}_ref`)
         .join(", ");
       this.emit(`Program_${prog.name}::Program_${prog.name}(${params})`);
 
@@ -1331,7 +1383,7 @@ export class CodeGenerator {
       for (const gvar of config.globalVars) {
         const constQualifier = gvar.isConstant ? "const " : "";
         this.emitHeader(
-          `    ${constQualifier}IEC_${gvar.typeName} ${gvar.name};`,
+          `    ${constQualifier}${this.mapVarTypeToCpp(gvar.typeName)} ${gvar.name};`,
         );
       }
       this.emitHeader("");
@@ -1645,6 +1697,17 @@ export class CodeGenerator {
   ): void {
     const target = this.generateExpression(stmt.target);
     const value = this.generateExpression(stmt.value);
+
+    // For interface-returning methods, convert assignment to result var into return statement
+    if (
+      this.interfaceReturnMethod &&
+      this.currentFunctionName &&
+      target === `${this.currentFunctionName}_result`
+    ) {
+      this.emit(`${indent}return ${value};`);
+      return;
+    }
+
     this.emit(`${indent}${target} = ${value};`);
   }
 
@@ -1852,7 +1915,11 @@ export class CodeGenerator {
    * In programs/FBs: return;
    */
   private generateReturnStatement(indent: string): void {
-    if (this.currentFunctionName) {
+    if (this.interfaceReturnMethod) {
+      // Interface return methods use return in the assignment; explicit RETURN
+      // shouldn't occur but emit a bare return for safety
+      this.emit(`${indent}return *this;`);
+    } else if (this.currentFunctionName) {
       this.emit(`${indent}return ${this.currentFunctionName}_result;`);
     } else {
       this.emit(`${indent}return;`);
@@ -1949,10 +2016,15 @@ export class CodeGenerator {
         // Ensure real literals have a decimal point
         return str.includes(".") ? str : str + ".0";
       }
-      case "STRING":
-        return `"${expr.rawValue}"`;
-      case "WSTRING":
-        return `L"${expr.rawValue}"`;
+      case "STRING": {
+        // rawValue includes surrounding single quotes: 'hello' → strip them
+        const inner = expr.rawValue.replace(/^'|'$/g, "");
+        return `"${inner}"`;
+      }
+      case "WSTRING": {
+        const wInner = expr.rawValue.replace(/^'|'$/g, "");
+        return `L"${wInner}"`;
+      }
       case "TIME": {
         const timeVal = parseTimeLiteral(String(expr.value));
         return `${timeVal.nanoseconds}LL`;
@@ -2105,7 +2177,9 @@ export class CodeGenerator {
     const args = expr.arguments
       .map((a) => this.generateExpression(a.value))
       .join(", ");
-    return `${obj}.${expr.methodName}(${args})`;
+    // Resolve method name case: look up the declared name across all known types
+    const resolvedName = this.resolveMethodNameGlobal(expr.methodName);
+    return `${obj}.${resolvedName}(${args})`;
   }
 
   /**
@@ -2124,13 +2198,19 @@ export class CodeGenerator {
         this.generateExpression(arg.value),
       );
 
+      // Resolve method name case from declaration
+      const varType = this.currentScopeVarTypes.get(prefix.toUpperCase());
+      const resolvedMethod = varType
+        ? this.resolveMethodName(varType, methodName)
+        : this.resolveMethodNameGlobal(methodName);
+
       if (prefix.toUpperCase() === "THIS") {
-        return `this->${methodName}(${args.join(", ")})`;
+        return `this->${resolvedMethod}(${args.join(", ")})`;
       } else if (prefix.toUpperCase() === "SUPER" && this.currentFBExtends) {
-        return `${this.currentFBExtends}::${methodName}(${args.join(", ")})`;
+        return `${this.currentFBExtends}::${resolvedMethod}(${args.join(", ")})`;
       } else {
         // instance.method() call
-        return `${prefix}.${methodName}(${args.join(", ")})`;
+        return `${prefix}.${resolvedMethod}(${args.join(", ")})`;
       }
     }
 
@@ -2397,6 +2477,49 @@ export class CodeGenerator {
    */
   private isFBType(typeName: string): boolean {
     return this.knownFBTypes.has(typeName.toUpperCase());
+  }
+
+  /**
+   * Check if a type name refers to a known interface type.
+   */
+  private isInterfaceType(typeName: string): boolean {
+    return this.knownInterfaceTypes.has(typeName.toUpperCase());
+  }
+
+  /**
+   * Resolve the declared case of a method name given the type and method name.
+   * Returns the declared name if found, or the original name if not.
+   */
+  private resolveMethodName(typeName: string, methodName: string): string {
+    const key = `${typeName.toUpperCase()}.${methodName.toUpperCase()}`;
+    return this.methodNameMap.get(key) ?? methodName;
+  }
+
+  /**
+   * Resolve method name case by searching all known types.
+   * Used when the object type is not easily determined (e.g., chained calls).
+   */
+  private resolveMethodNameGlobal(methodName: string): string {
+    const upper = methodName.toUpperCase();
+    for (const [key, declaredName] of this.methodNameMap) {
+      if (key.endsWith(`.${upper}`)) {
+        return declaredName;
+      }
+    }
+    return methodName;
+  }
+
+  /**
+   * Check if a type name refers to any user-defined type (FB, interface, or struct/UDT).
+   * These types should NOT get the IEC_ prefix.
+   */
+  private isUserDefinedType(typeName: string): boolean {
+    const upper = typeName.toUpperCase();
+    return (
+      this.knownFBTypes.has(upper) ||
+      this.knownInterfaceTypes.has(upper) ||
+      this.knownStructTypes.has(upper)
+    );
   }
 
   /**

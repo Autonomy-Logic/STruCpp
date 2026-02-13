@@ -75,7 +75,7 @@ describe('TypeCodeGenerator', () => {
       expect(generator.mapTypeToCpp('INT')).toBe('INT_t');
       expect(generator.mapTypeToCpp('REAL')).toBe('REAL_t');
       expect(generator.mapTypeToCpp('DINT')).toBe('DINT_t');
-      expect(generator.mapTypeToCpp('STRING')).toBe('std::string');
+      expect(generator.mapTypeToCpp('STRING')).toBe('IECString<254>');
     });
 
     it('should be case-insensitive for elementary types', () => {
