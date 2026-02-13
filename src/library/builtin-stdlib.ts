@@ -13,25 +13,48 @@ import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
 
 /**
  * Find the generated manifest file. It lives in src/stdlib/iec-standard-fb/
- * and is reachable from both src/ (test imports) and dist/ (production).
+ * and is reachable from both src/ (test imports), dist/ (production),
+ * and pkg-bundled binaries.
  */
 function findManifestPath(): string {
-  const __dir = dirname(fileURLToPath(import.meta.url));
+  const candidates: string[] = [];
 
-  // When running from src/library/ → ../stdlib/iec-standard-fb/manifest.json
-  const fromSrc = resolve(__dir, "../stdlib/iec-standard-fb/manifest.json");
-  if (existsSync(fromSrc)) return fromSrc;
+  // From import.meta.url (ESM / ts-node / vitest)
+  try {
+    if (typeof import.meta?.url === "string") {
+      const metaDir = dirname(fileURLToPath(import.meta.url));
+      // src/library/ → ../stdlib/iec-standard-fb/manifest.json
+      candidates.push(resolve(metaDir, "../stdlib/iec-standard-fb/manifest.json"));
+      // dist/library/ → ../../src/stdlib/iec-standard-fb/manifest.json
+      candidates.push(resolve(metaDir, "../../src/stdlib/iec-standard-fb/manifest.json"));
+    }
+  } catch {
+    // unavailable in CJS bundle / pkg binary
+  }
 
-  // When running from dist/library/ → ../../src/stdlib/iec-standard-fb/manifest.json
-  const fromDist = resolve(
-    __dir,
-    "../../src/stdlib/iec-standard-fb/manifest.json",
-  );
-  if (existsSync(fromDist)) return fromDist;
+  // From __dirname (CJS bundle via esbuild)
+  if (typeof __dirname === "string") {
+    candidates.push(resolve(__dirname, "../stdlib/iec-standard-fb/manifest.json"));
+    candidates.push(resolve(__dirname, "../../src/stdlib/iec-standard-fb/manifest.json"));
+    candidates.push(resolve(__dirname, "src/stdlib/iec-standard-fb/manifest.json"));
+  }
+
+  // Relative to binary (pkg binary in dist/bin/)
+  const execDir = dirname(process.execPath);
+  for (const base of [execDir, resolve(execDir, ".."), resolve(execDir, "..", "..")]) {
+    candidates.push(resolve(base, "src/stdlib/iec-standard-fb/manifest.json"));
+  }
+
+  // CWD fallback
+  candidates.push(resolve(process.cwd(), "src/stdlib/iec-standard-fb/manifest.json"));
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
 
   throw new Error(
     `Standard FB library manifest not found. Run 'npm run build' to generate it.\n` +
-      `  Searched: ${fromSrc}\n  Searched: ${fromDist}`,
+      `  Searched:\n${candidates.map((c) => `    ${c}`).join("\n")}`,
   );
 }
 
