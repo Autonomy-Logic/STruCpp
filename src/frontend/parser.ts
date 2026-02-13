@@ -702,6 +702,12 @@ export class STParser extends CstParser {
           ALT: () => this.SUBRULE(this.superCallStatement),
           GATE: () => this.LA(1).tokenType === tokens.SUPER,
         },
+        // methodCallStatement must come before assignmentStatement/functionCallStatement
+        // since all start with Identifier but methodCall needs Ident.Ident( lookahead
+        {
+          ALT: () => this.SUBRULE(this.methodCallStatement),
+          GATE: () => this.isMethodCallAhead(),
+        },
         // assignmentStatement and functionCallStatement both start with Identifier;
         // Chevrotain resolves by trying assignmentStatement first (it has := after the LHS)
         { ALT: () => this.SUBRULE(this.assignmentStatement) },
@@ -738,10 +744,6 @@ export class STParser extends CstParser {
           GATE: () => this.LA(1).tokenType === tokens.__DELETE,
         },
         { ALT: () => this.SUBRULE(this.functionCallStatement) },
-        {
-          ALT: () => this.SUBRULE(this.methodCallStatement),
-          GATE: () => this.isMethodCallAhead(),
-        },
         {
           ALT: () => this.SUBRULE(this.externalCodePragma),
           GATE: () => this.LA(1).tokenType === tokens.ExternalPragma,
@@ -828,6 +830,10 @@ export class STParser extends CstParser {
       this.SUBRULE(this.argumentList);
     });
     this.CONSUME(tokens.RParen);
+    // Method chaining: .method2(args).method3(args)...
+    this.MANY(() => {
+      this.SUBRULE(this.chainedMethodCall);
+    });
     this.CONSUME(tokens.Semicolon);
   });
 
@@ -1223,6 +1229,24 @@ export class STParser extends CstParser {
     this.CONSUME(tokens.Identifier); // instance name
     this.CONSUME(tokens.Dot);
     this.CONSUME2(tokens.Identifier); // method name
+    this.CONSUME(tokens.LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.argumentList);
+    });
+    this.CONSUME(tokens.RParen);
+    // Method chaining: .method2(args).method3(args)...
+    this.MANY(() => {
+      this.SUBRULE(this.chainedMethodCall);
+    });
+  });
+
+  /**
+   * Chained method call: .methodName(args)
+   * Used inside methodCall/methodCallStatement for fluent interface patterns.
+   */
+  public chainedMethodCall = this.RULE("chainedMethodCall", () => {
+    this.CONSUME(tokens.Dot);
+    this.CONSUME(tokens.Identifier);
     this.CONSUME(tokens.LParen);
     this.OPTION(() => {
       this.SUBRULE(this.argumentList);

@@ -43,6 +43,7 @@ import type {
   NewExpression,
   DeleteStatement,
   FunctionCallExpression,
+  MethodCallExpression,
   FunctionCallStatement,
   Argument,
   IfStatement,
@@ -2382,7 +2383,9 @@ export class ASTBuilder {
    * Build a method call expression: instance.method(args)
    * Maps to FunctionCallExpression with functionName = "instance.method"
    */
-  buildMethodCallExpression(node: CstNode): FunctionCallExpression {
+  buildMethodCallExpression(
+    node: CstNode,
+  ): FunctionCallExpression | MethodCallExpression {
     const children = node.children as CstChildren;
     const identifiers = getAllTokens(children.Identifier);
     const instanceName = identifiers[0]?.image ?? "";
@@ -2397,12 +2400,21 @@ export class ASTBuilder {
       }
     }
 
-    return {
+    // Build the base method call as a FunctionCallExpression
+    let result: Expression = {
       kind: "FunctionCallExpression",
       sourceSpan: nodeToSourceSpan(node),
       functionName: `${instanceName}.${methodName}`,
       arguments: args,
     };
+
+    // Build chained method calls as nested MethodCallExpression nodes
+    const chainedCalls = getAllNodes(children.chainedMethodCall);
+    for (const chainNode of chainedCalls) {
+      result = this.buildChainedCall(chainNode, result, node);
+    }
+
+    return result as FunctionCallExpression | MethodCallExpression;
   }
 
   /**
@@ -2427,6 +2439,37 @@ export class ASTBuilder {
       sourceSpan: nodeToSourceSpan(node),
       functionName,
       arguments: args,
+    };
+  }
+
+  /**
+   * Build a MethodCallExpression from a chainedMethodCall CST node.
+   * Wraps the previous expression as the object of the chained call.
+   */
+  private buildChainedCall(
+    chainNode: CstNode,
+    objectExpr: Expression,
+    parentNode: CstNode,
+  ): MethodCallExpression {
+    const chainChildren = chainNode.children as CstChildren;
+    const chainMethodName =
+      getAllTokens(chainChildren.Identifier)[0]?.image ?? "";
+
+    const chainArgs: Argument[] = [];
+    const chainArgList = getFirstNode(chainChildren.argumentList);
+    if (chainArgList) {
+      const chainArgListChildren = chainArgList.children as CstChildren;
+      for (const argNode of getAllNodes(chainArgListChildren.argument)) {
+        chainArgs.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "MethodCallExpression",
+      sourceSpan: nodeToSourceSpan(parentNode),
+      object: objectExpr,
+      methodName: chainMethodName,
+      arguments: chainArgs,
     };
   }
 
@@ -2505,15 +2548,24 @@ export class ASTBuilder {
       }
     }
 
+    // Build the base method call
+    let callExpr: Expression = {
+      kind: "FunctionCallExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      functionName: `${instanceName}.${methodName}`,
+      arguments: args,
+    };
+
+    // Build chained method calls as nested MethodCallExpression nodes
+    const chainedCalls = getAllNodes(children.chainedMethodCall);
+    for (const chainNode of chainedCalls) {
+      callExpr = this.buildChainedCall(chainNode, callExpr, node);
+    }
+
     return {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),
-      call: {
-        kind: "FunctionCallExpression",
-        sourceSpan: nodeToSourceSpan(node),
-        functionName: `${instanceName}.${methodName}`,
-        arguments: args,
-      },
+      call: callExpr as FunctionCallExpression,
     };
   }
 

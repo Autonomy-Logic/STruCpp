@@ -18,6 +18,7 @@ import type {
   WhileStatement,
   RepeatStatement,
   FunctionCallExpression,
+  MethodCallExpression,
   BinaryExpression,
   UnaryExpression,
   LiteralExpression,
@@ -1576,11 +1577,15 @@ export class CodeGenerator {
         this.generateRefAssignStatement(stmt, indent);
         break;
       case "FunctionCallStatement": {
-        const fbType = this.getFBInvocationType(stmt.call.functionName);
-        if (fbType) {
-          this.generateFBInvocation(stmt.call, indent);
+        if (stmt.call.kind === "MethodCallExpression") {
+          this.emit(`${indent}${this.generateMethodCallExpression(stmt.call)};`);
         } else {
-          this.emit(`${indent}${this.generateExpression(stmt.call)};`);
+          const fbType = this.getFBInvocationType(stmt.call.functionName);
+          if (fbType) {
+            this.generateFBInvocation(stmt.call, indent);
+          } else {
+            this.emit(`${indent}${this.generateExpression(stmt.call)};`);
+          }
         }
         break;
       }
@@ -1909,6 +1914,8 @@ export class CodeGenerator {
         return `(${this.generateExpression(expr.expression)})`;
       case "FunctionCallExpression":
         return this.generateFunctionCallExpression(expr);
+      case "MethodCallExpression":
+        return this.generateMethodCallExpression(expr);
       case "RefExpression":
         return `REF(${this.generateExpression(expr.operand)})`;
       case "DrefExpression":
@@ -2087,6 +2094,18 @@ export class CodeGenerator {
       case "+":
         return `+${operand}`;
     }
+  }
+
+  /**
+   * Generate C++ for a method call expression (chained method calls).
+   * e.g., fb.method1(args).method2(args) → fb.method1(args).method2(args)
+   */
+  private generateMethodCallExpression(expr: MethodCallExpression): string {
+    const obj = this.generateExpression(expr.object);
+    const args = expr.arguments
+      .map((a) => this.generateExpression(a.value))
+      .join(", ");
+    return `${obj}.${expr.methodName}(${args})`;
   }
 
   /**

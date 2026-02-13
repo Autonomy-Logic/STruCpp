@@ -519,7 +519,7 @@ export interface ReturnStatement extends ASTNode {
  */
 export interface FunctionCallStatement extends ASTNode {
   kind: "FunctionCallStatement";
-  call: FunctionCallExpression;
+  call: FunctionCallExpression | MethodCallExpression;
 }
 
 /**
@@ -556,6 +556,7 @@ export type Expression =
   | BinaryExpression
   | UnaryExpression
   | FunctionCallExpression
+  | MethodCallExpression
   | VariableExpression
   | LiteralExpression
   | ParenthesizedExpression
@@ -613,6 +614,17 @@ export interface UnaryExpression extends TypedNode {
 export interface FunctionCallExpression extends TypedNode {
   kind: "FunctionCallExpression";
   functionName: string;
+  arguments: Argument[];
+}
+
+/**
+ * Method call on an expression (for method chaining / fluent interface).
+ * e.g., fb.method1(args).method2(args) → nested MethodCallExpression nodes
+ */
+export interface MethodCallExpression extends TypedNode {
+  kind: "MethodCallExpression";
+  object: Expression; // The expression to call the method on
+  methodName: string;
   arguments: Argument[];
 }
 
