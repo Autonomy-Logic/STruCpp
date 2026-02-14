@@ -8,78 +8,39 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { compile } from '../../src/index.js';
-import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-
-// Skip these tests if g++ is not available
-const hasGpp = (() => {
-  try {
-    execSync('which g++', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+import {
+  hasGpp,
+  createPCH,
+  compileWithGpp as compileWithGppHelper,
+  compileAndRunStandalone as compileAndRunHelper,
+} from './test-helpers.js';
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
 
 describeIfGpp('C++ Compilation Tests', () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(__dirname, '../../src/runtime/include');
+  let pchPath: string;
 
   beforeAll(() => {
-    // Create a temporary directory for test files
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-test-'));
+    pchPath = createPCH(tempDir);
   });
 
   afterAll(() => {
-    // Clean up temporary directory
     if (tempDir && fs.existsSync(tempDir)) {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
   });
 
-  /**
-   * Helper function to compile generated C++ code with g++
-   * Returns true if compilation succeeds, false otherwise
-   */
   function compileWithGpp(
     headerCode: string,
     cppCode: string,
     testName: string,
   ): { success: boolean; error?: string } {
-    // The generated code includes "generated.hpp", so we must use that name
-    const headerPath = path.join(tempDir, 'generated.hpp');
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-
-    // Write the generated code to files
-    fs.writeFileSync(headerPath, headerCode);
-
-    // Create a main.cpp that includes the generated code and has a main function
-    const mainCpp = `${cppCode}
-
-int main() {
-    return 0;
-}
-`;
-    fs.writeFileSync(cppPath, mainCpp);
-
-    try {
-      // Compile with g++ (syntax check only, no linking)
-      execSync(
-        `g++ -std=c++17 -fsyntax-only -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" 2>&1`,
-        { encoding: 'utf-8' },
-      );
-      return { success: true };
-    } catch (error) {
-      const execError = error as { stdout?: string; stderr?: string; message?: string };
-      return {
-        success: false,
-        error: execError.stdout || execError.stderr || execError.message || 'Unknown error',
-      };
-    }
+    return compileWithGppHelper({ tempDir, pchPath, headerCode, cppCode, testName });
   }
 
   it('should compile a simple program', () => {
@@ -1102,10 +1063,11 @@ int main() {
  */
 describeIfGpp('C++ Runtime Behavior Tests', () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(__dirname, '../../src/runtime/include');
+  let pchPath: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-runtime-test-'));
+    pchPath = createPCH(tempDir);
   });
 
   afterAll(() => {
@@ -1114,54 +1076,24 @@ describeIfGpp('C++ Runtime Behavior Tests', () => {
     }
   });
 
-  /**
-   * Helper function to compile and run generated C++ code
-   * Returns the stdout output from the executed program
-   */
   function compileAndRun(
     headerCode: string,
     cppCode: string,
     mainCode: string,
     testName: string,
   ): { success: boolean; output?: string; error?: string } {
-    const headerPath = path.join(tempDir, 'generated.hpp');
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-    const binPath = path.join(tempDir, testName);
-
-    // Write the generated code to files
-    fs.writeFileSync(headerPath, headerCode);
-
-    // Create the full source with custom main
-    const fullCpp = `${cppCode}
-
-${mainCode}
-`;
-    fs.writeFileSync(cppPath, fullCpp);
-
     try {
-      // Compile with g++ (full compilation, not just syntax check)
-      execSync(
-        `g++ -std=c++17 -O2 -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" -o "${binPath}" 2>&1`,
-        { encoding: 'utf-8' },
-      );
-    } catch (error) {
-      const execError = error as { stdout?: string; stderr?: string; message?: string };
-      return {
-        success: false,
-        error: `Compilation failed: ${execError.stdout || execError.stderr || execError.message || 'Unknown error'}`,
-      };
-    }
-
-    try {
-      // Run the compiled binary
-      const output = execSync(`"${binPath}"`, { encoding: 'utf-8', timeout: 5000 });
+      const output = compileAndRunHelper({
+        tempDir, pchPath, headerCode, cppCode, testName, mainCode,
+      });
       return { success: true, output };
     } catch (error) {
-      const execError = error as { stdout?: string; stderr?: string; message?: string };
-      return {
-        success: false,
-        error: `Execution failed: ${execError.stdout || execError.stderr || execError.message || 'Unknown error'}`,
-      };
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('Compilation failed') || msg.includes('g++ compilation failed')) {
+        return { success: false, error: msg };
+      }
+      // Execution failure
+      return { success: false, error: `Execution failed: ${msg}` };
     }
   }
 
@@ -1574,10 +1506,11 @@ int main() {
  */
 describeIfGpp('External Code Pragma Runtime Tests', () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(__dirname, '../../src/runtime/include');
+  let pchPath: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-external-test-'));
+    pchPath = createPCH(tempDir);
   });
 
   afterAll(() => {
@@ -1592,36 +1525,17 @@ describeIfGpp('External Code Pragma Runtime Tests', () => {
     mainCode: string,
     testName: string,
   ): { success: boolean; output?: string; error?: string } {
-    const headerPath = path.join(tempDir, 'generated.hpp');
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-    const binPath = path.join(tempDir, testName);
-
-    fs.writeFileSync(headerPath, headerCode);
-    const fullCpp = `${cppCode}\n\n${mainCode}\n`;
-    fs.writeFileSync(cppPath, fullCpp);
-
     try {
-      execSync(
-        `g++ -std=c++17 -O2 -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" -o "${binPath}" 2>&1`,
-        { encoding: 'utf-8' },
-      );
-    } catch (error) {
-      const execError = error as { stdout?: string; stderr?: string; message?: string };
-      return {
-        success: false,
-        error: `Compilation failed: ${execError.stdout || execError.stderr || execError.message || 'Unknown error'}`,
-      };
-    }
-
-    try {
-      const output = execSync(`"${binPath}"`, { encoding: 'utf-8', timeout: 5000 });
+      const output = compileAndRunHelper({
+        tempDir, pchPath, headerCode, cppCode, testName, mainCode,
+      });
       return { success: true, output };
     } catch (error) {
-      const execError = error as { stdout?: string; stderr?: string; message?: string };
-      return {
-        success: false,
-        error: `Execution failed: ${execError.stdout || execError.stderr || execError.message || 'Unknown error'}`,
-      };
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('Compilation failed') || msg.includes('g++ compilation failed')) {
+        return { success: false, error: msg };
+      }
+      return { success: false, error: `Execution failed: ${msg}` };
     }
   }
 

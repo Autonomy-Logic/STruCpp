@@ -13,41 +13,26 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-
-// Skip if g++ or cc is not available
-const hasGpp = (() => {
-  try {
-    execSync('which g++', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-const hasCc = (() => {
-  try {
-    execSync('which cc', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+import {
+  hasGpp,
+  hasCc,
+  createPCH,
+  precompileIsocline,
+  RUNTIME_INCLUDE_PATH,
+  REPL_PATH,
+} from './test-helpers.js';
 
 const describeIfCompilers = hasGpp && hasCc ? describe : describe.skip;
 
 describeIfCompilers('REPL Runner Integration Tests', () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(__dirname, '../../src/runtime/include');
-  const replPath = path.resolve(__dirname, '../../src/runtime/repl');
+  let pchPath: string;
+  let isoclineObj: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-repl-test-'));
-
-    // Pre-compile isocline.c once for all tests
-    execSync(
-      `cc -c -std=c11 -I"${replPath}" "${path.join(replPath, 'isocline.c')}" -o "${path.join(tempDir, 'isocline.o')}" 2>&1`,
-      { encoding: 'utf-8' },
-    );
+    pchPath = createPCH(tempDir);
+    isoclineObj = precompileIsocline(tempDir);
   });
 
   afterAll(() => {
@@ -84,9 +69,9 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
     });
     fs.writeFileSync(mainPath, mainCpp);
 
-    // Compile C++ and link with pre-compiled isocline.o
+    // Compile C++ and link with pre-compiled isocline.o + PCH
     execSync(
-      `g++ -std=c++17 -I"${runtimeIncludePath}" -I"${replPath}" -I"${tempDir}" "${mainPath}" "${cppPath}" "${path.join(tempDir, 'isocline.o')}" -o "${binPath}" 2>&1`,
+      `g++ -std=c++17 -include "${pchPath}" -I"${RUNTIME_INCLUDE_PATH}" -I"${REPL_PATH}" -I"${tempDir}" "${mainPath}" "${cppPath}" "${isoclineObj}" -o "${binPath}" 2>&1`,
       { encoding: 'utf-8' },
     );
 

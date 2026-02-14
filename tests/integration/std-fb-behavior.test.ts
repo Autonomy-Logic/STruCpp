@@ -12,20 +12,14 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { compile } from '../../src/index.js';
-import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-
-// Skip these tests if g++ is not available
-const hasGpp = (() => {
-  try {
-    execSync('which g++', { stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+import {
+  hasGpp,
+  createPCH,
+  compileAndRunStandalone as compileAndRunHelper,
+} from './test-helpers.js';
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
 
@@ -38,10 +32,11 @@ const timerST = fs.readFileSync(path.join(stDir, 'timer.st'), 'utf-8');
 
 describeIfGpp('Standard Function Block Behavioral Tests', () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(__dirname, '../../src/runtime/include');
+  let pchPath: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-stdfb-test-'));
+    pchPath = createPCH(tempDir);
   });
 
   afterAll(() => {
@@ -50,11 +45,6 @@ describeIfGpp('Standard Function Block Behavioral Tests', () => {
     }
   });
 
-  /**
-   * Compile ST source with standard FB libraries, build with g++, and run.
-   * The mainCppBody is inserted into a main() function that has access to
-   * the strucpp namespace. It should print results to stdout.
-   */
   function compileAndRun(mainST: string, testName: string, mainCppBody: string): string {
     const result = compile(mainST, {
       headerFileName: 'generated.hpp',
@@ -72,27 +62,16 @@ describeIfGpp('Standard Function Block Behavioral Tests', () => {
       );
     }
 
-    const headerPath = path.join(tempDir, 'generated.hpp');
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-    const outPath = path.join(tempDir, testName);
+    const mainCode = `#include <iostream>\nint main() {\n    using namespace strucpp;\n${mainCppBody}\n    return 0;\n}\n`;
 
-    fs.writeFileSync(headerPath, result.headerCode);
-    const fullCpp = `${result.cppCode}\n#include <iostream>\nint main() {\n    using namespace strucpp;\n${mainCppBody}\n    return 0;\n}\n`;
-    fs.writeFileSync(cppPath, fullCpp);
-
-    try {
-      execSync(
-        `g++ -std=c++17 -O0 -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" -o "${outPath}" 2>&1`,
-        { encoding: 'utf-8' },
-      );
-    } catch (error) {
-      const execError = error as { stdout?: string; stderr?: string; message?: string };
-      throw new Error(
-        `g++ compilation failed: ${execError.stdout || execError.stderr || execError.message || 'Unknown error'}`,
-      );
-    }
-
-    return execSync(`"${outPath}"`, { encoding: 'utf-8', timeout: 5000 }).trim();
+    return compileAndRunHelper({
+      tempDir, pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName,
+      mainCode,
+      extraFlags: ['-O0'],
+    });
   }
 
   // ===========================================================================

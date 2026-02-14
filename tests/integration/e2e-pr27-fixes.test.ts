@@ -17,44 +17,27 @@ import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-
-// Skip if g++ or cc is not available
-const hasGpp = (() => {
-  try {
-    execSync("which g++", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
-
-const hasCc = (() => {
-  try {
-    execSync("which cc", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+import {
+  hasGpp,
+  hasCc,
+  createPCH,
+  precompileIsocline,
+  compileAndRunStandalone as compileAndRunHelper,
+  RUNTIME_INCLUDE_PATH,
+  REPL_PATH,
+} from "./test-helpers.js";
 
 const describeIfCompilers = hasGpp && hasCc ? describe : describe.skip;
 
 describeIfCompilers("E2E PR #27 Fixes - REPL Binary Tests", () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(
-    __dirname,
-    "../../src/runtime/include",
-  );
-  const replPath = path.resolve(__dirname, "../../src/runtime/repl");
+  let pchPath: string;
+  let isoclineObj: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-e2e-pr27-"));
-
-    // Pre-compile isocline.c once for all tests
-    execSync(
-      `cc -c -std=c11 -I"${replPath}" "${path.join(replPath, "isocline.c")}" -o "${path.join(tempDir, "isocline.o")}" 2>&1`,
-      { encoding: "utf-8" },
-    );
+    pchPath = createPCH(tempDir);
+    isoclineObj = precompileIsocline(tempDir);
   });
 
   afterAll(() => {
@@ -96,9 +79,9 @@ describeIfCompilers("E2E PR #27 Fixes - REPL Binary Tests", () => {
     });
     fs.writeFileSync(mainPath, mainCpp);
 
-    // Compile and link
+    // Compile and link with PCH
     execSync(
-      `g++ -std=c++17 -I"${runtimeIncludePath}" -I"${replPath}" -I"${tempDir}" "${mainPath}" "${cppPath}" "${path.join(tempDir, "isocline.o")}" -o "${binPath}" 2>&1`,
+      `g++ -std=c++17 -include "${pchPath}" -I"${RUNTIME_INCLUDE_PATH}" -I"${REPL_PATH}" -I"${tempDir}" "${mainPath}" "${cppPath}" "${isoclineObj}" -o "${binPath}" 2>&1`,
       { encoding: "utf-8" },
     );
 
@@ -124,23 +107,16 @@ describeIfCompilers("E2E PR #27 Fixes - REPL Binary Tests", () => {
       );
     }
 
-    const headerPath = path.join(tempDir, "generated.hpp");
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-    const outPath = path.join(tempDir, testName);
+    const mainCode = `#include <iostream>\n#include <cstring>\nint main() {\n    using namespace strucpp;\n${mainCppBody}\n    return 0;\n}\n`;
 
-    fs.writeFileSync(headerPath, result.headerCode);
-    const fullCpp = `${result.cppCode}\n#include <iostream>\n#include <cstring>\nint main() {\n    using namespace strucpp;\n${mainCppBody}\n    return 0;\n}\n`;
-    fs.writeFileSync(cppPath, fullCpp);
-
-    execSync(
-      `g++ -std=c++17 -O0 -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" -o "${outPath}" 2>&1`,
-      { encoding: "utf-8" },
-    );
-
-    return execSync(`"${outPath}"`, {
-      encoding: "utf-8",
-      timeout: 5000,
-    }).trim();
+    return compileAndRunHelper({
+      tempDir, pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName,
+      mainCode,
+      extraFlags: ['-O0'],
+    });
   }
 
   // ===========================================================================

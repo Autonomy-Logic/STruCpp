@@ -8,20 +8,14 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { compile } from "../../src/index.js";
-import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-
-// Skip these tests if g++ is not available
-const hasGpp = (() => {
-  try {
-    execSync("which g++", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
+import {
+  hasGpp,
+  createPCH,
+  compileWithGpp as compileWithGppHelper,
+} from "./test-helpers.js";
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
 
@@ -31,13 +25,11 @@ const describeIfGpp = hasGpp ? describe : describe.skip;
 
 describeIfGpp("FB C++ Compilation Tests - Phase 5.1 (Basic FB)", () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(
-    __dirname,
-    "../../src/runtime/include",
-  );
+  let pchPath: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-fb-compile-"));
+    pchPath = createPCH(tempDir);
   });
 
   afterAll(() => {
@@ -46,43 +38,12 @@ describeIfGpp("FB C++ Compilation Tests - Phase 5.1 (Basic FB)", () => {
     }
   });
 
-  /**
-   * Helper function to compile generated C++ code with g++.
-   * Returns success status and optional error message.
-   */
   function compileWithGpp(
     headerCode: string,
     cppCode: string,
     testName: string,
   ): { success: boolean; error?: string } {
-    const headerPath = path.join(tempDir, "generated.hpp");
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-
-    fs.writeFileSync(headerPath, headerCode);
-    const mainCpp = `${cppCode}\n\nint main() {\n    return 0;\n}\n`;
-    fs.writeFileSync(cppPath, mainCpp);
-
-    try {
-      execSync(
-        `g++ -std=c++17 -fsyntax-only -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" 2>&1`,
-        { encoding: "utf-8" },
-      );
-      return { success: true };
-    } catch (error) {
-      const execError = error as {
-        stdout?: string;
-        stderr?: string;
-        message?: string;
-      };
-      return {
-        success: false,
-        error:
-          execError.stdout ||
-          execError.stderr ||
-          execError.message ||
-          "Unknown error",
-      };
-    }
+    return compileWithGppHelper({ tempDir, pchPath, headerCode, cppCode, testName });
   }
 
   it("should compile basic FB declaration and instantiation", () => {
@@ -371,13 +332,11 @@ describeIfGpp("FB C++ Compilation Tests - Phase 5.1 (Basic FB)", () => {
 
 describeIfGpp("FB C++ Compilation Tests - Phase 5.2 (OOP)", () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(
-    __dirname,
-    "../../src/runtime/include",
-  );
+  let pchPath: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-fb-oop-"));
+    pchPath = createPCH(tempDir);
   });
 
   afterAll(() => {
@@ -391,34 +350,7 @@ describeIfGpp("FB C++ Compilation Tests - Phase 5.2 (OOP)", () => {
     cppCode: string,
     testName: string,
   ): { success: boolean; error?: string } {
-    const headerPath = path.join(tempDir, "generated.hpp");
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-
-    fs.writeFileSync(headerPath, headerCode);
-    const mainCpp = `${cppCode}\n\nint main() {\n    return 0;\n}\n`;
-    fs.writeFileSync(cppPath, mainCpp);
-
-    try {
-      execSync(
-        `g++ -std=c++17 -fsyntax-only -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" 2>&1`,
-        { encoding: "utf-8" },
-      );
-      return { success: true };
-    } catch (error) {
-      const execError = error as {
-        stdout?: string;
-        stderr?: string;
-        message?: string;
-      };
-      return {
-        success: false,
-        error:
-          execError.stdout ||
-          execError.stderr ||
-          execError.message ||
-          "Unknown error",
-      };
-    }
+    return compileWithGppHelper({ tempDir, pchPath, headerCode, cppCode, testName });
   }
 
   it("should compile FB with methods", () => {
@@ -783,10 +715,7 @@ describeIfGpp("FB C++ Compilation Tests - Phase 5.2 (OOP)", () => {
 
 describeIfGpp("FB C++ Compilation Tests - Phase 5.3 (Standard FBs)", () => {
   let tempDir: string;
-  const runtimeIncludePath = path.resolve(
-    __dirname,
-    "../../src/runtime/include",
-  );
+  let pchPath: string;
 
   // Load standard FB source files for use as additionalSources
   const stDir = path.resolve(__dirname, "../../src/stdlib/iec-standard-fb");
@@ -800,6 +729,7 @@ describeIfGpp("FB C++ Compilation Tests - Phase 5.3 (Standard FBs)", () => {
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-fb-std-"));
+    pchPath = createPCH(tempDir);
   });
 
   afterAll(() => {
@@ -813,34 +743,7 @@ describeIfGpp("FB C++ Compilation Tests - Phase 5.3 (Standard FBs)", () => {
     cppCode: string,
     testName: string,
   ): { success: boolean; error?: string } {
-    const headerPath = path.join(tempDir, "generated.hpp");
-    const cppPath = path.join(tempDir, `${testName}.cpp`);
-
-    fs.writeFileSync(headerPath, headerCode);
-    const mainCpp = `${cppCode}\n\nint main() {\n    return 0;\n}\n`;
-    fs.writeFileSync(cppPath, mainCpp);
-
-    try {
-      execSync(
-        `g++ -std=c++17 -fsyntax-only -I"${runtimeIncludePath}" -I"${tempDir}" "${cppPath}" 2>&1`,
-        { encoding: "utf-8" },
-      );
-      return { success: true };
-    } catch (error) {
-      const execError = error as {
-        stdout?: string;
-        stderr?: string;
-        message?: string;
-      };
-      return {
-        success: false,
-        error:
-          execError.stdout ||
-          execError.stderr ||
-          execError.message ||
-          "Unknown error",
-      };
-    }
+    return compileWithGppHelper({ tempDir, pchPath, headerCode, cppCode, testName });
   }
 
   it("should compile program using R_TRIG", () => {
