@@ -401,6 +401,9 @@ export class SemanticAnalyzer {
     // Validate OOP property/member name collisions
     this.validatePropertyNameCollisions(ast);
 
+    // Validate OOP modifier contradictions
+    this.validateOOPModifiers(ast);
+
     // TODO: Implement additional semantic validation in Phase 3+
     // - Check that variables are declared before use
     // - Validate array bounds
@@ -675,6 +678,43 @@ export class SemanticAnalyzer {
               `The setter parameter will shadow the member variable.`,
             prop.sourceSpan.startLine,
             prop.sourceSpan.startCol,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate OOP modifier contradictions on function blocks and methods.
+   */
+  private validateOOPModifiers(ast: CompilationUnit): void {
+    for (const fb of ast.functionBlocks) {
+      // ABSTRACT + FINAL on same FB is contradictory
+      if (fb.isAbstract && fb.isFinal) {
+        this.addError(
+          `FUNCTION_BLOCK '${fb.name}' cannot be both ABSTRACT and FINAL.`,
+          fb.sourceSpan.startLine,
+          fb.sourceSpan.startCol,
+        );
+      }
+
+      // ABSTRACT method in non-abstract FB is an error
+      for (const method of fb.methods) {
+        if (method.isAbstract && !fb.isAbstract) {
+          this.addError(
+            `Method '${method.name}' is ABSTRACT but FUNCTION_BLOCK '${fb.name}' is not ABSTRACT. ` +
+              `ABSTRACT methods can only appear in ABSTRACT function blocks.`,
+            method.sourceSpan.startLine,
+            method.sourceSpan.startCol,
+          );
+        }
+
+        // ABSTRACT + FINAL on same method is contradictory
+        if (method.isAbstract && method.isFinal) {
+          this.addError(
+            `Method '${method.name}' in '${fb.name}' cannot be both ABSTRACT and FINAL.`,
+            method.sourceSpan.startLine,
+            method.sourceSpan.startCol,
           );
         }
       }

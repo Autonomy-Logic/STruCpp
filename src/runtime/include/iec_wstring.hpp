@@ -370,6 +370,13 @@ public:
     IECWStringVar& operator=(const IECWStringVar&) = default;
     IECWStringVar& operator=(IECWStringVar&&) = default;
 
+    // Cross-size assignment (IEC 61131-3: WSTRING types are interoperable, truncation on overflow)
+    template<size_t OtherLen>
+    IECWStringVar& operator=(const IECWStringVar<OtherLen>& other) noexcept {
+        value_ = IECWString<MaxLen>(other.get().c_str());
+        return *this;
+    }
+
     value_type get() const noexcept {
         return forced_ ? forced_value_ : value_;
     }

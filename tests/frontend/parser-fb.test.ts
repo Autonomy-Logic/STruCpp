@@ -530,4 +530,19 @@ describe('Function Block Parser (Phase 5.1)', () => {
       expectNoErrors(source);
     });
   });
+
+  // ==========================================================================
+  // Negative FB Declaration Tests
+  // ==========================================================================
+
+  describe('Negative FB declaration tests', () => {
+    it('should error on missing END_FUNCTION_BLOCK', () => {
+      const source = `
+        FUNCTION_BLOCK Broken
+          VAR x : INT; END_VAR
+      `;
+      const result = parse(source);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+  });
 });

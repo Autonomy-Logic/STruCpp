@@ -963,4 +963,260 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       expect(result.headerCode).toContain("class C : public B {");
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // 19. Property Access Codegen (get_/set_ method calls)
+  // ─────────────────────────────────────────────────────────────────────
+  describe("Property access codegen", () => {
+    it("should generate getter call for property read", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Motor
+          VAR _speed : INT; END_VAR
+          PROPERTY Speed : INT
+            GET
+              Speed := _speed;
+            END_GET
+            SET
+              _speed := Speed;
+            END_SET
+          END_PROPERTY
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR
+            m : Motor;
+            x : INT;
+          END_VAR
+          x := m.Speed;
+        END_PROGRAM
+      `);
+
+      expect(result.cppCode).toContain("x = m.get_Speed()");
+    });
+
+    it("should generate setter call for property write", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Motor
+          VAR _speed : INT; END_VAR
+          PROPERTY Speed : INT
+            GET
+              Speed := _speed;
+            END_GET
+            SET
+              _speed := Speed;
+            END_SET
+          END_PROPERTY
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR m : Motor; END_VAR
+          m.Speed := 75;
+        END_PROGRAM
+      `);
+
+      expect(result.cppCode).toContain("m.set_Speed(75)");
+    });
+
+    it("should generate getter for chained field + property read", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Motor
+          VAR _speed : INT; END_VAR
+          PROPERTY Speed : INT
+            GET
+              Speed := _speed;
+            END_GET
+          END_PROPERTY
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Controller
+          VAR motor : Motor; END_VAR
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR
+            ctrl : Controller;
+            x : INT;
+          END_VAR
+          x := ctrl.motor.Speed;
+        END_PROGRAM
+      `);
+
+      expect(result.cppCode).toContain("x = ctrl.motor.get_Speed()");
+    });
+
+    it("should generate setter for chained field + property write", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Motor
+          VAR _speed : INT; END_VAR
+          PROPERTY Speed : INT
+            SET
+              _speed := Speed;
+            END_SET
+          END_PROPERTY
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Controller
+          VAR motor : Motor; END_VAR
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR ctrl : Controller; END_VAR
+          ctrl.motor.Speed := 10;
+        END_PROGRAM
+      `);
+
+      expect(result.cppCode).toContain("ctrl.motor.set_Speed(10)");
+    });
+
+    it("should NOT generate getter/setter for regular field access", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Motor
+          VAR_OUTPUT result : INT; END_VAR
+          VAR _speed : INT; END_VAR
+          PROPERTY Speed : INT
+            GET
+              Speed := _speed;
+            END_GET
+          END_PROPERTY
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR
+            m : Motor;
+            x : INT;
+          END_VAR
+          x := m.result;
+        END_PROGRAM
+      `);
+
+      // Regular field access should remain direct, not get_result()
+      expect(result.cppCode).toContain("x = m.result");
+      expect(result.cppCode).not.toContain("get_result");
+    });
+
+    it("should generate getter for THIS property read in method", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Motor
+          VAR _speed : INT; END_VAR
+          PROPERTY Speed : INT
+            GET
+              Speed := _speed;
+            END_GET
+          END_PROPERTY
+          METHOD PUBLIC LogSpeed : INT
+            LogSpeed := THIS.Speed;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main END_PROGRAM
+      `);
+
+      expect(result.cppCode).toContain("this->get_Speed()");
+    });
+
+    it("should generate setter for THIS property write in method", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Motor
+          VAR _speed : INT; END_VAR
+          PROPERTY Speed : INT
+            SET
+              _speed := Speed;
+            END_SET
+          END_PROPERTY
+          METHOD PUBLIC SetSpeed
+            VAR_INPUT s : INT; END_VAR
+            THIS.Speed := s;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main END_PROGRAM
+      `);
+
+      expect(result.cppCode).toContain("this->set_Speed(s)");
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Method calling FB member methods (Fix 1 - enterScope)
+  // ─────────────────────────────────────────────────────────────────────
+  describe("Method accessing FB member FB instances", () => {
+    it("should generate correct code when method references FB member that is an FB instance", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Inner
+          VAR_OUTPUT val : INT; END_VAR
+          METHOD PUBLIC GetVal : INT
+            GetVal := val;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Outer
+          VAR m : Inner; END_VAR
+          METHOD PUBLIC ReadInner : INT
+            ReadInner := m.GetVal();
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main END_PROGRAM
+      `);
+
+      // The method should be able to reference m.GetVal() — m is an FB member
+      expect(result.cppCode).toContain("Outer::ReadInner()");
+      expect(result.cppCode).toContain("m.GetVal()");
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Method name collision resolution (Fix 3 - resolveMethodNameGlobal)
+  // ─────────────────────────────────────────────────────────────────────
+  describe("Method name collision resolution", () => {
+    it("should resolve correct method when two FBs have same-named methods", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Alpha
+          METHOD PUBLIC DoWork
+          END_METHOD
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Beta
+          METHOD PUBLIC DoWork
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR
+            a : Alpha;
+            b : Beta;
+          END_VAR
+          a.DoWork();
+          b.DoWork();
+        END_PROGRAM
+      `);
+
+      // Both calls should resolve correctly
+      expect(result.cppCode).toContain("a.DoWork()");
+      expect(result.cppCode).toContain("b.DoWork()");
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────────────
+  // String escaping in codegen (Fix 5)
+  // ─────────────────────────────────────────────────────────────────────
+  describe("String escaping", () => {
+    it("should escape double quotes in ST strings for C++", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR s : STRING; END_VAR
+          s := 'say "hello"';
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain('say \\"hello\\"');
+    });
+
+    it("should escape backslashes in ST strings for C++", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR s : STRING; END_VAR
+          s := 'path\\to\\file';
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("path\\\\to\\\\file");
+    });
+
+    it("should convert ST doubled single quotes to single quote in C++", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR s : STRING; END_VAR
+          s := 'it''s';
+        END_PROGRAM
+      `);
+      // In C++ output: "it's" (the doubled '' becomes a single ')
+      expect(result.cppCode).toContain('"it\'s"');
+    });
+  });
 });

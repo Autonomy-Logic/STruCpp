@@ -2401,7 +2401,7 @@ export class ASTBuilder {
     }
 
     // Build the base method call as a FunctionCallExpression
-    let result: Expression = {
+    let result: FunctionCallExpression | MethodCallExpression = {
       kind: "FunctionCallExpression",
       sourceSpan: nodeToSourceSpan(node),
       functionName: `${instanceName}.${methodName}`,
@@ -2414,7 +2414,7 @@ export class ASTBuilder {
       result = this.buildChainedCall(chainNode, result, node);
     }
 
-    return result as FunctionCallExpression | MethodCallExpression;
+    return result;
   }
 
   /**
@@ -2549,7 +2549,7 @@ export class ASTBuilder {
     }
 
     // Build the base method call
-    let callExpr: Expression = {
+    let callExpr: FunctionCallExpression | MethodCallExpression = {
       kind: "FunctionCallExpression",
       sourceSpan: nodeToSourceSpan(node),
       functionName: `${instanceName}.${methodName}`,
@@ -2565,7 +2565,7 @@ export class ASTBuilder {
     return {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),
-      call: callExpr as FunctionCallExpression,
+      call: callExpr,
     };
   }
 

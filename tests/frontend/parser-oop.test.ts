@@ -1202,4 +1202,55 @@ describe('OOP Parser', () => {
       expect(result.cst).toBeDefined();
     });
   });
+
+  // ==========================================================================
+  // Negative OOP Parser Tests
+  // ==========================================================================
+
+  describe('Negative OOP parser tests', () => {
+    it('should error on missing END_METHOD', () => {
+      const source = `
+        FUNCTION_BLOCK Motor
+          METHOD PUBLIC Start
+            (* missing end *)
+        END_FUNCTION_BLOCK
+      `;
+      const result = parseSource(source);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('should error on missing END_INTERFACE', () => {
+      const source = `
+        INTERFACE IRunnable
+          METHOD Run
+          END_METHOD
+      `;
+      const result = parseSource(source);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it('should parse method with ABSTRACT and FINAL combined (contradictory but parser allows)', () => {
+      const source = `
+        FUNCTION_BLOCK ABSTRACT Motor
+          METHOD PUBLIC ABSTRACT FINAL Calculate : REAL
+          END_METHOD
+        END_FUNCTION_BLOCK
+      `;
+      const result = parseSource(source);
+      // Parser allows the combination; semantic analysis catches the contradiction
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should parse method with OVERRIDE and FINAL combined', () => {
+      const source = `
+        FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
+          METHOD PUBLIC OVERRIDE FINAL Start
+          END_METHOD
+        END_FUNCTION_BLOCK
+      `;
+      const result = parseSource(source);
+      // Parser allows the combination; these are independent optional modifiers
+      expect(result.errors).toHaveLength(0);
+    });
+  });
 });

@@ -109,15 +109,12 @@ export class STParser extends CstParser {
     "functionBlockDeclaration",
     () => {
       this.CONSUME(tokens.FUNCTION_BLOCK);
-      // Optional ABSTRACT or FINAL modifier (before or after FB name per IEC spec)
+      // Optional ABSTRACT and/or FINAL modifier (semantic analysis catches contradictions)
       this.OPTION(() => {
-        this.OR({
-          DEF: [
-            { ALT: () => this.CONSUME(tokens.ABSTRACT) },
-            { ALT: () => this.CONSUME(tokens.FINAL) },
-          ],
-          IGNORE_AMBIGUITIES: true,
-        });
+        this.CONSUME(tokens.ABSTRACT);
+      });
+      this.OPTION6(() => {
+        this.CONSUME(tokens.FINAL);
       });
       this.CONSUME(tokens.Identifier);
       // Optional EXTENDS clause
@@ -223,13 +220,13 @@ export class STParser extends CstParser {
         IGNORE_AMBIGUITIES: true,
       });
     });
-    // Optional ABSTRACT/FINAL/OVERRIDE
-    this.OPTION2(() => {
+    // Optional ABSTRACT/FINAL/OVERRIDE (can appear in any combination and order)
+    this.MANY2(() => {
       this.OR2({
         DEF: [
-          { ALT: () => this.CONSUME(tokens.ABSTRACT) },
-          { ALT: () => this.CONSUME(tokens.FINAL) },
-          { ALT: () => this.CONSUME(tokens.OVERRIDE) },
+          { ALT: () => this.CONSUME(tokens.ABSTRACT), GATE: () => this.LA(1).tokenType === tokens.ABSTRACT },
+          { ALT: () => this.CONSUME(tokens.FINAL), GATE: () => this.LA(1).tokenType === tokens.FINAL },
+          { ALT: () => this.CONSUME(tokens.OVERRIDE), GATE: () => this.LA(1).tokenType === tokens.OVERRIDE },
         ],
         IGNORE_AMBIGUITIES: true,
       });

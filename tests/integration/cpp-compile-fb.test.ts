@@ -572,6 +572,97 @@ describeIfGpp("FB C++ Compilation Tests - Phase 5.2 (OOP)", () => {
     }
   });
 
+  it("should compile property access (read and write)", () => {
+    const source = `
+      FUNCTION_BLOCK Motor
+        VAR _speed : INT; END_VAR
+
+        PROPERTY Speed : INT
+          GET
+            Speed := _speed;
+          END_GET
+          SET
+            _speed := Speed;
+          END_SET
+        END_PROPERTY
+      END_FUNCTION_BLOCK
+
+      PROGRAM Main
+        VAR
+          m : Motor;
+          x : INT;
+        END_VAR
+        m.Speed := 75;
+        x := m.Speed;
+      END_PROGRAM
+    `;
+    const result = compile(source, { noStdFBLibrary: true });
+    expect(result.success).toBe(true);
+
+    // Verify property access generates get_/set_ calls
+    expect(result.cppCode).toContain("m.set_Speed(75)");
+    expect(result.cppCode).toContain("m.get_Speed()");
+
+    const gppResult = compileWithGpp(
+      result.headerCode,
+      result.cppCode,
+      "fb_prop_access",
+    );
+    expect(gppResult.success).toBe(true);
+    if (!gppResult.success) {
+      console.log("g++ error:", gppResult.error);
+      console.log("Header:\n", result.headerCode);
+      console.log("CPP:\n", result.cppCode);
+    }
+  });
+
+  it("should compile chained property access", () => {
+    const source = `
+      FUNCTION_BLOCK Motor
+        VAR _speed : INT; END_VAR
+
+        PROPERTY Speed : INT
+          GET
+            Speed := _speed;
+          END_GET
+          SET
+            _speed := Speed;
+          END_SET
+        END_PROPERTY
+      END_FUNCTION_BLOCK
+
+      FUNCTION_BLOCK Controller
+        VAR motor : Motor; END_VAR
+      END_FUNCTION_BLOCK
+
+      PROGRAM Main
+        VAR
+          ctrl : Controller;
+          x : INT;
+        END_VAR
+        ctrl.motor.Speed := 50;
+        x := ctrl.motor.Speed;
+      END_PROGRAM
+    `;
+    const result = compile(source, { noStdFBLibrary: true });
+    expect(result.success).toBe(true);
+
+    expect(result.cppCode).toContain("ctrl.motor.set_Speed(50)");
+    expect(result.cppCode).toContain("ctrl.motor.get_Speed()");
+
+    const gppResult = compileWithGpp(
+      result.headerCode,
+      result.cppCode,
+      "fb_prop_chained",
+    );
+    expect(gppResult.success).toBe(true);
+    if (!gppResult.success) {
+      console.log("g++ error:", gppResult.error);
+      console.log("Header:\n", result.headerCode);
+      console.log("CPP:\n", result.cppCode);
+    }
+  });
+
   it("should compile THIS and SUPER usage", () => {
     const source = `
       FUNCTION_BLOCK Base

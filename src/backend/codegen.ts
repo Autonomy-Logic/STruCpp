@@ -243,8 +243,17 @@ export class CodeGenerator {
   /** Map of UPPER(typeName).UPPER(methodName) → declared method name for case normalization */
   private methodNameMap: Map<string, string> = new Map();
 
+  /** Map of UPPER(typeName).UPPER(propName) → declared property name for property access codegen */
+  private propertyNameMap: Map<string, string> = new Map();
+
+  /** Current FB name (set during generateFBImplementation for property resolution) */
+  private currentFBName: string | undefined;
+
   /** Mapping of VAR_INST names (upper case) to mangled class member names */
   private varInstMangledNames: Map<string, string> = new Map();
+
+  /** Current FB's var blocks, kept so method scopes can see FB member types */
+  private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
 
   constructor(
     private readonly _symbolTables: SymbolTables,
@@ -349,12 +358,18 @@ export class CodeGenerator {
       }
     }
 
-    // Build method name map for FBs
+    // Build method name map and property name map for FBs
     for (const fb of ast.functionBlocks) {
       for (const method of fb.methods) {
         this.methodNameMap.set(
           `${fb.name.toUpperCase()}.${method.name.toUpperCase()}`,
           method.name,
+        );
+      }
+      for (const prop of fb.properties) {
+        this.propertyNameMap.set(
+          `${fb.name.toUpperCase()}.${prop.name.toUpperCase()}`,
+          prop.name,
         );
       }
     }
@@ -964,8 +979,8 @@ export class CodeGenerator {
       }
     }
 
-    // Populate scope for FB instance detection inside method bodies
-    this.enterScope(method.varBlocks);
+    // Merge FB scope + method scope so FB member types are visible (same pattern as properties)
+    this.enterScope([...this.currentFBVarBlocks, ...method.varBlocks]);
 
     // Declare local variables (VAR, VAR_TEMP)
     for (const block of method.varBlocks) {
@@ -1083,7 +1098,9 @@ export class CodeGenerator {
   private generateFBImplementation(
     fb: CompilationUnit["functionBlocks"][0],
   ): void {
+    this.currentFBName = fb.name;
     this.currentFBExtends = fb.extends;
+    this.currentFBVarBlocks = fb.varBlocks;
 
     // Constructor
     this.emit(`${fb.name}::${fb.name}() {`);
@@ -1117,7 +1134,9 @@ export class CodeGenerator {
       this.exitScope();
     }
 
+    this.currentFBName = undefined;
     this.currentFBExtends = undefined;
+    this.currentFBVarBlocks = [];
   }
 
   /**
@@ -1695,6 +1714,16 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
+    // Check for property write: m.Speed := 75 → m.set_Speed(75)
+    const propWrite = this.detectPropertyWrite(stmt.target);
+    if (propWrite) {
+      const value = this.generateExpression(stmt.value);
+      this.emit(
+        `${indent}${propWrite.objectCode}set_${propWrite.propertyName}(${value});`,
+      );
+      return;
+    }
+
     const target = this.generateExpression(stmt.target);
     const value = this.generateExpression(stmt.value);
 
@@ -1916,8 +1945,11 @@ export class CodeGenerator {
    */
   private generateReturnStatement(indent: string): void {
     if (this.interfaceReturnMethod) {
-      // Interface return methods use return in the assignment; explicit RETURN
-      // shouldn't occur but emit a bare return for safety
+      // Interface-returning methods: the assignment-based return path (methodName := expr)
+      // directly emits `return expr;`. A bare `RETURN;` has no value to return, so we
+      // default to `return *this;` which is correct for the common pattern where the
+      // method returns its own FB as the interface implementor. Edge case: if the method
+      // should return a different object, the user must use the assignment form instead.
       this.emit(`${indent}return *this;`);
     } else if (this.currentFunctionName) {
       this.emit(`${indent}return ${this.currentFunctionName}_result;`);
@@ -2019,11 +2051,19 @@ export class CodeGenerator {
       case "STRING": {
         // rawValue includes surrounding single quotes: 'hello' → strip them
         const inner = expr.rawValue.replace(/^'|'$/g, "");
-        return `"${inner}"`;
+        const escaped = inner
+          .replace(/''/g, "'")        // ST doubled-quote → single quote
+          .replace(/\\/g, "\\\\")     // Escape backslash for C++
+          .replace(/"/g, '\\"');       // Escape double-quote for C++
+        return `"${escaped}"`;
       }
       case "WSTRING": {
         const wInner = expr.rawValue.replace(/^'|'$/g, "");
-        return `L"${wInner}"`;
+        const wEscaped = wInner
+          .replace(/''/g, "'")        // ST doubled-quote → single quote
+          .replace(/\\/g, "\\\\")     // Escape backslash for C++
+          .replace(/"/g, '\\"');       // Escape double-quote for C++
+        return `L"${wEscaped}"`;
       }
       case "TIME": {
         const timeVal = parseTimeLiteral(String(expr.value));
@@ -2053,23 +2093,51 @@ export class CodeGenerator {
         return "(*this)";
       }
       // THIS.member or THIS^.member → this->member
+      // Check if last field is a property → this->get_Prop()
       let result = "this->";
       if (expr.fieldAccess.length > 0) {
-        result += expr.fieldAccess[0];
-        for (let i = 1; i < expr.fieldAccess.length; i++) {
-          result += `.${expr.fieldAccess[i]}`;
+        let currentType = this.currentFBName;
+        for (let i = 0; i < expr.fieldAccess.length; i++) {
+          const field = expr.fieldAccess[i]!;
+          const isLast = i === expr.fieldAccess.length - 1;
+          if (isLast) {
+            const propName = this.resolvePropertyName(currentType, field);
+            if (propName) {
+              result += `get_${propName}()`;
+              return result;
+            }
+          }
+          if (i > 0) result += ".";
+          result += field;
+          if (!isLast) {
+            currentType = this.resolveMemberType(currentType, field);
+          }
         }
       }
       return result;
     }
 
     // Handle SUPER reference → BaseClass::member
+    // Check if last field is a property → BaseClass::get_Prop()
     if (nameUpper === "SUPER" && this.currentFBExtends) {
       let result = `${this.currentFBExtends}::`;
       if (expr.fieldAccess.length > 0) {
-        result += expr.fieldAccess[0];
-        for (let i = 1; i < expr.fieldAccess.length; i++) {
-          result += `.${expr.fieldAccess[i]}`;
+        let currentType: string | undefined = this.currentFBExtends;
+        for (let i = 0; i < expr.fieldAccess.length; i++) {
+          const field = expr.fieldAccess[i]!;
+          const isLast = i === expr.fieldAccess.length - 1;
+          if (isLast) {
+            const propName = this.resolvePropertyName(currentType, field);
+            if (propName) {
+              result += `get_${propName}()`;
+              return result;
+            }
+          }
+          if (i > 0) result += ".";
+          result += field;
+          if (!isLast) {
+            currentType = this.resolveMemberType(currentType, field);
+          }
         }
       }
       return result;
@@ -2103,9 +2171,24 @@ export class CodeGenerator {
       }
     }
 
-    // Field access (struct members)
-    for (const field of expr.fieldAccess) {
-      result += `.${field}`;
+    // Field access (struct members) — detect property reads on last field
+    if (expr.fieldAccess.length > 0) {
+      let currentType = this.currentScopeVarTypes.get(nameUpper);
+      for (let i = 0; i < expr.fieldAccess.length; i++) {
+        const field = expr.fieldAccess[i]!;
+        const isLast = i === expr.fieldAccess.length - 1;
+        if (isLast) {
+          const propName = this.resolvePropertyName(currentType, field);
+          if (propName) {
+            result += `.get_${propName}()`;
+            continue;
+          }
+        }
+        result += `.${field}`;
+        if (!isLast) {
+          currentType = this.resolveMemberType(currentType, field);
+        }
+      }
     }
 
     // Dereference (^ operator → pointer dereference)
@@ -2177,8 +2260,16 @@ export class CodeGenerator {
     const args = expr.arguments
       .map((a) => this.generateExpression(a.value))
       .join(", ");
-    // Resolve method name case: look up the declared name across all known types
-    const resolvedName = this.resolveMethodNameGlobal(expr.methodName);
+    // Try type-specific resolution first (avoids collisions when two FBs share a method name)
+    let resolvedName: string;
+    if (expr.object.kind === "VariableExpression") {
+      const varType = this.currentScopeVarTypes.get(expr.object.name.toUpperCase());
+      resolvedName = varType
+        ? this.resolveMethodName(varType, expr.methodName)
+        : this.resolveMethodNameGlobal(expr.methodName);
+    } else {
+      resolvedName = this.resolveMethodNameGlobal(expr.methodName);
+    }
     return `${obj}.${resolvedName}(${args})`;
   }
 
@@ -2507,6 +2598,111 @@ export class CodeGenerator {
       }
     }
     return methodName;
+  }
+
+  /**
+   * Resolve a property name from the property name map.
+   * Returns the declared property name if the field is a property, undefined otherwise.
+   */
+  private resolvePropertyName(
+    typeName: string | undefined,
+    fieldName: string,
+  ): string | undefined {
+    if (!typeName) return undefined;
+    const key = `${typeName.toUpperCase()}.${fieldName.toUpperCase()}`;
+    return this.propertyNameMap.get(key);
+  }
+
+  /**
+   * Resolve the type of a member field on a given FB or struct type.
+   * Used for chained access like ctrl.motor.Speed where we need to know
+   * motor's type to check if Speed is a property.
+   */
+  private resolveMemberType(
+    typeName: string | undefined,
+    memberName: string,
+  ): string | undefined {
+    if (!typeName) return undefined;
+    const typeUpper = typeName.toUpperCase();
+    const memberUpper = memberName.toUpperCase();
+    if (!this.ast) return undefined;
+
+    for (const fb of this.ast.functionBlocks) {
+      if (fb.name.toUpperCase() === typeUpper) {
+        for (const block of fb.varBlocks) {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              if (name.toUpperCase() === memberUpper) return decl.type.name;
+            }
+          }
+        }
+        return undefined;
+      }
+    }
+
+    for (const td of this.ast.types) {
+      if (
+        td.name.toUpperCase() === typeUpper &&
+        td.definition.kind === "StructDefinition"
+      ) {
+        for (const field of td.definition.fields) {
+          for (const name of field.names) {
+            if (name.toUpperCase() === memberUpper) return field.type.name;
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Detect if an assignment target is a property write (e.g., m.Speed := 75).
+   * Returns the object code prefix and property name if so, undefined otherwise.
+   */
+  private detectPropertyWrite(
+    target: Expression,
+  ): { objectCode: string; propertyName: string } | undefined {
+    if (target.kind !== "VariableExpression") return undefined;
+    const expr = target;
+    if (expr.fieldAccess.length === 0) return undefined;
+
+    const nameUpper = expr.name.toUpperCase();
+    const lastField = expr.fieldAccess[expr.fieldAccess.length - 1]!;
+
+    // Resolve the type at the point just before the last field
+    let currentType: string | undefined;
+    if (nameUpper === "THIS") currentType = this.currentFBName;
+    else if (nameUpper === "SUPER") currentType = this.currentFBExtends;
+    else currentType = this.currentScopeVarTypes.get(nameUpper);
+
+    for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
+      if (!currentType) break;
+      currentType = this.resolveMemberType(currentType, expr.fieldAccess[i]!);
+    }
+
+    if (!currentType) return undefined;
+    const propName = this.resolvePropertyName(currentType, lastField);
+    if (!propName) return undefined;
+
+    // Build the object code (everything except the last field)
+    let objectCode: string;
+    if (nameUpper === "THIS") {
+      objectCode = "this->";
+      for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
+        objectCode += expr.fieldAccess[i]! + ".";
+      }
+    } else if (nameUpper === "SUPER" && this.currentFBExtends) {
+      objectCode = this.currentFBExtends + "::";
+      for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
+        objectCode += expr.fieldAccess[i]! + ".";
+      }
+    } else {
+      // Generate a VariableExpression with fieldAccess trimmed to all-but-last
+      const baseExpr = { ...expr, fieldAccess: expr.fieldAccess.slice(0, -1) };
+      objectCode = this.generateVariableExpression(baseExpr) + ".";
+    }
+
+    return { objectCode, propertyName: propName };
   }
 
   /**

@@ -437,7 +437,7 @@ export const IntegerLiteral = createToken({
 // String literal: 'hello world'
 export const StringLiteral = createToken({
   name: "StringLiteral",
-  pattern: /'(?:[^'$]|\$\$|\$'|\$[LNPRTlnprt]|\$[0-9A-Fa-f]{2})*'/,
+  pattern: /'(?:[^'$]|\$\$|\$'|\$[LNPRTlnprt]|\$[0-9A-Fa-f]{2}|'')*'/,
 });
 
 // Wide string literal: "hello world"
