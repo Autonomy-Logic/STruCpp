@@ -1,16 +1,16 @@
-# Phase 8.2: Complete Assert Library and Test Organization
+# Phase 9.2: Complete Assert Library and Test Organization
 
 **Status**: PENDING
 
 **Duration**: 1-2 weeks
 
-**Prerequisites**: Phase 8.1 (Core Test Infrastructure)
+**Prerequisites**: Phase 9.1 (Core Test Infrastructure). All external prerequisites (Phases 3.6, 4, 5) are satisfied.
 
 **Goal**: Extend the testing framework with a comprehensive assert library covering all IEC 61131-3 data types, add SETUP/TEARDOWN support for shared test initialization, optional assertion messages, and support for multiple test files in a single invocation
 
 ## Overview
 
-Phase 8.1 delivers the core `ASSERT_EQ`, `ASSERT_TRUE`, and `ASSERT_FALSE` functions. This phase completes the assert library with numerical comparisons, range/tolerance checks for REAL types, and organizational features (SETUP/TEARDOWN) that reduce test boilerplate.
+Phase 9.1 delivers the core `ASSERT_EQ`, `ASSERT_TRUE`, and `ASSERT_FALSE` functions. This phase completes the assert library with numerical comparisons, range/tolerance checks for REAL types, and organizational features (SETUP/TEARDOWN) that reduce test boilerplate.
 
 ## Scope
 
@@ -102,8 +102,8 @@ END_TEST
 
 ```cpp
 struct TestSetup {
-    Program_MotorControl motor;
-    Program_TemperatureSensor sensor;
+    MotorControl motor;
+    TemperatureSensor sensor;
 
     void setup() {
         motor.max_speed = 1500;
@@ -121,9 +121,34 @@ bool test_1(strucpp::TestContext& ctx) {
     s.setup();
     // TEST 'Motor starts when enabled'
     s.motor.enabled = true;
-    s.motor.run();
+    s.motor();  // FB invocation → operator()
     bool result = ctx.assert_true(
         static_cast<bool>(s.motor.running), "motor.running", 15);
+    s.teardown();
+    return result;
+}
+```
+
+**Variable scoping in generated code:**
+- SETUP variables are members of the `TestSetup` struct, accessed via `s.` prefix
+- TEST-local variables (from `VAR ... END_VAR` inside TEST blocks) are local C++ variables, accessed directly
+- The test codegen must track which variables come from SETUP vs TEST-local to generate correct access patterns
+- TEARDOWN accesses SETUP variables via the same `s.` prefix
+
+```cpp
+bool test_2(strucpp::TestContext& ctx) {
+    TestSetup s;          // SETUP vars: s.motor, s.sensor
+    s.setup();
+
+    INT_t local_speed;    // TEST-local var: no prefix
+    s.motor.enabled = true;
+    s.motor.speed_setpoint = INT_t(9999);
+    s.motor();
+    local_speed = static_cast<INT_t>(s.motor.actual_speed);
+
+    bool result = ctx.assert_le<INT_t>(
+        local_speed, INT_t(1500),
+        "motor.actual_speed", "1500", 22);
     s.teardown();
     return result;
 }
@@ -379,4 +404,4 @@ bool assert_near(T actual, T expected, T tolerance, /* ... */) {
 - Output groups results by test file
 - ASSERT_NEAR handles floating-point comparison correctly
 - TEARDOWN runs even when a TEST block fails
-- All tests pass with no regressions from Phase 8.1
+- All tests pass with no regressions from Phase 9.1

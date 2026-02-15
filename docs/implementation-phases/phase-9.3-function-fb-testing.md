@@ -1,16 +1,16 @@
-# Phase 8.3: Function and Function Block Testing
+# Phase 9.3: Function and Function Block Testing
 
 **Status**: PENDING
 
 **Duration**: 2-3 weeks
 
-**Prerequisites**: Phase 4 (Functions), Phase 5.1 (Function Blocks Core), Phase 8.2 (Assert Library)
+**Prerequisites**: Phase 4 (Functions) - **satisfied**, Phase 5.1 (Function Blocks Core) - **satisfied**, Phase 9.2 (Assert Library)
 
 **Goal**: Extend the testing framework to support direct function calls, function block instantiation and invocation, method calls, output parameter access, and interface-based testing
 
 ## Overview
 
-Phases 8.1-8.2 support testing PROGRAMs only. This phase adds the ability to test **Functions** (Phase 4) and **Function Blocks** (Phase 5) - the primary unit-testable constructs in IEC 61131-3. This is where the testing framework becomes truly powerful, enabling POU-oriented unit testing as described in academic literature.
+Phases 9.1-9.2 support testing PROGRAMs only. This phase adds the ability to test **Functions** (Phase 4) and **Function Blocks** (Phase 5) - the primary unit-testable constructs in IEC 61131-3. This is where the testing framework becomes truly powerful, enabling POU-oriented unit testing as described in academic literature.
 
 With Function Blocks, tests can:
 - Instantiate FBs with independent state
@@ -376,6 +376,14 @@ END_TEST
 
 ### Standard Function Block Testing
 
+The standard FBs (TON, TOF, CTU, CTD, R_TRIG, F_TRIG, SR, RS) are compiled from ST source and loaded via the library system (`src/library/builtin-stdlib.ts`). When tests reference standard FBs, the test build must include the compiled standard library:
+
+1. The standard FB library manifest is loaded via `getStdFBLibraryManifest()`
+2. Library symbols are registered in the SymbolTables via `registerLibrarySymbols()`
+3. The compiled standard library C++ code is linked during g++ compilation
+
+This happens automatically through the normal `compile()` pipeline (which already loads the standard FB library by default). The test codegen just needs to ensure the library's header/source files are included in the g++ invocation.
+
 Test the standard FBs (TON, TOF, CTU, CTD, R_TRIG, F_TRIG, SR, RS):
 
 ```st
@@ -450,7 +458,7 @@ output = m.GetSpeed();
 ### Type Resolution in Test Context
 
 The test parser needs access to the symbol table from the compiled source to:
-- Resolve POU names to their generated C++ classes (`Counter` → `Program_Counter`, `Debounce` → `FB_Debounce`)
+- Resolve POU names to their generated C++ classes (`Counter` → `Program_Counter`, `Debounce` → `Debounce`)
 - Determine parameter types for assert type specialization
 - Validate member access (`uut.count` exists and has type INT)
 - Resolve function return types for expression typing
@@ -543,8 +551,9 @@ In STruC++, all member variables of generated C++ classes are public (they are `
 
 ### Relationship to Phase 4 and 5
 
-This phase cannot be implemented until Functions (Phase 4) and Function Blocks (Phase 5.1) are complete. Method testing additionally requires Phase 5.2 (OOP Extensions). The implementation can be staged:
+Functions (Phase 4), Function Blocks (Phase 5.1), OOP (Phase 5.2), and Standard FBs (Phase 5.3) are all complete. This means Phase 9.3 can implement all testing patterns in a single pass:
 
-1. First: Function testing (after Phase 4)
-2. Then: FB instantiation and invocation testing (after Phase 5.1)
-3. Finally: Method and interface testing (after Phase 5.2)
+1. Function testing (calls, return values, VAR_IN_OUT)
+2. FB instantiation and invocation testing (state, named params, outputs)
+3. Method and interface testing (method calls, inheritance, polymorphism)
+4. Standard FB testing (TON, CTU, R_TRIG, etc. from the compiled ST standard library)

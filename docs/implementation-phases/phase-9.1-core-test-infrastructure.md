@@ -1,10 +1,10 @@
-# Phase 8.1: Core Test Infrastructure
+# Phase 9.1: Core Test Infrastructure
 
 **Status**: PENDING
 
 **Duration**: 2-3 weeks
 
-**Prerequisites**: Phase 3.6 (REPL Runner)
+**Prerequisites**: Phase 3.6 (REPL Runner) - **satisfied**
 
 **Goal**: Implement the foundational test infrastructure: parser extensions for TEST/END_TEST blocks, basic assert functions, C++ test runtime, test main generator, and CLI `--test` flag with single-pass compile-build-run execution
 
@@ -183,7 +183,22 @@ export const ASSERT_TRUE = createToken({ name: "ASSERT_TRUE", pattern: /ASSERT_T
 export const ASSERT_FALSE = createToken({ name: "ASSERT_FALSE", pattern: /ASSERT_FALSE/i, longer_alt: Identifier });
 ```
 
-Note: These tokens should only be added to the token list when parsing test files, to avoid conflicting with user identifiers named `TEST` in normal ST programs. This can be achieved by having a separate token list for test file parsing, or by using the parser's `GATE` mechanism.
+**Important: Separate token list for test files.** These tokens must NOT be added to the normal `allTokens` array, as they would conflict with user identifiers named `TEST`, `SETUP`, etc. in normal ST programs. The implementation should use a **separate `allTestTokens` array** that extends the normal token list with test-specific keywords:
+
+```typescript
+// Test-specific token list (extends normal allTokens)
+export const allTestTokens = [
+  // All test keywords BEFORE the normal keyword tokens (higher priority)
+  TEST, END_TEST, SETUP, END_SETUP, TEARDOWN, END_TEARDOWN,
+  ASSERT_EQ, ASSERT_TRUE, ASSERT_FALSE,
+  ASSERT_NEQ, ASSERT_GT, ASSERT_LT, ASSERT_GE, ASSERT_LE, ASSERT_NEAR,
+  MOCK, MOCK_FUNCTION, MOCK_VERIFY_CALLED, MOCK_VERIFY_CALL_COUNT, RETURNS,
+  // Then all normal tokens (same order as allTokens)
+  ...allTokens,
+];
+```
+
+The parser creates a **second Chevrotain lexer instance** using `allTestTokens` for tokenizing test files, while the normal lexer remains unchanged for source files. Both lexers share the same underlying token definitions for all standard ST constructs.
 
 ### 3. Parser Extensions (`src/frontend/parser.ts`)
 
@@ -305,11 +320,13 @@ int main() {
 **Key generation rules:**
 - Each TEST block becomes a `bool test_N(TestContext&)` function
 - VAR declarations become local C++ variables (fresh per invocation)
-- `uut()` becomes `uut.run()` (for programs)
-- `ASSERT_EQ(a, b)` becomes `ctx.assert_eq<T>(a, b, "a", "b", line)`
-- `ASSERT_TRUE(x)` becomes `ctx.assert_true(x, "x", line)`
+- `uut()` becomes `uut.run()` (for programs) or `uut()` (for FBs, which use `operator()`)
+- `ASSERT_EQ(a, b)` becomes `ctx.assert_eq<T>(static_cast<T>(a), T(b), "a", "b", line)`
+- `ASSERT_TRUE(x)` becomes `ctx.assert_true(static_cast<bool>(x), "x", line)`
 - Test functions return `true` on success, `false` on first failure (fail-fast within a test)
 - `main()` registers all tests and calls `runner.run()`
+
+**IECVar\<T\> handling:** All POU member variables are `IECVar<T>` wrappers, which have implicit `operator T()` conversion. The `static_cast<T>()` in assert generation is necessary to ensure C++ template type deduction works correctly - without it, the compiler cannot deduce `T` from `IECVar<T>` vs `T` arguments. Literal values are wrapped in `T()` constructors (e.g., `INT_t(1)`) for the same reason.
 
 ### 6. C++ Test Runtime (`src/runtime/test/iec_test.hpp`)
 
@@ -327,8 +344,9 @@ Header-only C++ test runtime:
 namespace strucpp {
 
 struct TestContext {
-    const char* test_file;
+    const char* test_file;   // Set by TestRunner before each test
     int failures = 0;
+    bool verbose = false;    // Set from CLI flags (Phase 9.6)
 
     template<typename T>
     bool assert_eq(T actual, T expected,
@@ -411,7 +429,59 @@ public:
 } // namespace strucpp
 ```
 
-### 7. CLI Integration (`src/cli.ts`)
+### 7. Test File Parsing Architecture
+
+Test files and source files go through **separate but connected pipelines**:
+
+```
+Source files (*.st)                    Test files (test_*.st)
+       │                                       │
+       │ Normal Lexer (allTokens)              │ Test Lexer (allTestTokens)
+       ▼                                       ▼
+    CST (source)                           CST (test)
+       │                                       │
+       │ buildCompilationUnit()                │ buildTestFile()
+       ▼                                       ▼
+    AST (source)                         TestModel (tests)
+       │                                       │
+       │ compile() pipeline                    │ Uses source SymbolTables
+       ▼                                       │ to resolve POU references
+    CompileResult                              │
+    ├── headerCode (.hpp)                      │
+    ├── cppCode (.cpp)                         │
+    ├── symbolTables ──────────────────────────▶│
+    └── projectModel                           │
+                                               ▼
+                                       generateTestMain()
+                                               │
+                                          test_main.cpp
+```
+
+**Key design points:**
+
+1. **Source compiles first** - The normal `compile()` pipeline runs on source files, producing C++ output AND a populated SymbolTable
+2. **Test parser reuses grammar rules** - The `testFile` rule reuses existing `varBlock`, `statement`, and `expression` rules, minimizing duplication
+3. **Symbol resolution** - The test codegen uses source SymbolTables to:
+   - Map POU names to C++ class names (`Counter` → `Program_Counter` for programs, `Debounce` → `Debounce` for FBs)
+   - Determine parameter types for assert type specialization (`assert_eq<INT_t>`)
+   - Validate member access expressions (`uut.count` has type INT)
+4. **Separate entry points** - The parser has both `compilationUnit` (for source) and `testFile` (for tests) as top-level rules
+
+### 8. Error Handling
+
+The test runner should provide clear error messages for common failure scenarios:
+
+| Scenario | Error Message | Exit Code |
+|----------|--------------|-----------|
+| Test file has syntax errors | `Error parsing test_file.st: Unexpected token END_TEST at line 5` | 1 |
+| Test references non-existent POU | `Error: POU 'NonExistent' not found in source files` | 1 |
+| Test accesses non-existent member | `Error: 'Counter' has no member 'nonexistent'` | 1 |
+| Source file compilation fails | `Error compiling source.st: [normal compile errors]` | 1 |
+| g++ compilation fails | `Error: C++ compilation failed:\n[g++ error output]` | 1 |
+| Test binary crashes (segfault) | `Error: Test binary crashed with signal 11` | 1 |
+| g++ not available | `Error: g++ not found. Install a C++17 compiler to run tests.` | 1 |
+
+### 9. CLI Integration (`src/cli.ts`)
 
 Add `--test` flag to the CLI:
 
@@ -424,33 +494,48 @@ interface CLIOptions {
 }
 ```
 
-The `--test` execution flow:
+The `--test` execution flow (following the same pattern as the existing `--build` REPL in `cli.ts`):
 
 ```typescript
 async function runTests(sourceFiles: string[], testFiles: string[], options: CLIOptions) {
-  // 1. Compile all source files
-  const compileResult = compile(combinedSource, { headerFileName: 'generated.hpp' });
+  // 1. Compile all source files (uses normal compile() pipeline with library loading)
+  const compileResult = compile(combinedSource, {
+    headerFileName: 'generated.hpp',
+    libraryPaths: options.libraryPaths,
+  });
   if (!compileResult.success) {
     reportCompileErrors(compileResult.errors);
     process.exit(1);
   }
 
-  // 2. Parse test files
-  const testModels = testFiles.map(f => parseTestFile(fs.readFileSync(f, 'utf-8'), f));
+  // 2. Parse test files using the test lexer/parser
+  const testModels = testFiles.map(f =>
+    parseTestFile(fs.readFileSync(f, 'utf-8'), f, compileResult.symbolTables)
+  );
 
-  // 3. Generate test_main.cpp
+  // 3. Generate test_main.cpp (uses SymbolTables for POU → C++ class mapping)
   const testMainCpp = generateTestMain(testModels, compileResult);
 
   // 4. Write files to temp directory
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-test-'));
   // ... write generated.hpp, generated.cpp, test_main.cpp
 
-  // 5. Compile with g++
-  execSync(`g++ -std=c++17 -I"${runtimeInclude}" -I"${testRuntime}" ...`);
+  // 5. Compile with g++ (use execFileSync for shell-injection safety, like --build does)
+  execFileSync(gppPath, [
+    '-std=c++17', '-DSTRUCPP_TEST_BUILD',
+    `-I${runtimeIncludeDir}`, `-I${testRuntimeDir}`,
+    'test_main.cpp', 'generated.cpp',
+    '-o', binaryPath,
+  ], { cwd: tempDir });
 
-  // 6. Execute binary and capture output
-  const result = execSync(`"${binaryPath}"`, { encoding: 'utf-8' });
-  const exitCode = /* parse exit code */;
+  // 6. Execute binary and capture output (pass format flags as argv)
+  const binaryArgs = [];
+  if (options.testOutput === 'junit') binaryArgs.push('--junit');
+  if (options.testOutput === 'tap') binaryArgs.push('--tap');
+  if (options.testVerbose) binaryArgs.push('--verbose');
+  if (options.testFilter) binaryArgs.push('--filter', options.testFilter);
+
+  const result = execFileSync(binaryPath, binaryArgs, { encoding: 'utf-8' });
 
   // 7. Display results
   process.stdout.write(result);
@@ -462,6 +547,8 @@ async function runTests(sourceFiles: string[], testFiles: string[], options: CLI
   process.exit(exitCode);
 }
 ```
+
+**Note**: The `--test` flag is mutually exclusive with `--build` (REPL) and `--compile-lib` (library compilation). It can be combined with `-L` (library paths) and source file compilation options.
 
 ## Deliverables
 
@@ -581,9 +668,9 @@ END_TEST
 
 ### Relationship to Other Phases
 
-- **Phase 3.6** (REPL): Reuses the C++ compilation pipeline (g++ invocation, runtime include paths, isocline is NOT needed)
-- **Phase 4** (Functions): Will enable function call testing in Phase 8.3
-- **Phase 5** (Function Blocks): Will enable FB instantiation testing in Phase 8.3
+- **Phase 3.6** (REPL): Reuses the C++ compilation pipeline (g++ invocation, runtime include paths, `execFileSync` pattern). Isocline is NOT needed for test runner.
+- **Phase 4** (Functions): Complete. Enables function call testing in Phase 9.3.
+- **Phase 5** (Function Blocks, OOP, Standard FBs): Complete. Enables FB/method/interface testing in Phase 9.3 and mocking in Phase 9.4.
 
 ### Design Decisions
 
@@ -593,4 +680,11 @@ END_TEST
 
 3. **No isocline dependency**: Unlike the REPL, the test runner does not need the isocline line editing library. It runs non-interactively with no stdin input.
 
-4. **Program invocation syntax**: `uut()` (function-call syntax) is used instead of a special command like `RUN(uut)`. This is consistent with IEC 61131-3 syntax for FB invocation and will extend naturally when Functions and FBs are added in Phase 8.3.
+4. **Program invocation syntax**: `uut()` (function-call syntax) is used instead of a special command like `RUN(uut)`. This is consistent with IEC 61131-3 syntax for FB invocation and extends naturally to Functions and FBs in Phase 9.3.
+
+5. **POU invocation C++ mapping**: The generated C++ differs by POU type:
+   - **Programs**: `uut()` → `uut.run()` (Programs are `Program_X` classes with a `run()` method)
+   - **Function Blocks**: `fb()` → `fb()` (FBs use `operator()()`, so call syntax maps directly)
+   - **Functions**: `FUNC(x)` → `FUNC(x)` (Functions are free C++ functions in the namespace)
+
+   The test codegen uses the source SymbolTables to determine which mapping to apply.

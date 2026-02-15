@@ -1,4 +1,4 @@
-# Phase 8: IEC 61131-3 Testing Framework
+# Phase 9: IEC 61131-3 Testing Framework
 
 **Status**: PENDING
 
@@ -115,7 +115,7 @@ strucpp counter.st --test test_basic.st test_edge_cases.st
 # Verbose output
 strucpp counter.st --test test_counter.st --test-verbose
 
-# JUnit XML output for CI (Phase 8.6)
+# JUnit XML output for CI (Phase 9.6)
 strucpp counter.st --test test_counter.st --test-output junit
 ```
 
@@ -149,20 +149,22 @@ test_counter.st
 
 This phase is divided into sub-phases that can be implemented incrementally:
 
-- [Phase 8.1: Core Test Infrastructure](phase-8.1-core-test-infrastructure.md) - Parser extensions, basic asserts, CLI integration, program testing
-- [Phase 8.2: Complete Assert Library and Test Organization](phase-8.2-assert-library.md) - Full assert set, SETUP/TEARDOWN, multiple test files, messages
-- [Phase 8.3: Function and Function Block Testing](phase-8.3-function-fb-testing.md) - Direct function calls, FB instantiation, method invocation, interface testing
-- [Phase 8.4: Mocking Framework](phase-8.4-mocking-framework.md) - Per-TEST MOCK declarations for FBs and Functions, mock verification, selective mocking
-- [Phase 8.5: STruC++ Self-Validation Suite](phase-8.5-self-validation-suite.md) - ST test files for compiler validation, Vitest integration, CI pipeline
-- [Phase 8.6: Advanced Testing Features](phase-8.6-advanced-testing.md) - JUnit XML/TAP output, verbose mode, test filtering, timing
+- [Phase 9.1: Core Test Infrastructure](phase-9.1-core-test-infrastructure.md) - Parser extensions, basic asserts, CLI integration, program testing
+- [Phase 9.2: Complete Assert Library and Test Organization](phase-9.2-assert-library.md) - Full assert set, SETUP/TEARDOWN, multiple test files, messages
+- [Phase 9.3: Function and Function Block Testing](phase-9.3-function-fb-testing.md) - Direct function calls, FB instantiation, method invocation, interface testing
+- [Phase 9.4: Mocking Framework](phase-9.4-mocking-framework.md) - Per-TEST MOCK declarations for FBs and Functions, mock verification, selective mocking
+- [Phase 9.5: STruC++ Self-Validation Suite](phase-9.5-self-validation-suite.md) - ST test files for compiler validation, Vitest integration, CI pipeline
+- [Phase 9.6: Advanced Testing Features](phase-9.6-advanced-testing.md) - JUnit XML/TAP output, verbose mode, test filtering, timing
 
 ## Prerequisites
 
-- **Phase 3.6** (REPL Runner) - Provides compilation pipeline infrastructure (`--build`, `repl-main-gen.ts`, C++ compilation)
-- **Phase 4** (Functions) - Required for Phase 8.3 function testing
-- **Phase 5** (Function Blocks) - Required for Phase 8.3 FB testing
+All external prerequisites are satisfied (Phases 1-5 are complete):
 
-Phase 8.1 and 8.2 can begin immediately after Phase 3.6, using only PROGRAM testing. Phase 8.3 requires Phase 4+5 to be complete. Phase 8.4 (Mocking) requires Phase 8.3 and Phase 5.1.
+- **Phase 3.6** (REPL Runner) - Provides C++ compilation pipeline infrastructure (`repl-main-gen.ts` as reference pattern, g++ invocation, runtime include paths)
+- **Phase 4** (Functions) - Complete. Enables function testing in Phase 9.3
+- **Phase 5.1-5.4** (Function Blocks, OOP, Standard FBs) - Complete. Enables FB/method/interface testing in Phase 9.3, mocking in Phase 9.4
+
+All sub-phases can proceed sequentially: 9.1→9.2→9.3→9.4→9.5→9.6. Phase 9.5 can optionally start in parallel with 9.4, and Phase 9.6 can start after 9.2.
 
 ## Architecture
 
@@ -259,6 +261,40 @@ int main() {
 
 ## Notes
 
+### Assert Argument Order Convention
+
+STruC++ asserts follow the **actual-first** convention (Google Test / Jest style):
+
+```st
+ASSERT_EQ(actual, expected);
+ASSERT_EQ(uut.count, 42);       (* actual value first, expected second *)
+ASSERT_GT(uut.speed, 0);        (* actual > threshold *)
+```
+
+This differs from the xUnit/ceedling convention where expected comes first (`TEST_ASSERT_EQUAL(expected, actual)`). The actual-first convention was chosen because:
+1. It reads more naturally in English ("assert that uut.count equals 42")
+2. It's consistent with the majority of modern testing frameworks
+3. The ST expression being tested is more prominent in the first position
+
+### Library System Integration
+
+Tests that reference POUs from external libraries (including the standard FB library) work automatically because:
+1. Source files are compiled through the normal `compile()` pipeline, which loads all configured libraries
+2. Library symbols are registered in the SymbolTables, making them available for test file resolution
+3. The standard FB library (TON, CTU, R_TRIG, etc.) is loaded by default via `getStdFBLibraryManifest()`
+4. Library C++ code is included in the g++ compilation step
+
+The `--test` flag can be combined with `-L` (library paths) to test code that depends on user libraries:
+```bash
+strucpp source.st -L ./my-libs --test test_source.st
+```
+
+### CONFIGURATION/RESOURCE/TASK in Tests
+
+Test blocks create POU instances directly (bypassing CONFIGURATION/RESOURCE/TASK structure). This is intentional - unit tests test individual POUs in isolation, not the runtime scheduling model. Configuration-level testing is outside the scope of Phase 9 and would require integration with the OpenPLC runtime (Phase 7).
+
+Located variables (`AT %IX0.0`) in tested POUs are treated as regular variables in the test context, with no hardware binding. This enables testing POU logic independently of I/O configuration.
+
 ### Why Tests in ST (Not a Custom DSL)
 
 Writing tests in ST itself (rather than a custom `.stt` format or external language) provides several advantages:
@@ -269,14 +305,14 @@ Writing tests in ST itself (rather than a custom `.stt` format or external langu
 4. **Consistency with ceedling** - Proven approach from the embedded C testing ecosystem
 5. **Parser reuse** - The existing STruC++ parser handles most of the test file syntax; only TEST/ASSERT extensions are needed
 
-### Why Phase 8 (Not Earlier)
+### Why Phase 9 Is Ready Now
 
-The testing framework benefits from having the full language available:
+With Phases 1-5 complete, the full IEC 61131-3 language is available in STruC++:
 - Phase 4 (Functions) enables testing individual functions
 - Phase 5 (Function Blocks) enables testing FBs with state, methods, and interfaces
 - Phase 3.6 (REPL) provides the C++ compilation pipeline infrastructure
 
-Phase 8.1-8.2 can start immediately (testing PROGRAMs only), while Phase 8.3 requires Phase 4+5.
+This means Phase 9 can be implemented with full-featured testing from the start - no need to limit early sub-phases to PROGRAM-only testing. All sub-phases should proceed in order: 9.1→9.2→9.3→9.4→9.5→9.6.
 
 ### Dual Purpose: User Testing + Compiler Validation
 
@@ -290,10 +326,25 @@ strucpp my_program.st --test test_my_program.st
 **STruC++ Developers** write tests to validate compiler correctness:
 ```
 tests/st-validation/
-  counter.st + test_counter.st         # Validates arithmetic codegen
-  control_flow.st + test_control.st    # Validates IF/FOR/WHILE codegen
-  arrays.st + test_arrays.st           # Validates array access codegen
+  expressions/arithmetic.st + test_arithmetic.st     # Validates arithmetic codegen
+  control_flow/for_loop.st + test_for_loop.st        # Validates FOR loop codegen
+  function_blocks/basic_fb.st + test_basic_fb.st     # Validates FB instantiation
   ...
 ```
 
 If any assertion fails, it means STruC++ generated incorrect C++ code for a known-good ST program. This provides end-to-end compiler validation without inspecting generated C++.
+
+### Replacing the --build REPL for E2E Testing
+
+The current end-to-end tests use the `--build` REPL approach, which is interactive and not ideal for CI/CD:
+- REPL tests require scripting stdin/stdout interaction
+- Test assertions are implicit (comparing output strings)
+- No structured pass/fail reporting
+
+The `--test` framework replaces this with:
+- Declarative test definitions in ST
+- Explicit assertions with clear pass/fail semantics
+- Structured output (JUnit XML, TAP) for CI integration
+- Self-contained test execution with automatic cleanup
+
+Phase 9.5 (Self-Validation Suite) specifically creates the ST test pairs that serve as the compiler's own regression test suite, run automatically via `npm test`.

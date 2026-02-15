@@ -1,16 +1,16 @@
-# Phase 8.6: Advanced Testing Features
+# Phase 9.6: Advanced Testing Features
 
 **Status**: PENDING
 
 **Duration**: 2-3 weeks
 
-**Prerequisites**: Phase 8.2 (Assert Library)
+**Prerequisites**: Phase 9.2 (Assert Library)
 
 **Goal**: Add CI/CD output formats (JUnit XML, TAP), verbose mode, test timing, and lay groundwork for future coverage instrumentation
 
 ## Overview
 
-This phase adds production-grade features that make the test runner suitable for professional CI/CD pipelines and larger test suites. The core testing functionality is complete in Phases 8.1-8.3; this phase focuses on tooling, reporting, and developer experience.
+This phase adds production-grade features that make the test runner suitable for professional CI/CD pipelines and larger test suites. The core testing functionality is complete in Phases 9.1-9.3; this phase focuses on tooling, reporting, and developer experience.
 
 ## Scope
 
@@ -281,7 +281,7 @@ Output: coverage percentage per ST source file, uncovered lines highlighted.
 
 ### Mock Generation (Future Phase)
 
-When Function Blocks (Phase 5) are available, auto-generating mock FBs:
+Auto-generating mock FBs from interface definitions:
 
 ```bash
 strucpp source.st --test test_source.st --mock MockableInterface
@@ -292,7 +292,7 @@ This would generate a mock FB implementing the specified interface with:
 - Call counting
 - Argument recording
 
-**Not implemented in this phase** - requires Phase 5.2 (interfaces) and careful design.
+**Not implemented in this phase** - the interfaces and FBs infrastructure (Phase 5.2) is complete, but auto-mock generation requires careful API design and is deferred.
 
 ### Test Generation from AST (Future Phase)
 

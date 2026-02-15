@@ -1,10 +1,10 @@
-# Phase 8.4: Mocking Framework
+# Phase 9.4: Mocking Framework
 
 **Status**: PENDING
 
 **Duration**: 2-3 weeks
 
-**Prerequisites**: Phase 8.3 (Function and Function Block Testing), Phase 5.1 (Function Blocks Core)
+**Prerequisites**: Phase 9.3 (Function and Function Block Testing), Phase 5.1 (Function Blocks Core) - **satisfied**
 
 **Goal**: Add per-TEST mocking support for Function Blocks and Functions, enabling isolation of units under test from their dependencies. Inspired by CMock (ceedling's mocking companion) but adapted for IEC 61131-3's class-based POU model.
 
@@ -111,7 +111,7 @@ In test builds, every FB class gets an additional `__mocked_` flag:
 
 ```cpp
 // Generated C++ for FB (test build)
-class FB_PIDController {
+class PIDController {
 public:
     // Normal members
     IECVar<REAL_t> setpoint;
@@ -233,26 +233,24 @@ TEST 'SensorProcessor with real function'
 END_TEST
 ```
 
-**Generated C++ for function mocking:**
+**Generated C++ for function mocking (test build only):**
 
 ```cpp
-// Original function
+// Original implementation (renamed with _real suffix)
 INT_t ReadSensorRaw_real(INT_t channel) {
     // ... original body
 }
 
-// Function pointer for dispatch
-#ifdef STRUCPP_TEST_BUILD
+// Dispatch pointer (defaults to real implementation)
 INT_t (*ReadSensorRaw_dispatch)(INT_t) = ReadSensorRaw_real;
+
+// Wrapper that calls through dispatch pointer
 INT_t ReadSensorRaw(INT_t channel) {
     return ReadSensorRaw_dispatch(channel);
 }
-#else
-INT_t ReadSensorRaw(INT_t channel) {
-    return ReadSensorRaw_real(channel);
-}
-#endif
 ```
+
+**Note**: This dispatch-pointer pattern is only generated when the `--test` flag is active. In production builds (no `--test`), the function is generated normally without any indirection. The decision is made at STruC++ compile time, not C++ compile time.
 
 The `MOCK_FUNCTION ReadSensorRaw RETURNS 4200;` statement generates:
 
@@ -318,7 +316,7 @@ ctx.assert_true(ctrl.sensor.__mock_state_.call_count > 0,
 
 // MOCK_VERIFY_CALL_COUNT(ctrl.sensor, 1)
 ctx.assert_eq<int>(ctrl.sensor.__mock_state_.call_count, 1,
-    "ctrl.sensor call count", "1", file, line);
+    "ctrl.sensor call count", "1", line);
 ```
 
 ### Input Verification (No Special API Needed)
@@ -462,23 +460,26 @@ function generateMockFB(stmt: MockFBStatement): string {
     return `${path}.__mocked_ = true;\n`;
 }
 
-function generateMockFunction(stmt: MockFunctionStatement): string {
+function generateMockFunction(stmt: MockFunctionStatement, funcSymbol: FunctionSymbol): string {
     const name = stmt.functionName;
     const retVal = generateExpression(stmt.returnValue);
-    return `${name}_dispatch = [](auto...) -> decltype(${name}_real(std::declval<auto>()...)) { return ${retVal}; };\n`;
+    const retType = mapType(funcSymbol.returnType);
+    // Generate a lambda with the correct parameter types from the function's symbol
+    const params = funcSymbol.parameters.map((p, i) => `${mapType(p.type)} /*${p.name}*/`).join(', ');
+    return `${name}_dispatch = [](${params}) -> ${retType} { return ${retType}(${retVal}); };\n`;
 }
 
 function generateMockVerifyCalled(stmt: MockVerifyCalledStatement, ctx: GenContext): string {
     const path = stmt.instancePath.join('.');
     return `if (!ctx.assert_true(${path}.__mock_state_.call_count > 0, ` +
-        `"MOCK_VERIFY_CALLED(${path})", "${ctx.file}", ${ctx.line})) return false;\n`;
+        `"MOCK_VERIFY_CALLED(${path})", ${ctx.line})) return false;\n`;
 }
 
 function generateMockVerifyCallCount(stmt: MockVerifyCallCountStatement, ctx: GenContext): string {
     const path = stmt.instancePath.join('.');
     const expected = generateExpression(stmt.expectedCount);
     return `if (!ctx.assert_eq<int>(${path}.__mock_state_.call_count, ${expected}, ` +
-        `"${path} call count", "${expected}", "${ctx.file}", ${ctx.line})) return false;\n`;
+        `"${path} call count", "${expected}", ${ctx.line})) return false;\n`;
 }
 ```
 
@@ -490,7 +491,7 @@ When `--test` flag is active, FB code generation adds mock infrastructure:
 // In codegen.ts, when generating FB class
 
 function generateFBClass(fb: FunctionBlockDecl, isTestBuild: boolean): string {
-    let code = `class FB_${fb.name} {\npublic:\n`;
+    let code = `class ${fb.name} {\npublic:\n`;
 
     // ... normal member generation ...
 
@@ -519,41 +520,38 @@ function generateFBClass(fb: FunctionBlockDecl, isTestBuild: boolean): string {
 
 ### Function Code Generation Changes (Test Build)
 
+When `--test` is active, functions are generated with a dispatch-pointer indirection. In production builds (no `--test`), functions are generated normally with zero overhead.
+
 ```typescript
 // In codegen.ts, when generating functions
 
 function generateFunction(func: FunctionDecl, isTestBuild: boolean): string {
     const retType = mapType(func.returnType);
     const params = func.params.map(p => `${mapType(p.type)} ${p.name}`).join(', ');
+    const paramNames = func.params.map(p => p.name).join(', ');
 
+    if (!isTestBuild) {
+        // Production: Normal function, no indirection
+        return `${retType} ${func.name}(${params}) {\n    // ... function body ...\n}\n`;
+    }
+
+    // Test build: _real implementation + dispatch pointer + wrapper
     let code = '';
-
-    // Real implementation (always generated)
+    code += `// Original implementation\n`;
     code += `${retType} ${func.name}_real(${params}) {\n`;
     code += `    // ... function body ...\n`;
     code += `}\n\n`;
-
-    if (isTestBuild) {
-        // Dispatch pointer and wrapper (test build only)
-        code += `#ifdef STRUCPP_TEST_BUILD\n`;
-        code += `${retType} (*${func.name}_dispatch)(${params}) = ${func.name}_real;\n`;
-        code += `${retType} ${func.name}(${params}) {\n`;
-        code += `    return ${func.name}_dispatch(${paramNames});\n`;
-        code += `}\n`;
-        code += `#else\n`;
-        code += `${retType} ${func.name}(${params}) {\n`;
-        code += `    return ${func.name}_real(${paramNames});\n`;
-        code += `}\n`;
-        code += `#endif\n`;
-    } else {
-        code += `${retType} ${func.name}(${params}) {\n`;
-        code += `    return ${func.name}_real(${paramNames});\n`;
-        code += `}\n`;
-    }
+    code += `// Test dispatch (function pointer defaults to real implementation)\n`;
+    code += `${retType} (*${func.name}_dispatch)(${params}) = ${func.name}_real;\n`;
+    code += `${retType} ${func.name}(${params}) {\n`;
+    code += `    return ${func.name}_dispatch(${paramNames});\n`;
+    code += `}\n`;
 
     return code;
 }
 ```
+
+**Note**: In test builds, the entire generated C++ is compiled with `-DSTRUCPP_TEST_BUILD`, so there's no need for `#ifdef` guards in the function code itself - the test-specific codegen path is chosen at STruC++ compile time, not C++ compile time. The `#ifdef` is only used for FB mock fields where the same class definition serves both paths.
 
 ### Test Main Generation
 
@@ -566,7 +564,7 @@ bool test_1(strucpp::TestContext& ctx) {
     ComputeOffset_dispatch = ComputeOffset_real;
 
     // Fresh FB instances (mock flags default to false)
-    FB_MotorController ctrl;
+    MotorController ctrl;
 
     // MOCK ctrl.sensor;
     ctrl.sensor.__mocked_ = true;
@@ -584,12 +582,12 @@ bool test_1(strucpp::TestContext& ctx) {
     // Assertions
     if (!ctx.assert_near<REAL_t>(
         static_cast<REAL_t>(ctrl.motor_speed), REAL_t(75.0), REAL_t(0.001),
-        "ctrl.motor_speed", "75.0", "0.001", nullptr, "test_motor_controller.st", 12))
+        "ctrl.motor_speed", "75.0", "0.001", 12))
         return false;
 
     // Verify mock was called
     if (!ctx.assert_true(ctrl.sensor.__mock_state_.call_count > 0,
-        "MOCK_VERIFY_CALLED(ctrl.sensor)", "test_motor_controller.st", 15))
+        "MOCK_VERIFY_CALLED(ctrl.sensor)", 15))
         return false;
 
     return true;

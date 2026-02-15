@@ -1,16 +1,16 @@
-# Phase 8.5: STruC++ Self-Validation Suite
+# Phase 9.5: STruC++ Self-Validation Suite
 
 **Status**: PENDING
 
 **Duration**: 2-3 weeks
 
-**Prerequisites**: Phase 8.2 (Assert Library), preferably Phase 8.3 (Function/FB Testing) and Phase 8.4 (Mocking Framework)
+**Prerequisites**: Phase 9.2 (Assert Library), preferably Phase 9.3 (Function/FB Testing) and Phase 9.4 (Mocking Framework)
 
 **Goal**: Build a comprehensive suite of ST source + test file pairs that validate STruC++ compiler correctness end-to-end, integrate with Vitest for CI, and establish the pattern for ongoing compiler validation
 
 ## Overview
 
-This phase leverages the testing framework built in 8.1-8.3 to create a suite of **ST programs with known behavior** paired with **test files that assert that behavior**. If any assertion fails, it means STruC++ generated incorrect C++ code - providing end-to-end compiler validation without inspecting generated C++.
+This phase leverages the testing framework built in 9.1-9.3 to create a suite of **ST programs with known behavior** paired with **test files that assert that behavior**. If any assertion fails, it means STruC++ generated incorrect C++ code - providing end-to-end compiler validation without inspecting generated C++.
 
 This is inspired by the K-ST approach (formal semantics used to validate ST compilers) but implemented practically: we write ST programs where we know exactly what the output should be, compile them with STruC++, run the tests, and verify correctness.
 
@@ -92,14 +92,16 @@ tests/st-validation/
 ├── dynamic_memory/                    # Phase 3.5 features
 │   ├── new_delete.st
 │   └── test_new_delete.st
-├── functions/                         # Phase 4 features (when available)
+├── functions/                         # Phase 4 features (complete)
 │   ├── basic_function.st
 │   ├── test_basic_function.st
 │   ├── function_overload.st
 │   ├── test_function_overload.st
 │   ├── var_in_out_params.st
-│   └── test_var_in_out_params.st
-├── function_blocks/                   # Phase 5 features (when available)
+│   ├── test_var_in_out_params.st
+│   ├── std_functions.st               # Standard functions (ABS, LEN, etc.)
+│   └── test_std_functions.st
+├── function_blocks/                   # Phase 5 features (complete)
 │   ├── basic_fb.st
 │   ├── test_basic_fb.st
 │   ├── fb_state.st
@@ -109,7 +111,9 @@ tests/st-validation/
 │   ├── fb_methods.st
 │   ├── test_fb_methods.st
 │   ├── fb_inheritance.st
-│   └── test_fb_inheritance.st
+│   ├── test_fb_inheritance.st
+│   ├── fb_interfaces.st              # Interface implementation
+│   └── test_fb_interfaces.st
 └── programs/
     ├── multi_program.st               # Multiple programs interacting
     ├── test_multi_program.st
@@ -284,13 +288,13 @@ A Vitest test file orchestrates running all ST validation tests:
 
 **`tests/integration/st-validation.test.ts`:**
 ```typescript
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { glob } from 'glob';
+import { globSync } from 'glob';
 
-// Skip if g++ is unavailable
+// Skip if g++ is unavailable (reuse existing test helper pattern)
 const hasGpp = (() => {
   try { execSync('which g++', { stdio: 'ignore' }); return true; }
   catch { return false; }
@@ -302,18 +306,21 @@ describeIfGpp('ST Validation Suite', () => {
   const validationDir = path.resolve(__dirname, '../st-validation');
   const strucppBin = path.resolve(__dirname, '../../dist/cli.js');
 
-  // Auto-discover all test pairs
-  const testFiles = glob.sync('**/test_*.st', { cwd: validationDir });
+  // Auto-discover all test files (test_*.st in any subdirectory)
+  const testFiles = globSync('**/test_*.st', { cwd: validationDir });
 
   for (const testFile of testFiles) {
-    const sourceFile = testFile.replace('test_', '');
+    // Derive source file: test_arithmetic.st → arithmetic.st (same directory)
+    const dir = path.dirname(testFile);
+    const baseName = path.basename(testFile).replace(/^test_/, '');
+    const sourceFile = path.join(dir, baseName);
     const testPath = path.join(validationDir, testFile);
     const sourcePath = path.join(validationDir, sourceFile);
 
-    // Skip if source file doesn't exist (test for future phase)
+    // Skip if source file doesn't exist yet (placeholder for future phase)
     if (!fs.existsSync(sourcePath)) continue;
 
-    const testName = testFile.replace(/\.st$/, '').replace(/^test_/, '');
+    const testName = path.join(dir, baseName.replace(/\.st$/, ''));
 
     it(`validates ${testName}`, () => {
       const result = execSync(
@@ -326,6 +333,8 @@ describeIfGpp('ST Validation Suite', () => {
   }
 });
 ```
+
+**Note**: Uses `globSync` (named export) from the `glob` package, consistent with modern glob v10+ API. The `hasGpp` check reuses the same pattern from `tests/integration/test-helpers.ts`.
 
 ### Running the Suite
 
@@ -410,14 +419,24 @@ When implementing a new compiler feature:
 - [ ] `tests/st-validation/programs/multi_program.st` + `test_multi_program.st`
 - [ ] `tests/integration/st-validation.test.ts` - Vitest orchestrator
 
-### Deferred (Added When Phases Complete)
-- `tests/st-validation/functions/` - After Phase 4
-- `tests/st-validation/function_blocks/` - After Phase 5
-- `tests/st-validation/data_types/strings.st` - After STRING codegen is complete
+### Function and FB Validation (Phases 4-5 are complete)
+- [ ] `tests/st-validation/functions/basic_function.st` + `test_basic_function.st`
+- [ ] `tests/st-validation/functions/function_overload.st` + `test_function_overload.st`
+- [ ] `tests/st-validation/functions/var_in_out_params.st` + `test_var_in_out_params.st`
+- [ ] `tests/st-validation/functions/std_functions.st` + `test_std_functions.st` (ABS, SQRT, LEN, etc.)
+- [ ] `tests/st-validation/function_blocks/basic_fb.st` + `test_basic_fb.st`
+- [ ] `tests/st-validation/function_blocks/fb_state.st` + `test_fb_state.st`
+- [ ] `tests/st-validation/function_blocks/standard_fbs.st` + `test_standard_fbs.st` (CTU, R_TRIG, SR)
+- [ ] `tests/st-validation/function_blocks/fb_methods.st` + `test_fb_methods.st`
+- [ ] `tests/st-validation/function_blocks/fb_inheritance.st` + `test_fb_inheritance.st`
+- [ ] `tests/st-validation/function_blocks/fb_interfaces.st` + `test_fb_interfaces.st`
+
+### Deferred
+- `tests/st-validation/data_types/strings.st` - After STRING codegen improvements
 
 ## Success Criteria
 
-- At least 15 source+test pairs covering core language features
+- At least 25 source+test pairs covering core language features (expressions, control flow, variables, data types, functions, FBs)
 - All validation tests pass on the current STruC++ compiler
 - Vitest orchestrator auto-discovers and runs all pairs
 - CI pipeline runs the full suite on every commit
@@ -428,7 +447,7 @@ When implementing a new compiler feature:
 
 ### Incremental Growth
 
-The suite starts with tests for currently implemented features (expressions, control flow, variables, data types, programs) and grows as new phases are completed. Test pairs for Functions and FBs will be added in parallel with Phase 4 and 5 implementation.
+Since Phases 1-5 are complete, the initial validation suite should cover all currently implemented features: expressions, control flow, variables, data types, programs, functions, function blocks, methods, interfaces, inheritance, and standard FBs. The suite will continue to grow as Phase 6 (CODESYS compatibility) features are added.
 
 ### Regression Detection
 
