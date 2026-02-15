@@ -853,7 +853,7 @@ export class StdFunctionRegistry {
     // SIZEOF(variable) -> UDINT (size in bytes)
     this.register({
       name: "SIZEOF",
-      cppName: "sizeof",
+      cppName: "IEC_SIZEOF",
       returnConstraint: "specific",
       returnMatchesFirstParam: false,
       specificReturnType: "UDINT",

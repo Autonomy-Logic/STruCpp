@@ -822,6 +822,21 @@ inline IEC_ULINT ADR(T& var) {
 }
 
 /**
+ * IEC_SIZEOF(var) - Returns the logical IEC type size in bytes.
+ * For IECVar<T> types, returns sizeof(T) (the underlying type),
+ * not sizeof(IECVar<T>) which includes the forcing wrapper overhead.
+ * Matches CODESYS SIZEOF behavior: SIZEOF(INT) = 2, SIZEOF(DINT) = 4, etc.
+ */
+template<typename T>
+inline IEC_UDINT IEC_SIZEOF(const IECVar<T>&) noexcept {
+    return static_cast<IEC_UDINT>(sizeof(T));
+}
+template<typename T>
+inline IEC_UDINT IEC_SIZEOF(const T&) noexcept {
+    return static_cast<IEC_UDINT>(sizeof(T));
+}
+
+/**
  * MEMCPY(dest, src, n) - Copies n bytes from src to dest.
  * CODESYS extension. Accepts uintptr_t addresses from ADR() for
  * pointer arithmetic compatibility.

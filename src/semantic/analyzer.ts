@@ -8,6 +8,7 @@
 import type {
   CompilationUnit,
   ElementaryType,
+  FunctionBlockDeclaration,
   VarBlock,
   VarDeclaration,
   Statement,
@@ -688,6 +689,22 @@ export class SemanticAnalyzer {
    * Validate OOP modifier contradictions on function blocks and methods.
    */
   private validateOOPModifiers(ast: CompilationUnit): void {
+    // Build FB lookup map for OVERRIDE and IMPLEMENTS validation
+    const fbMap = new Map<string, FunctionBlockDeclaration>();
+    for (const fb of ast.functionBlocks) {
+      fbMap.set(fb.name.toUpperCase(), fb);
+    }
+
+    // Build interface lookup map
+    const ifaceMap = new Map<string, Set<string>>();
+    for (const iface of ast.interfaces) {
+      const methodNames = new Set<string>();
+      for (const m of iface.methods) {
+        methodNames.add(m.name.toUpperCase());
+      }
+      ifaceMap.set(iface.name.toUpperCase(), methodNames);
+    }
+
     for (const fb of ast.functionBlocks) {
       // ABSTRACT + FINAL on same FB is contradictory
       if (fb.isAbstract && fb.isFinal) {
@@ -697,6 +714,9 @@ export class SemanticAnalyzer {
           fb.sourceSpan.startCol,
         );
       }
+
+      // Collect parent method names for OVERRIDE validation
+      const parentMethodNames = this.collectParentMethods(fb, fbMap);
 
       // ABSTRACT method in non-abstract FB is an error
       for (const method of fb.methods) {
@@ -717,8 +737,76 @@ export class SemanticAnalyzer {
             method.sourceSpan.startCol,
           );
         }
+
+        // OVERRIDE without a parent method
+        if (method.isOverride) {
+          if (!fb.extends) {
+            this.addError(
+              `Method '${method.name}' in '${fb.name}' is marked OVERRIDE but '${fb.name}' does not extend any function block.`,
+              method.sourceSpan.startLine,
+              method.sourceSpan.startCol,
+            );
+          } else if (!parentMethodNames.has(method.name.toUpperCase())) {
+            this.addError(
+              `Method '${method.name}' in '${fb.name}' is marked OVERRIDE but no method '${method.name}' exists in parent '${fb.extends}'.`,
+              method.sourceSpan.startLine,
+              method.sourceSpan.startCol,
+            );
+          }
+        }
+      }
+
+      // IMPLEMENTS contract validation: check all interface methods are provided
+      if (fb.implements && !fb.isAbstract) {
+        const fbMethodNames = new Set<string>();
+        for (const m of fb.methods) {
+          fbMethodNames.add(m.name.toUpperCase());
+        }
+        // Include inherited methods
+        for (const name of parentMethodNames) {
+          fbMethodNames.add(name);
+        }
+
+        for (const ifaceName of fb.implements) {
+          const requiredMethods = ifaceMap.get(ifaceName.toUpperCase());
+          if (requiredMethods) {
+            for (const reqMethod of requiredMethods) {
+              if (!fbMethodNames.has(reqMethod)) {
+                this.addError(
+                  `FUNCTION_BLOCK '${fb.name}' implements '${ifaceName}' but does not provide method '${reqMethod}'.`,
+                  fb.sourceSpan.startLine,
+                  fb.sourceSpan.startCol,
+                );
+              }
+            }
+          }
+        }
       }
     }
+  }
+
+  /**
+   * Collect all method names from the parent chain of a function block.
+   */
+  private collectParentMethods(
+    fb: FunctionBlockDeclaration,
+    fbMap: Map<string, FunctionBlockDeclaration>,
+  ): Set<string> {
+    const methods = new Set<string>();
+    let current = fb.extends;
+    const visited = new Set<string>(); // prevent infinite loops on circular extends
+    while (current) {
+      const upper = current.toUpperCase();
+      if (visited.has(upper)) break;
+      visited.add(upper);
+      const parent = fbMap.get(upper);
+      if (!parent) break;
+      for (const m of parent.methods) {
+        methods.add(m.name.toUpperCase());
+      }
+      current = parent.extends;
+    }
+    return methods;
   }
 
   /**

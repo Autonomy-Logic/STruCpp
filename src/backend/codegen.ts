@@ -2051,18 +2051,12 @@ export class CodeGenerator {
       case "STRING": {
         // rawValue includes surrounding single quotes: 'hello' → strip them
         const inner = expr.rawValue.replace(/^'|'$/g, "");
-        const escaped = inner
-          .replace(/''/g, "'")        // ST doubled-quote → single quote
-          .replace(/\\/g, "\\\\")     // Escape backslash for C++
-          .replace(/"/g, '\\"');       // Escape double-quote for C++
+        const escaped = this.translateIECString(inner);
         return `"${escaped}"`;
       }
       case "WSTRING": {
         const wInner = expr.rawValue.replace(/^'|'$/g, "");
-        const wEscaped = wInner
-          .replace(/''/g, "'")        // ST doubled-quote → single quote
-          .replace(/\\/g, "\\\\")     // Escape backslash for C++
-          .replace(/"/g, '\\"');       // Escape double-quote for C++
+        const wEscaped = this.translateIECString(wInner);
         return `L"${wEscaped}"`;
       }
       case "TIME": {
@@ -2078,6 +2072,73 @@ export class CodeGenerator {
       default:
         return String(expr.value);
     }
+  }
+
+  /**
+   * Translate IEC 61131-3 $-escape sequences to C++ escape sequences.
+   * Handles: $N/$n (newline), $L/$l (line feed), $R/$r (CR), $T/$t (tab),
+   * $P/$p (form feed), $$ (literal $), $' (single quote), $XX (hex byte),
+   * '' (doubled single quote), and C++ escaping for backslash and double-quote.
+   */
+  private translateIECString(inner: string): string {
+    let result = "";
+    for (let i = 0; i < inner.length; i++) {
+      const ch = inner[i]!;
+      if (ch === "$" && i + 1 < inner.length) {
+        const next = inner[i + 1]!;
+        switch (next.toUpperCase()) {
+          case "N":
+          case "L":
+            result += "\\n";
+            i++;
+            break;
+          case "R":
+            result += "\\r";
+            i++;
+            break;
+          case "T":
+            result += "\\t";
+            i++;
+            break;
+          case "P":
+            result += "\\f";
+            i++;
+            break;
+          case "$":
+            result += "$";
+            i++;
+            break;
+          case "'":
+            result += "'";
+            i++;
+            break;
+          default:
+            // $XX hex escape: two hex digits
+            if (
+              i + 2 < inner.length &&
+              /^[0-9A-Fa-f]{2}$/.test(inner.substring(i + 1, i + 3))
+            ) {
+              result += "\\x" + inner.substring(i + 1, i + 3);
+              i += 2;
+            } else {
+              // Unknown $-escape, pass through
+              result += "\\\\$";
+            }
+            break;
+        }
+      } else if (ch === "'" && i + 1 < inner.length && inner[i + 1] === "'") {
+        // ST doubled-quote → single quote
+        result += "'";
+        i++;
+      } else if (ch === "\\") {
+        result += "\\\\";
+      } else if (ch === '"') {
+        result += '\\"';
+      } else {
+        result += ch;
+      }
+    }
+    return result;
   }
 
   /**
