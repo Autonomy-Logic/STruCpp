@@ -367,6 +367,45 @@ export const ASSERT_FALSE = createToken({
   name: "ASSERT_FALSE",
   pattern: /ASSERT_FALSE/i,
 });
+export const ASSERT_NEQ = createToken({
+  name: "ASSERT_NEQ",
+  pattern: /ASSERT_NEQ/i,
+});
+export const ASSERT_GT = createToken({
+  name: "ASSERT_GT",
+  pattern: /ASSERT_GT/i,
+});
+export const ASSERT_LT = createToken({
+  name: "ASSERT_LT",
+  pattern: /ASSERT_LT/i,
+});
+export const ASSERT_GE = createToken({
+  name: "ASSERT_GE",
+  pattern: /ASSERT_GE/i,
+});
+export const ASSERT_LE = createToken({
+  name: "ASSERT_LE",
+  pattern: /ASSERT_LE/i,
+});
+export const ASSERT_NEAR = createToken({
+  name: "ASSERT_NEAR",
+  pattern: /ASSERT_NEAR/i,
+});
+
+// SETUP/TEARDOWN for test organization
+export const SETUP = createToken({ name: "SETUP", pattern: /SETUP/i });
+export const END_SETUP = createToken({
+  name: "END_SETUP",
+  pattern: /END_SETUP/i,
+});
+export const TEARDOWN = createToken({
+  name: "TEARDOWN",
+  pattern: /TEARDOWN/i,
+});
+export const END_TEARDOWN = createToken({
+  name: "END_TEARDOWN",
+  pattern: /END_TEARDOWN/i,
+});
 
 // OOP extensions (IEC 61131-3 Edition 3)
 export const METHOD = createToken({ name: "METHOD", pattern: /METHOD/i });
@@ -532,9 +571,19 @@ export const Identifier = createToken({
 const testKeywordTokens = [
   END_TEST,
   TEST,
+  END_SETUP,
+  SETUP,
+  END_TEARDOWN,
+  TEARDOWN,
   ASSERT_EQ,
+  ASSERT_NEQ,
   ASSERT_TRUE,
   ASSERT_FALSE,
+  ASSERT_GT,
+  ASSERT_LT,
+  ASSERT_GE,
+  ASSERT_LE,
+  ASSERT_NEAR,
 ];
 
 // Set longer_alt for test keywords
@@ -816,9 +865,19 @@ export const allTestTokens = [
   // Test-specific keywords (before normal keywords and Identifier)
   END_TEST,
   TEST,
+  END_SETUP,
+  SETUP,
+  END_TEARDOWN,
+  TEARDOWN,
+  ASSERT_NEAR,
+  ASSERT_NEQ,
   ASSERT_EQ,
   ASSERT_TRUE,
   ASSERT_FALSE,
+  ASSERT_GT,
+  ASSERT_LT,
+  ASSERT_GE,
+  ASSERT_LE,
 
   // Keywords (before Identifier) - same order as allTokens
   END_PROGRAM,

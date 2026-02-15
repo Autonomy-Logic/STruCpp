@@ -2711,7 +2711,41 @@ export class ASTBuilder {
     const testCases = getAllNodes(children.testCase).map((tc) =>
       this.buildTestCase(tc),
     );
-    return { fileName: "", testCases };
+    const result: import("./ast.js").TestFile = { fileName: "", testCases };
+    const setupNode = getFirstNode(children.setupBlock);
+    if (setupNode) {
+      result.setup = this.buildSetupBlock(setupNode);
+    }
+    const teardownNode = getFirstNode(children.teardownBlock);
+    if (teardownNode) {
+      result.teardown = this.buildTeardownBlock(teardownNode);
+    }
+    return result;
+  }
+
+  /**
+   * Build a SetupBlock from a setupBlock CST node.
+   */
+  buildSetupBlock(cst: CstNode): import("./ast.js").SetupBlock {
+    const children = cst.children as CstChildren;
+    const varBlocks = getAllNodes(children.varBlock).map((vb) =>
+      this.buildVarBlock(vb),
+    );
+    const body = this.buildTestStatementList(
+      getFirstNode(children.testStatementList)!,
+    );
+    return { varBlocks, body, sourceSpan: nodeToSourceSpan(cst) };
+  }
+
+  /**
+   * Build a TeardownBlock from a teardownBlock CST node.
+   */
+  buildTeardownBlock(cst: CstNode): import("./ast.js").TeardownBlock {
+    const children = cst.children as CstChildren;
+    const body = this.buildTestStatementList(
+      getFirstNode(children.testStatementList)!,
+    );
+    return { body, sourceSpan: nodeToSourceSpan(cst) };
   }
 
   /**
@@ -2775,27 +2809,81 @@ export class ASTBuilder {
 
     // Determine assert type from which token was consumed
     let assertType: import("./ast.js").AssertType;
-    if (getFirstToken(children.ASSERT_EQ)) {
-      assertType = "ASSERT_EQ";
-    } else if (getFirstToken(children.ASSERT_TRUE)) {
-      assertType = "ASSERT_TRUE";
-    } else if (getFirstToken(children.ASSERT_FALSE)) {
-      assertType = "ASSERT_FALSE";
-    } else {
+    const tokenNames: Array<[string, import("./ast.js").AssertType]> = [
+      ["ASSERT_EQ", "ASSERT_EQ"],
+      ["ASSERT_NEQ", "ASSERT_NEQ"],
+      ["ASSERT_TRUE", "ASSERT_TRUE"],
+      ["ASSERT_FALSE", "ASSERT_FALSE"],
+      ["ASSERT_GT", "ASSERT_GT"],
+      ["ASSERT_LT", "ASSERT_LT"],
+      ["ASSERT_GE", "ASSERT_GE"],
+      ["ASSERT_LE", "ASSERT_LE"],
+      ["ASSERT_NEAR", "ASSERT_NEAR"],
+    ];
+    let found = false;
+    assertType = "ASSERT_EQ"; // default, overridden below
+    for (const [tokenName, type] of tokenNames) {
+      if (getFirstToken(children[tokenName])) {
+        assertType = type;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
       throw new Error("Unknown assert type");
     }
 
     // Collect all expression arguments
-    const args = getAllNodes(children.expression)
+    const allArgs = getAllNodes(children.expression)
       .map((e) => this.buildExpression(e))
       .filter((e): e is import("./ast.js").Expression => e !== undefined);
 
-    return {
+    // Check for optional message (last STRING literal argument)
+    let message: string | undefined;
+    const lastArg = allArgs[allArgs.length - 1];
+    const minArgs = this.getMinAssertArgs(assertType);
+    if (
+      lastArg &&
+      allArgs.length > minArgs &&
+      lastArg.kind === "LiteralExpression" &&
+      lastArg.literalType === "STRING"
+    ) {
+      message = lastArg.rawValue.replace(/^'|'$/g, "");
+      allArgs.pop();
+    }
+
+    const result: import("./ast.js").AssertCall = {
       kind: "AssertCall",
       assertType,
-      args,
+      args: allArgs,
       sourceSpan: nodeToSourceSpan(cst),
     };
+    if (message !== undefined) {
+      result.message = message;
+    }
+    return result;
+  }
+
+  /**
+   * Returns the minimum required argument count for an assert type.
+   */
+  private getMinAssertArgs(
+    assertType: import("./ast.js").AssertType,
+  ): number {
+    switch (assertType) {
+      case "ASSERT_TRUE":
+      case "ASSERT_FALSE":
+        return 1;
+      case "ASSERT_EQ":
+      case "ASSERT_NEQ":
+      case "ASSERT_GT":
+      case "ASSERT_LT":
+      case "ASSERT_GE":
+      case "ASSERT_LE":
+        return 2;
+      case "ASSERT_NEAR":
+        return 3;
+    }
   }
 }
 

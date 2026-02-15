@@ -11,6 +11,8 @@ import type {
   TestCase,
   TestStatement,
   AssertCall,
+  SetupBlock,
+  TeardownBlock,
 } from "../testing/test-model.js";
 import type {
   VarBlock,
@@ -102,8 +104,9 @@ export function generateTestMain(
   lines.push("using namespace strucpp;");
   lines.push("");
 
-  // Generate test functions for each file
+  // Generate setup structs and test functions for each file
   let testIndex = 0;
+  let setupIndex = 0;
   const registrations: Array<{
     fileName: string;
     name: string;
@@ -111,11 +114,32 @@ export function generateTestMain(
   }> = [];
 
   for (const testFile of testFiles) {
+    // Generate SETUP/TEARDOWN struct if present
+    let setupStructName: string | undefined;
+    if (testFile.setup) {
+      setupIndex++;
+      setupStructName = `TestSetup_${setupIndex}`;
+      const gen = new TestFunctionGenerator(pouMap, testFile.fileName);
+      const structCode = gen.generateSetupStruct(
+        setupStructName,
+        testFile.setup,
+        testFile.teardown,
+      );
+      lines.push(structCode);
+      lines.push("");
+    }
+
     for (const tc of testFile.testCases) {
       testIndex++;
       const funcName = `test_${testIndex}`;
       const gen = new TestFunctionGenerator(pouMap, testFile.fileName);
-      const code = gen.generateTestFunction(funcName, tc);
+      const code = gen.generateTestFunction(
+        funcName,
+        tc,
+        testFile.setup,
+        testFile.teardown,
+        setupStructName,
+      );
       lines.push(code);
       lines.push("");
       registrations.push({
@@ -185,25 +209,113 @@ class TestFunctionGenerator {
   private indent = "    ";
   /** Maps local variable names to their declared type names (for POU resolution) */
   private varTypeMap = new Map<string, string>();
+  /** Names of variables from SETUP block (need s. prefix in test functions) */
+  private setupVarNames: Set<string> | undefined;
 
   constructor(pouMap: Map<string, POUInfo>, fileName: string) {
     this.pouMap = pouMap;
     this.fileName = fileName;
   }
 
-  generateTestFunction(funcName: string, tc: TestCase): string {
+  /**
+   * Generate a C++ struct for SETUP/TEARDOWN.
+   */
+  generateSetupStruct(
+    structName: string,
+    setup: SetupBlock,
+    teardown?: TeardownBlock,
+  ): string {
+    const lines: string[] = [];
+    lines.push(`struct ${structName} {`);
+
+    // Member variables from SETUP VAR blocks
+    for (const varBlock of setup.varBlocks) {
+      for (const decl of varBlock.declarations) {
+        const typeName = decl.type.name;
+        const cppType = this.resolveTypeName(typeName);
+        for (const name of decl.names) {
+          lines.push(`    ${cppType} ${name};`);
+        }
+      }
+    }
+    lines.push("");
+
+    // setup() method
+    lines.push("    void setup() {");
+    const savedIndent = this.indent;
+    this.indent = "        ";
+    for (const stmt of setup.body) {
+      this.generateTestStatement(lines, stmt);
+    }
+    this.indent = savedIndent;
+    lines.push("    }");
+    lines.push("");
+
+    // teardown() method
+    lines.push("    void teardown() {");
+    if (teardown) {
+      this.indent = "        ";
+      for (const stmt of teardown.body) {
+        this.generateTestStatement(lines, stmt);
+      }
+      this.indent = savedIndent;
+    }
+    lines.push("    }");
+
+    lines.push("};");
+    return lines.join("\n");
+  }
+
+  generateTestFunction(
+    funcName: string,
+    tc: TestCase,
+    setup?: SetupBlock,
+    _teardown?: TeardownBlock,
+    setupStructName?: string,
+  ): string {
     const lines: string[] = [];
     lines.push(`// TEST '${escapeString(tc.name)}'`);
     lines.push(`bool ${funcName}(strucpp::TestContext& ctx) {`);
 
     // Build variable-to-type map for POU resolution
     this.varTypeMap.clear();
+
+    // Include SETUP variables in the type map
+    if (setup) {
+      for (const varBlock of setup.varBlocks) {
+        for (const decl of varBlock.declarations) {
+          for (const name of decl.names) {
+            this.varTypeMap.set(name, decl.type.name);
+          }
+        }
+      }
+    }
+
     for (const varBlock of tc.varBlocks) {
       for (const decl of varBlock.declarations) {
         for (const name of decl.names) {
           this.varTypeMap.set(name, decl.type.name);
         }
       }
+    }
+
+    // If there's a SETUP, create the struct instance and call setup()
+    if (setupStructName) {
+      lines.push(`${this.indent}${setupStructName} s;`);
+      lines.push(`${this.indent}s.setup();`);
+      // Track setup var names so we prefix accesses with s.
+      this.setupVarNames = new Set<string>();
+      if (setup) {
+        for (const varBlock of setup.varBlocks) {
+          for (const decl of varBlock.declarations) {
+            for (const name of decl.names) {
+              this.setupVarNames.add(name);
+            }
+          }
+        }
+      }
+    } else {
+      this.setupVarNames = undefined;
     }
 
     // Generate local variable declarations
@@ -214,6 +326,11 @@ class TestFunctionGenerator {
     // Generate test body statements
     for (const stmt of tc.body) {
       this.generateTestStatement(lines, stmt);
+    }
+
+    // Call teardown if present
+    if (setupStructName) {
+      lines.push(`${this.indent}s.teardown();`);
     }
 
     lines.push(`${this.indent}return true;`);
@@ -276,22 +393,26 @@ class TestFunctionGenerator {
     assert: AssertCall,
   ): void {
     const line = assert.sourceSpan.startLine;
+    const msgArg = assert.message
+      ? `, "${escapeString(assert.message)}"`
+      : "";
 
     switch (assert.assertType) {
-      case "ASSERT_EQ": {
+      case "ASSERT_EQ":
+      case "ASSERT_NEQ": {
         if (assert.args.length < 2) {
           throw new Error(
-            `ASSERT_EQ requires 2 arguments at ${this.fileName}:${line}`,
+            `${assert.assertType} requires 2 arguments at ${this.fileName}:${line}`,
           );
         }
         const actualExpr = this.generateExpression(assert.args[0]!);
         const expectedExpr = this.generateExpression(assert.args[1]!);
         const actualStr = this.expressionToString(assert.args[0]!);
         const expectedStr = this.expressionToString(assert.args[1]!);
-        // Use INT_t as default type for assert_eq; the C++ template
-        // will deduce from the actual arguments due to static_cast
+        const method =
+          assert.assertType === "ASSERT_EQ" ? "assert_eq" : "assert_neq";
         lines.push(
-          `${this.indent}if (!ctx.assert_eq(static_cast<decltype(${expectedExpr})>(${actualExpr}), ${expectedExpr}, "${escapeString(actualStr)}", "${escapeString(expectedStr)}", ${line})) return false;`,
+          `${this.indent}if (!ctx.${method}(static_cast<decltype(${expectedExpr})>(${actualExpr}), ${expectedExpr}, "${escapeString(actualStr)}", "${escapeString(expectedStr)}", ${line}${msgArg})) return false;`,
         );
         break;
       }
@@ -304,7 +425,7 @@ class TestFunctionGenerator {
         const condExpr = this.generateExpression(assert.args[0]!);
         const condStr = this.expressionToString(assert.args[0]!);
         lines.push(
-          `${this.indent}if (!ctx.assert_true(static_cast<bool>(${condExpr}), "${escapeString(condStr)}", ${line})) return false;`,
+          `${this.indent}if (!ctx.assert_true(static_cast<bool>(${condExpr}), "${escapeString(condStr)}", ${line}${msgArg})) return false;`,
         );
         break;
       }
@@ -317,7 +438,49 @@ class TestFunctionGenerator {
         const condExpr = this.generateExpression(assert.args[0]!);
         const condStr = this.expressionToString(assert.args[0]!);
         lines.push(
-          `${this.indent}if (!ctx.assert_false(static_cast<bool>(${condExpr}), "${escapeString(condStr)}", ${line})) return false;`,
+          `${this.indent}if (!ctx.assert_false(static_cast<bool>(${condExpr}), "${escapeString(condStr)}", ${line}${msgArg})) return false;`,
+        );
+        break;
+      }
+      case "ASSERT_GT":
+      case "ASSERT_LT":
+      case "ASSERT_GE":
+      case "ASSERT_LE": {
+        if (assert.args.length < 2) {
+          throw new Error(
+            `${assert.assertType} requires 2 arguments at ${this.fileName}:${line}`,
+          );
+        }
+        const actualExpr = this.generateExpression(assert.args[0]!);
+        const thresholdExpr = this.generateExpression(assert.args[1]!);
+        const actualStr = this.expressionToString(assert.args[0]!);
+        const thresholdStr = this.expressionToString(assert.args[1]!);
+        const methodMap: Record<string, string> = {
+          ASSERT_GT: "assert_gt",
+          ASSERT_LT: "assert_lt",
+          ASSERT_GE: "assert_ge",
+          ASSERT_LE: "assert_le",
+        };
+        const method = methodMap[assert.assertType]!;
+        lines.push(
+          `${this.indent}if (!ctx.${method}(static_cast<decltype(${thresholdExpr})>(${actualExpr}), ${thresholdExpr}, "${escapeString(actualStr)}", "${escapeString(thresholdStr)}", ${line}${msgArg})) return false;`,
+        );
+        break;
+      }
+      case "ASSERT_NEAR": {
+        if (assert.args.length < 3) {
+          throw new Error(
+            `ASSERT_NEAR requires 3 arguments at ${this.fileName}:${line}`,
+          );
+        }
+        const actualExpr = this.generateExpression(assert.args[0]!);
+        const expectedExpr = this.generateExpression(assert.args[1]!);
+        const toleranceExpr = this.generateExpression(assert.args[2]!);
+        const actualStr = this.expressionToString(assert.args[0]!);
+        const expectedStr = this.expressionToString(assert.args[1]!);
+        const toleranceStr = this.expressionToString(assert.args[2]!);
+        lines.push(
+          `${this.indent}if (!ctx.assert_near(static_cast<decltype(${expectedExpr})>(${actualExpr}), ${expectedExpr}, ${toleranceExpr}, "${escapeString(actualStr)}", "${escapeString(expectedStr)}", "${escapeString(toleranceStr)}", ${line}${msgArg})) return false;`,
         );
         break;
       }
@@ -437,11 +600,15 @@ class TestFunctionGenerator {
       ? this.pouMap.get(varTypeName.toUpperCase())
       : this.pouMap.get(funcName.toUpperCase());
 
+    // Prefix SETUP variables with s.
+    const prefix =
+      this.setupVarNames && this.setupVarNames.has(funcName) ? "s." : "";
+
     if (pou) {
       if (pou.kind === "program") {
-        lines.push(`${this.indent}${funcName}.run();`);
+        lines.push(`${this.indent}${prefix}${funcName}.run();`);
       } else {
-        lines.push(`${this.indent}${funcName}();`);
+        lines.push(`${this.indent}${prefix}${funcName}();`);
       }
       return;
     }
@@ -641,7 +808,10 @@ class TestFunctionGenerator {
   }
 
   private generateVariable(expr: VariableExpression): string {
-    let result = expr.name;
+    // Prefix SETUP variables with s. in test functions
+    const prefix =
+      this.setupVarNames && this.setupVarNames.has(expr.name) ? "s." : "";
+    let result = prefix + expr.name;
     if (expr.isDereference) {
       result = `(*${result})`;
     }

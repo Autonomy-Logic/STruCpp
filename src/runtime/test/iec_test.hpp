@@ -44,10 +44,20 @@ inline std::string to_display_string(const bool& value) {
 
 /**
  * Per-test context that tracks assertion results and provides assert methods.
+ * All assert methods support an optional custom message (nullptr if not provided).
  */
 struct TestContext {
     const char* test_file = "";
     int failures = 0;
+
+    /**
+     * Print optional custom message if provided.
+     */
+    void print_message(const char* msg) {
+        if (msg && msg[0] != '\0') {
+            printf("         Message: %s\n", msg);
+        }
+    }
 
     /**
      * ASSERT_EQ: check actual == expected
@@ -55,13 +65,31 @@ struct TestContext {
     template<typename T>
     bool assert_eq(T actual, T expected,
                    const char* actual_expr, const char* expected_expr,
-                   int line) {
+                   int line, const char* msg = "") {
         if (actual == expected) return true;
         std::string actual_str = to_display_string(actual);
         std::string expected_str = to_display_string(expected);
         printf("         ASSERT_EQ failed: %s expected %s, got %s\n",
                actual_expr, expected_str.c_str(), actual_str.c_str());
         printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_NEQ: check actual != expected
+     */
+    template<typename T>
+    bool assert_neq(T actual, T expected,
+                    const char* actual_expr, const char* expected_expr,
+                    int line, const char* msg = "") {
+        if (actual != expected) return true;
+        std::string actual_str = to_display_string(actual);
+        printf("         ASSERT_NEQ failed: %s should not equal %s\n",
+               actual_expr, actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
         failures++;
         return false;
     }
@@ -69,10 +97,12 @@ struct TestContext {
     /**
      * ASSERT_TRUE: check condition is true
      */
-    bool assert_true(bool condition, const char* expr, int line) {
+    bool assert_true(bool condition, const char* expr, int line,
+                     const char* msg = "") {
         if (condition) return true;
         printf("         ASSERT_TRUE failed: %s expected TRUE, got FALSE\n", expr);
         printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
         failures++;
         return false;
     }
@@ -80,10 +110,106 @@ struct TestContext {
     /**
      * ASSERT_FALSE: check condition is false
      */
-    bool assert_false(bool condition, const char* expr, int line) {
+    bool assert_false(bool condition, const char* expr, int line,
+                      const char* msg = "") {
         if (!condition) return true;
         printf("         ASSERT_FALSE failed: %s expected FALSE, got TRUE\n", expr);
         printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_GT: check actual > threshold
+     */
+    template<typename T>
+    bool assert_gt(T actual, T threshold,
+                   const char* actual_expr, const char* threshold_expr,
+                   int line, const char* msg = "") {
+        if (actual > threshold) return true;
+        std::string actual_str = to_display_string(actual);
+        std::string threshold_str = to_display_string(threshold);
+        printf("         ASSERT_GT failed: %s expected > %s, got %s\n",
+               actual_expr, threshold_str.c_str(), actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_LT: check actual < threshold
+     */
+    template<typename T>
+    bool assert_lt(T actual, T threshold,
+                   const char* actual_expr, const char* threshold_expr,
+                   int line, const char* msg = "") {
+        if (actual < threshold) return true;
+        std::string actual_str = to_display_string(actual);
+        std::string threshold_str = to_display_string(threshold);
+        printf("         ASSERT_LT failed: %s expected < %s, got %s\n",
+               actual_expr, threshold_str.c_str(), actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_GE: check actual >= threshold
+     */
+    template<typename T>
+    bool assert_ge(T actual, T threshold,
+                   const char* actual_expr, const char* threshold_expr,
+                   int line, const char* msg = "") {
+        if (actual >= threshold) return true;
+        std::string actual_str = to_display_string(actual);
+        std::string threshold_str = to_display_string(threshold);
+        printf("         ASSERT_GE failed: %s expected >= %s, got %s\n",
+               actual_expr, threshold_str.c_str(), actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_LE: check actual <= threshold
+     */
+    template<typename T>
+    bool assert_le(T actual, T threshold,
+                   const char* actual_expr, const char* threshold_expr,
+                   int line, const char* msg = "") {
+        if (actual <= threshold) return true;
+        std::string actual_str = to_display_string(actual);
+        std::string threshold_str = to_display_string(threshold);
+        printf("         ASSERT_LE failed: %s expected <= %s, got %s\n",
+               actual_expr, threshold_str.c_str(), actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_NEAR: check |actual - expected| <= tolerance
+     */
+    template<typename T>
+    bool assert_near(T actual, T expected, T tolerance,
+                     const char* actual_expr, const char* expected_expr,
+                     const char* tolerance_expr,
+                     int line, const char* msg = "") {
+        if (std::abs(static_cast<double>(actual) - static_cast<double>(expected))
+            <= static_cast<double>(tolerance)) return true;
+        std::string actual_str = to_display_string(actual);
+        std::string expected_str = to_display_string(expected);
+        std::string tolerance_str = to_display_string(tolerance);
+        printf("         ASSERT_NEAR failed: %s expected %s +/- %s, got %s\n",
+               actual_expr, expected_str.c_str(), tolerance_str.c_str(),
+               actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
         failures++;
         return false;
     }

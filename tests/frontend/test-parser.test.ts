@@ -284,4 +284,203 @@ END_TEST
       expect(result.testFile!.testCases).toHaveLength(1);
     });
   });
+
+  describe("new assert types (Phase 9.2)", () => {
+    it("should parse ASSERT_NEQ with two arguments", () => {
+      const source = `
+TEST 'neq test'
+  ASSERT_NEQ(1, 2);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const body = result.testFile!.testCases[0]!.body;
+      const assert = body[0] as { kind: string; assertType: string; args: unknown[] };
+      expect(assert.assertType).toBe("ASSERT_NEQ");
+      expect(assert.args).toHaveLength(2);
+    });
+
+    it("should parse ASSERT_GT with two arguments", () => {
+      const source = `
+TEST 'gt test'
+  ASSERT_GT(10, 5);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string; args: unknown[] };
+      expect(assert.assertType).toBe("ASSERT_GT");
+      expect(assert.args).toHaveLength(2);
+    });
+
+    it("should parse ASSERT_LT with two arguments", () => {
+      const source = `
+TEST 'lt test'
+  ASSERT_LT(1, 10);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string };
+      expect(assert.assertType).toBe("ASSERT_LT");
+    });
+
+    it("should parse ASSERT_GE and ASSERT_LE", () => {
+      const source = `
+TEST 'ge le test'
+  ASSERT_GE(10, 10);
+  ASSERT_LE(5, 10);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const body = result.testFile!.testCases[0]!.body;
+      expect(body).toHaveLength(2);
+      expect((body[0] as { assertType: string }).assertType).toBe("ASSERT_GE");
+      expect((body[1] as { assertType: string }).assertType).toBe("ASSERT_LE");
+    });
+
+    it("should parse ASSERT_NEAR with three arguments", () => {
+      const source = `
+TEST 'near test'
+  ASSERT_NEAR(1.0, 1.01, 0.1);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string; args: unknown[] };
+      expect(assert.assertType).toBe("ASSERT_NEAR");
+      expect(assert.args).toHaveLength(3);
+    });
+  });
+
+  describe("optional message parameter (Phase 9.2)", () => {
+    it("should parse ASSERT_EQ with optional message", () => {
+      const source = `
+TEST 'msg test'
+  ASSERT_EQ(1, 2, 'Values should match');
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string; args: unknown[]; message?: string };
+      expect(assert.assertType).toBe("ASSERT_EQ");
+      expect(assert.args).toHaveLength(2);
+      expect(assert.message).toBe("Values should match");
+    });
+
+    it("should parse ASSERT_TRUE with optional message", () => {
+      const source = `
+TEST 'msg true test'
+  ASSERT_TRUE(TRUE, 'Should be true');
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const assert = result.testFile!.testCases[0]!.body[0] as { args: unknown[]; message?: string };
+      expect(assert.args).toHaveLength(1);
+      expect(assert.message).toBe("Should be true");
+    });
+
+    it("should parse ASSERT_NEAR with optional message", () => {
+      const source = `
+TEST 'near msg test'
+  ASSERT_NEAR(1.0, 1.01, 0.1, 'Within tolerance');
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      const assert = result.testFile!.testCases[0]!.body[0] as { args: unknown[]; message?: string };
+      expect(assert.args).toHaveLength(3);
+      expect(assert.message).toBe("Within tolerance");
+    });
+  });
+
+  describe("SETUP and TEARDOWN (Phase 9.2)", () => {
+    it("should parse SETUP block with VAR declarations", () => {
+      const source = `
+SETUP
+  VAR x : INT; END_VAR
+  x := 42;
+END_SETUP
+
+TEST 'setup test'
+  ASSERT_EQ(x, 42);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      expect(result.testFile!.setup).toBeDefined();
+      expect(result.testFile!.setup!.varBlocks).toHaveLength(1);
+      expect(result.testFile!.setup!.body).toHaveLength(1);
+      expect(result.testFile!.testCases).toHaveLength(1);
+    });
+
+    it("should parse TEARDOWN block", () => {
+      const source = `
+TEARDOWN
+  (* cleanup *)
+END_TEARDOWN
+
+TEST 'teardown test'
+  ASSERT_TRUE(TRUE);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      expect(result.testFile!.teardown).toBeDefined();
+      expect(result.testFile!.teardown!.body).toHaveLength(0);
+    });
+
+    it("should parse both SETUP and TEARDOWN", () => {
+      const source = `
+SETUP
+  VAR counter : INT; END_VAR
+  counter := 0;
+END_SETUP
+
+TEARDOWN
+  counter := -1;
+END_TEARDOWN
+
+TEST 'both blocks'
+  ASSERT_EQ(counter, 0);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      expect(result.testFile!.setup).toBeDefined();
+      expect(result.testFile!.teardown).toBeDefined();
+      expect(result.testFile!.testCases).toHaveLength(1);
+    });
+
+    it("should parse SETUP with multiple VAR blocks", () => {
+      const source = `
+SETUP
+  VAR a : INT; END_VAR
+  VAR b : BOOL; END_VAR
+  a := 10;
+END_SETUP
+
+TEST 'multi var setup'
+  ASSERT_EQ(a, 10);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      expect(result.testFile!.setup!.varBlocks).toHaveLength(2);
+    });
+
+    it("should allow test file with no SETUP or TEARDOWN", () => {
+      const source = `
+TEST 'no setup'
+  ASSERT_TRUE(TRUE);
+END_TEST
+`;
+      const result = parseTestFile(source, "test.st");
+      expect(result.errors).toHaveLength(0);
+      expect(result.testFile!.setup).toBeUndefined();
+      expect(result.testFile!.teardown).toBeUndefined();
+    });
+  });
 });

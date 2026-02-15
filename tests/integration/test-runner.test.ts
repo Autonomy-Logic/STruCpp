@@ -360,4 +360,152 @@ END_TEST
     expect(stdout).toContain("[PASS] This also passes");
     expect(stdout).toContain("3 tests, 2 passed, 1 failed");
   });
+
+  it("should handle ASSERT_GT and ASSERT_LT", () => {
+    const source = `
+PROGRAM Calculator
+  VAR result : INT; END_VAR
+  result := 42;
+END_PROGRAM
+`;
+    const test = `
+TEST 'Comparison asserts'
+  VAR uut : Calculator; END_VAR
+  uut();
+  ASSERT_GT(uut.result, 0);
+  ASSERT_LT(uut.result, 100);
+  ASSERT_GE(uut.result, 42);
+  ASSERT_LE(uut.result, 42);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] Comparison asserts");
+  });
+
+  it("should handle ASSERT_NEQ", () => {
+    const source = `
+PROGRAM P
+  VAR x : INT; END_VAR
+  x := 10;
+END_PROGRAM
+`;
+    const test = `
+TEST 'Not equal'
+  VAR uut : P; END_VAR
+  uut();
+  ASSERT_NEQ(uut.x, 0);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] Not equal");
+  });
+
+  it("should handle ASSERT_NEAR with REAL values", () => {
+    const source = `
+PROGRAM P
+  VAR value : REAL; END_VAR
+  value := 3.14;
+END_PROGRAM
+`;
+    const test = `
+TEST 'Near check'
+  VAR uut : P; END_VAR
+  uut();
+  ASSERT_NEAR(uut.value, 3.14, 0.01);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] Near check");
+  });
+
+  it("should display custom message on failure", () => {
+    const source = `
+PROGRAM P
+  VAR x : INT; END_VAR
+  x := -1;
+END_PROGRAM
+`;
+    const test = `
+TEST 'Custom message'
+  VAR uut : P; END_VAR
+  uut();
+  ASSERT_EQ(uut.x, 0, 'X should be zero');
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("[FAIL] Custom message");
+    expect(stdout).toContain("Message: X should be zero");
+  });
+
+  it("should handle SETUP/TEARDOWN blocks", () => {
+    const source = `
+PROGRAM Counter
+  VAR count : INT; END_VAR
+  count := count + 1;
+END_PROGRAM
+`;
+    const test = `
+SETUP
+  VAR uut : Counter; END_VAR
+  uut.count := 100;
+END_SETUP
+
+TEST 'Setup runs before each test'
+  uut();
+  ASSERT_EQ(uut.count, 101);
+END_TEST
+
+TEST 'Setup gives fresh state'
+  ASSERT_EQ(uut.count, 100);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] Setup runs before each test");
+    expect(stdout).toContain("[PASS] Setup gives fresh state");
+  });
+
+  it("should fail ASSERT_GT when actual is not greater", () => {
+    const source = `
+PROGRAM P
+  VAR x : INT; END_VAR
+  x := 5;
+END_PROGRAM
+`;
+    const test = `
+TEST 'GT fail'
+  VAR uut : P; END_VAR
+  uut();
+  ASSERT_GT(uut.x, 10);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("[FAIL] GT fail");
+    expect(stdout).toContain("ASSERT_GT failed");
+  });
+
+  it("should fail ASSERT_NEAR when outside tolerance", () => {
+    const source = `
+PROGRAM P
+  VAR value : REAL; END_VAR
+  value := 10.0;
+END_PROGRAM
+`;
+    const test = `
+TEST 'Near fail'
+  VAR uut : P; END_VAR
+  uut();
+  ASSERT_NEAR(uut.value, 5.0, 0.1);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(1);
+    expect(stdout).toContain("[FAIL] Near fail");
+    expect(stdout).toContain("ASSERT_NEAR failed");
+  });
 });

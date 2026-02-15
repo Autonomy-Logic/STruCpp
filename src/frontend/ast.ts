@@ -717,7 +717,26 @@ export interface NewExpression extends TypedNode {
  */
 export interface TestFile {
   fileName: string;
+  setup?: SetupBlock;
+  teardown?: TeardownBlock;
   testCases: TestCase[];
+}
+
+/**
+ * SETUP block: shared initialization that runs before each TEST.
+ */
+export interface SetupBlock {
+  varBlocks: VarBlock[];
+  body: TestStatement[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * TEARDOWN block: cleanup that runs after each TEST.
+ */
+export interface TeardownBlock {
+  body: TestStatement[];
+  sourceSpan: SourceSpan;
 }
 
 /**
@@ -733,7 +752,16 @@ export interface TestCase {
 /**
  * Assert function type
  */
-export type AssertType = "ASSERT_EQ" | "ASSERT_TRUE" | "ASSERT_FALSE";
+export type AssertType =
+  | "ASSERT_EQ"
+  | "ASSERT_NEQ"
+  | "ASSERT_TRUE"
+  | "ASSERT_FALSE"
+  | "ASSERT_GT"
+  | "ASSERT_LT"
+  | "ASSERT_GE"
+  | "ASSERT_LE"
+  | "ASSERT_NEAR";
 
 /**
  * Assert function call within a test block.
@@ -742,6 +770,7 @@ export interface AssertCall extends ASTNode {
   kind: "AssertCall";
   assertType: AssertType;
   args: Expression[];
+  message?: string;
   sourceSpan: SourceSpan;
 }
 

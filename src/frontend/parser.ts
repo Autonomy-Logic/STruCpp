@@ -1429,12 +1429,39 @@ export class STParser extends CstParser {
   // ==========================================================================
 
   /**
-   * Top-level rule for test files: one or more TEST blocks
+   * Top-level rule for test files: optional SETUP, optional TEARDOWN, then TEST blocks
    */
   public testFile = this.RULE("testFile", () => {
+    this.OPTION(() => {
+      this.SUBRULE(this.setupBlock);
+    });
+    this.OPTION2(() => {
+      this.SUBRULE(this.teardownBlock);
+    });
     this.MANY(() => {
       this.SUBRULE(this.testCase);
     });
+  });
+
+  /**
+   * SETUP ... END_SETUP block with optional VAR declarations and statements
+   */
+  public setupBlock = this.RULE("setupBlock", () => {
+    this.CONSUME(tokens.SETUP);
+    this.MANY(() => {
+      this.SUBRULE(this.varBlock);
+    });
+    this.SUBRULE(this.testStatementList);
+    this.CONSUME(tokens.END_SETUP);
+  });
+
+  /**
+   * TEARDOWN ... END_TEARDOWN block
+   */
+  public teardownBlock = this.RULE("teardownBlock", () => {
+    this.CONSUME(tokens.TEARDOWN);
+    this.SUBRULE(this.testStatementList);
+    this.CONSUME(tokens.END_TEARDOWN);
   });
 
   /**
@@ -1476,13 +1503,19 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Assert function call
+   * Assert function call (all assert types)
    */
   public assertCall = this.RULE("assertCall", () => {
     this.OR([
       { ALT: () => this.CONSUME(tokens.ASSERT_EQ) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_NEQ) },
       { ALT: () => this.CONSUME(tokens.ASSERT_TRUE) },
       { ALT: () => this.CONSUME(tokens.ASSERT_FALSE) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_GT) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_LT) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_GE) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_LE) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_NEAR) },
     ]);
     this.CONSUME(tokens.LParen);
     this.SUBRULE(this.expression);
@@ -1501,8 +1534,14 @@ export class STParser extends CstParser {
     const t = this.LA(1).tokenType;
     return (
       t === tokens.ASSERT_EQ ||
+      t === tokens.ASSERT_NEQ ||
       t === tokens.ASSERT_TRUE ||
-      t === tokens.ASSERT_FALSE
+      t === tokens.ASSERT_FALSE ||
+      t === tokens.ASSERT_GT ||
+      t === tokens.ASSERT_LT ||
+      t === tokens.ASSERT_GE ||
+      t === tokens.ASSERT_LE ||
+      t === tokens.ASSERT_NEAR
     );
   }
 }
