@@ -46,6 +46,9 @@ export interface CompileOptions {
 
   /** Disable auto-loading of IEC standard function block library (TON, CTU, R_TRIG, etc.) */
   noStdFBLibrary?: boolean;
+
+  /** Whether this is a test build (adds mock infrastructure to generated code) */
+  isTestBuild?: boolean;
 }
 
 /**

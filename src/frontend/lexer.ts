@@ -407,6 +407,22 @@ export const END_TEARDOWN = createToken({
   pattern: /END_TEARDOWN/i,
 });
 
+// Mocking framework keywords (test file only)
+export const MOCK_VERIFY_CALL_COUNT = createToken({
+  name: "MOCK_VERIFY_CALL_COUNT",
+  pattern: /MOCK_VERIFY_CALL_COUNT/i,
+});
+export const MOCK_VERIFY_CALLED = createToken({
+  name: "MOCK_VERIFY_CALLED",
+  pattern: /MOCK_VERIFY_CALLED/i,
+});
+export const MOCK_FUNCTION = createToken({
+  name: "MOCK_FUNCTION",
+  pattern: /MOCK_FUNCTION/i,
+});
+export const MOCK = createToken({ name: "MOCK", pattern: /MOCK/i });
+export const RETURNS = createToken({ name: "RETURNS", pattern: /RETURNS/i });
+
 // OOP extensions (IEC 61131-3 Edition 3)
 export const METHOD = createToken({ name: "METHOD", pattern: /METHOD/i });
 export const END_METHOD = createToken({
@@ -584,6 +600,11 @@ const testKeywordTokens = [
   ASSERT_GE,
   ASSERT_LE,
   ASSERT_NEAR,
+  MOCK_VERIFY_CALL_COUNT,
+  MOCK_VERIFY_CALLED,
+  MOCK_FUNCTION,
+  MOCK,
+  RETURNS,
 ];
 
 // Set longer_alt for test keywords
@@ -878,6 +899,11 @@ export const allTestTokens = [
   ASSERT_LT,
   ASSERT_GE,
   ASSERT_LE,
+  MOCK_VERIFY_CALL_COUNT,
+  MOCK_VERIFY_CALLED,
+  MOCK_FUNCTION,
+  MOCK,
+  RETURNS,
 
   // Keywords (before Identifier) - same order as allTokens
   END_PROGRAM,

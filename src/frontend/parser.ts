@@ -1487,7 +1487,7 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Single statement inside a test block: either an assert call or a regular statement
+   * Single statement inside a test block: assert call, mock statement, or regular statement
    */
   public testStatement = this.RULE("testStatement", () => {
     this.OR({
@@ -1495,6 +1495,14 @@ export class STParser extends CstParser {
         {
           ALT: () => this.SUBRULE(this.assertCall),
           GATE: () => this.isAssertAhead(),
+        },
+        {
+          ALT: () => this.SUBRULE(this.mockVerifyStatement),
+          GATE: () => this.isMockVerifyAhead(),
+        },
+        {
+          ALT: () => this.SUBRULE(this.mockStatement),
+          GATE: () => this.isMockAhead(),
         },
         { ALT: () => this.SUBRULE(this.statement) },
       ],
@@ -1543,6 +1551,96 @@ export class STParser extends CstParser {
       t === tokens.ASSERT_LE ||
       t === tokens.ASSERT_NEAR
     );
+  }
+
+  // ==========================================================================
+  // Mock framework rules (used only when parsing test files)
+  // ==========================================================================
+
+  /**
+   * Mock statement: MOCK instance.path ; or MOCK_FUNCTION FuncName RETURNS expr ;
+   */
+  public mockStatement = this.RULE("mockStatement", () => {
+    this.OR([
+      {
+        // MOCK_FUNCTION FuncName RETURNS expression ;
+        ALT: () => {
+          this.CONSUME(tokens.MOCK_FUNCTION);
+          this.CONSUME(tokens.Identifier);
+          this.CONSUME(tokens.RETURNS);
+          this.SUBRULE(this.expression);
+          this.CONSUME(tokens.Semicolon);
+        },
+        GATE: () => this.LA(1).tokenType === tokens.MOCK_FUNCTION,
+      },
+      {
+        // MOCK instance.path ;
+        ALT: () => {
+          this.CONSUME2(tokens.MOCK);
+          this.SUBRULE(this.qualifiedIdentifier);
+          this.CONSUME2(tokens.Semicolon);
+        },
+      },
+    ]);
+  });
+
+  /**
+   * Mock verification statements
+   */
+  public mockVerifyStatement = this.RULE("mockVerifyStatement", () => {
+    this.OR([
+      {
+        // MOCK_VERIFY_CALL_COUNT(instance.path, count);
+        ALT: () => {
+          this.CONSUME(tokens.MOCK_VERIFY_CALL_COUNT);
+          this.CONSUME(tokens.LParen);
+          this.SUBRULE(this.qualifiedIdentifier);
+          this.CONSUME(tokens.Comma);
+          this.SUBRULE(this.expression);
+          this.CONSUME(tokens.RParen);
+          this.CONSUME(tokens.Semicolon);
+        },
+        GATE: () => this.LA(1).tokenType === tokens.MOCK_VERIFY_CALL_COUNT,
+      },
+      {
+        // MOCK_VERIFY_CALLED(instance.path);
+        ALT: () => {
+          this.CONSUME2(tokens.MOCK_VERIFY_CALLED);
+          this.CONSUME2(tokens.LParen);
+          this.SUBRULE2(this.qualifiedIdentifier);
+          this.CONSUME2(tokens.RParen);
+          this.CONSUME2(tokens.Semicolon);
+        },
+      },
+    ]);
+  });
+
+  /**
+   * Qualified identifier: Identifier (.Identifier)*
+   * Used for mock instance paths like ctrl.sensor or ctrl.subsystem.valve
+   */
+  public qualifiedIdentifier = this.RULE("qualifiedIdentifier", () => {
+    this.CONSUME(tokens.Identifier);
+    this.MANY(() => {
+      this.CONSUME(tokens.Dot);
+      this.CONSUME2(tokens.Identifier);
+    });
+  });
+
+  /**
+   * Lookahead helper to detect MOCK or MOCK_FUNCTION
+   */
+  private isMockAhead(): boolean {
+    const t = this.LA(1).tokenType;
+    return t === tokens.MOCK || t === tokens.MOCK_FUNCTION;
+  }
+
+  /**
+   * Lookahead helper to detect MOCK_VERIFY_CALLED or MOCK_VERIFY_CALL_COUNT
+   */
+  private isMockVerifyAhead(): boolean {
+    const t = this.LA(1).tokenType;
+    return t === tokens.MOCK_VERIFY_CALLED || t === tokens.MOCK_VERIFY_CALL_COUNT;
   }
 }
 

@@ -2785,7 +2785,7 @@ export class ASTBuilder {
   }
 
   /**
-   * Build a single test statement (either an assert call or a regular statement).
+   * Build a single test statement (assert call, mock statement, or regular statement).
    */
   buildTestStatement(cst: CstNode): import("./ast.js").TestStatement {
     const children = cst.children as CstChildren;
@@ -2793,12 +2793,100 @@ export class ASTBuilder {
     if (assertNode) {
       return this.buildAssertCall(assertNode);
     }
+    const mockNode = getFirstNode(children.mockStatement);
+    if (mockNode) {
+      return this.buildMockStatement(mockNode);
+    }
+    const mockVerifyNode = getFirstNode(children.mockVerifyStatement);
+    if (mockVerifyNode) {
+      return this.buildMockVerifyStatement(mockVerifyNode);
+    }
     const stmtNode = getFirstNode(children.statement);
     if (stmtNode) {
       const stmt = this.buildStatement(stmtNode);
       if (stmt) return stmt;
     }
     throw new Error("Empty test statement");
+  }
+
+  /**
+   * Extract a qualified identifier path (Identifier.Identifier...) from a qualifiedIdentifier CST node.
+   */
+  private buildQualifiedIdentifier(cst: CstNode): string[] {
+    const children = cst.children as CstChildren;
+    return getAllTokens(children.Identifier).map((t) => t.image);
+  }
+
+  /**
+   * Build a MockFBStatement or MockFunctionStatement from a mockStatement CST node.
+   */
+  buildMockStatement(
+    cst: CstNode,
+  ): import("./ast.js").MockFBStatement | import("./ast.js").MockFunctionStatement {
+    const children = cst.children as CstChildren;
+
+    // MOCK_FUNCTION FuncName RETURNS expression ;
+    if (children.MOCK_FUNCTION) {
+      const nameToken = getFirstToken(children.Identifier);
+      const functionName = nameToken?.image ?? "";
+      const exprNode = getFirstNode(children.expression);
+      const returnValue = exprNode
+        ? (this.buildExpression(exprNode) ?? this.createDummyLiteral(cst))
+        : this.createDummyLiteral(cst);
+      return {
+        kind: "MockFunctionStatement",
+        functionName,
+        returnValue,
+        sourceSpan: nodeToSourceSpan(cst),
+      };
+    }
+
+    // MOCK instance.path ;
+    const qidNode = getFirstNode(children.qualifiedIdentifier);
+    const instancePath = qidNode ? this.buildQualifiedIdentifier(qidNode) : [];
+    return {
+      kind: "MockFBStatement",
+      instancePath,
+      sourceSpan: nodeToSourceSpan(cst),
+    };
+  }
+
+  /**
+   * Build a MockVerifyCalledStatement or MockVerifyCallCountStatement.
+   */
+  buildMockVerifyStatement(
+    cst: CstNode,
+  ):
+    | import("./ast.js").MockVerifyCalledStatement
+    | import("./ast.js").MockVerifyCallCountStatement {
+    const children = cst.children as CstChildren;
+
+    // MOCK_VERIFY_CALL_COUNT(instance.path, count)
+    if (children.MOCK_VERIFY_CALL_COUNT) {
+      const qidNode = getFirstNode(children.qualifiedIdentifier);
+      const instancePath = qidNode
+        ? this.buildQualifiedIdentifier(qidNode)
+        : [];
+      const exprNode = getFirstNode(children.expression);
+      const expectedCount = exprNode
+        ? (this.buildExpression(exprNode) ?? this.createDummyLiteral(cst))
+        : this.createDummyLiteral(cst);
+      return {
+        kind: "MockVerifyCallCountStatement",
+        instancePath,
+        expectedCount,
+        sourceSpan: nodeToSourceSpan(cst),
+      };
+    }
+
+    // MOCK_VERIFY_CALLED(instance.path)
+    const qidNode = getFirstNode(children.qualifiedIdentifier);
+    const instancePath = qidNode ? this.buildQualifiedIdentifier(qidNode) : [];
+    return {
+      kind: "MockVerifyCalledStatement",
+      instancePath,
+      sourceSpan: nodeToSourceSpan(cst),
+    };
   }
 
   /**

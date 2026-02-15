@@ -13,6 +13,10 @@ import type {
   AssertCall,
   SetupBlock,
   TeardownBlock,
+  MockFBStatement,
+  MockFunctionStatement,
+  MockVerifyCalledStatement,
+  MockVerifyCallCountStatement,
 } from "../testing/test-model.js";
 import type {
   VarBlock,
@@ -35,7 +39,7 @@ import type {
 } from "../frontend/ast.js";
 
 /**
- * Map of IEC type names to C++ type suffixes for the template specialization.
+ * Map of IEC type names to C++ raw types for template specialization and local variables.
  */
 const TYPE_MAP: Record<string, string> = {
   BOOL: "BOOL_t",
@@ -59,6 +63,30 @@ const TYPE_MAP: Record<string, string> = {
 };
 
 /**
+ * Map of IEC type names to C++ IECVar-wrapped types (matches codegen function signatures).
+ */
+const FUNC_TYPE_MAP: Record<string, string> = {
+  BOOL: "IEC_BOOL",
+  SINT: "IEC_SINT",
+  INT: "IEC_INT",
+  DINT: "IEC_DINT",
+  LINT: "IEC_LINT",
+  USINT: "IEC_USINT",
+  UINT: "IEC_UINT",
+  UDINT: "IEC_UDINT",
+  ULINT: "IEC_ULINT",
+  REAL: "IEC_REAL",
+  LREAL: "IEC_LREAL",
+  BYTE: "IEC_BYTE",
+  WORD: "IEC_WORD",
+  DWORD: "IEC_DWORD",
+  LWORD: "IEC_LWORD",
+  STRING: "IEC_STRING",
+  WSTRING: "IEC_WSTRING",
+  TIME: "IEC_TIME",
+};
+
+/**
  * Information about a POU (Program Organization Unit) from compilation.
  */
 export interface POUInfo {
@@ -71,6 +99,15 @@ export interface POUInfo {
 }
 
 /**
+ * Information about a function for mock dispatch generation.
+ */
+export interface FunctionInfo {
+  name: string;
+  returnType: string;
+  parameters: Array<{ name: string; type: string }>;
+}
+
+/**
  * Options for test main generation.
  */
 export interface TestMainGenOptions {
@@ -78,6 +115,10 @@ export interface TestMainGenOptions {
   headerFileName: string;
   /** Known POUs from the source compilation */
   pous: POUInfo[];
+  /** Whether this is a test build (enables mock infrastructure) */
+  isTestBuild?: boolean;
+  /** Known functions for mock dispatch generation */
+  functions?: FunctionInfo[];
 }
 
 /**
@@ -113,13 +154,48 @@ export function generateTestMain(
     funcName: string;
   }> = [];
 
+  // Build function info map for mock dispatch
+  const functionMap = new Map<string, FunctionInfo>();
+  if (options.functions) {
+    for (const func of options.functions) {
+      functionMap.set(func.name.toUpperCase(), func);
+    }
+  }
+
+  // Collect all mocked function names across all test files
+  const mockedFunctionNames = new Set<string>();
+  for (const testFile of testFiles) {
+    for (const tc of testFile.testCases) {
+      collectMockedFunctions(tc.body, mockedFunctionNames);
+    }
+  }
+
+  // Generate function dispatch declarations for mocked functions
+  // These must be inside namespace strucpp since the symbols are defined there
+  if (mockedFunctionNames.size > 0) {
+    lines.push("namespace strucpp {");
+    for (const funcName of mockedFunctionNames) {
+      const func = functionMap.get(funcName.toUpperCase());
+      if (func) {
+        const retType = FUNC_TYPE_MAP[func.returnType.toUpperCase()] ?? func.returnType;
+        const params = func.parameters
+          .map((p) => `${FUNC_TYPE_MAP[p.type.toUpperCase()] ?? p.type} ${p.name}`)
+          .join(", ");
+        lines.push(`extern ${retType} ${func.name}_real(${params});`);
+        lines.push(`extern ${retType} (*${func.name}_dispatch)(${params});`);
+      }
+    }
+    lines.push("} // namespace strucpp");
+    lines.push("");
+  }
+
   for (const testFile of testFiles) {
     // Generate SETUP/TEARDOWN struct if present
     let setupStructName: string | undefined;
     if (testFile.setup) {
       setupIndex++;
       setupStructName = `TestSetup_${setupIndex}`;
-      const gen = new TestFunctionGenerator(pouMap, testFile.fileName);
+      const gen = new TestFunctionGenerator(pouMap, testFile.fileName, functionMap);
       const structCode = gen.generateSetupStruct(
         setupStructName,
         testFile.setup,
@@ -132,13 +208,14 @@ export function generateTestMain(
     for (const tc of testFile.testCases) {
       testIndex++;
       const funcName = `test_${testIndex}`;
-      const gen = new TestFunctionGenerator(pouMap, testFile.fileName);
+      const gen = new TestFunctionGenerator(pouMap, testFile.fileName, functionMap);
       const code = gen.generateTestFunction(
         funcName,
         tc,
         testFile.setup,
         testFile.teardown,
         setupStructName,
+        mockedFunctionNames,
       );
       lines.push(code);
       lines.push("");
@@ -201,10 +278,25 @@ export function generateTestMain(
 }
 
 /**
+ * Collect all MOCK_FUNCTION names from a test body.
+ */
+function collectMockedFunctions(
+  body: TestStatement[],
+  names: Set<string>,
+): void {
+  for (const stmt of body) {
+    if (stmt.kind === "MockFunctionStatement") {
+      names.add(stmt.functionName);
+    }
+  }
+}
+
+/**
  * Generates C++ code for a single test function.
  */
 class TestFunctionGenerator {
   private pouMap: Map<string, POUInfo>;
+  private functionMap: Map<string, FunctionInfo>;
   private fileName: string;
   private indent = "    ";
   /** Maps local variable names to their declared type names (for POU resolution) */
@@ -212,9 +304,14 @@ class TestFunctionGenerator {
   /** Names of variables from SETUP block (need s. prefix in test functions) */
   private setupVarNames: Set<string> | undefined;
 
-  constructor(pouMap: Map<string, POUInfo>, fileName: string) {
+  constructor(
+    pouMap: Map<string, POUInfo>,
+    fileName: string,
+    functionMap?: Map<string, FunctionInfo>,
+  ) {
     this.pouMap = pouMap;
     this.fileName = fileName;
+    this.functionMap = functionMap ?? new Map();
   }
 
   /**
@@ -272,10 +369,18 @@ class TestFunctionGenerator {
     setup?: SetupBlock,
     _teardown?: TeardownBlock,
     setupStructName?: string,
+    mockedFunctionNames?: Set<string>,
   ): string {
     const lines: string[] = [];
     lines.push(`// TEST '${escapeString(tc.name)}'`);
     lines.push(`bool ${funcName}(strucpp::TestContext& ctx) {`);
+
+    // Reset function dispatch pointers to real implementations
+    if (mockedFunctionNames && mockedFunctionNames.size > 0) {
+      for (const name of mockedFunctionNames) {
+        lines.push(`${this.indent}${name}_dispatch = ${name}_real;`);
+      }
+    }
 
     // Build variable-to-type map for POU resolution
     this.varTypeMap.clear();
@@ -381,12 +486,105 @@ class TestFunctionGenerator {
     lines: string[],
     stmt: TestStatement,
   ): void {
-    if (stmt.kind === "AssertCall") {
-      this.generateAssertCall(lines, stmt as AssertCall);
-    } else {
-      this.generateStatement(lines, stmt as Statement);
+    switch (stmt.kind) {
+      case "AssertCall":
+        this.generateAssertCall(lines, stmt as AssertCall);
+        break;
+      case "MockFBStatement":
+        this.generateMockFB(lines, stmt as MockFBStatement);
+        break;
+      case "MockFunctionStatement":
+        this.generateMockFunction(lines, stmt as MockFunctionStatement);
+        break;
+      case "MockVerifyCalledStatement":
+        this.generateMockVerifyCalled(
+          lines,
+          stmt as MockVerifyCalledStatement,
+        );
+        break;
+      case "MockVerifyCallCountStatement":
+        this.generateMockVerifyCallCount(
+          lines,
+          stmt as MockVerifyCallCountStatement,
+        );
+        break;
+      default:
+        this.generateStatement(lines, stmt as Statement);
+        break;
     }
   }
+
+  // ===========================================================================
+  // Mock statement generation
+  // ===========================================================================
+
+  private generateMockFB(
+    lines: string[],
+    stmt: MockFBStatement,
+  ): void {
+    const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
+    const path = prefix + stmt.instancePath.join(".");
+    lines.push(`${this.indent}${path}.__mocked_ = true;`);
+  }
+
+  private generateMockFunction(
+    lines: string[],
+    stmt: MockFunctionStatement,
+  ): void {
+    const name = stmt.functionName;
+    const retVal = this.generateExpression(stmt.returnValue);
+    const func = this.functionMap.get(name.toUpperCase());
+    if (func) {
+      const retType = FUNC_TYPE_MAP[func.returnType.toUpperCase()] ?? func.returnType;
+      const params = func.parameters
+        .map((p) => `${FUNC_TYPE_MAP[p.type.toUpperCase()] ?? p.type} /*${p.name}*/`)
+        .join(", ");
+      lines.push(
+        `${this.indent}${name}_dispatch = [](${params}) -> ${retType} { return ${retType}(${retVal}); };`,
+      );
+    } else {
+      // Fallback: generate without type info
+      lines.push(
+        `${this.indent}${name}_dispatch = [](...) { return ${retVal}; };`,
+      );
+    }
+  }
+
+  private generateMockVerifyCalled(
+    lines: string[],
+    stmt: MockVerifyCalledStatement,
+  ): void {
+    const line = stmt.sourceSpan.startLine;
+    const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
+    const path = prefix + stmt.instancePath.join(".");
+    lines.push(
+      `${this.indent}if (!ctx.assert_true(${path}.__mock_state_.call_count > 0, "MOCK_VERIFY_CALLED(${escapeString(stmt.instancePath.join("."))})", ${line})) return false;`,
+    );
+  }
+
+  private generateMockVerifyCallCount(
+    lines: string[],
+    stmt: MockVerifyCallCountStatement,
+  ): void {
+    const line = stmt.sourceSpan.startLine;
+    const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
+    const path = prefix + stmt.instancePath.join(".");
+    const expected = this.generateExpression(stmt.expectedCount);
+    lines.push(
+      `${this.indent}if (!ctx.assert_eq<int>(${path}.__mock_state_.call_count, ${expected}, "${escapeString(stmt.instancePath.join("."))} call count", "${escapeString(expected)}", ${line})) return false;`,
+    );
+  }
+
+  /**
+   * Resolve SETUP prefix for a variable name.
+   */
+  private resolveSetupPrefix(name: string): string {
+    return this.setupVarNames && this.setupVarNames.has(name) ? "s." : "";
+  }
+
+  // ===========================================================================
+  // Assert generation
+  // ===========================================================================
 
   private generateAssertCall(
     lines: string[],

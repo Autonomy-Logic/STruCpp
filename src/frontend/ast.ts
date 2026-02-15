@@ -775,9 +775,53 @@ export interface AssertCall extends ASTNode {
 }
 
 /**
- * A statement within a test block (either a regular statement or an assert call).
+ * MOCK instance.path; - Mock an FB instance (skip body, retain outputs).
  */
-export type TestStatement = Statement | AssertCall;
+export interface MockFBStatement extends ASTNode {
+  kind: "MockFBStatement";
+  instancePath: string[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_FUNCTION FuncName RETURNS expression; - Mock a function with fixed return value.
+ */
+export interface MockFunctionStatement extends ASTNode {
+  kind: "MockFunctionStatement";
+  functionName: string;
+  returnValue: Expression;
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_VERIFY_CALLED(instance.path); - Assert mocked FB was called at least once.
+ */
+export interface MockVerifyCalledStatement extends ASTNode {
+  kind: "MockVerifyCalledStatement";
+  instancePath: string[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_VERIFY_CALL_COUNT(instance.path, count); - Assert mocked FB call count.
+ */
+export interface MockVerifyCallCountStatement extends ASTNode {
+  kind: "MockVerifyCallCountStatement";
+  instancePath: string[];
+  expectedCount: Expression;
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * A statement within a test block (either a regular statement, assert call, or mock statement).
+ */
+export type TestStatement =
+  | Statement
+  | AssertCall
+  | MockFBStatement
+  | MockFunctionStatement
+  | MockVerifyCalledStatement
+  | MockVerifyCallCountStatement;
 
 // =============================================================================
 // Factory Functions

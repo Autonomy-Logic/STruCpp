@@ -71,8 +71,50 @@ export interface AssertCall {
 }
 
 /**
- * A statement within a test block: either a regular ST statement or an assert call.
+ * MOCK instance.path; - Mock an FB instance.
+ */
+export interface MockFBStatement {
+  kind: "MockFBStatement";
+  instancePath: string[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_FUNCTION FuncName RETURNS expression; - Mock a function return value.
+ */
+export interface MockFunctionStatement {
+  kind: "MockFunctionStatement";
+  functionName: string;
+  returnValue: import("../frontend/ast.js").Expression;
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_VERIFY_CALLED(instance.path); - Verify mocked FB was called.
+ */
+export interface MockVerifyCalledStatement {
+  kind: "MockVerifyCalledStatement";
+  instancePath: string[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_VERIFY_CALL_COUNT(instance.path, count); - Verify mock call count.
+ */
+export interface MockVerifyCallCountStatement {
+  kind: "MockVerifyCallCountStatement";
+  instancePath: string[];
+  expectedCount: import("../frontend/ast.js").Expression;
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * A statement within a test block: regular ST statement, assert call, or mock statement.
  */
 export type TestStatement =
   | import("../frontend/ast.js").Statement
-  | AssertCall;
+  | AssertCall
+  | MockFBStatement
+  | MockFunctionStatement
+  | MockVerifyCalledStatement
+  | MockVerifyCallCountStatement;

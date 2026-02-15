@@ -41,7 +41,7 @@ import { compile, getVersion, compileLibrary } from "./index.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
 import { parseTestFile } from "./testing/test-parser.js";
 import { generateTestMain } from "./backend/test-main-gen.js";
-import type { POUInfo } from "./backend/test-main-gen.js";
+import type { POUInfo, FunctionInfo } from "./backend/test-main-gen.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
@@ -431,6 +431,7 @@ function runTestMode(options: CLIOptions): void {
   const compileOptions: Partial<CompileOptions> = {
     headerFileName: "generated.hpp",
     fileName: basename(inputPath),
+    isTestBuild: true,
   };
   if (additionalSources.length > 0) {
     compileOptions.additionalSources = additionalSources;
@@ -496,6 +497,28 @@ function runTestMode(options: CLIOptions): void {
     }
   }
 
+  // Build function info for mock dispatch generation
+  const functions: FunctionInfo[] = [];
+  if (result.ast) {
+    for (const func of result.ast.functions) {
+      const params: Array<{ name: string; type: string }> = [];
+      for (const block of func.varBlocks) {
+        if (block.blockType === "VAR_INPUT" || block.blockType === "VAR_IN_OUT") {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              params.push({ name, type: decl.type.name });
+            }
+          }
+        }
+      }
+      functions.push({
+        name: func.name,
+        returnType: func.returnType.name,
+        parameters: params,
+      });
+    }
+  }
+
   // 3. Parse test files
   const testFiles: import("./testing/test-model.js").TestFile[] = [];
   for (const testPath of options.test) {
@@ -530,6 +553,8 @@ function runTestMode(options: CLIOptions): void {
   const testMainCpp = generateTestMain(testFiles, {
     headerFileName: "generated.hpp",
     pous,
+    isTestBuild: true,
+    functions,
   });
 
   // 5. Write to temp directory

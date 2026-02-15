@@ -128,6 +128,9 @@ export interface CodeGenOptions {
 
   /** Additional library headers to include in the generated header */
   libraryHeaders: string[];
+
+  /** Whether this is a test build (adds mock infrastructure to FB classes) */
+  isTestBuild: boolean;
 }
 
 /**
@@ -140,6 +143,7 @@ export const defaultCodeGenOptions: CodeGenOptions = {
   lineEnding: "\n",
   headerFileName: "generated.hpp",
   libraryHeaders: [],
+  isTestBuild: false,
 };
 
 // =============================================================================
@@ -658,6 +662,14 @@ export class CodeGenerator {
       this.emitHeader(`    virtual ~${fb.name}() = default;`);
     }
 
+    // Test build: add mock infrastructure
+    if (this.options.isTestBuild) {
+      this.emitHeader("");
+      this.emitHeader("    // Test mock infrastructure");
+      this.emitHeader("    bool __mocked_ = false;");
+      this.emitHeader("    struct { int call_count = 0; } __mock_state_;");
+    }
+
     this.emitHeader("};");
     this.emitHeader("");
   }
@@ -1110,6 +1122,9 @@ export class CodeGenerator {
 
     // Operator()
     this.emit(`void ${fb.name}::operator()() {`);
+    if (this.options.isTestBuild) {
+      this.emit("    if (__mocked_) { __mock_state_.call_count++; return; }");
+    }
     this.enterScope(fb.varBlocks);
     if (fb.body.length > 0) {
       this.generateStatements(fb.body);
@@ -1146,22 +1161,76 @@ export class CodeGenerator {
     func: CompilationUnit["functions"][0],
   ): void {
     const params = this.generateFunctionParams(func);
+    const retType = this.mapTypeRefToCpp(func.returnType);
 
-    this.emit(
-      `${this.mapTypeRefToCpp(func.returnType)} ${func.name}(${params.join(", ")}) {`,
-    );
-    this.emit(`    ${this.mapTypeRefToCpp(func.returnType)} ${func.name}_result;`);
-    // Set function context so assignments to function name redirect to result variable
-    this.currentFunctionName = func.name;
-    if (func.body.length > 0) {
-      this.generateStatements(func.body);
-    } else if (this.options.sourceComments) {
-      this.emit("    // Empty function body");
+    if (this.options.isTestBuild) {
+      // Test build: generate _real, dispatch pointer, and wrapper
+      // 1. _real implementation (original body with renamed function)
+      this.emit(
+        `${retType} ${func.name}_real(${params.join(", ")}) {`,
+      );
+      this.emit(`    ${retType} ${func.name}_result;`);
+      this.currentFunctionName = func.name;
+      if (func.body.length > 0) {
+        this.generateStatements(func.body);
+      } else if (this.options.sourceComments) {
+        this.emit("    // Empty function body");
+      }
+      this.currentFunctionName = undefined;
+      this.emit(`    return ${func.name}_result;`);
+      this.emit("}");
+      this.emit("");
+
+      // 2. Dispatch pointer (defaults to real implementation)
+      this.emit(
+        `${retType} (*${func.name}_dispatch)(${params.join(", ")}) = ${func.name}_real;`,
+      );
+      this.emit("");
+
+      // 3. Wrapper that calls through dispatch pointer
+      const paramNames = this.generateFunctionParamNames(func);
+      this.emit(
+        `${retType} ${func.name}(${params.join(", ")}) {`,
+      );
+      this.emit(`    return ${func.name}_dispatch(${paramNames.join(", ")});`);
+      this.emit("}");
+      this.emit("");
+    } else {
+      // Production build: normal function
+      this.emit(
+        `${retType} ${func.name}(${params.join(", ")}) {`,
+      );
+      this.emit(`    ${retType} ${func.name}_result;`);
+      this.currentFunctionName = func.name;
+      if (func.body.length > 0) {
+        this.generateStatements(func.body);
+      } else if (this.options.sourceComments) {
+        this.emit("    // Empty function body");
+      }
+      this.currentFunctionName = undefined;
+      this.emit(`    return ${func.name}_result;`);
+      this.emit("}");
+      this.emit("");
     }
-    this.currentFunctionName = undefined;
-    this.emit(`    return ${func.name}_result;`);
-    this.emit("}");
-    this.emit("");
+  }
+
+  /**
+   * Generate function parameter name list (just names, no types).
+   */
+  private generateFunctionParamNames(
+    func: CompilationUnit["functions"][0],
+  ): string[] {
+    const names: string[] = [];
+    for (const block of func.varBlocks) {
+      if (block.blockType === "VAR_INPUT" || block.blockType === "VAR_IN_OUT") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            names.push(name);
+          }
+        }
+      }
+    }
+    return names;
   }
 
   // ===========================================================================
