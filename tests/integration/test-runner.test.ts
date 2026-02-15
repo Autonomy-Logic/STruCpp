@@ -69,6 +69,14 @@ function runTest(
         variables: vars,
       });
     }
+    for (const func of result.ast.functions) {
+      pous.push({
+        name: func.name,
+        kind: "function",
+        cppClassName: func.name,
+        variables: new Map(),
+      });
+    }
   }
 
   // 3. Parse test file
@@ -507,5 +515,178 @@ END_TEST
     expect(exitCode).toBe(1);
     expect(stdout).toContain("[FAIL] Near fail");
     expect(stdout).toContain("ASSERT_NEAR failed");
+  });
+
+  // Phase 9.3: Function and FB Testing
+
+  it("should test functions with direct calls in assertions", () => {
+    const source = `
+FUNCTION SQUARE : INT
+  VAR_INPUT x : INT; END_VAR
+  SQUARE := x * x;
+END_FUNCTION
+`;
+    const test = `
+TEST 'SQUARE of positive'
+  VAR result : INT; END_VAR
+  result := SQUARE(5);
+  ASSERT_EQ(result, 25);
+END_TEST
+
+TEST 'SQUARE of zero'
+  VAR result : INT; END_VAR
+  result := SQUARE(0);
+  ASSERT_EQ(result, 0);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] SQUARE of positive");
+    expect(stdout).toContain("[PASS] SQUARE of zero");
+  });
+
+  it("should test FB with named parameter invocation", () => {
+    const source = `
+FUNCTION_BLOCK Debounce
+  VAR_INPUT
+    signal : BOOL;
+    threshold : INT;
+  END_VAR
+  VAR_OUTPUT
+    stable : BOOL;
+  END_VAR
+  VAR
+    count : INT;
+  END_VAR
+  IF signal THEN
+    count := count + 1;
+  ELSE
+    count := 0;
+  END_IF;
+  stable := count >= threshold;
+END_FUNCTION_BLOCK
+`;
+    const test = `
+TEST 'Debounce needs sustained signal'
+  VAR db : Debounce; END_VAR
+  db(signal := TRUE, threshold := 3);
+  ASSERT_FALSE(db.stable);
+  db(signal := TRUE, threshold := 3);
+  ASSERT_FALSE(db.stable);
+  db(signal := TRUE, threshold := 3);
+  ASSERT_TRUE(db.stable);
+END_TEST
+
+TEST 'Debounce resets on signal loss'
+  VAR db : Debounce; END_VAR
+  db(signal := TRUE, threshold := 2);
+  db(signal := TRUE, threshold := 2);
+  ASSERT_TRUE(db.stable);
+  db(signal := FALSE, threshold := 2);
+  ASSERT_FALSE(db.stable);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] Debounce needs sustained signal");
+    expect(stdout).toContain("[PASS] Debounce resets on signal loss");
+  });
+
+  it("should test two independent FB instances", () => {
+    const source = `
+FUNCTION_BLOCK Accumulator
+  VAR_INPUT value : INT; END_VAR
+  VAR_OUTPUT total : INT; END_VAR
+  total := total + value;
+END_FUNCTION_BLOCK
+`;
+    const test = `
+TEST 'Two instances are independent'
+  VAR a : Accumulator; b : Accumulator; END_VAR
+  a(value := 10);
+  b(value := 20);
+  a(value := 5);
+  ASSERT_EQ(a.total, 15);
+  ASSERT_EQ(b.total, 20);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] Two instances are independent");
+  });
+
+  it("should test FB state persists within TEST but fresh between TESTs", () => {
+    const source = `
+FUNCTION_BLOCK Accumulator
+  VAR_INPUT value : INT; END_VAR
+  VAR_OUTPUT total : INT; END_VAR
+  total := total + value;
+END_FUNCTION_BLOCK
+`;
+    const test = `
+TEST 'State accumulates within test'
+  VAR acc : Accumulator; END_VAR
+  acc(value := 10);
+  acc(value := 20);
+  ASSERT_EQ(acc.total, 30);
+END_TEST
+
+TEST 'State is fresh in new test'
+  VAR acc : Accumulator; END_VAR
+  ASSERT_EQ(acc.total, 0);
+  acc(value := 5);
+  ASSERT_EQ(acc.total, 5);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] State accumulates within test");
+    expect(stdout).toContain("[PASS] State is fresh in new test");
+  });
+
+  it("should test FB methods", () => {
+    const source = `
+FUNCTION_BLOCK Motor
+  VAR
+    _speed : INT;
+    _running : BOOL;
+  END_VAR
+
+  METHOD PUBLIC Start
+    _running := TRUE;
+  END_METHOD
+
+  METHOD PUBLIC Stop
+    _running := FALSE;
+    _speed := 0;
+  END_METHOD
+
+  METHOD PUBLIC SetSpeed
+    VAR_INPUT newSpeed : INT; END_VAR
+    _speed := newSpeed;
+  END_METHOD
+END_FUNCTION_BLOCK
+`;
+    const test = `
+TEST 'Motor starts and stops'
+  VAR m : Motor; END_VAR
+  m.Start();
+  ASSERT_TRUE(m._running);
+  m.Stop();
+  ASSERT_FALSE(m._running);
+  ASSERT_EQ(m._speed, 0);
+END_TEST
+
+TEST 'Motor set speed'
+  VAR m : Motor; END_VAR
+  m.Start();
+  m.SetSpeed(newSpeed := 750);
+  ASSERT_EQ(m._speed, 750);
+END_TEST
+`;
+    const { stdout, exitCode } = runTest(source, test);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain("[PASS] Motor starts and stops");
+    expect(stdout).toContain("[PASS] Motor set speed");
   });
 });

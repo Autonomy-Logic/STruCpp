@@ -605,10 +605,27 @@ class TestFunctionGenerator {
       this.setupVarNames && this.setupVarNames.has(funcName) ? "s." : "";
 
     if (pou) {
+      // Assign named input parameters before invocation
+      for (const arg of call.arguments) {
+        if (arg.name && !arg.isOutput) {
+          lines.push(
+            `${this.indent}${prefix}${funcName}.${arg.name} = ${this.generateExpression(arg.value)};`,
+          );
+        }
+      }
+      // Call the POU body
       if (pou.kind === "program") {
         lines.push(`${this.indent}${prefix}${funcName}.run();`);
       } else {
         lines.push(`${this.indent}${prefix}${funcName}();`);
+      }
+      // Capture output arguments (=> syntax)
+      for (const arg of call.arguments) {
+        if (arg.name && arg.isOutput) {
+          lines.push(
+            `${this.indent}${this.generateExpression(arg.value)} = ${prefix}${funcName}.${arg.name};`,
+          );
+        }
       }
       return;
     }
