@@ -1694,6 +1694,9 @@ export class CodeGenerator {
           `${indent}strucpp::iec_delete(${this.generateExpression(stmt.pointer)});`,
         );
         break;
+      case "AssertCall":
+        // Assert calls only appear in test files, not in normal source compilation
+        break;
       default: {
         const _exhaustive: never = stmt;
         throw new Error(

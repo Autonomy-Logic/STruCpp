@@ -1251,6 +1251,9 @@ export class ASTBuilder {
         getFirstNode(children.superCallStatement)!,
       );
     }
+    if (children.assertCall) {
+      return this.buildAssertCall(getFirstNode(children.assertCall)!);
+    }
 
     return undefined;
   }
@@ -2695,6 +2698,105 @@ export class ASTBuilder {
       rawValue: "0",
     };
   }
+
+  // ===========================================================================
+  // Test File AST Building
+  // ===========================================================================
+
+  /**
+   * Build a TestFile from the testFile CST node.
+   */
+  buildTestFile(cst: CstNode): import("./ast.js").TestFile {
+    const children = cst.children as CstChildren;
+    const testCases = getAllNodes(children.testCase).map((tc) =>
+      this.buildTestCase(tc),
+    );
+    return { fileName: "", testCases };
+  }
+
+  /**
+   * Build a TestCase from a testCase CST node.
+   */
+  buildTestCase(cst: CstNode): import("./ast.js").TestCase {
+    const children = cst.children as CstChildren;
+    const nameToken = getFirstToken(children.StringLiteral);
+    // Remove surrounding quotes from test name
+    const name = nameToken ? nameToken.image.slice(1, -1) : "";
+    const varBlocks = getAllNodes(children.varBlock).map((vb) =>
+      this.buildVarBlock(vb),
+    );
+    const body = this.buildTestStatementList(
+      getFirstNode(children.testStatementList)!,
+    );
+    return {
+      name,
+      varBlocks,
+      body,
+      sourceSpan: nodeToSourceSpan(cst),
+    };
+  }
+
+  /**
+   * Build a list of test statements from a testStatementList CST node.
+   */
+  buildTestStatementList(
+    cst: CstNode,
+  ): import("./ast.js").TestStatement[] {
+    const children = cst.children as CstChildren;
+    const stmts: import("./ast.js").TestStatement[] = [];
+    for (const node of getAllNodes(children.testStatement)) {
+      stmts.push(this.buildTestStatement(node));
+    }
+    return stmts;
+  }
+
+  /**
+   * Build a single test statement (either an assert call or a regular statement).
+   */
+  buildTestStatement(cst: CstNode): import("./ast.js").TestStatement {
+    const children = cst.children as CstChildren;
+    const assertNode = getFirstNode(children.assertCall);
+    if (assertNode) {
+      return this.buildAssertCall(assertNode);
+    }
+    const stmtNode = getFirstNode(children.statement);
+    if (stmtNode) {
+      const stmt = this.buildStatement(stmtNode);
+      if (stmt) return stmt;
+    }
+    throw new Error("Empty test statement");
+  }
+
+  /**
+   * Build an AssertCall from an assertCall CST node.
+   */
+  buildAssertCall(cst: CstNode): import("./ast.js").AssertCall {
+    const children = cst.children as CstChildren;
+
+    // Determine assert type from which token was consumed
+    let assertType: import("./ast.js").AssertType;
+    if (getFirstToken(children.ASSERT_EQ)) {
+      assertType = "ASSERT_EQ";
+    } else if (getFirstToken(children.ASSERT_TRUE)) {
+      assertType = "ASSERT_TRUE";
+    } else if (getFirstToken(children.ASSERT_FALSE)) {
+      assertType = "ASSERT_FALSE";
+    } else {
+      throw new Error("Unknown assert type");
+    }
+
+    // Collect all expression arguments
+    const args = getAllNodes(children.expression)
+      .map((e) => this.buildExpression(e))
+      .filter((e): e is import("./ast.js").Expression => e !== undefined);
+
+    return {
+      kind: "AssertCall",
+      assertType,
+      args,
+      sourceSpan: nodeToSourceSpan(cst),
+    };
+  }
 }
 
 /**
@@ -2710,6 +2812,24 @@ export function buildAST(cst: CstNode, fileName?: string): CompilationUnit {
     setFileOnSpans(ast, fileName);
   }
   return ast;
+}
+
+/**
+ * Build a TestFile AST from a test file CST.
+ * Convenience function that creates a builder and builds the test AST.
+ * @param cst - The Chevrotain CST root node from parseTestSource()
+ * @param fileName - The test file name
+ */
+export function buildTestAST(
+  cst: CstNode,
+  fileName: string,
+): import("./ast.js").TestFile {
+  const builder = new ASTBuilder();
+  const testFile = builder.buildTestFile(cst);
+  testFile.fileName = fileName;
+  // Set file on all sourceSpan objects
+  setFileOnSpans(testFile, fileName);
+  return testFile;
 }
 
 /**

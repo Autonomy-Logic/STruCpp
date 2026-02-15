@@ -347,6 +347,27 @@ export const NULL = createToken({ name: "NULL", pattern: /NULL/i });
 export const __NEW = createToken({ name: "__NEW", pattern: /__NEW/i });
 export const __DELETE = createToken({ name: "__DELETE", pattern: /__DELETE/i });
 
+// Test framework keywords (only active in test file lexing)
+export const TEST = createToken({ name: "TEST", pattern: /TEST/i });
+export const END_TEST = createToken({
+  name: "END_TEST",
+  pattern: /END_TEST/i,
+});
+
+// Test framework assert built-in functions
+export const ASSERT_EQ = createToken({
+  name: "ASSERT_EQ",
+  pattern: /ASSERT_EQ/i,
+});
+export const ASSERT_TRUE = createToken({
+  name: "ASSERT_TRUE",
+  pattern: /ASSERT_TRUE/i,
+});
+export const ASSERT_FALSE = createToken({
+  name: "ASSERT_FALSE",
+  pattern: /ASSERT_FALSE/i,
+});
+
 // OOP extensions (IEC 61131-3 Edition 3)
 export const METHOD = createToken({ name: "METHOD", pattern: /METHOD/i });
 export const END_METHOD = createToken({
@@ -506,6 +527,20 @@ export const Identifier = createToken({
 // =============================================================================
 // Keyword Configuration
 // =============================================================================
+
+// Test-specific keyword tokens (separate from normal keywords)
+const testKeywordTokens = [
+  END_TEST,
+  TEST,
+  ASSERT_EQ,
+  ASSERT_TRUE,
+  ASSERT_FALSE,
+];
+
+// Set longer_alt for test keywords
+testKeywordTokens.forEach((token) => {
+  token.LONGER_ALT = Identifier;
+});
 
 // Configure all keywords to use Identifier as longer_alt
 // This ensures that 'var123' is tokenized as Identifier, not VAR + 123
@@ -753,6 +788,165 @@ export const allTokens = [
 export const STLexer = new Lexer(allTokens);
 
 /**
+ * Token list for test files. Extends allTokens with test-specific keywords
+ * (TEST, END_TEST, ASSERT_*). These tokens must NOT be in the normal allTokens
+ * to avoid conflicting with user identifiers named TEST in normal ST programs.
+ *
+ * Test keywords are inserted before the normal keywords section so they
+ * have higher priority than Identifier.
+ */
+export const allTestTokens = [
+  // Whitespace and comments (skipped)
+  WhiteSpace,
+  Comment,
+
+  // External code pragma
+  ExternalPragma,
+
+  // Multi-character operators (before single-character)
+  DoubleDot,
+  Power,
+  RefAssign,
+  Assign,
+  OutputAssign,
+  NotEqual,
+  LessEqual,
+  GreaterEqual,
+
+  // Test-specific keywords (before normal keywords and Identifier)
+  END_TEST,
+  TEST,
+  ASSERT_EQ,
+  ASSERT_TRUE,
+  ASSERT_FALSE,
+
+  // Keywords (before Identifier) - same order as allTokens
+  END_PROGRAM,
+  END_FUNCTION_BLOCK,
+  END_FUNCTION,
+  END_CONFIGURATION,
+  END_RESOURCE,
+  END_STRUCT,
+  END_TYPE,
+  END_VAR,
+  END_IF,
+  END_CASE,
+  END_FOR,
+  END_WHILE,
+  END_REPEAT,
+  FUNCTION_BLOCK,
+  FUNCTION,
+  PROGRAM,
+  CONFIGURATION,
+  RESOURCE,
+  VAR_INPUT,
+  VAR_OUTPUT,
+  VAR_IN_OUT,
+  VAR_EXTERNAL,
+  VAR_GLOBAL,
+  VAR_TEMP,
+  VAR_INST,
+  VAR,
+  CONSTANT,
+  RETAIN,
+  TYPE,
+  STRUCT,
+  ARRAY,
+  OF,
+  AT,
+  TASK,
+  WITH,
+  ON,
+  IF,
+  THEN,
+  ELSIF,
+  ELSE,
+  CASE,
+  FOR,
+  TO,
+  BY,
+  DO,
+  WHILE,
+  REPEAT,
+  UNTIL,
+  EXIT,
+  RETURN,
+  TRUE,
+  FALSE,
+  AND,
+  OR,
+  XOR,
+  NOT,
+  MOD,
+  REFERENCE_TO,
+  REF_TO,
+  DREF,
+  REF,
+  NULL,
+  __NEW,
+  __DELETE,
+  END_METHOD,
+  END_INTERFACE,
+  END_PROPERTY,
+  END_GET,
+  END_SET,
+  METHOD,
+  INTERFACE,
+  EXTENDS,
+  IMPLEMENTS,
+  THIS,
+  SUPER,
+  PROPERTY,
+  GET,
+  SET,
+  ABSTRACT,
+  FINAL,
+  OVERRIDE,
+  PUBLIC,
+  PRIVATE,
+  PROTECTED,
+
+  // Literals
+  TimeLiteral,
+  DateTimeLiteral,
+  DateLiteral,
+  TimeOfDayLiteral,
+  RealLiteral,
+  IntegerLiteral,
+  StringLiteral,
+  WideStringLiteral,
+  DirectAddress,
+
+  // Single-character operators and punctuation
+  Colon,
+  Semicolon,
+  Comma,
+  Dot,
+  LParen,
+  RParen,
+  LBracket,
+  RBracket,
+  Equal,
+  Less,
+  Greater,
+  Plus,
+  Minus,
+  Star,
+  Slash,
+  Caret,
+  Ampersand,
+
+  // Identifier (last)
+  Identifier,
+];
+
+/**
+ * The STruC++ test file lexer instance.
+ * Uses allTestTokens which includes TEST/END_TEST/ASSERT_* tokens.
+ */
+export const TestLexer = new Lexer(allTestTokens);
+
+/**
  * Check for unclosed block comments in source code.
  * Returns error info if an unclosed comment is found.
  */
@@ -836,6 +1030,33 @@ export function tokenize(source: string): ReturnType<typeof STLexer.tokenize> {
   const unclosedComment = findUnclosedBlockComment(source);
 
   const result = STLexer.tokenize(source);
+
+  if (unclosedComment) {
+    result.errors.push({
+      offset: unclosedComment.offset,
+      line: unclosedComment.line,
+      column: unclosedComment.column,
+      length: 2,
+      message: "Unclosed block comment",
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Tokenize test file source code using the test lexer.
+ * Identical to tokenize() but uses TestLexer (which recognizes TEST/ASSERT_* tokens).
+ *
+ * @param source - The test file source code to tokenize
+ * @returns Lexer result with tokens and any lexing errors
+ */
+export function tokenizeTest(
+  source: string,
+): ReturnType<typeof TestLexer.tokenize> {
+  const unclosedComment = findUnclosedBlockComment(source);
+
+  const result = TestLexer.tokenize(source);
 
   if (unclosedComment) {
     result.errors.push({

@@ -15,8 +15,8 @@ import * as tokens from "./lexer.js";
  * transformed into an Abstract Syntax Tree (AST) by the visitor.
  */
 export class STParser extends CstParser {
-  constructor() {
-    super(tokens.allTokens, {
+  constructor(tokenVocabulary?: import("chevrotain").TokenType[]) {
+    super(tokenVocabulary ?? tokens.allTokens, {
       recoveryEnabled: true,
       maxLookahead: 3,
     });
@@ -745,6 +745,10 @@ export class STParser extends CstParser {
           ALT: () => this.SUBRULE(this.externalCodePragma),
           GATE: () => this.LA(1).tokenType === tokens.ExternalPragma,
         },
+        {
+          ALT: () => this.SUBRULE(this.assertCall),
+          GATE: () => this.isAssertAhead(),
+        },
       ],
       IGNORE_AMBIGUITIES: true,
     });
@@ -1419,12 +1423,100 @@ export class STParser extends CstParser {
       { ALT: () => this.CONSUME(tokens.NULL) },
     ]);
   });
+
+  // ==========================================================================
+  // Test file rules (used only when parsing test files)
+  // ==========================================================================
+
+  /**
+   * Top-level rule for test files: one or more TEST blocks
+   */
+  public testFile = this.RULE("testFile", () => {
+    this.MANY(() => {
+      this.SUBRULE(this.testCase);
+    });
+  });
+
+  /**
+   * Individual TEST block
+   */
+  public testCase = this.RULE("testCase", () => {
+    this.CONSUME(tokens.TEST);
+    this.CONSUME(tokens.StringLiteral); // Test name
+    this.MANY(() => {
+      this.SUBRULE(this.varBlock);
+    });
+    this.SUBRULE(this.testStatementList);
+    this.CONSUME(tokens.END_TEST);
+  });
+
+  /**
+   * List of statements inside a test block (includes assert calls)
+   */
+  public testStatementList = this.RULE("testStatementList", () => {
+    this.MANY(() => {
+      this.SUBRULE(this.testStatement);
+    });
+  });
+
+  /**
+   * Single statement inside a test block: either an assert call or a regular statement
+   */
+  public testStatement = this.RULE("testStatement", () => {
+    this.OR({
+      DEF: [
+        {
+          ALT: () => this.SUBRULE(this.assertCall),
+          GATE: () => this.isAssertAhead(),
+        },
+        { ALT: () => this.SUBRULE(this.statement) },
+      ],
+      IGNORE_AMBIGUITIES: true,
+    });
+  });
+
+  /**
+   * Assert function call
+   */
+  public assertCall = this.RULE("assertCall", () => {
+    this.OR([
+      { ALT: () => this.CONSUME(tokens.ASSERT_EQ) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_TRUE) },
+      { ALT: () => this.CONSUME(tokens.ASSERT_FALSE) },
+    ]);
+    this.CONSUME(tokens.LParen);
+    this.SUBRULE(this.expression);
+    this.MANY(() => {
+      this.CONSUME(tokens.Comma);
+      this.SUBRULE2(this.expression);
+    });
+    this.CONSUME(tokens.RParen);
+    this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
+   * Lookahead helper to detect if next token is an ASSERT_* keyword
+   */
+  private isAssertAhead(): boolean {
+    const t = this.LA(1).tokenType;
+    return (
+      t === tokens.ASSERT_EQ ||
+      t === tokens.ASSERT_TRUE ||
+      t === tokens.ASSERT_FALSE
+    );
+  }
 }
 
 /**
- * Singleton parser instance.
+ * Singleton parser instance for source files.
  */
 export const parser = new STParser();
+
+/**
+ * Singleton parser instance for test files.
+ * Uses the test token list which includes TEST/END_TEST/ASSERT_* tokens.
+ */
+export const testParser = new STParser(tokens.allTestTokens);
 
 /**
  * Parse ST source code into a CST.
@@ -1451,5 +1543,33 @@ export function parse(source: string): {
   return {
     cst,
     errors: parser.errors,
+  };
+}
+
+/**
+ * Parse a test file into a CST using the test lexer/parser.
+ *
+ * @param source - The test file source code to parse
+ * @returns Parse result with CST and any errors
+ */
+export function parseTestSource(source: string): {
+  cst: CstNode | null;
+  errors: unknown[];
+} {
+  const lexResult = tokens.tokenizeTest(source);
+
+  if (lexResult.errors.length > 0) {
+    return {
+      cst: null,
+      errors: lexResult.errors,
+    };
+  }
+
+  testParser.input = lexResult.tokens;
+  const cst = testParser.testFile();
+
+  return {
+    cst,
+    errors: testParser.errors,
   };
 }

@@ -402,7 +402,8 @@ export type Statement =
   | ReturnStatement
   | FunctionCallStatement
   | ExternalCodePragma
-  | DeleteStatement;
+  | DeleteStatement
+  | AssertCall;
 
 /**
  * Assignment statement
@@ -706,6 +707,48 @@ export interface NewExpression extends TypedNode {
   allocationType: TypeReference;
   arraySize?: Expression;
 }
+
+// =============================================================================
+// Test Framework Types
+// =============================================================================
+
+/**
+ * Root node representing a parsed test file.
+ */
+export interface TestFile {
+  fileName: string;
+  testCases: TestCase[];
+}
+
+/**
+ * A single TEST block.
+ */
+export interface TestCase {
+  name: string;
+  varBlocks: VarBlock[];
+  body: TestStatement[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * Assert function type
+ */
+export type AssertType = "ASSERT_EQ" | "ASSERT_TRUE" | "ASSERT_FALSE";
+
+/**
+ * Assert function call within a test block.
+ */
+export interface AssertCall extends ASTNode {
+  kind: "AssertCall";
+  assertType: AssertType;
+  args: Expression[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * A statement within a test block (either a regular statement or an assert call).
+ */
+export type TestStatement = Statement | AssertCall;
 
 // =============================================================================
 // Factory Functions
