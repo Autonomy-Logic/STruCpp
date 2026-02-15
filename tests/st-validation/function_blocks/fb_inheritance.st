@@ -1,0 +1,20 @@
+FUNCTION_BLOCK Base
+  VAR
+    _val : INT;
+  END_VAR
+
+  METHOD PUBLIC SetValue
+    VAR_INPUT v : INT; END_VAR
+    _val := v;
+  END_METHOD
+
+  METHOD PUBLIC GetValue : INT
+    GetValue := _val;
+  END_METHOD
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Derived EXTENDS Base
+  METHOD PUBLIC DoubleIt
+    _val := _val * 2;
+  END_METHOD
+END_FUNCTION_BLOCK
