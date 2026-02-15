@@ -1,6 +1,6 @@
 # Phase 5.1: Function Block Instances and Invocations
 
-**Status**: PARTIAL
+**Status**: COMPLETE
 **Duration**: 3-4 weeks
 **Goal**: Complete Function Block support by adding FB instantiation, invocation (call) syntax, and member access
 

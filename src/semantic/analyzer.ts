@@ -8,10 +8,13 @@
 import type {
   CompilationUnit,
   ElementaryType,
+  Expression,
   FunctionBlockDeclaration,
+  MethodDeclaration,
   VarBlock,
   VarDeclaration,
   Statement,
+  Visibility,
 } from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
 import { SymbolTables } from "./symbol-table.js";
@@ -405,6 +408,15 @@ export class SemanticAnalyzer {
     // Validate OOP modifier contradictions
     this.validateOOPModifiers(ast);
 
+    // Validate abstract FB instantiation
+    this.validateAbstractInstantiation(ast);
+
+    // Validate property write access (read-only check)
+    this.validatePropertyAccess(ast);
+
+    // Validate access modifier enforcement
+    this.validateAccessModifiers(ast);
+
     // TODO: Implement additional semantic validation in Phase 3+
     // - Check that variables are declared before use
     // - Validate array bounds
@@ -715,8 +727,20 @@ export class SemanticAnalyzer {
         );
       }
 
-      // Collect parent method names for OVERRIDE validation
-      const parentMethodNames = this.collectParentMethods(fb, fbMap);
+      // Collect parent methods for OVERRIDE / FINAL validation
+      const parentMethods = this.collectParentMethods(fb, fbMap);
+
+      // Cannot extend a FINAL FB
+      if (fb.extends) {
+        const parentFB = fbMap.get(fb.extends.toUpperCase());
+        if (parentFB && parentFB.isFinal) {
+          this.addError(
+            `Cannot extend FINAL FUNCTION_BLOCK '${fb.extends}'.`,
+            fb.sourceSpan.startLine,
+            fb.sourceSpan.startCol,
+          );
+        }
+      }
 
       // ABSTRACT method in non-abstract FB is an error
       for (const method of fb.methods) {
@@ -738,7 +762,7 @@ export class SemanticAnalyzer {
           );
         }
 
-        // OVERRIDE without a parent method
+        // OVERRIDE validation
         if (method.isOverride) {
           if (!fb.extends) {
             this.addError(
@@ -746,12 +770,26 @@ export class SemanticAnalyzer {
               method.sourceSpan.startLine,
               method.sourceSpan.startCol,
             );
-          } else if (!parentMethodNames.has(method.name.toUpperCase())) {
-            this.addError(
-              `Method '${method.name}' in '${fb.name}' is marked OVERRIDE but no method '${method.name}' exists in parent '${fb.extends}'.`,
-              method.sourceSpan.startLine,
-              method.sourceSpan.startCol,
-            );
+          } else {
+            const parentMethod = parentMethods.get(method.name.toUpperCase());
+            if (!parentMethod) {
+              this.addError(
+                `Method '${method.name}' in '${fb.name}' is marked OVERRIDE but no method '${method.name}' exists in parent '${fb.extends}'.`,
+                method.sourceSpan.startLine,
+                method.sourceSpan.startCol,
+              );
+            } else {
+              // Cannot override a FINAL method
+              if (parentMethod.isFinal) {
+                this.addError(
+                  `Cannot override FINAL method '${method.name}' from '${fb.extends}'.`,
+                  method.sourceSpan.startLine,
+                  method.sourceSpan.startCol,
+                );
+              }
+              // Signature must match parent
+              this.validateOverrideSignature(method, parentMethod, fb.name, fb.extends);
+            }
           }
         }
       }
@@ -763,7 +801,7 @@ export class SemanticAnalyzer {
           fbMethodNames.add(m.name.toUpperCase());
         }
         // Include inherited methods
-        for (const name of parentMethodNames) {
+        for (const name of parentMethods.keys()) {
           fbMethodNames.add(name);
         }
 
@@ -786,13 +824,14 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * Collect all method names from the parent chain of a function block.
+   * Collect all methods from the parent chain of a function block.
+   * Returns a map of uppercase method name → nearest parent MethodDeclaration.
    */
   private collectParentMethods(
     fb: FunctionBlockDeclaration,
     fbMap: Map<string, FunctionBlockDeclaration>,
-  ): Set<string> {
-    const methods = new Set<string>();
+  ): Map<string, MethodDeclaration> {
+    const methods = new Map<string, MethodDeclaration>();
     let current = fb.extends;
     const visited = new Set<string>(); // prevent infinite loops on circular extends
     while (current) {
@@ -802,11 +841,729 @@ export class SemanticAnalyzer {
       const parent = fbMap.get(upper);
       if (!parent) break;
       for (const m of parent.methods) {
-        methods.add(m.name.toUpperCase());
+        const key = m.name.toUpperCase();
+        // Only store the nearest parent's version (first encountered wins)
+        if (!methods.has(key)) {
+          methods.set(key, m);
+        }
       }
       current = parent.extends;
     }
     return methods;
+  }
+
+  /**
+   * Validate that an OVERRIDE method has the same signature as the parent method.
+   */
+  private validateOverrideSignature(
+    method: MethodDeclaration,
+    parentMethod: MethodDeclaration,
+    fbName: string,
+    parentFBName: string,
+  ): void {
+    // Extract VAR_INPUT parameters from both methods
+    const childParams = this.extractMethodParams(method);
+    const parentParams = this.extractMethodParams(parentMethod);
+
+    // Compare parameter count and types
+    const childSig = childParams.map((p) => p.type).join(", ") || "void";
+    const parentSig = parentParams.map((p) => p.type).join(", ") || "void";
+
+    let mismatch = false;
+    if (childParams.length !== parentParams.length) {
+      mismatch = true;
+    } else {
+      for (let i = 0; i < childParams.length; i++) {
+        if (
+          childParams[i]!.type.toUpperCase() !==
+          parentParams[i]!.type.toUpperCase()
+        ) {
+          mismatch = true;
+          break;
+        }
+      }
+    }
+
+    // Compare return types
+    const childReturn = method.returnType?.name?.toUpperCase() ?? "";
+    const parentReturn = parentMethod.returnType?.name?.toUpperCase() ?? "";
+    if (childReturn !== parentReturn) {
+      mismatch = true;
+    }
+
+    if (mismatch) {
+      const childRetStr = method.returnType?.name ?? "void";
+      const parentRetStr = parentMethod.returnType?.name ?? "void";
+      this.addError(
+        `Method '${method.name}' in '${fbName}' has different signature than parent method in '${parentFBName}'. ` +
+          `Expected: (${parentSig}) : ${parentRetStr}, got: (${childSig}) : ${childRetStr}.`,
+        method.sourceSpan.startLine,
+        method.sourceSpan.startCol,
+      );
+    }
+  }
+
+  /**
+   * Extract VAR_INPUT parameter names and types from a method declaration.
+   */
+  private extractMethodParams(
+    method: MethodDeclaration,
+  ): Array<{ name: string; type: string }> {
+    const params: Array<{ name: string; type: string }> = [];
+    for (const block of method.varBlocks) {
+      if (block.blockType === "VAR_INPUT") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            params.push({ name, type: decl.type.name });
+          }
+        }
+      }
+    }
+    return params;
+  }
+
+  /**
+   * Validate that abstract function blocks are not instantiated directly.
+   */
+  private validateAbstractInstantiation(ast: CompilationUnit): void {
+    // Build set of abstract FB names
+    const abstractFBs = new Set<string>();
+    for (const fb of ast.functionBlocks) {
+      if (fb.isAbstract) {
+        abstractFBs.add(fb.name.toUpperCase());
+      }
+    }
+    if (abstractFBs.size === 0) return;
+
+    // Check variable declarations in programs
+    for (const prog of ast.programs) {
+      this.checkVarBlocksForAbstractInstantiation(
+        prog.varBlocks,
+        abstractFBs,
+      );
+    }
+
+    // Check variable declarations in function blocks
+    for (const fb of ast.functionBlocks) {
+      this.checkVarBlocksForAbstractInstantiation(fb.varBlocks, abstractFBs);
+    }
+
+    // Check variable declarations in functions
+    for (const func of ast.functions) {
+      this.checkVarBlocksForAbstractInstantiation(func.varBlocks, abstractFBs);
+    }
+  }
+
+  /**
+   * Check var blocks for instantiation of abstract FBs.
+   */
+  private checkVarBlocksForAbstractInstantiation(
+    varBlocks: VarBlock[],
+    abstractFBs: Set<string>,
+  ): void {
+    for (const block of varBlocks) {
+      for (const decl of block.declarations) {
+        if (abstractFBs.has(decl.type.name.toUpperCase())) {
+          this.addError(
+            `Cannot instantiate ABSTRACT FUNCTION_BLOCK '${decl.type.name}'.`,
+            decl.sourceSpan.startLine,
+            decl.sourceSpan.startCol,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Validate that properties without setters are not written to.
+   * Best-effort check for direct `x.Property := value;` assignments.
+   */
+  private validatePropertyAccess(ast: CompilationUnit): void {
+    // Build property info map: "FBNAME.PROPNAME" → { hasSetter }
+    const propertyInfo = new Map<string, { hasSetter: boolean }>();
+    for (const fb of ast.functionBlocks) {
+      for (const prop of fb.properties) {
+        const key = `${fb.name.toUpperCase()}.${prop.name.toUpperCase()}`;
+        propertyInfo.set(key, { hasSetter: prop.setter !== undefined });
+      }
+    }
+    if (propertyInfo.size === 0) return;
+
+    // Build a map of variable name (uppercase) → FB type name (uppercase) for each scope
+    const checkStatementsInScope = (
+      stmts: Statement[],
+      varTypeMap: Map<string, string>,
+    ) => {
+      this.walkStatementsForPropertyWrites(stmts, varTypeMap, propertyInfo);
+    };
+
+    // Check programs
+    for (const prog of ast.programs) {
+      const varTypeMap = this.buildVarTypeMap(prog.varBlocks);
+      checkStatementsInScope(prog.body, varTypeMap);
+    }
+
+    // Check function blocks (body and method bodies)
+    for (const fb of ast.functionBlocks) {
+      const varTypeMap = this.buildVarTypeMap(fb.varBlocks);
+      checkStatementsInScope(fb.body, varTypeMap);
+      for (const method of fb.methods) {
+        const methodVarMap = new Map(varTypeMap);
+        // Add method-local vars
+        for (const [k, v] of this.buildVarTypeMap(method.varBlocks)) {
+          methodVarMap.set(k, v);
+        }
+        checkStatementsInScope(method.body, methodVarMap);
+      }
+    }
+
+    // Check functions
+    for (const func of ast.functions) {
+      const varTypeMap = this.buildVarTypeMap(func.varBlocks);
+      checkStatementsInScope(func.body, varTypeMap);
+    }
+  }
+
+  /**
+   * Build a map of variable name (uppercase) → type name (uppercase) from var blocks.
+   */
+  private buildVarTypeMap(varBlocks: VarBlock[]): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const block of varBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          map.set(name.toUpperCase(), decl.type.name.toUpperCase());
+        }
+      }
+    }
+    return map;
+  }
+
+  /**
+   * Walk statements looking for assignments to read-only properties.
+   */
+  private walkStatementsForPropertyWrites(
+    stmts: Statement[],
+    varTypeMap: Map<string, string>,
+    propertyInfo: Map<string, { hasSetter: boolean }>,
+  ): void {
+    for (const stmt of stmts) {
+      if (stmt.kind === "AssignmentStatement") {
+        const target = stmt.target;
+        // Check for x.Property := value pattern
+        if (
+          target.kind === "VariableExpression" &&
+          target.fieldAccess.length === 1
+        ) {
+          const varType = varTypeMap.get(target.name.toUpperCase());
+          if (varType) {
+            const fieldName = target.fieldAccess[0]!;
+            const propKey = `${varType}.${fieldName.toUpperCase()}`;
+            const info = propertyInfo.get(propKey);
+            if (info && !info.hasSetter) {
+              this.addError(
+                `Property '${fieldName}' of '${varType}' is read-only (no SET accessor).`,
+                stmt.sourceSpan.startLine,
+                stmt.sourceSpan.startCol,
+              );
+            }
+          }
+        }
+      }
+      // Recurse into control flow
+      this.recurseStatementsForPropertyWrites(stmt, varTypeMap, propertyInfo);
+    }
+  }
+
+  /**
+   * Recurse into control flow statements for property write checks.
+   */
+  private recurseStatementsForPropertyWrites(
+    stmt: Statement,
+    varTypeMap: Map<string, string>,
+    propertyInfo: Map<string, { hasSetter: boolean }>,
+  ): void {
+    if (stmt.kind === "IfStatement") {
+      const s = stmt as unknown as {
+        thenStatements: Statement[];
+        elsifClauses: Array<{ statements: Statement[] }>;
+        elseStatements: Statement[];
+      };
+      this.walkStatementsForPropertyWrites(
+        s.thenStatements,
+        varTypeMap,
+        propertyInfo,
+      );
+      for (const clause of s.elsifClauses) {
+        this.walkStatementsForPropertyWrites(
+          clause.statements,
+          varTypeMap,
+          propertyInfo,
+        );
+      }
+      this.walkStatementsForPropertyWrites(
+        s.elseStatements,
+        varTypeMap,
+        propertyInfo,
+      );
+    } else if (stmt.kind === "ForStatement") {
+      const s = stmt as unknown as { body: Statement[] };
+      this.walkStatementsForPropertyWrites(s.body, varTypeMap, propertyInfo);
+    } else if (stmt.kind === "WhileStatement") {
+      const s = stmt as unknown as { body: Statement[] };
+      this.walkStatementsForPropertyWrites(s.body, varTypeMap, propertyInfo);
+    } else if (stmt.kind === "RepeatStatement") {
+      const s = stmt as unknown as { body: Statement[] };
+      this.walkStatementsForPropertyWrites(s.body, varTypeMap, propertyInfo);
+    } else if (stmt.kind === "CaseStatement") {
+      const s = stmt as unknown as {
+        cases: Array<{ statements: Statement[] }>;
+        elseStatements: Statement[];
+      };
+      for (const c of s.cases) {
+        this.walkStatementsForPropertyWrites(
+          c.statements,
+          varTypeMap,
+          propertyInfo,
+        );
+      }
+      this.walkStatementsForPropertyWrites(
+        s.elseStatements,
+        varTypeMap,
+        propertyInfo,
+      );
+    }
+  }
+
+  /**
+   * Validate access modifier enforcement for method calls.
+   * PRIVATE methods only callable from within same FB.
+   * PROTECTED only from same FB or derived FBs.
+   */
+  private validateAccessModifiers(ast: CompilationUnit): void {
+    // Build method visibility map: "FBNAME.METHODNAME" → Visibility
+    const methodVisibility = new Map<string, Visibility>();
+    for (const fb of ast.functionBlocks) {
+      for (const method of fb.methods) {
+        const key = `${fb.name.toUpperCase()}.${method.name.toUpperCase()}`;
+        methodVisibility.set(key, method.visibility);
+      }
+    }
+
+    // Build inheritance chain: FB name → set of ancestor FB names (uppercase)
+    const fbMap = new Map<string, FunctionBlockDeclaration>();
+    for (const fb of ast.functionBlocks) {
+      fbMap.set(fb.name.toUpperCase(), fb);
+    }
+
+    const getAncestors = (fbName: string): Set<string> => {
+      const ancestors = new Set<string>();
+      let current = fbMap.get(fbName.toUpperCase())?.extends;
+      const visited = new Set<string>();
+      while (current) {
+        const upper = current.toUpperCase();
+        if (visited.has(upper)) break;
+        visited.add(upper);
+        ancestors.add(upper);
+        current = fbMap.get(upper)?.extends;
+      }
+      return ancestors;
+    };
+
+    // Check method calls in programs (caller context: not in any FB)
+    for (const prog of ast.programs) {
+      const varTypeMap = this.buildVarTypeMap(prog.varBlocks);
+      this.walkStatementsForAccessViolations(
+        prog.body,
+        varTypeMap,
+        methodVisibility,
+        null,
+        getAncestors,
+      );
+    }
+
+    // Check method calls in functions
+    for (const func of ast.functions) {
+      const varTypeMap = this.buildVarTypeMap(func.varBlocks);
+      this.walkStatementsForAccessViolations(
+        func.body,
+        varTypeMap,
+        methodVisibility,
+        null,
+        getAncestors,
+      );
+    }
+
+    // Check method calls in FBs and their methods
+    for (const fb of ast.functionBlocks) {
+      const varTypeMap = this.buildVarTypeMap(fb.varBlocks);
+      this.walkStatementsForAccessViolations(
+        fb.body,
+        varTypeMap,
+        methodVisibility,
+        fb.name.toUpperCase(),
+        getAncestors,
+      );
+      for (const method of fb.methods) {
+        const methodVarMap = new Map(varTypeMap);
+        for (const [k, v] of this.buildVarTypeMap(method.varBlocks)) {
+          methodVarMap.set(k, v);
+        }
+        this.walkStatementsForAccessViolations(
+          method.body,
+          methodVarMap,
+          methodVisibility,
+          fb.name.toUpperCase(),
+          getAncestors,
+        );
+      }
+    }
+  }
+
+  /**
+   * Walk statements looking for method calls that violate access modifiers.
+   */
+  private walkStatementsForAccessViolations(
+    stmts: Statement[],
+    varTypeMap: Map<string, string>,
+    methodVisibility: Map<string, Visibility>,
+    callerFB: string | null, // uppercase name of the FB we're inside, or null
+    getAncestors: (fbName: string) => Set<string>,
+  ): void {
+    for (const stmt of stmts) {
+      // Check method calls in FunctionCallStatement
+      if (stmt.kind === "FunctionCallStatement") {
+        const fcStmt = stmt as unknown as {
+          call: {
+            kind: string;
+            functionName?: string;
+            object?: Expression;
+            methodName?: string;
+            arguments: Array<{ value: Expression }>;
+            sourceSpan: { startLine: number; startCol: number };
+          };
+        };
+        // Handle dotted FunctionCallExpression: m.Method() → functionName = "m.Method"
+        if (
+          fcStmt.call.kind === "FunctionCallExpression" &&
+          fcStmt.call.functionName?.includes(".")
+        ) {
+          this.checkDottedFunctionCallAccess(
+            fcStmt.call.functionName,
+            fcStmt.call.sourceSpan,
+            varTypeMap,
+            methodVisibility,
+            callerFB,
+            getAncestors,
+          );
+        }
+        // Handle MethodCallExpression: chained calls
+        if (fcStmt.call.kind === "MethodCallExpression") {
+          this.checkMethodCallAccess(
+            fcStmt.call as {
+              object: Expression;
+              methodName: string;
+              sourceSpan: { startLine: number; startCol: number };
+            },
+            varTypeMap,
+            methodVisibility,
+            callerFB,
+            getAncestors,
+          );
+        }
+      }
+
+      // Check assignment RHS for method calls
+      if (stmt.kind === "AssignmentStatement") {
+        const value = (stmt as { value: Expression }).value;
+        this.walkExpressionForAccessViolations(
+          value,
+          varTypeMap,
+          methodVisibility,
+          callerFB,
+          getAncestors,
+        );
+      }
+
+      // Recurse into control flow
+      this.recurseStatementsForAccessViolations(
+        stmt,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    }
+  }
+
+  /**
+   * Walk an expression tree looking for method calls that violate access modifiers.
+   */
+  private walkExpressionForAccessViolations(
+    expr: Expression,
+    varTypeMap: Map<string, string>,
+    methodVisibility: Map<string, Visibility>,
+    callerFB: string | null,
+    getAncestors: (fbName: string) => Set<string>,
+  ): void {
+    if (expr.kind === "MethodCallExpression") {
+      this.checkMethodCallAccess(
+        expr as {
+          object: Expression;
+          methodName: string;
+          sourceSpan: { startLine: number; startCol: number };
+        },
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+      // Also check arguments
+      const args = (expr as { arguments: Array<{ value: Expression }> })
+        .arguments;
+      for (const arg of args) {
+        this.walkExpressionForAccessViolations(
+          arg.value,
+          varTypeMap,
+          methodVisibility,
+          callerFB,
+          getAncestors,
+        );
+      }
+    } else if (expr.kind === "FunctionCallExpression") {
+      const args = (expr as { arguments: Array<{ value: Expression }> })
+        .arguments;
+      for (const arg of args) {
+        this.walkExpressionForAccessViolations(
+          arg.value,
+          varTypeMap,
+          methodVisibility,
+          callerFB,
+          getAncestors,
+        );
+      }
+    } else if (expr.kind === "BinaryExpression") {
+      const bin = expr as { left: Expression; right: Expression };
+      this.walkExpressionForAccessViolations(
+        bin.left,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+      this.walkExpressionForAccessViolations(
+        bin.right,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    } else if (expr.kind === "UnaryExpression") {
+      const un = expr as { operand: Expression };
+      this.walkExpressionForAccessViolations(
+        un.operand,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    } else if (expr.kind === "ParenthesizedExpression") {
+      const paren = expr as { expression: Expression };
+      this.walkExpressionForAccessViolations(
+        paren.expression,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    }
+  }
+
+  /**
+   * Check a dotted FunctionCallExpression (e.g., functionName="m.InternalCalc")
+   * for access modifier violations.
+   */
+  private checkDottedFunctionCallAccess(
+    functionName: string,
+    sourceSpan: { startLine: number; startCol: number },
+    varTypeMap: Map<string, string>,
+    methodVisibility: Map<string, Visibility>,
+    callerFB: string | null,
+    getAncestors: (fbName: string) => Set<string>,
+  ): void {
+    const dotIndex = functionName.indexOf(".");
+    if (dotIndex < 0) return;
+    const objName = functionName.substring(0, dotIndex);
+    const methodName = functionName.substring(dotIndex + 1);
+
+    const calleeFBType = varTypeMap.get(objName.toUpperCase());
+    if (!calleeFBType) return;
+
+    const visKey = `${calleeFBType}.${methodName.toUpperCase()}`;
+    const visibility = methodVisibility.get(visKey);
+    if (!visibility) return;
+
+    if (visibility === "PRIVATE") {
+      if (callerFB !== calleeFBType) {
+        this.addError(
+          `Cannot call PRIVATE method '${methodName}' of '${calleeFBType}' from outside '${calleeFBType}'.`,
+          sourceSpan.startLine,
+          sourceSpan.startCol,
+        );
+      }
+    } else if (visibility === "PROTECTED") {
+      if (callerFB !== calleeFBType) {
+        const ancestors = callerFB
+          ? getAncestors(callerFB)
+          : new Set<string>();
+        if (!ancestors.has(calleeFBType)) {
+          this.addError(
+            `Cannot call PROTECTED method '${methodName}' of '${calleeFBType}' from '${callerFB ?? "PROGRAM"}'.`,
+            sourceSpan.startLine,
+            sourceSpan.startCol,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Check a single method call for access modifier violations.
+   */
+  private checkMethodCallAccess(
+    call: {
+      object: Expression;
+      methodName: string;
+      sourceSpan: { startLine: number; startCol: number };
+    },
+    varTypeMap: Map<string, string>,
+    methodVisibility: Map<string, Visibility>,
+    callerFB: string | null,
+    getAncestors: (fbName: string) => Set<string>,
+  ): void {
+    // Only handle obj.Method() where obj is a simple VariableExpression
+    if (call.object.kind !== "VariableExpression") return;
+    const varExpr = call.object as { name: string; fieldAccess: string[] };
+    if (varExpr.fieldAccess.length > 0) return; // skip chained access for now
+
+    const calleeFBType = varTypeMap.get(varExpr.name.toUpperCase());
+    if (!calleeFBType) return;
+
+    const visKey = `${calleeFBType}.${call.methodName.toUpperCase()}`;
+    const visibility = methodVisibility.get(visKey);
+    if (!visibility) return;
+
+    if (visibility === "PRIVATE") {
+      if (callerFB !== calleeFBType) {
+        this.addError(
+          `Cannot call PRIVATE method '${call.methodName}' of '${calleeFBType}' from outside '${calleeFBType}'.`,
+          call.sourceSpan.startLine,
+          call.sourceSpan.startCol,
+        );
+      }
+    } else if (visibility === "PROTECTED") {
+      if (callerFB !== calleeFBType) {
+        // Check if caller is a derived FB
+        const ancestors = callerFB ? getAncestors(callerFB) : new Set<string>();
+        if (!ancestors.has(calleeFBType)) {
+          this.addError(
+            `Cannot call PROTECTED method '${call.methodName}' of '${calleeFBType}' from '${callerFB ?? "PROGRAM"}'.`,
+            call.sourceSpan.startLine,
+            call.sourceSpan.startCol,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Recurse into control flow statements for access violation checks.
+   */
+  private recurseStatementsForAccessViolations(
+    stmt: Statement,
+    varTypeMap: Map<string, string>,
+    methodVisibility: Map<string, Visibility>,
+    callerFB: string | null,
+    getAncestors: (fbName: string) => Set<string>,
+  ): void {
+    if (stmt.kind === "IfStatement") {
+      const s = stmt as unknown as {
+        thenStatements: Statement[];
+        elsifClauses: Array<{ statements: Statement[] }>;
+        elseStatements: Statement[];
+      };
+      this.walkStatementsForAccessViolations(
+        s.thenStatements,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+      for (const clause of s.elsifClauses) {
+        this.walkStatementsForAccessViolations(
+          clause.statements,
+          varTypeMap,
+          methodVisibility,
+          callerFB,
+          getAncestors,
+        );
+      }
+      this.walkStatementsForAccessViolations(
+        s.elseStatements,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    } else if (stmt.kind === "ForStatement") {
+      const s = stmt as unknown as { body: Statement[] };
+      this.walkStatementsForAccessViolations(
+        s.body,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    } else if (stmt.kind === "WhileStatement") {
+      const s = stmt as unknown as { body: Statement[] };
+      this.walkStatementsForAccessViolations(
+        s.body,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    } else if (stmt.kind === "RepeatStatement") {
+      const s = stmt as unknown as { body: Statement[] };
+      this.walkStatementsForAccessViolations(
+        s.body,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    } else if (stmt.kind === "CaseStatement") {
+      const s = stmt as unknown as {
+        cases: Array<{ statements: Statement[] }>;
+        elseStatements: Statement[];
+      };
+      for (const c of s.cases) {
+        this.walkStatementsForAccessViolations(
+          c.statements,
+          varTypeMap,
+          methodVisibility,
+          callerFB,
+          getAncestors,
+        );
+      }
+      this.walkStatementsForAccessViolations(
+        s.elseStatements,
+        varTypeMap,
+        methodVisibility,
+        callerFB,
+        getAncestors,
+      );
+    }
   }
 
   /**
