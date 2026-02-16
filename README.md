@@ -66,22 +66,30 @@ END_FUNCTION_BLOCK
 ```cpp
 // counter.hpp
 namespace strucpp {
+
 class Counter {
 public:
+    // Inputs
     IEC_BOOL enable;
     IEC_BOOL reset;
+    // Outputs
     IEC_INT count;
+
     Counter();
     void operator()();
     virtual ~Counter() = default;
 };
+
 }  // namespace strucpp
 ```
 
 ```cpp
 // counter.cpp
 namespace strucpp {
-Counter::Counter() { }
+
+Counter::Counter() {
+    // Initialize variables
+}
 
 void Counter::operator()() {
     if (reset) {
@@ -90,42 +98,73 @@ void Counter::operator()() {
         count = count + 1;
     }
 }
+
 }  // namespace strucpp
 ```
 
 ### Interactive REPL
 
-The `--build` flag compiles ST source into a standalone binary with an interactive REPL for exploring program behavior:
+The `--build` flag compiles ST source into a standalone binary with an interactive REPL for exploring program behavior. The source must include a PROGRAM with a CONFIGURATION that defines task scheduling:
+
+**Source** (`counter_app.st`):
+
+```iecst
+PROGRAM CounterProg
+  VAR_INPUT
+    enable : BOOL;
+    reset  : BOOL;
+  END_VAR
+  VAR_OUTPUT
+    count : INT;
+  END_VAR
+
+  IF reset THEN
+    count := 0;
+  ELSIF enable THEN
+    count := count + 1;
+  END_IF;
+END_PROGRAM
+
+CONFIGURATION DefaultConfig
+  RESOURCE DefaultResource ON PLC
+    TASK MainTask(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM Counter WITH MainTask : CounterProg;
+  END_RESOURCE
+END_CONFIGURATION
+```
 
 ```bash
-npx strucpp counter.st -o counter.cpp --build
-./counter
+npx strucpp counter_app.st -o counter_app.cpp --build
+./counter_app
 ```
 
 ```
 STruC++ Interactive PLC Test REPL
-Type 'help' for available commands.
+Programs: Counter(3 vars)
+Source: 22 lines loaded
+Type help for commands, Tab for completion, Ctrl+R to search history.
 
-[cycle:0]> programs
+strucpp[0]> programs
   Counter (3 variables)
 
-[cycle:0]> set Counter.enable true
-Counter.enable = TRUE
+strucpp[0]> set Counter.enable true
+  Counter.enable = TRUE
 
-[cycle:0]> run 5
-Executed 5 cycles.
+strucpp[0]> run 5
+Executed 5 cycle(s). Total: 5
 
-[cycle:5]> vars Counter
-  enable   BOOL   TRUE
-  reset    BOOL   FALSE
-  count    INT    5
+strucpp[5]> vars Counter
+  Counter.enable : BOOL = TRUE
+  Counter.reset : BOOL = FALSE
+  Counter.count : INT = 5
 
-[cycle:5]> set Counter.reset true
-[cycle:5]> run
-Executed 1 cycle.
+strucpp[5]> set Counter.reset true
+  Counter.reset = TRUE
+strucpp[5]> run
+Executed 1 cycle(s). Total: 6
 
-[cycle:6]> get Counter.count
-Counter.count = 0
+strucpp[6]> get Counter.count
+  Counter.count : INT = 0
 ```
 
 REPL commands:
@@ -195,6 +234,30 @@ Available assertions: `ASSERT_EQ`, `ASSERT_NEQ`, `ASSERT_TRUE`, `ASSERT_FALSE`, 
 
 The testing framework also supports `SETUP`/`TEARDOWN` blocks, `MOCK`/`MOCK_FUNCTION` for dependency isolation, and `MOCK_VERIFY_CALLED`/`MOCK_VERIFY_CALL_COUNT` for interaction verification.
 
+### Programmatic API
+
+STruC++ can be used as a JavaScript library, making it suitable for embedding in browser-based IDEs and web applications:
+
+```javascript
+import { compile } from 'strucpp';
+
+const source = `
+FUNCTION_BLOCK Counter
+  VAR_INPUT enable : BOOL; END_VAR
+  VAR_OUTPUT count : INT; END_VAR
+  IF enable THEN count := count + 1; END_IF;
+END_FUNCTION_BLOCK
+`;
+
+const result = compile(source);
+// result.success    - whether compilation succeeded
+// result.cppCode    - C++ implementation
+// result.headerCode - C++ header
+// result.errors     - compilation errors (if any)
+```
+
+The compiler has zero native dependencies and runs in any JavaScript environment (Node.js, browsers, Deno, Bun).
+
 ## Compiler Options
 
 ```
@@ -212,6 +275,7 @@ strucpp <input.st> [input2.st ...] -o <output.cpp> [options]
 | `--build` | Build interactive REPL binary |
 | `--test <test.st> [...]` | Run test files against source |
 | `--compile-lib` | Package source as reusable library |
+| `--lib-name <name>` | Library name (required with `--compile-lib`) |
 | `--gpp <path>` | Custom g++ path (for `--build`/`--test`) |
 | `--cxx-flags <flags>` | Extra C++ compiler flags |
 
@@ -239,7 +303,7 @@ npm run dev             # Watch mode
 
 ## License
 
-[GPL-3.0](LICENSE)
+[LGPL-3.0](LICENSE)
 
 ## Acknowledgments
 
