@@ -40,8 +40,7 @@ import { execFileSync } from "child_process";
 import { compile, getVersion, compileLibrary } from "./index.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
 import { parseTestFile } from "./testing/test-parser.js";
-import { generateTestMain } from "./backend/test-main-gen.js";
-import type { POUInfo, FunctionInfo } from "./backend/test-main-gen.js";
+import { generateTestMain, buildPOUInfoFromAST } from "./backend/test-main-gen.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
@@ -453,71 +452,9 @@ function runTestMode(options: CLIOptions): void {
   }
 
   // 2. Build POU info from the compiled AST
-  const pous: POUInfo[] = [];
-  if (result.ast) {
-    for (const prog of result.ast.programs) {
-      const vars = new Map<string, string>();
-      for (const block of prog.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            vars.set(name, decl.type.name);
-          }
-        }
-      }
-      pous.push({
-        name: prog.name,
-        kind: "program",
-        cppClassName: `Program_${prog.name}`,
-        variables: vars,
-      });
-    }
-    for (const fb of result.ast.functionBlocks) {
-      const vars = new Map<string, string>();
-      for (const block of fb.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            vars.set(name, decl.type.name);
-          }
-        }
-      }
-      pous.push({
-        name: fb.name,
-        kind: "functionBlock",
-        cppClassName: fb.name,
-        variables: vars,
-      });
-    }
-    for (const func of result.ast.functions) {
-      pous.push({
-        name: func.name,
-        kind: "function",
-        cppClassName: func.name,
-        variables: new Map(),
-      });
-    }
-  }
-
-  // Build function info for mock dispatch generation
-  const functions: FunctionInfo[] = [];
-  if (result.ast) {
-    for (const func of result.ast.functions) {
-      const params: Array<{ name: string; type: string }> = [];
-      for (const block of func.varBlocks) {
-        if (block.blockType === "VAR_INPUT" || block.blockType === "VAR_IN_OUT") {
-          for (const decl of block.declarations) {
-            for (const name of decl.names) {
-              params.push({ name, type: decl.type.name });
-            }
-          }
-        }
-      }
-      functions.push({
-        name: func.name,
-        returnType: func.returnType.name,
-        parameters: params,
-      });
-    }
-  }
+  const { pous, functions } = result.ast
+    ? buildPOUInfoFromAST(result.ast)
+    : { pous: [], functions: [] };
 
   // 3. Parse test files
   const testFiles: import("./testing/test-model.js").TestFile[] = [];

@@ -12,8 +12,7 @@ import * as path from "path";
 import * as os from "os";
 import { compile } from "../../src/index.js";
 import { parseTestFile } from "../../src/testing/test-parser.js";
-import { generateTestMain } from "../../src/backend/test-main-gen.js";
-import type { POUInfo } from "../../src/backend/test-main-gen.js";
+import { generateTestMain, buildPOUInfoFromAST } from "../../src/backend/test-main-gen.js";
 import { hasGpp, RUNTIME_INCLUDE_PATH } from "./test-helpers.js";
 
 const TEST_RUNTIME_PATH = path.resolve(__dirname, "../../src/runtime/test");
@@ -35,49 +34,9 @@ function runTest(
   }
 
   // 2. Build POU info
-  const pous: POUInfo[] = [];
-  if (result.ast) {
-    for (const prog of result.ast.programs) {
-      const vars = new Map<string, string>();
-      for (const block of prog.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            vars.set(name, decl.type.name);
-          }
-        }
-      }
-      pous.push({
-        name: prog.name,
-        kind: "program",
-        cppClassName: `Program_${prog.name}`,
-        variables: vars,
-      });
-    }
-    for (const fb of result.ast.functionBlocks) {
-      const vars = new Map<string, string>();
-      for (const block of fb.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            vars.set(name, decl.type.name);
-          }
-        }
-      }
-      pous.push({
-        name: fb.name,
-        kind: "functionBlock",
-        cppClassName: fb.name,
-        variables: vars,
-      });
-    }
-    for (const func of result.ast.functions) {
-      pous.push({
-        name: func.name,
-        kind: "function",
-        cppClassName: func.name,
-        variables: new Map(),
-      });
-    }
-  }
+  const { pous } = result.ast
+    ? buildPOUInfoFromAST(result.ast)
+    : { pous: [] };
 
   // 3. Parse test file
   const parseResult = parseTestFile(testST, testFileName);

@@ -122,6 +122,78 @@ export interface TestMainGenOptions {
 }
 
 /**
+ * Build POUInfo and FunctionInfo arrays from a CompilationUnit AST.
+ * Shared helper used by CLI, integration tests, and validation suite.
+ */
+export function buildPOUInfoFromAST(ast: import("../frontend/ast.js").CompilationUnit): {
+  pous: POUInfo[];
+  functions: FunctionInfo[];
+} {
+  const pous: POUInfo[] = [];
+  const functions: FunctionInfo[] = [];
+
+  for (const prog of ast.programs) {
+    const vars = new Map<string, string>();
+    for (const block of prog.varBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          vars.set(name, decl.type.name);
+        }
+      }
+    }
+    pous.push({
+      name: prog.name,
+      kind: "program",
+      cppClassName: `Program_${prog.name}`,
+      variables: vars,
+    });
+  }
+
+  for (const fb of ast.functionBlocks) {
+    const vars = new Map<string, string>();
+    for (const block of fb.varBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          vars.set(name, decl.type.name);
+        }
+      }
+    }
+    pous.push({
+      name: fb.name,
+      kind: "functionBlock",
+      cppClassName: fb.name,
+      variables: vars,
+    });
+  }
+
+  for (const func of ast.functions) {
+    const params: Array<{ name: string; type: string }> = [];
+    for (const block of func.varBlocks) {
+      if (block.blockType === "VAR_INPUT" || block.blockType === "VAR_IN_OUT") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            params.push({ name, type: decl.type.name });
+          }
+        }
+      }
+    }
+    pous.push({
+      name: func.name,
+      kind: "function",
+      cppClassName: func.name,
+      variables: new Map(),
+    });
+    functions.push({
+      name: func.name,
+      returnType: func.returnType.name,
+      parameters: params,
+    });
+  }
+
+  return { pous, functions };
+}
+
+/**
  * Generate the test_main.cpp source code.
  *
  * @param testFiles - Parsed test files
@@ -428,17 +500,27 @@ class TestFunctionGenerator {
       this.generateVarBlock(lines, varBlock);
     }
 
-    // Generate test body statements
-    for (const stmt of tc.body) {
-      this.generateTestStatement(lines, stmt);
-    }
-
-    // Call teardown if present
     if (setupStructName) {
+      // Wrap body in a lambda so assert failures (return false) don't skip teardown
+      lines.push(`${this.indent}bool __passed = [&]() -> bool {`);
+      const savedIndent = this.indent;
+      this.indent += "    ";
+      for (const stmt of tc.body) {
+        this.generateTestStatement(lines, stmt);
+      }
+      lines.push(`${this.indent}return true;`);
+      this.indent = savedIndent;
+      lines.push(`${this.indent}}();`);
       lines.push(`${this.indent}s.teardown();`);
+      lines.push(`${this.indent}return __passed;`);
+    } else {
+      // No teardown: generate body directly with early returns
+      for (const stmt of tc.body) {
+        this.generateTestStatement(lines, stmt);
+      }
+      lines.push(`${this.indent}return true;`);
     }
 
-    lines.push(`${this.indent}return true;`);
     lines.push("}");
     return lines.join("\n");
   }
@@ -765,6 +847,11 @@ class TestFunctionGenerator {
       case "AssertCall":
         this.generateAssertCall(lines, stmt as AssertCall);
         break;
+      default:
+        lines.push(
+          `${this.indent}/* unsupported statement: ${(stmt as { kind: string }).kind} */`,
+        );
+        break;
     }
   }
 
@@ -875,12 +962,18 @@ class TestFunctionGenerator {
     const varName = stmt.controlVariable;
     const start = this.generateExpression(stmt.start);
     const end = this.generateExpression(stmt.end);
-    const step = stmt.step
-      ? this.generateExpression(stmt.step)
-      : "1";
-    lines.push(
-      `${this.indent}for (auto ${varName} = ${start}; ${varName} <= ${end}; ${varName} += ${step}) {`,
-    );
+    if (stmt.step) {
+      const stepExpr = this.generateExpression(stmt.step);
+      const stepVal = evaluateLiteralInt(stmt.step);
+      const cmp = stepVal !== undefined && stepVal < 0 ? ">=" : "<=";
+      lines.push(
+        `${this.indent}for (auto ${varName} = ${start}; ${varName} ${cmp} ${end}; ${varName} += ${stepExpr}) {`,
+      );
+    } else {
+      lines.push(
+        `${this.indent}for (auto ${varName} = ${start}; ${varName} <= ${end}; ${varName}++) {`,
+      );
+    }
     const savedIndent = this.indent;
     this.indent += "    ";
     for (const s of stmt.body) {
@@ -1042,6 +1135,9 @@ class TestFunctionGenerator {
   private generateBinary(expr: BinaryExpression): string {
     const left = this.generateExpression(expr.left);
     const right = this.generateExpression(expr.right);
+    if (expr.operator === "**") {
+      return `std::pow(static_cast<double>(${left}), static_cast<double>(${right}))`;
+    }
     const op = this.mapBinaryOp(expr.operator);
     return `${left} ${op} ${right}`;
   }
@@ -1060,8 +1156,6 @@ class TestFunctionGenerator {
         return "==";
       case "<>":
         return "!=";
-      case "**":
-        return "**"; // Will need special handling for pow
       default:
         return op;
     }
@@ -1113,5 +1207,29 @@ function escapeString(s: string): string {
   return s
     .replace(/\\/g, "\\\\")
     .replace(/"/g, '\\"')
-    .replace(/\n/g, "\\n");
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t")
+    .replace(/\0/g, "\\0");
+}
+
+/**
+ * Evaluate a literal integer expression at codegen time.
+ * Returns the numeric value for literal ints (including unary negation), or undefined.
+ */
+function evaluateLiteralInt(expr: Expression): number | undefined {
+  if (expr.kind === "LiteralExpression" && expr.literalType === "INT") {
+    return typeof expr.value === "number"
+      ? expr.value
+      : parseInt(String(expr.value), 10);
+  }
+  if (
+    expr.kind === "UnaryExpression" &&
+    expr.operator === "-" &&
+    expr.operand.kind === "LiteralExpression"
+  ) {
+    const val = evaluateLiteralInt(expr.operand);
+    return val !== undefined ? -val : undefined;
+  }
+  return undefined;
 }

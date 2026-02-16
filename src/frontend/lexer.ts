@@ -858,172 +858,23 @@ export const allTokens = [
 export const STLexer = new Lexer(allTokens);
 
 /**
- * Token list for test files. Extends allTokens with test-specific keywords
- * (TEST, END_TEST, ASSERT_*). These tokens must NOT be in the normal allTokens
- * to avoid conflicting with user identifiers named TEST in normal ST programs.
+ * Token list for test files. Built programmatically from allTokens by
+ * inserting test-specific keywords (TEST, END_TEST, ASSERT_*, MOCK*, etc.)
+ * before the normal keywords section.
  *
- * Test keywords are inserted before the normal keywords section so they
- * have higher priority than Identifier.
+ * Test keywords must NOT be in allTokens to avoid conflicting with user
+ * identifiers named TEST in normal ST programs.
  */
-export const allTestTokens = [
-  // Whitespace and comments (skipped)
-  WhiteSpace,
-  Comment,
-
-  // External code pragma
-  ExternalPragma,
-
-  // Multi-character operators (before single-character)
-  DoubleDot,
-  Power,
-  RefAssign,
-  Assign,
-  OutputAssign,
-  NotEqual,
-  LessEqual,
-  GreaterEqual,
-
-  // Test-specific keywords (before normal keywords and Identifier)
-  END_TEST,
-  TEST,
-  END_SETUP,
-  SETUP,
-  END_TEARDOWN,
-  TEARDOWN,
-  ASSERT_NEAR,
-  ASSERT_NEQ,
-  ASSERT_EQ,
-  ASSERT_TRUE,
-  ASSERT_FALSE,
-  ASSERT_GT,
-  ASSERT_LT,
-  ASSERT_GE,
-  ASSERT_LE,
-  MOCK_VERIFY_CALL_COUNT,
-  MOCK_VERIFY_CALLED,
-  MOCK_FUNCTION,
-  MOCK,
-  RETURNS,
-
-  // Keywords (before Identifier) - same order as allTokens
-  END_PROGRAM,
-  END_FUNCTION_BLOCK,
-  END_FUNCTION,
-  END_CONFIGURATION,
-  END_RESOURCE,
-  END_STRUCT,
-  END_TYPE,
-  END_VAR,
-  END_IF,
-  END_CASE,
-  END_FOR,
-  END_WHILE,
-  END_REPEAT,
-  FUNCTION_BLOCK,
-  FUNCTION,
-  PROGRAM,
-  CONFIGURATION,
-  RESOURCE,
-  VAR_INPUT,
-  VAR_OUTPUT,
-  VAR_IN_OUT,
-  VAR_EXTERNAL,
-  VAR_GLOBAL,
-  VAR_TEMP,
-  VAR_INST,
-  VAR,
-  CONSTANT,
-  RETAIN,
-  TYPE,
-  STRUCT,
-  ARRAY,
-  OF,
-  AT,
-  TASK,
-  WITH,
-  ON,
-  IF,
-  THEN,
-  ELSIF,
-  ELSE,
-  CASE,
-  FOR,
-  TO,
-  BY,
-  DO,
-  WHILE,
-  REPEAT,
-  UNTIL,
-  EXIT,
-  RETURN,
-  TRUE,
-  FALSE,
-  AND,
-  OR,
-  XOR,
-  NOT,
-  MOD,
-  REFERENCE_TO,
-  REF_TO,
-  DREF,
-  REF,
-  NULL,
-  __NEW,
-  __DELETE,
-  END_METHOD,
-  END_INTERFACE,
-  END_PROPERTY,
-  END_GET,
-  END_SET,
-  METHOD,
-  INTERFACE,
-  EXTENDS,
-  IMPLEMENTS,
-  THIS,
-  SUPER,
-  PROPERTY,
-  GET,
-  SET,
-  ABSTRACT,
-  FINAL,
-  OVERRIDE,
-  PUBLIC,
-  PRIVATE,
-  PROTECTED,
-
-  // Literals
-  TimeLiteral,
-  DateTimeLiteral,
-  DateLiteral,
-  TimeOfDayLiteral,
-  RealLiteral,
-  IntegerLiteral,
-  StringLiteral,
-  WideStringLiteral,
-  DirectAddress,
-
-  // Single-character operators and punctuation
-  Colon,
-  Semicolon,
-  Comma,
-  Dot,
-  LParen,
-  RParen,
-  LBracket,
-  RBracket,
-  Equal,
-  Less,
-  Greater,
-  Plus,
-  Minus,
-  Star,
-  Slash,
-  Caret,
-  Ampersand,
-
-  // Identifier (last)
-  Identifier,
-];
+export const allTestTokens = (() => {
+  // Find where normal keywords start (first keyword is END_PROGRAM)
+  const keywordIndex = allTokens.indexOf(END_PROGRAM);
+  return [
+    ...allTokens.slice(0, keywordIndex),
+    // Test-specific keywords (higher priority than normal keywords)
+    ...testKeywordTokens,
+    ...allTokens.slice(keywordIndex),
+  ];
+})();
 
 /**
  * The STruC++ test file lexer instance.

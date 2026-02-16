@@ -62,10 +62,7 @@ export function parseTestFile(
 
   // Build TestFile AST from CST
   try {
-    const testFile = buildTestAST(
-      parseResult.cst,
-      fileName,
-    ) as unknown as TestFile;
+    const testFile = buildTestAST(parseResult.cst, fileName);
     return { testFile, errors };
   } catch (e) {
     errors.push({
