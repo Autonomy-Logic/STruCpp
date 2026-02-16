@@ -184,7 +184,7 @@ export interface CodeGenResult {
  */
 export class CodeGenerator {
   private options: CodeGenOptions;
-  private output: string[] = [];
+  protected output: string[] = [];
   private headerOutput: string[] = [];
   private lineMap: Map<number, LineMapEntry> = new Map();
   private headerLineMap: Map<number, LineMapEntry> = new Map();
@@ -206,10 +206,10 @@ export class CodeGenerator {
   private ast?: CompilationUnit;
 
   /** Current function name (for redirecting function name := to result variable) */
-  private currentFunctionName: string | undefined;
+  protected currentFunctionName: string | undefined;
 
   /** Standard function registry for name mapping and conversion resolution */
-  private stdRegistry: StdFunctionRegistry;
+  protected stdRegistry: StdFunctionRegistry;
 
   /** Warnings collected during code generation */
   private codegenWarnings: Array<{
@@ -223,19 +223,22 @@ export class CodeGenerator {
   private tempVarCounter = 0;
 
   /** Current statement indent level (set by generateStatement before expression generation) */
-  private currentStatementIndent = "    ";
+  protected currentStatementIndent = "    ";
 
   /** Set of known function block type names (upper case) for FB instance detection */
-  private knownFBTypes: Set<string> = new Set();
+  protected knownFBTypes: Set<string> = new Set();
 
   /** Set of known interface type names (upper case) */
-  private knownInterfaceTypes: Set<string> = new Set();
+  protected knownInterfaceTypes: Set<string> = new Set();
 
   /** Set of known struct/UDT type names (upper case) */
-  private knownStructTypes: Set<string> = new Set();
+  protected knownStructTypes: Set<string> = new Set();
+
+  /** Set of known program type names (upper case) for program invocation detection */
+  protected knownProgramTypes: Set<string> = new Set();
 
   /** Map of variable name (upper case) → type name (original case) for current scope */
-  private currentScopeVarTypes: Map<string, string> = new Map();
+  protected currentScopeVarTypes: Map<string, string> = new Map();
 
   /** Parent class name of current FB (for SUPER resolution) */
   private currentFBExtends: string | undefined;
@@ -260,7 +263,7 @@ export class CodeGenerator {
   private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
 
   constructor(
-    private readonly _symbolTables: SymbolTables,
+    private readonly _symbolTables?: SymbolTables,
     options: Partial<CodeGenOptions> = {},
   ) {
     this.options = { ...defaultCodeGenOptions, ...options };
@@ -272,6 +275,9 @@ export class CodeGenerator {
 
   /** Get symbol tables (for future use in Phase 3+) */
   get symbolTables(): SymbolTables {
+    if (!this._symbolTables) {
+      throw new Error("SymbolTables not available (test codegen mode)");
+    }
     return this._symbolTables;
   }
 
@@ -280,7 +286,7 @@ export class CodeGenerator {
    * Handles VLA synthetic names (__VLA_1D_INT → ArrayView1D<INT_t>)
    * and regular types (INT → IEC_INT).
    */
-  private mapVarTypeToCpp(typeName: string, maxLength?: number): string {
+  protected mapVarTypeToCpp(typeName: string, maxLength?: number): string {
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
     if (vlaMatch) {
@@ -308,7 +314,7 @@ export class CodeGenerator {
   /**
    * Map a TypeReference to its C++ type string, including parameterized length.
    */
-  private mapTypeRefToCpp(typeRef: { name: string; maxLength?: number }): string {
+  protected mapTypeRefToCpp(typeRef: { name: string; maxLength?: number }): string {
     return this.mapVarTypeToCpp(typeRef.name, typeRef.maxLength);
   }
 
@@ -2216,7 +2222,7 @@ export class CodeGenerator {
   /**
    * Generate C++ for a variable expression.
    */
-  private generateVariableExpression(expr: VariableExpression): string {
+  protected generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
     // Handle THIS reference
@@ -2289,7 +2295,7 @@ export class CodeGenerator {
       if (mangledName) {
         result = mangledName;
       } else {
-        result = expr.name;
+        result = this.resolveVariableBaseName(expr.name);
       }
     }
 
@@ -2412,7 +2418,7 @@ export class CodeGenerator {
    * standard functions, *_TO_* conversions, DELETE->DELETE_STR mapping,
    * named argument reordering, and user-defined function calls.
    */
-  private generateFunctionCallExpression(expr: FunctionCallExpression): string {
+  protected generateFunctionCallExpression(expr: FunctionCallExpression): string {
     // Handle dotted method calls: THIS.method, SUPER.method, instance.method
     if (expr.functionName.includes(".")) {
       const dotIdx = expr.functionName.indexOf(".");
@@ -2699,7 +2705,7 @@ export class CodeGenerator {
   /**
    * Check if a type name refers to a known function block type.
    */
-  private isFBType(typeName: string): boolean {
+  protected isFBType(typeName: string): boolean {
     return this.knownFBTypes.has(typeName.toUpperCase());
   }
 
@@ -2855,7 +2861,7 @@ export class CodeGenerator {
    * Enter a new scope for code generation. Populates currentScopeVarTypes
    * from the variable blocks of a program or function block.
    */
-  private enterScope(
+  protected enterScope(
     varBlocks: CompilationUnit["programs"][0]["varBlocks"],
   ): void {
     this.currentScopeVarTypes.clear();
@@ -2871,7 +2877,7 @@ export class CodeGenerator {
   /**
    * Exit the current scope, clearing variable type tracking.
    */
-  private exitScope(): void {
+  protected exitScope(): void {
     this.currentScopeVarTypes.clear();
   }
 
@@ -2879,9 +2885,9 @@ export class CodeGenerator {
    * Check if a function call statement is actually an FB invocation.
    * Returns the FB type name if it is, undefined otherwise.
    */
-  private getFBInvocationType(functionName: string): string | undefined {
+  protected getFBInvocationType(functionName: string): string | undefined {
     const varType = this.currentScopeVarTypes.get(functionName.toUpperCase());
-    if (varType && this.isFBType(varType)) {
+    if (varType && (this.isFBType(varType) || this.knownProgramTypes.has(varType.toUpperCase()))) {
       return varType;
     }
     return undefined;
@@ -2891,11 +2897,11 @@ export class CodeGenerator {
    * Generate code for an FB invocation.
    * Pattern: assign inputs → call operator() → capture outputs
    */
-  private generateFBInvocation(
+  protected generateFBInvocation(
     call: FunctionCallExpression,
     indent: string,
   ): void {
-    const instanceName = call.functionName;
+    const instanceName = this.resolveVariableBaseName(call.functionName);
 
     // Assign each named input parameter
     for (const arg of call.arguments) {
@@ -2906,8 +2912,8 @@ export class CodeGenerator {
       }
     }
 
-    // Call the FB execution body
-    this.emit(`${indent}${instanceName}();`);
+    // Call the FB/program execution body
+    this.emitPOUCallLine(instanceName, call.functionName, indent);
 
     // Capture output arguments (=> syntax)
     for (const arg of call.arguments) {
@@ -2917,6 +2923,22 @@ export class CodeGenerator {
         );
       }
     }
+  }
+
+  /**
+   * Resolve the base name for a variable. Subclasses can override to add
+   * prefixes (e.g., "s." for SETUP variables in test codegen).
+   */
+  protected resolveVariableBaseName(name: string): string {
+    return name;
+  }
+
+  /**
+   * Emit the call line for a POU (FB or program) invocation.
+   * Subclasses can override to change the call pattern (e.g., ".run()" for programs).
+   */
+  protected emitPOUCallLine(instanceName: string, _rawName: string, indent: string): void {
+    this.emit(`${indent}${instanceName}();`);
   }
 
   /**
@@ -3148,7 +3170,7 @@ export class CodeGenerator {
   /**
    * Emit a line to the implementation output.
    */
-  private emit(line: string): void {
+  protected emit(line: string): void {
     this.output.push(line);
     this.currentLine++;
   }

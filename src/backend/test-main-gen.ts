@@ -4,6 +4,10 @@
  * Generates test_main.cpp from parsed test files and compiled source.
  * Each TEST block becomes a bool test_N(TestContext&) function.
  * The generated main() registers all tests and calls runner.run().
+ *
+ * All ST→C++ translation is delegated to TestCodeGenerator (which extends
+ * the production CodeGenerator) to avoid divergence. Only test-specific
+ * logic (asserts, mocks, setup/teardown, runner registration) lives here.
  */
 
 import type {
@@ -23,44 +27,8 @@ import type {
   VarDeclaration,
   Statement,
   Expression,
-  AssignmentStatement,
-  FunctionCallStatement,
-  FunctionCallExpression,
-  MethodCallExpression,
-  VariableExpression,
-  LiteralExpression,
-  BinaryExpression,
-  UnaryExpression,
-  IfStatement,
-  ForStatement,
-  WhileStatement,
-  RepeatStatement,
-  CaseStatement,
 } from "../frontend/ast.js";
-
-/**
- * Map of IEC type names to C++ raw types for template specialization and local variables.
- */
-const TYPE_MAP: Record<string, string> = {
-  BOOL: "BOOL_t",
-  SINT: "SINT_t",
-  INT: "INT_t",
-  DINT: "DINT_t",
-  LINT: "LINT_t",
-  USINT: "USINT_t",
-  UINT: "UINT_t",
-  UDINT: "UDINT_t",
-  ULINT: "ULINT_t",
-  REAL: "REAL_t",
-  LREAL: "LREAL_t",
-  BYTE: "BYTE_t",
-  WORD: "WORD_t",
-  DWORD: "DWORD_t",
-  LWORD: "LWORD_t",
-  STRING: "STRING_t",
-  WSTRING: "WSTRING_t",
-  TIME: "TIME_t",
-};
+import { TestCodeGenerator } from "./test-codegen.js";
 
 /**
  * Map of IEC type names to C++ IECVar-wrapped types (matches codegen function signatures).
@@ -205,10 +173,7 @@ export function generateTestMain(
   options: TestMainGenOptions,
 ): string {
   const lines: string[] = [];
-  const pouMap = new Map<string, POUInfo>();
-  for (const pou of options.pous) {
-    pouMap.set(pou.name.toUpperCase(), pou);
-  }
+  const testCodegen = new TestCodeGenerator(options.pous);
 
   // Includes
   lines.push(`#include "${options.headerFileName}"`);
@@ -267,7 +232,7 @@ export function generateTestMain(
     if (testFile.setup) {
       setupIndex++;
       setupStructName = `TestSetup_${setupIndex}`;
-      const gen = new TestFunctionGenerator(pouMap, testFile.fileName, functionMap);
+      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, functionMap);
       const structCode = gen.generateSetupStruct(
         setupStructName,
         testFile.setup,
@@ -280,7 +245,7 @@ export function generateTestMain(
     for (const tc of testFile.testCases) {
       testIndex++;
       const funcName = `test_${testIndex}`;
-      const gen = new TestFunctionGenerator(pouMap, testFile.fileName, functionMap);
+      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, functionMap);
       const code = gen.generateTestFunction(
         funcName,
         tc,
@@ -365,25 +330,24 @@ function collectMockedFunctions(
 
 /**
  * Generates C++ code for a single test function.
+ * Delegates all ST→C++ translation to TestCodeGenerator.
  */
 class TestFunctionGenerator {
-  private pouMap: Map<string, POUInfo>;
+  private testCodegen: TestCodeGenerator;
   private functionMap: Map<string, FunctionInfo>;
   private fileName: string;
   private indent = "    ";
-  /** Maps local variable names to their declared type names (for POU resolution) */
-  private varTypeMap = new Map<string, string>();
-  /** Names of variables from SETUP block (need s. prefix in test functions) */
+  /** Names of variables from SETUP block (need s. prefix for mock paths) */
   private setupVarNames: Set<string> | undefined;
 
   constructor(
-    pouMap: Map<string, POUInfo>,
+    testCodegen: TestCodeGenerator,
     fileName: string,
     functionMap?: Map<string, FunctionInfo>,
   ) {
-    this.pouMap = pouMap;
+    this.testCodegen = testCodegen;
     this.fileName = fileName;
-    this.functionMap = functionMap ?? new Map();
+    this.functionMap = functionMap ?? new Map<string, FunctionInfo>();
   }
 
   /**
@@ -397,11 +361,23 @@ class TestFunctionGenerator {
     const lines: string[] = [];
     lines.push(`struct ${structName} {`);
 
+    // Configure codegen: no setup prefix in struct context
+    this.testCodegen.clearSetupVars();
+    // Build scope from setup vars so codegen can detect FB/program invocations
+    const varTypes = new Map<string, string>();
+    for (const varBlock of setup.varBlocks) {
+      for (const decl of varBlock.declarations) {
+        for (const name of decl.names) {
+          varTypes.set(name, decl.type.name);
+        }
+      }
+    }
+    this.testCodegen.setScopeFromVarTypes(varTypes);
+
     // Member variables from SETUP VAR blocks
     for (const varBlock of setup.varBlocks) {
       for (const decl of varBlock.declarations) {
-        const typeName = decl.type.name;
-        const cppType = this.resolveTypeName(typeName);
+        const cppType = this.testCodegen.resolveType(decl.type.name);
         for (const name of decl.names) {
           lines.push(`    ${cppType} ${name};`);
         }
@@ -454,15 +430,15 @@ class TestFunctionGenerator {
       }
     }
 
-    // Build variable-to-type map for POU resolution
-    this.varTypeMap.clear();
+    // Build variable-to-type map for codegen scope (POU invocation detection)
+    const varTypes = new Map<string, string>();
 
     // Include SETUP variables in the type map
     if (setup) {
       for (const varBlock of setup.varBlocks) {
         for (const decl of varBlock.declarations) {
           for (const name of decl.names) {
-            this.varTypeMap.set(name, decl.type.name);
+            varTypes.set(name, decl.type.name);
           }
         }
       }
@@ -471,10 +447,12 @@ class TestFunctionGenerator {
     for (const varBlock of tc.varBlocks) {
       for (const decl of varBlock.declarations) {
         for (const name of decl.names) {
-          this.varTypeMap.set(name, decl.type.name);
+          varTypes.set(name, decl.type.name);
         }
       }
     }
+
+    this.testCodegen.setScopeFromVarTypes(varTypes);
 
     // If there's a SETUP, create the struct instance and call setup()
     if (setupStructName) {
@@ -491,8 +469,10 @@ class TestFunctionGenerator {
           }
         }
       }
+      this.testCodegen.setSetupVars(this.setupVarNames);
     } else {
       this.setupVarNames = undefined;
+      this.testCodegen.clearSetupVars();
     }
 
     // Generate local variable declarations
@@ -535,33 +515,17 @@ class TestFunctionGenerator {
     lines: string[],
     decl: VarDeclaration,
   ): void {
-    const typeName = decl.type.name;
-    const cppType = this.resolveTypeName(typeName);
+    const cppType = this.testCodegen.resolveType(decl.type.name);
 
     for (const name of decl.names) {
       if (decl.initialValue) {
         lines.push(
-          `${this.indent}${cppType} ${name} = ${this.generateExpression(decl.initialValue)};`,
+          `${this.indent}${cppType} ${name} = ${this.testCodegen.emitExpression(decl.initialValue)};`,
         );
       } else {
         lines.push(`${this.indent}${cppType} ${name};`);
       }
     }
-  }
-
-  /**
-   * Resolve a type name to its C++ equivalent.
-   * For POUs (programs/FBs), maps to the C++ class name.
-   * For elementary types, maps to the C++ type wrapper.
-   */
-  private resolveTypeName(typeName: string): string {
-    // Check if it's a known POU
-    const pou = this.pouMap.get(typeName.toUpperCase());
-    if (pou) {
-      return pou.cppClassName;
-    }
-    // Elementary type mapping
-    return TYPE_MAP[typeName.toUpperCase()] ?? typeName;
   }
 
   private generateTestStatement(
@@ -570,28 +534,28 @@ class TestFunctionGenerator {
   ): void {
     switch (stmt.kind) {
       case "AssertCall":
-        this.generateAssertCall(lines, stmt as AssertCall);
+        this.generateAssertCall(lines, stmt);
         break;
       case "MockFBStatement":
-        this.generateMockFB(lines, stmt as MockFBStatement);
+        this.generateMockFB(lines, stmt);
         break;
       case "MockFunctionStatement":
-        this.generateMockFunction(lines, stmt as MockFunctionStatement);
+        this.generateMockFunction(lines, stmt);
         break;
       case "MockVerifyCalledStatement":
-        this.generateMockVerifyCalled(
-          lines,
-          stmt as MockVerifyCalledStatement,
-        );
+        this.generateMockVerifyCalled(lines, stmt);
         break;
       case "MockVerifyCallCountStatement":
-        this.generateMockVerifyCallCount(
-          lines,
-          stmt as MockVerifyCallCountStatement,
-        );
+        this.generateMockVerifyCallCount(lines, stmt);
+        break;
+      case "ReturnStatement":
+        lines.push(`${this.indent}return true;`);
         break;
       default:
-        this.generateStatement(lines, stmt as Statement);
+        // Delegate all other statements to production codegen
+        this.testCodegen.clearOutput();
+        this.testCodegen.emitStatement(stmt as Statement, this.indent);
+        lines.push(...this.testCodegen.getOutput());
         break;
     }
   }
@@ -614,7 +578,7 @@ class TestFunctionGenerator {
     stmt: MockFunctionStatement,
   ): void {
     const name = stmt.functionName;
-    const retVal = this.generateExpression(stmt.returnValue);
+    const retVal = this.testCodegen.emitExpression(stmt.returnValue);
     const func = this.functionMap.get(name.toUpperCase());
     if (func) {
       const retType = FUNC_TYPE_MAP[func.returnType.toUpperCase()] ?? func.returnType;
@@ -651,7 +615,7 @@ class TestFunctionGenerator {
     const line = stmt.sourceSpan.startLine;
     const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
     const path = prefix + stmt.instancePath.join(".");
-    const expected = this.generateExpression(stmt.expectedCount);
+    const expected = this.testCodegen.emitExpression(stmt.expectedCount);
     lines.push(
       `${this.indent}if (!ctx.assert_eq<int>(${path}.__mock_state_.call_count, ${expected}, "${escapeString(stmt.instancePath.join("."))} call count", "${escapeString(expected)}", ${line})) return false;`,
     );
@@ -685,8 +649,8 @@ class TestFunctionGenerator {
             `${assert.assertType} requires 2 arguments at ${this.fileName}:${line}`,
           );
         }
-        const actualExpr = this.generateExpression(assert.args[0]!);
-        const expectedExpr = this.generateExpression(assert.args[1]!);
+        const actualExpr = this.testCodegen.emitExpression(assert.args[0]!);
+        const expectedExpr = this.testCodegen.emitExpression(assert.args[1]!);
         const actualStr = this.expressionToString(assert.args[0]!);
         const expectedStr = this.expressionToString(assert.args[1]!);
         const method =
@@ -702,7 +666,7 @@ class TestFunctionGenerator {
             `ASSERT_TRUE requires 1 argument at ${this.fileName}:${line}`,
           );
         }
-        const condExpr = this.generateExpression(assert.args[0]!);
+        const condExpr = this.testCodegen.emitExpression(assert.args[0]!);
         const condStr = this.expressionToString(assert.args[0]!);
         lines.push(
           `${this.indent}if (!ctx.assert_true(static_cast<bool>(${condExpr}), "${escapeString(condStr)}", ${line}${msgArg})) return false;`,
@@ -715,7 +679,7 @@ class TestFunctionGenerator {
             `ASSERT_FALSE requires 1 argument at ${this.fileName}:${line}`,
           );
         }
-        const condExpr = this.generateExpression(assert.args[0]!);
+        const condExpr = this.testCodegen.emitExpression(assert.args[0]!);
         const condStr = this.expressionToString(assert.args[0]!);
         lines.push(
           `${this.indent}if (!ctx.assert_false(static_cast<bool>(${condExpr}), "${escapeString(condStr)}", ${line}${msgArg})) return false;`,
@@ -731,8 +695,8 @@ class TestFunctionGenerator {
             `${assert.assertType} requires 2 arguments at ${this.fileName}:${line}`,
           );
         }
-        const actualExpr = this.generateExpression(assert.args[0]!);
-        const thresholdExpr = this.generateExpression(assert.args[1]!);
+        const actualExpr = this.testCodegen.emitExpression(assert.args[0]!);
+        const thresholdExpr = this.testCodegen.emitExpression(assert.args[1]!);
         const actualStr = this.expressionToString(assert.args[0]!);
         const thresholdStr = this.expressionToString(assert.args[1]!);
         const methodMap: Record<string, string> = {
@@ -753,9 +717,9 @@ class TestFunctionGenerator {
             `ASSERT_NEAR requires 3 arguments at ${this.fileName}:${line}`,
           );
         }
-        const actualExpr = this.generateExpression(assert.args[0]!);
-        const expectedExpr = this.generateExpression(assert.args[1]!);
-        const toleranceExpr = this.generateExpression(assert.args[2]!);
+        const actualExpr = this.testCodegen.emitExpression(assert.args[0]!);
+        const expectedExpr = this.testCodegen.emitExpression(assert.args[1]!);
+        const toleranceExpr = this.testCodegen.emitExpression(assert.args[2]!);
         const actualStr = this.expressionToString(assert.args[0]!);
         const expectedStr = this.expressionToString(assert.args[1]!);
         const toleranceStr = this.expressionToString(assert.args[2]!);
@@ -769,7 +733,7 @@ class TestFunctionGenerator {
 
   /**
    * Convert an AST expression to its ST source string representation.
-   * Used for assertion failure messages.
+   * Used for assertion failure messages (NOT for C++ generation).
    */
   private expressionToString(expr: Expression): string {
     switch (expr.kind) {
@@ -796,408 +760,6 @@ class TestFunctionGenerator {
         return "?";
     }
   }
-
-  // ===========================================================================
-  // Statement generation (simplified version for test context)
-  // ===========================================================================
-
-  private generateStatement(lines: string[], stmt: Statement): void {
-    switch (stmt.kind) {
-      case "AssignmentStatement":
-        this.generateAssignment(lines, stmt);
-        break;
-      case "FunctionCallStatement":
-        this.generateFunctionCallStatement(lines, stmt);
-        break;
-      case "IfStatement":
-        this.generateIfStatement(lines, stmt);
-        break;
-      case "ForStatement":
-        this.generateForStatement(lines, stmt);
-        break;
-      case "WhileStatement":
-        this.generateWhileStatement(lines, stmt);
-        break;
-      case "RepeatStatement":
-        this.generateRepeatStatement(lines, stmt);
-        break;
-      case "CaseStatement":
-        this.generateCaseStatement(lines, stmt);
-        break;
-      case "ExitStatement":
-        lines.push(`${this.indent}break;`);
-        break;
-      case "ReturnStatement":
-        lines.push(`${this.indent}return true;`);
-        break;
-      case "ExternalCodePragma":
-        // Extract code content from pragma
-        lines.push(`${this.indent}${stmt.code}`);
-        break;
-      case "RefAssignStatement":
-        lines.push(
-          `${this.indent}${this.generateExpression(stmt.target)}.bind(${this.generateExpression(stmt.source)});`,
-        );
-        break;
-      case "DeleteStatement":
-        lines.push(
-          `${this.indent}strucpp::iec_delete(${this.generateExpression(stmt.pointer)});`,
-        );
-        break;
-      case "AssertCall":
-        this.generateAssertCall(lines, stmt as AssertCall);
-        break;
-      default:
-        lines.push(
-          `${this.indent}/* unsupported statement: ${(stmt as { kind: string }).kind} */`,
-        );
-        break;
-    }
-  }
-
-  private generateAssignment(
-    lines: string[],
-    stmt: AssignmentStatement,
-  ): void {
-    const target = this.generateExpression(stmt.target);
-    const value = this.generateExpression(stmt.value);
-    lines.push(`${this.indent}${target} = ${value};`);
-  }
-
-  private generateFunctionCallStatement(
-    lines: string[],
-    stmt: FunctionCallStatement,
-  ): void {
-    if (stmt.call.kind === "MethodCallExpression") {
-      lines.push(
-        `${this.indent}${this.generateMethodCallExpression(stmt.call)};`,
-      );
-      return;
-    }
-
-    const call = stmt.call as FunctionCallExpression;
-    const funcName = call.functionName;
-
-    // Resolve the variable's declared type to find the POU
-    // e.g., `uut()` where uut is declared as `VAR uut : Counter; END_VAR`
-    const varTypeName = this.varTypeMap.get(funcName);
-    const pou = varTypeName
-      ? this.pouMap.get(varTypeName.toUpperCase())
-      : this.pouMap.get(funcName.toUpperCase());
-
-    // Prefix SETUP variables with s.
-    const prefix =
-      this.setupVarNames && this.setupVarNames.has(funcName) ? "s." : "";
-
-    if (pou) {
-      // Assign named input parameters before invocation
-      for (const arg of call.arguments) {
-        if (arg.name && !arg.isOutput) {
-          lines.push(
-            `${this.indent}${prefix}${funcName}.${arg.name} = ${this.generateExpression(arg.value)};`,
-          );
-        }
-      }
-      // Call the POU body
-      if (pou.kind === "program") {
-        lines.push(`${this.indent}${prefix}${funcName}.run();`);
-      } else {
-        lines.push(`${this.indent}${prefix}${funcName}();`);
-      }
-      // Capture output arguments (=> syntax)
-      for (const arg of call.arguments) {
-        if (arg.name && arg.isOutput) {
-          lines.push(
-            `${this.indent}${this.generateExpression(arg.value)} = ${prefix}${funcName}.${arg.name};`,
-          );
-        }
-      }
-      return;
-    }
-
-    // Standard function call
-    lines.push(
-      `${this.indent}${this.generateFunctionCallExpression(call)};`,
-    );
-  }
-
-  private generateIfStatement(
-    lines: string[],
-    stmt: IfStatement,
-  ): void {
-    lines.push(
-      `${this.indent}if (${this.generateExpression(stmt.condition)}) {`,
-    );
-    const savedIndent = this.indent;
-    this.indent += "    ";
-    for (const s of stmt.thenStatements) {
-      this.generateStatement(lines, s);
-    }
-    this.indent = savedIndent;
-    for (const elsif of stmt.elsifClauses) {
-      lines.push(
-        `${this.indent}} else if (${this.generateExpression(elsif.condition)}) {`,
-      );
-      this.indent += "    ";
-      for (const s of elsif.statements) {
-        this.generateStatement(lines, s);
-      }
-      this.indent = savedIndent;
-    }
-    if (stmt.elseStatements.length > 0) {
-      lines.push(`${this.indent}} else {`);
-      this.indent += "    ";
-      for (const s of stmt.elseStatements) {
-        this.generateStatement(lines, s);
-      }
-      this.indent = savedIndent;
-    }
-    lines.push(`${this.indent}}`);
-  }
-
-  private generateForStatement(
-    lines: string[],
-    stmt: ForStatement,
-  ): void {
-    const varName = stmt.controlVariable;
-    const start = this.generateExpression(stmt.start);
-    const end = this.generateExpression(stmt.end);
-    if (stmt.step) {
-      const stepExpr = this.generateExpression(stmt.step);
-      const stepVal = evaluateLiteralInt(stmt.step);
-      const cmp = stepVal !== undefined && stepVal < 0 ? ">=" : "<=";
-      lines.push(
-        `${this.indent}for (auto ${varName} = ${start}; ${varName} ${cmp} ${end}; ${varName} += ${stepExpr}) {`,
-      );
-    } else {
-      lines.push(
-        `${this.indent}for (auto ${varName} = ${start}; ${varName} <= ${end}; ${varName}++) {`,
-      );
-    }
-    const savedIndent = this.indent;
-    this.indent += "    ";
-    for (const s of stmt.body) {
-      this.generateStatement(lines, s);
-    }
-    this.indent = savedIndent;
-    lines.push(`${this.indent}}`);
-  }
-
-  private generateWhileStatement(
-    lines: string[],
-    stmt: WhileStatement,
-  ): void {
-    lines.push(
-      `${this.indent}while (${this.generateExpression(stmt.condition)}) {`,
-    );
-    const savedIndent = this.indent;
-    this.indent += "    ";
-    for (const s of stmt.body) {
-      this.generateStatement(lines, s);
-    }
-    this.indent = savedIndent;
-    lines.push(`${this.indent}}`);
-  }
-
-  private generateRepeatStatement(
-    lines: string[],
-    stmt: RepeatStatement,
-  ): void {
-    lines.push(`${this.indent}do {`);
-    const savedIndent = this.indent;
-    this.indent += "    ";
-    for (const s of stmt.body) {
-      this.generateStatement(lines, s);
-    }
-    this.indent = savedIndent;
-    lines.push(
-      `${this.indent}} while (!(${this.generateExpression(stmt.condition)}));`,
-    );
-  }
-
-  private generateCaseStatement(
-    lines: string[],
-    stmt: CaseStatement,
-  ): void {
-    lines.push(
-      `${this.indent}switch (static_cast<int>(${this.generateExpression(stmt.selector)})) {`,
-    );
-    const savedIndent = this.indent;
-    for (const caseElem of stmt.cases) {
-      for (const label of caseElem.labels) {
-        lines.push(
-          `${this.indent}    case ${this.generateExpression(label.start)}:`,
-        );
-      }
-      this.indent = savedIndent + "        ";
-      for (const s of caseElem.statements) {
-        this.generateStatement(lines, s);
-      }
-      lines.push(`${this.indent}break;`);
-      this.indent = savedIndent;
-    }
-    if (stmt.elseStatements.length > 0) {
-      lines.push(`${this.indent}    default:`);
-      this.indent = savedIndent + "        ";
-      for (const s of stmt.elseStatements) {
-        this.generateStatement(lines, s);
-      }
-      lines.push(`${this.indent}break;`);
-      this.indent = savedIndent;
-    }
-    lines.push(`${this.indent}}`);
-  }
-
-  // ===========================================================================
-  // Expression generation
-  // ===========================================================================
-
-  private generateExpression(expr: Expression): string {
-    switch (expr.kind) {
-      case "LiteralExpression":
-        return this.generateLiteral(expr);
-      case "VariableExpression":
-        return this.generateVariable(expr);
-      case "BinaryExpression":
-        return this.generateBinary(expr);
-      case "UnaryExpression":
-        return this.generateUnary(expr);
-      case "ParenthesizedExpression":
-        return `(${this.generateExpression(expr.expression)})`;
-      case "FunctionCallExpression":
-        return this.generateFunctionCallExpression(expr);
-      case "MethodCallExpression":
-        return this.generateMethodCallExpression(expr);
-      case "RefExpression":
-        return `REF(${this.generateExpression(expr.operand)})`;
-      case "DrefExpression":
-        return `${this.generateExpression(expr.operand)}.deref()`;
-      case "NewExpression": {
-        const typeName = expr.allocationType.name;
-        if (expr.arraySize) {
-          return `strucpp::iec_new_array<${typeName}>(${this.generateExpression(expr.arraySize)})`;
-        }
-        return `strucpp::iec_new<${typeName}>()`;
-      }
-    }
-  }
-
-  private generateLiteral(expr: LiteralExpression): string {
-    switch (expr.literalType) {
-      case "BOOL":
-        return expr.value === true ||
-          expr.value === "TRUE" ||
-          expr.rawValue?.toUpperCase() === "TRUE"
-          ? "true"
-          : "false";
-      case "INT":
-        return String(expr.value);
-      case "REAL": {
-        const str = String(expr.value);
-        return str.includes(".") ? str : str + ".0";
-      }
-      case "STRING": {
-        const inner = expr.rawValue.replace(/^'|'$/g, "");
-        return `"${inner}"`;
-      }
-      case "WSTRING": {
-        const wInner = expr.rawValue.replace(/^'|'$/g, "");
-        return `L"${wInner}"`;
-      }
-      case "TIME": {
-        // Time literals remain as raw values
-        return String(expr.value);
-      }
-      case "NULL":
-        return "IEC_NULL";
-      default:
-        return String(expr.value);
-    }
-  }
-
-  private generateVariable(expr: VariableExpression): string {
-    // Prefix SETUP variables with s. in test functions
-    const prefix =
-      this.setupVarNames && this.setupVarNames.has(expr.name) ? "s." : "";
-    let result = prefix + expr.name;
-    if (expr.isDereference) {
-      result = `(*${result})`;
-    }
-    for (let i = 0; i < expr.subscripts.length; i++) {
-      result += `[${this.generateExpression(expr.subscripts[i]!)}]`;
-    }
-    for (const field of expr.fieldAccess) {
-      result += `.${field}`;
-    }
-    return result;
-  }
-
-  private generateBinary(expr: BinaryExpression): string {
-    const left = this.generateExpression(expr.left);
-    const right = this.generateExpression(expr.right);
-    if (expr.operator === "**") {
-      return `std::pow(static_cast<double>(${left}), static_cast<double>(${right}))`;
-    }
-    const op = this.mapBinaryOp(expr.operator);
-    return `${left} ${op} ${right}`;
-  }
-
-  private mapBinaryOp(op: string): string {
-    switch (op) {
-      case "AND":
-        return "&&";
-      case "OR":
-        return "||";
-      case "XOR":
-        return "^";
-      case "MOD":
-        return "%";
-      case "=":
-        return "==";
-      case "<>":
-        return "!=";
-      default:
-        return op;
-    }
-  }
-
-  private generateUnary(expr: UnaryExpression): string {
-    const operand = this.generateExpression(expr.operand);
-    switch (expr.operator) {
-      case "NOT":
-        return `!${operand}`;
-      case "-":
-        return `-${operand}`;
-      case "+":
-        return `+${operand}`;
-      default:
-        return operand;
-    }
-  }
-
-  private generateFunctionCallExpression(
-    expr: FunctionCallExpression,
-  ): string {
-    const args = expr.arguments
-      .map((arg) => {
-        if (arg.name) {
-          return this.generateExpression(arg.value);
-        }
-        return this.generateExpression(arg.value);
-      })
-      .join(", ");
-    return `${expr.functionName}(${args})`;
-  }
-
-  private generateMethodCallExpression(
-    expr: MethodCallExpression,
-  ): string {
-    const obj = this.generateExpression(expr.object);
-    const args = expr.arguments
-      .map((arg) => this.generateExpression(arg.value))
-      .join(", ");
-    return `${obj}.${expr.methodName}(${args})`;
-  }
 }
 
 /**
@@ -1211,25 +773,4 @@ function escapeString(s: string): string {
     .replace(/\r/g, "\\r")
     .replace(/\t/g, "\\t")
     .replace(/\0/g, "\\0");
-}
-
-/**
- * Evaluate a literal integer expression at codegen time.
- * Returns the numeric value for literal ints (including unary negation), or undefined.
- */
-function evaluateLiteralInt(expr: Expression): number | undefined {
-  if (expr.kind === "LiteralExpression" && expr.literalType === "INT") {
-    return typeof expr.value === "number"
-      ? expr.value
-      : parseInt(String(expr.value), 10);
-  }
-  if (
-    expr.kind === "UnaryExpression" &&
-    expr.operator === "-" &&
-    expr.operand.kind === "LiteralExpression"
-  ) {
-    const val = evaluateLiteralInt(expr.operand);
-    return val !== undefined ? -val : undefined;
-  }
-  return undefined;
 }

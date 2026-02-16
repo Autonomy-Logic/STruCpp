@@ -432,8 +432,8 @@ describe("Test Main Generator", () => {
         pous: [],
       });
 
-      expect(code).toContain("INT_t x;");
-      expect(code).toContain("BOOL_t flag;");
+      expect(code).toContain("IEC_INT x;");
+      expect(code).toContain("IEC_BOOL flag;");
     });
   });
 
