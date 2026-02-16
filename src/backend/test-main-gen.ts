@@ -31,30 +31,6 @@ import type {
 import { TestCodeGenerator } from "./test-codegen.js";
 
 /**
- * Map of IEC type names to C++ IECVar-wrapped types (matches codegen function signatures).
- */
-const FUNC_TYPE_MAP: Record<string, string> = {
-  BOOL: "IEC_BOOL",
-  SINT: "IEC_SINT",
-  INT: "IEC_INT",
-  DINT: "IEC_DINT",
-  LINT: "IEC_LINT",
-  USINT: "IEC_USINT",
-  UINT: "IEC_UINT",
-  UDINT: "IEC_UDINT",
-  ULINT: "IEC_ULINT",
-  REAL: "IEC_REAL",
-  LREAL: "IEC_LREAL",
-  BYTE: "IEC_BYTE",
-  WORD: "IEC_WORD",
-  DWORD: "IEC_DWORD",
-  LWORD: "IEC_LWORD",
-  STRING: "IEC_STRING",
-  WSTRING: "IEC_WSTRING",
-  TIME: "IEC_TIME",
-};
-
-/**
  * Information about a POU (Program Organization Unit) from compilation.
  */
 export interface POUInfo {
@@ -214,9 +190,9 @@ export function generateTestMain(
     for (const funcName of mockedFunctionNames) {
       const func = functionMap.get(funcName.toUpperCase());
       if (func) {
-        const retType = FUNC_TYPE_MAP[func.returnType.toUpperCase()] ?? func.returnType;
+        const retType = testCodegen.resolveType(func.returnType);
         const params = func.parameters
-          .map((p) => `${FUNC_TYPE_MAP[p.type.toUpperCase()] ?? p.type} ${p.name}`)
+          .map((p) => `${testCodegen.resolveType(p.type)} ${p.name}`)
           .join(", ");
         lines.push(`extern ${retType} ${func.name}_real(${params});`);
         lines.push(`extern ${retType} (*${func.name}_dispatch)(${params});`);
@@ -581,9 +557,9 @@ class TestFunctionGenerator {
     const retVal = this.testCodegen.emitExpression(stmt.returnValue);
     const func = this.functionMap.get(name.toUpperCase());
     if (func) {
-      const retType = FUNC_TYPE_MAP[func.returnType.toUpperCase()] ?? func.returnType;
+      const retType = this.testCodegen.resolveType(func.returnType);
       const params = func.parameters
-        .map((p) => `${FUNC_TYPE_MAP[p.type.toUpperCase()] ?? p.type} /*${p.name}*/`)
+        .map((p) => `${this.testCodegen.resolveType(p.type)} /*${p.name}*/`)
         .join(", ");
       lines.push(
         `${this.indent}${name}_dispatch = [](${params}) -> ${retType} { return ${retType}(${retVal}); };`,
