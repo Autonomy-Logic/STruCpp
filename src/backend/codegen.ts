@@ -314,7 +314,10 @@ export class CodeGenerator {
   /**
    * Map a TypeReference to its C++ type string, including parameterized length.
    */
-  protected mapTypeRefToCpp(typeRef: { name: string; maxLength?: number }): string {
+  protected mapTypeRefToCpp(typeRef: {
+    name: string;
+    maxLength?: number;
+  }): string {
     return this.mapVarTypeToCpp(typeRef.name, typeRef.maxLength);
   }
 
@@ -797,7 +800,8 @@ export class CodeGenerator {
     this.emitHeader(`    virtual ~${iface.name}() = default;`);
 
     for (const method of iface.methods) {
-      const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
+      const isIfaceReturn =
+        method.returnType && this.isInterfaceType(method.returnType.name);
       const returnType = method.returnType
         ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
         : "void";
@@ -866,7 +870,8 @@ export class CodeGenerator {
       }
 
       for (const method of visMethods) {
-        const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
+        const isIfaceReturn =
+          method.returnType && this.isInterfaceType(method.returnType.name);
         const returnType = method.returnType
           ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
           : "void";
@@ -963,7 +968,8 @@ export class CodeGenerator {
     method: MethodDeclaration,
     className: string,
   ): void {
-    const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
+    const isIfaceReturn =
+      method.returnType && this.isInterfaceType(method.returnType.name);
     const returnType = method.returnType
       ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
       : "void";
@@ -977,7 +983,9 @@ export class CodeGenerator {
         // Interface return: assignments to result become return statements
         this.interfaceReturnMethod = true;
       } else {
-        this.emit(`    ${this.mapTypeRefToCpp(method.returnType)} ${method.name}_result;`);
+        this.emit(
+          `    ${this.mapTypeRefToCpp(method.returnType)} ${method.name}_result;`,
+        );
       }
       this.currentFunctionName = method.name;
     }
@@ -1008,7 +1016,9 @@ export class CodeGenerator {
             const initValue = decl.initialValue
               ? ` = ${this.generateExpression(decl.initialValue)}`
               : "";
-            this.emit(`    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`);
+            this.emit(
+              `    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`,
+            );
           }
         }
       }
@@ -1172,9 +1182,7 @@ export class CodeGenerator {
     if (this.options.isTestBuild) {
       // Test build: generate _real, dispatch pointer, and wrapper
       // 1. _real implementation (original body with renamed function)
-      this.emit(
-        `${retType} ${func.name}_real(${params.join(", ")}) {`,
-      );
+      this.emit(`${retType} ${func.name}_real(${params.join(", ")}) {`);
       this.emit(`    ${retType} ${func.name}_result;`);
       this.currentFunctionName = func.name;
       if (func.body.length > 0) {
@@ -1195,17 +1203,13 @@ export class CodeGenerator {
 
       // 3. Wrapper that calls through dispatch pointer
       const paramNames = this.generateFunctionParamNames(func);
-      this.emit(
-        `${retType} ${func.name}(${params.join(", ")}) {`,
-      );
+      this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
       this.emit(`    return ${func.name}_dispatch(${paramNames.join(", ")});`);
       this.emit("}");
       this.emit("");
     } else {
       // Production build: normal function
-      this.emit(
-        `${retType} ${func.name}(${params.join(", ")}) {`,
-      );
+      this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
       this.emit(`    ${retType} ${func.name}_result;`);
       this.currentFunctionName = func.name;
       if (func.body.length > 0) {
@@ -1306,7 +1310,10 @@ export class CodeGenerator {
 
         // Collect retain variables
         if (decl.isRetain) {
-          retainVars.push({ name: decl.name, typeName: this.mapVarTypeToCpp(decl.typeName, decl.maxLength) });
+          retainVars.push({
+            name: decl.name,
+            typeName: this.mapVarTypeToCpp(decl.typeName, decl.maxLength),
+          });
         }
       }
     }
@@ -1315,7 +1322,9 @@ export class CodeGenerator {
     if (prog.varExternal.length > 0) {
       this.emitHeader("    // External variables (references to globals)");
       for (const ext of prog.varExternal) {
-        this.emitHeader(`    ${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name};`);
+        this.emitHeader(
+          `    ${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name};`,
+        );
       }
     }
 
@@ -1724,7 +1733,9 @@ export class CodeGenerator {
         break;
       case "FunctionCallStatement": {
         if (stmt.call.kind === "MethodCallExpression") {
-          this.emit(`${indent}${this.generateMethodCallExpression(stmt.call)};`);
+          this.emit(
+            `${indent}${this.generateMethodCallExpression(stmt.call)};`,
+          );
         } else {
           const fbType = this.getFBInvocationType(stmt.call.functionName);
           if (fbType) {
@@ -2402,7 +2413,9 @@ export class CodeGenerator {
     // Try type-specific resolution first (avoids collisions when two FBs share a method name)
     let resolvedName: string;
     if (expr.object.kind === "VariableExpression") {
-      const varType = this.currentScopeVarTypes.get(expr.object.name.toUpperCase());
+      const varType = this.currentScopeVarTypes.get(
+        expr.object.name.toUpperCase(),
+      );
       resolvedName = varType
         ? this.resolveMethodName(varType, expr.methodName)
         : this.resolveMethodNameGlobal(expr.methodName);
@@ -2418,7 +2431,9 @@ export class CodeGenerator {
    * standard functions, *_TO_* conversions, DELETE->DELETE_STR mapping,
    * named argument reordering, and user-defined function calls.
    */
-  protected generateFunctionCallExpression(expr: FunctionCallExpression): string {
+  protected generateFunctionCallExpression(
+    expr: FunctionCallExpression,
+  ): string {
     // Handle dotted method calls: THIS.method, SUPER.method, instance.method
     if (expr.functionName.includes(".")) {
       const dotIdx = expr.functionName.indexOf(".");
@@ -2887,7 +2902,11 @@ export class CodeGenerator {
    */
   protected getFBInvocationType(functionName: string): string | undefined {
     const varType = this.currentScopeVarTypes.get(functionName.toUpperCase());
-    if (varType && (this.isFBType(varType) || this.knownProgramTypes.has(varType.toUpperCase()))) {
+    if (
+      varType &&
+      (this.isFBType(varType) ||
+        this.knownProgramTypes.has(varType.toUpperCase()))
+    ) {
       return varType;
     }
     return undefined;
@@ -2937,7 +2956,11 @@ export class CodeGenerator {
    * Emit the call line for a POU (FB or program) invocation.
    * Subclasses can override to change the call pattern (e.g., ".run()" for programs).
    */
-  protected emitPOUCallLine(instanceName: string, _rawName: string, indent: string): void {
+  protected emitPOUCallLine(
+    instanceName: string,
+    _rawName: string,
+    indent: string,
+  ): void {
     this.emit(`${indent}${instanceName}();`);
   }
 

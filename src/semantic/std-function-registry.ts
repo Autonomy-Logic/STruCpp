@@ -842,9 +842,7 @@ export class StdFunctionRegistry {
       returnConstraint: "specific",
       returnMatchesFirstParam: false,
       specificReturnType: "ULINT",
-      params: [
-        { name: "IN", constraint: "ANY", isByRef: true },
-      ],
+      params: [{ name: "IN", constraint: "ANY", isByRef: true }],
       isVariadic: false,
       isConversion: false,
       category: "system",
@@ -857,9 +855,7 @@ export class StdFunctionRegistry {
       returnConstraint: "specific",
       returnMatchesFirstParam: false,
       specificReturnType: "UDINT",
-      params: [
-        { name: "IN", constraint: "ANY", isByRef: false },
-      ],
+      params: [{ name: "IN", constraint: "ANY", isByRef: false }],
       isVariadic: false,
       isConversion: false,
       category: "system",

@@ -24,9 +24,13 @@ function findManifestPath(): string {
     if (typeof import.meta?.url === "string") {
       const metaDir = dirname(fileURLToPath(import.meta.url));
       // src/library/ → ../stdlib/iec-standard-fb/manifest.json
-      candidates.push(resolve(metaDir, "../stdlib/iec-standard-fb/manifest.json"));
+      candidates.push(
+        resolve(metaDir, "../stdlib/iec-standard-fb/manifest.json"),
+      );
       // dist/library/ → ../../src/stdlib/iec-standard-fb/manifest.json
-      candidates.push(resolve(metaDir, "../../src/stdlib/iec-standard-fb/manifest.json"));
+      candidates.push(
+        resolve(metaDir, "../../src/stdlib/iec-standard-fb/manifest.json"),
+      );
     }
   } catch {
     // unavailable in CJS bundle / pkg binary
@@ -34,19 +38,31 @@ function findManifestPath(): string {
 
   // From __dirname (CJS bundle via esbuild)
   if (typeof __dirname === "string") {
-    candidates.push(resolve(__dirname, "../stdlib/iec-standard-fb/manifest.json"));
-    candidates.push(resolve(__dirname, "../../src/stdlib/iec-standard-fb/manifest.json"));
-    candidates.push(resolve(__dirname, "src/stdlib/iec-standard-fb/manifest.json"));
+    candidates.push(
+      resolve(__dirname, "../stdlib/iec-standard-fb/manifest.json"),
+    );
+    candidates.push(
+      resolve(__dirname, "../../src/stdlib/iec-standard-fb/manifest.json"),
+    );
+    candidates.push(
+      resolve(__dirname, "src/stdlib/iec-standard-fb/manifest.json"),
+    );
   }
 
   // Relative to binary (pkg binary in dist/bin/)
   const execDir = dirname(process.execPath);
-  for (const base of [execDir, resolve(execDir, ".."), resolve(execDir, "..", "..")]) {
+  for (const base of [
+    execDir,
+    resolve(execDir, ".."),
+    resolve(execDir, "..", ".."),
+  ]) {
     candidates.push(resolve(base, "src/stdlib/iec-standard-fb/manifest.json"));
   }
 
   // CWD fallback
-  candidates.push(resolve(process.cwd(), "src/stdlib/iec-standard-fb/manifest.json"));
+  candidates.push(
+    resolve(process.cwd(), "src/stdlib/iec-standard-fb/manifest.json"),
+  );
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;

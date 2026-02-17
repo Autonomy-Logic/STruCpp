@@ -788,7 +788,12 @@ export class SemanticAnalyzer {
                 );
               }
               // Signature must match parent
-              this.validateOverrideSignature(method, parentMethod, fb.name, fb.extends);
+              this.validateOverrideSignature(
+                method,
+                parentMethod,
+                fb.name,
+                fb.extends,
+              );
             }
           }
         }
@@ -937,10 +942,7 @@ export class SemanticAnalyzer {
 
     // Check variable declarations in programs
     for (const prog of ast.programs) {
-      this.checkVarBlocksForAbstractInstantiation(
-        prog.varBlocks,
-        abstractFBs,
-      );
+      this.checkVarBlocksForAbstractInstantiation(prog.varBlocks, abstractFBs);
     }
 
     // Check variable declarations in function blocks
@@ -1413,9 +1415,7 @@ export class SemanticAnalyzer {
       }
     } else if (visibility === "PROTECTED") {
       if (callerFB !== calleeFBType) {
-        const ancestors = callerFB
-          ? getAncestors(callerFB)
-          : new Set<string>();
+        const ancestors = callerFB ? getAncestors(callerFB) : new Set<string>();
         if (!ancestors.has(calleeFBType)) {
           this.addError(
             `Cannot call PROTECTED method '${methodName}' of '${calleeFBType}' from '${callerFB ?? "PROGRAM"}'.`,

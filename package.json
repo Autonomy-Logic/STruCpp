@@ -21,7 +21,8 @@
     "format:check": "prettier --check src/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist/",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
   },
   "bin": {
     "strucpp": "./dist/cli.js"
@@ -54,6 +55,10 @@
   "dependencies": {
     "chevrotain": "^11.0.0"
   },
+  "lint-staged": {
+    "src/**/*.{ts,tsx,js,jsx}": "prettier --write",
+    "src/**/*.{json,md}": "prettier --write"
+  },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
@@ -61,6 +66,8 @@
     "@vitest/coverage-v8": "^1.0.0",
     "esbuild": "^0.27.0",
     "eslint": "^8.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
     "pkg": "^5.8.1",
     "prettier": "^3.0.0",
     "typescript": "^5.0.0",

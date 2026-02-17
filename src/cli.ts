@@ -40,7 +40,10 @@ import { execFileSync } from "child_process";
 import { compile, getVersion, compileLibrary } from "./index.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
 import { parseTestFile } from "./testing/test-parser.js";
-import { generateTestMain, buildPOUInfoFromAST } from "./backend/test-main-gen.js";
+import {
+  generateTestMain,
+  buildPOUInfoFromAST,
+} from "./backend/test-main-gen.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
@@ -162,7 +165,11 @@ function parseArgs(args: string[]): CLIOptions {
     } else if (arg === "--test") {
       // Collect all following arguments that don't start with '-' as test files
       i++;
-      while (i < args.length && args[i] !== undefined && !args[i]!.startsWith("-")) {
+      while (
+        i < args.length &&
+        args[i] !== undefined &&
+        !args[i]!.startsWith("-")
+      ) {
         options.test.push(args[i]!);
         i++;
       }
@@ -452,9 +459,7 @@ function runTestMode(options: CLIOptions): void {
   }
 
   // 2. Build POU info from the compiled AST
-  const { pous } = result.ast
-    ? buildPOUInfoFromAST(result.ast)
-    : { pous: [] };
+  const { pous } = result.ast ? buildPOUInfoFromAST(result.ast) : { pous: [] };
 
   // 3. Parse test files
   const testFiles: import("./testing/test-model.js").TestFile[] = [];
@@ -487,11 +492,12 @@ function runTestMode(options: CLIOptions): void {
   }
 
   // 4. Generate test_main.cpp
-  const testMainOpts: import("./backend/test-main-gen.js").TestMainGenOptions = {
-    headerFileName: "generated.hpp",
-    pous,
-    isTestBuild: true,
-  };
+  const testMainOpts: import("./backend/test-main-gen.js").TestMainGenOptions =
+    {
+      headerFileName: "generated.hpp",
+      pous,
+      isTestBuild: true,
+    };
   if (result.ast) {
     testMainOpts.ast = result.ast;
   }
@@ -524,17 +530,21 @@ function runTestMode(options: CLIOptions): void {
     );
 
     try {
-      execFileSync(options.gpp, [
-        "-std=c++17",
-        `-I${runtimeIncludeDir}`,
-        `-I${testRuntimeDir}`,
-        `-I${tempDir}`,
-        ...splitCxxFlags(options.cxxFlags),
-        join(tempDir, "test_main.cpp"),
-        join(tempDir, "generated.cpp"),
-        "-o",
-        binaryPath,
-      ], { stdio: ["pipe", "pipe", "pipe"] });
+      execFileSync(
+        options.gpp,
+        [
+          "-std=c++17",
+          `-I${runtimeIncludeDir}`,
+          `-I${testRuntimeDir}`,
+          `-I${tempDir}`,
+          ...splitCxxFlags(options.cxxFlags),
+          join(tempDir, "test_main.cpp"),
+          join(tempDir, "generated.cpp"),
+          "-o",
+          binaryPath,
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
     } catch (err: unknown) {
       const execErr = err as {
         status?: number;

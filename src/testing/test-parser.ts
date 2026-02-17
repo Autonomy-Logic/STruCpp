@@ -38,10 +38,8 @@ export function parseTestFile(
       };
       errors.push({
         message: errObj.message ?? "Parse error",
-        line:
-          errObj.token?.startLine ?? errObj.line ?? 0,
-        column:
-          errObj.token?.startColumn ?? errObj.column ?? 0,
+        line: errObj.token?.startLine ?? errObj.line ?? 0,
+        column: errObj.token?.startColumn ?? errObj.column ?? 0,
         severity: "error",
         file: fileName,
       });

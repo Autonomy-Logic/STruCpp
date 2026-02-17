@@ -224,9 +224,18 @@ export class STParser extends CstParser {
     this.MANY2(() => {
       this.OR2({
         DEF: [
-          { ALT: () => this.CONSUME(tokens.ABSTRACT), GATE: () => this.LA(1).tokenType === tokens.ABSTRACT },
-          { ALT: () => this.CONSUME(tokens.FINAL), GATE: () => this.LA(1).tokenType === tokens.FINAL },
-          { ALT: () => this.CONSUME(tokens.OVERRIDE), GATE: () => this.LA(1).tokenType === tokens.OVERRIDE },
+          {
+            ALT: () => this.CONSUME(tokens.ABSTRACT),
+            GATE: () => this.LA(1).tokenType === tokens.ABSTRACT,
+          },
+          {
+            ALT: () => this.CONSUME(tokens.FINAL),
+            GATE: () => this.LA(1).tokenType === tokens.FINAL,
+          },
+          {
+            ALT: () => this.CONSUME(tokens.OVERRIDE),
+            GATE: () => this.LA(1).tokenType === tokens.OVERRIDE,
+          },
         ],
         IGNORE_AMBIGUITIES: true,
       });
@@ -1640,7 +1649,9 @@ export class STParser extends CstParser {
    */
   private isMockVerifyAhead(): boolean {
     const t = this.LA(1).tokenType;
-    return t === tokens.MOCK_VERIFY_CALLED || t === tokens.MOCK_VERIFY_CALL_COUNT;
+    return (
+      t === tokens.MOCK_VERIFY_CALLED || t === tokens.MOCK_VERIFY_CALL_COUNT
+    );
   }
 }
 

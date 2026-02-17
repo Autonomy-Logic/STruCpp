@@ -2773,9 +2773,7 @@ export class ASTBuilder {
   /**
    * Build a list of test statements from a testStatementList CST node.
    */
-  buildTestStatementList(
-    cst: CstNode,
-  ): import("./ast.js").TestStatement[] {
+  buildTestStatementList(cst: CstNode): import("./ast.js").TestStatement[] {
     const children = cst.children as CstChildren;
     const stmts: import("./ast.js").TestStatement[] = [];
     for (const node of getAllNodes(children.testStatement)) {
@@ -2822,7 +2820,9 @@ export class ASTBuilder {
    */
   buildMockStatement(
     cst: CstNode,
-  ): import("./ast.js").MockFBStatement | import("./ast.js").MockFunctionStatement {
+  ):
+    | import("./ast.js").MockFBStatement
+    | import("./ast.js").MockFunctionStatement {
     const children = cst.children as CstChildren;
 
     // MOCK_FUNCTION FuncName RETURNS expression ;
@@ -2955,9 +2955,7 @@ export class ASTBuilder {
   /**
    * Returns the minimum required argument count for an assert type.
    */
-  private getMinAssertArgs(
-    assertType: import("./ast.js").AssertType,
-  ): number {
+  private getMinAssertArgs(assertType: import("./ast.js").AssertType): number {
     switch (assertType) {
       case "ASSERT_TRUE":
       case "ASSERT_FALSE":

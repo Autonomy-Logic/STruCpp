@@ -196,8 +196,12 @@ export function generateTestMain(
       if (astFunc) {
         // Use production codegen for correct type resolution
         const sig = testCodegen.generateFunctionSignature(astFunc);
-        lines.push(`extern ${sig.returnType} ${astFunc.name}_real(${sig.params.join(", ")});`);
-        lines.push(`extern ${sig.returnType} (*${astFunc.name}_dispatch)(${sig.params.join(", ")});`);
+        lines.push(
+          `extern ${sig.returnType} ${astFunc.name}_real(${sig.params.join(", ")});`,
+        );
+        lines.push(
+          `extern ${sig.returnType} (*${astFunc.name}_dispatch)(${sig.params.join(", ")});`,
+        );
       } else {
         // Legacy fallback
         const func = legacyFunctionMap.get(funcName.toUpperCase());
@@ -221,7 +225,11 @@ export function generateTestMain(
     if (testFile.setup) {
       setupIndex++;
       setupStructName = `TestSetup_${setupIndex}`;
-      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, astFunctionMap);
+      const gen = new TestFunctionGenerator(
+        testCodegen,
+        testFile.fileName,
+        astFunctionMap,
+      );
       const structCode = gen.generateSetupStruct(
         setupStructName,
         testFile.setup,
@@ -234,7 +242,11 @@ export function generateTestMain(
     for (const tc of testFile.testCases) {
       testIndex++;
       const funcName = `test_${testIndex}`;
-      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, astFunctionMap);
+      const gen = new TestFunctionGenerator(
+        testCodegen,
+        testFile.fileName,
+        astFunctionMap,
+      );
       const code = gen.generateTestFunction(
         funcName,
         tc,
@@ -268,9 +280,7 @@ export function generateTestMain(
   if (fileGroups.size === 1) {
     // Single file: simple runner
     const [fileName, regs] = [...fileGroups.entries()][0]!;
-    lines.push(
-      `    strucpp::TestRunner runner("${escapeString(fileName)}");`,
-    );
+    lines.push(`    strucpp::TestRunner runner("${escapeString(fileName)}");`);
     for (const reg of regs) {
       lines.push(
         `    runner.add("${escapeString(reg.name)}", ${reg.funcName});`,
@@ -290,9 +300,7 @@ export function generateTestMain(
           `        runner.add("${escapeString(reg.name)}", ${reg.funcName});`,
         );
       }
-      lines.push(
-        "        if (runner.run() != 0) exit_code = 1;",
-      );
+      lines.push("        if (runner.run() != 0) exit_code = 1;");
       lines.push("    }");
     }
     lines.push("    return exit_code;");
@@ -336,7 +344,8 @@ class TestFunctionGenerator {
   ) {
     this.testCodegen = testCodegen;
     this.fileName = fileName;
-    this.astFunctionMap = astFunctionMap ?? new Map<string, FunctionDeclaration>();
+    this.astFunctionMap =
+      astFunctionMap ?? new Map<string, FunctionDeclaration>();
   }
 
   /**
@@ -500,10 +509,7 @@ class TestFunctionGenerator {
     }
   }
 
-  private generateVarDeclaration(
-    lines: string[],
-    decl: VarDeclaration,
-  ): void {
+  private generateVarDeclaration(lines: string[], decl: VarDeclaration): void {
     const cppType = this.testCodegen.resolveType(decl.type);
 
     for (const name of decl.names) {
@@ -517,10 +523,7 @@ class TestFunctionGenerator {
     }
   }
 
-  private generateTestStatement(
-    lines: string[],
-    stmt: TestStatement,
-  ): void {
+  private generateTestStatement(lines: string[], stmt: TestStatement): void {
     switch (stmt.kind) {
       case "AssertCall":
         this.generateAssertCall(lines, stmt);
@@ -553,10 +556,7 @@ class TestFunctionGenerator {
   // Mock statement generation
   // ===========================================================================
 
-  private generateMockFB(
-    lines: string[],
-    stmt: MockFBStatement,
-  ): void {
+  private generateMockFB(lines: string[], stmt: MockFBStatement): void {
     const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
     const path = prefix + stmt.instancePath.join(".");
     lines.push(`${this.indent}${path}.__mocked_ = true;`);
@@ -628,14 +628,9 @@ class TestFunctionGenerator {
   // Assert generation
   // ===========================================================================
 
-  private generateAssertCall(
-    lines: string[],
-    assert: AssertCall,
-  ): void {
+  private generateAssertCall(lines: string[], assert: AssertCall): void {
     const line = assert.sourceSpan.startLine;
-    const msgArg = assert.message
-      ? `, "${escapeString(assert.message)}"`
-      : "";
+    const msgArg = assert.message ? `, "${escapeString(assert.message)}"` : "";
 
     switch (assert.assertType) {
       case "ASSERT_EQ":

@@ -150,7 +150,9 @@ export class TestCodeGenerator extends CodeGenerator {
    * In test context, user-defined functions like Add() should not be mapped to standard
    * library ADD() because the std library templates expect IECVar-wrapped arguments.
    */
-  protected override generateFunctionCallExpression(expr: FunctionCallExpression): string {
+  protected override generateFunctionCallExpression(
+    expr: FunctionCallExpression,
+  ): string {
     if (this.userFunctionNames.has(expr.functionName.toUpperCase())) {
       const args = expr.arguments
         .map((arg) => this.generateExpression(arg.value))
@@ -160,7 +162,11 @@ export class TestCodeGenerator extends CodeGenerator {
     return super.generateFunctionCallExpression(expr);
   }
 
-  protected override emitPOUCallLine(instanceName: string, rawName: string, indent: string): void {
+  protected override emitPOUCallLine(
+    instanceName: string,
+    rawName: string,
+    indent: string,
+  ): void {
     const varType = this.currentScopeVarTypes.get(rawName.toUpperCase());
     if (varType && this.knownProgramTypes.has(varType.toUpperCase())) {
       this.emit(`${indent}${instanceName}.run();`);
