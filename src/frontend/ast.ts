@@ -402,7 +402,8 @@ export type Statement =
   | ReturnStatement
   | FunctionCallStatement
   | ExternalCodePragma
-  | DeleteStatement;
+  | DeleteStatement
+  | AssertCall;
 
 /**
  * Assignment statement
@@ -706,6 +707,121 @@ export interface NewExpression extends TypedNode {
   allocationType: TypeReference;
   arraySize?: Expression;
 }
+
+// =============================================================================
+// Test Framework Types
+// =============================================================================
+
+/**
+ * Root node representing a parsed test file.
+ */
+export interface TestFile {
+  fileName: string;
+  setup?: SetupBlock;
+  teardown?: TeardownBlock;
+  testCases: TestCase[];
+}
+
+/**
+ * SETUP block: shared initialization that runs before each TEST.
+ */
+export interface SetupBlock {
+  varBlocks: VarBlock[];
+  body: TestStatement[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * TEARDOWN block: cleanup that runs after each TEST.
+ */
+export interface TeardownBlock {
+  body: TestStatement[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * A single TEST block.
+ */
+export interface TestCase {
+  name: string;
+  varBlocks: VarBlock[];
+  body: TestStatement[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * Assert function type
+ */
+export type AssertType =
+  | "ASSERT_EQ"
+  | "ASSERT_NEQ"
+  | "ASSERT_TRUE"
+  | "ASSERT_FALSE"
+  | "ASSERT_GT"
+  | "ASSERT_LT"
+  | "ASSERT_GE"
+  | "ASSERT_LE"
+  | "ASSERT_NEAR";
+
+/**
+ * Assert function call within a test block.
+ */
+export interface AssertCall extends ASTNode {
+  kind: "AssertCall";
+  assertType: AssertType;
+  args: Expression[];
+  message?: string;
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK instance.path; - Mock an FB instance (skip body, retain outputs).
+ */
+export interface MockFBStatement extends ASTNode {
+  kind: "MockFBStatement";
+  instancePath: string[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_FUNCTION FuncName RETURNS expression; - Mock a function with fixed return value.
+ */
+export interface MockFunctionStatement extends ASTNode {
+  kind: "MockFunctionStatement";
+  functionName: string;
+  returnValue: Expression;
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_VERIFY_CALLED(instance.path); - Assert mocked FB was called at least once.
+ */
+export interface MockVerifyCalledStatement extends ASTNode {
+  kind: "MockVerifyCalledStatement";
+  instancePath: string[];
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * MOCK_VERIFY_CALL_COUNT(instance.path, count); - Assert mocked FB call count.
+ */
+export interface MockVerifyCallCountStatement extends ASTNode {
+  kind: "MockVerifyCallCountStatement";
+  instancePath: string[];
+  expectedCount: Expression;
+  sourceSpan: SourceSpan;
+}
+
+/**
+ * A statement within a test block (either a regular statement, assert call, or mock statement).
+ */
+export type TestStatement =
+  | Statement
+  | AssertCall
+  | MockFBStatement
+  | MockFunctionStatement
+  | MockVerifyCalledStatement
+  | MockVerifyCallCountStatement;
 
 // =============================================================================
 // Factory Functions

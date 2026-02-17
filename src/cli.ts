@@ -26,11 +26,24 @@
  *   -h, --help                Show help
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { resolve, basename, dirname } from "path";
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  existsSync,
+} from "fs";
+import { resolve, basename, dirname, join } from "path";
+import { tmpdir } from "os";
 import { execFileSync } from "child_process";
 import { compile, getVersion, compileLibrary } from "./index.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
+import { parseTestFile } from "./testing/test-parser.js";
+import {
+  generateTestMain,
+  buildPOUInfoFromAST,
+} from "./backend/test-main-gen.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
@@ -52,6 +65,7 @@ interface CLIOptions {
   libName?: string;
   libVersion: string;
   libNamespace?: string;
+  test: string[];
 }
 
 function parseArgs(args: string[]): CLIOptions {
@@ -71,6 +85,7 @@ function parseArgs(args: string[]): CLIOptions {
     libraryPaths: [],
     compileLib: false,
     libVersion: "1.0.0",
+    test: [],
   };
 
   let i = 0;
@@ -147,6 +162,19 @@ function parseArgs(args: string[]): CLIOptions {
       if (nextArg !== undefined) {
         options.libNamespace = nextArg;
       }
+    } else if (arg === "--test") {
+      // Collect all following arguments that don't start with '-' as test files
+      i++;
+      while (
+        i < args.length &&
+        args[i] !== undefined &&
+        !args[i]!.startsWith("-")
+      ) {
+        options.test.push(args[i]!);
+        i++;
+      }
+      // Back up one so the outer loop increment doesn't skip anything
+      i--;
     } else if (arg !== undefined && !arg.startsWith("-")) {
       options.inputs.push(arg);
     }
@@ -186,6 +214,10 @@ Library compilation:
   --lib-version <version>   Library version (default: "1.0.0")
   --lib-namespace <ns>      C++ namespace (default: derived from lib-name)
 
+Testing:
+  --test <file> [file2...]   Run tests from test file(s) against source files
+                             (must come after -o if used)
+
 Examples:
   strucpp program.st -o program.cpp
   strucpp program.st utils.st -o program.cpp
@@ -193,6 +225,7 @@ Examples:
   strucpp program.st -o program.cpp --debug --line-directives
   strucpp program.st -o program.cpp --build
   strucpp --compile-lib math.st -o mathlib/ --lib-name math-lib
+  strucpp counter.st --test test_counter.st
 
 For more information, visit: https://github.com/Autonomy-Logic/STruCpp
 `);
@@ -367,6 +400,206 @@ function compileLibraryMode(options: CLIOptions): void {
   console.log("Library compilation successful!");
 }
 
+/**
+ * Test runner mode: compile source, parse tests, generate + compile + run test binary.
+ */
+function runTestMode(options: CLIOptions): void {
+  if (options.inputs.length === 0) {
+    console.error("Error: No source files specified for testing");
+    console.error("Usage: strucpp <source.st> --test <test.st>");
+    process.exit(1);
+  }
+
+  // 1. Read and compile all source files
+  const primaryInput = options.inputs[0]!;
+  const inputPath = resolve(primaryInput);
+  let source: string;
+  try {
+    source = readFileSync(inputPath, "utf-8");
+  } catch {
+    console.error(`Error: Cannot read source file: ${inputPath}`);
+    process.exit(1);
+  }
+
+  const additionalSources: Array<{ source: string; fileName: string }> = [];
+  for (const extra of options.inputs.slice(1)) {
+    const extraPath = resolve(extra);
+    try {
+      additionalSources.push({
+        source: readFileSync(extraPath, "utf-8"),
+        fileName: basename(extraPath),
+      });
+    } catch {
+      console.error(`Error: Cannot read source file: ${extraPath}`);
+      process.exit(1);
+    }
+  }
+
+  const compileOptions: Partial<CompileOptions> = {
+    headerFileName: "generated.hpp",
+    fileName: basename(inputPath),
+    isTestBuild: true,
+  };
+  if (additionalSources.length > 0) {
+    compileOptions.additionalSources = additionalSources;
+  }
+  if (options.libraryPaths.length > 0) {
+    compileOptions.libraryPaths = options.libraryPaths;
+  }
+
+  const result = compile(source, compileOptions);
+  if (!result.success) {
+    console.error("Error compiling source files:");
+    for (const err of result.errors) {
+      const location = err.file
+        ? `${err.file}:${err.line}:${err.column}`
+        : `${err.line}:${err.column}`;
+      console.error(`  ${location}: ${err.severity}: ${err.message}`);
+    }
+    process.exit(1);
+  }
+
+  // 2. Build POU info from the compiled AST
+  const { pous } = result.ast ? buildPOUInfoFromAST(result.ast) : { pous: [] };
+
+  // 3. Parse test files
+  const testFiles: import("./testing/test-model.js").TestFile[] = [];
+  for (const testPath of options.test) {
+    const resolvedPath = resolve(testPath);
+    let testSource: string;
+    try {
+      testSource = readFileSync(resolvedPath, "utf-8");
+    } catch {
+      console.error(`Error: Cannot read test file: ${resolvedPath}`);
+      process.exit(1);
+    }
+
+    const parseResult = parseTestFile(testSource, basename(testPath));
+    if (parseResult.errors.length > 0) {
+      console.error(`Error parsing ${basename(testPath)}:`);
+      for (const err of parseResult.errors) {
+        console.error(`  ${err.line}:${err.column}: ${err.message}`);
+      }
+      process.exit(1);
+    }
+    if (parseResult.testFile) {
+      testFiles.push(parseResult.testFile);
+    }
+  }
+
+  if (testFiles.length === 0) {
+    console.error("Error: No test cases found in test files");
+    process.exit(1);
+  }
+
+  // 4. Generate test_main.cpp
+  const testMainOpts: import("./backend/test-main-gen.js").TestMainGenOptions =
+    {
+      headerFileName: "generated.hpp",
+      pous,
+      isTestBuild: true,
+    };
+  if (result.ast) {
+    testMainOpts.ast = result.ast;
+  }
+  const testMainCpp = generateTestMain(testFiles, testMainOpts);
+
+  // 5. Write to temp directory
+  const tempDir = mkdtempSync(join(tmpdir(), "strucpp-test-"));
+  try {
+    writeFileSync(join(tempDir, "generated.hpp"), result.headerCode, "utf-8");
+    writeFileSync(join(tempDir, "generated.cpp"), result.cppCode, "utf-8");
+    writeFileSync(join(tempDir, "test_main.cpp"), testMainCpp, "utf-8");
+
+    // 6. Find runtime include directory
+    const runtimeIncludeDir = findRuntimeIncludeDir(options.cxxFlags);
+    if (!runtimeIncludeDir) {
+      console.error(
+        "Error: Could not locate runtime include directory.\n" +
+          '  Use --cxx-flags "-I/path/to/runtime/include" to specify it.',
+      );
+      process.exit(1);
+    }
+
+    // Test runtime header directory
+    const testRuntimeDir = resolve(dirname(runtimeIncludeDir), "test");
+
+    // 7. Compile with g++
+    const binaryPath = join(
+      tempDir,
+      process.platform === "win32" ? "test_runner.exe" : "test_runner",
+    );
+
+    try {
+      execFileSync(
+        options.gpp,
+        [
+          "-std=c++17",
+          `-I${runtimeIncludeDir}`,
+          `-I${testRuntimeDir}`,
+          `-I${tempDir}`,
+          ...splitCxxFlags(options.cxxFlags),
+          join(tempDir, "test_main.cpp"),
+          join(tempDir, "generated.cpp"),
+          "-o",
+          binaryPath,
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+    } catch (err: unknown) {
+      const execErr = err as {
+        status?: number;
+        stderr?: Buffer | string;
+        stdout?: Buffer | string;
+      };
+      const stderr = execErr.stderr
+        ? typeof execErr.stderr === "string"
+          ? execErr.stderr
+          : execErr.stderr.toString()
+        : "";
+      console.error("Error: C++ compilation failed:");
+      if (stderr) console.error(stderr);
+      process.exit(1);
+    }
+
+    // 8. Execute test binary and display results
+    let exitCode = 0;
+    try {
+      const output = execFileSync(binaryPath, [], {
+        encoding: "utf-8",
+        timeout: 30000,
+      });
+      process.stdout.write(output);
+    } catch (err: unknown) {
+      const execErr = err as {
+        status?: number;
+        stdout?: string;
+        stderr?: string;
+        signal?: string;
+      };
+      if (execErr.stdout) {
+        process.stdout.write(execErr.stdout);
+      }
+      if (execErr.signal) {
+        console.error(
+          `Error: Test binary crashed with signal ${execErr.signal}`,
+        );
+      }
+      exitCode = execErr.status ?? 1;
+    }
+
+    // 9. Exit with test result code
+    process.exit(exitCode);
+  } finally {
+    // 10. Cleanup temp directory
+    try {
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+}
+
 function main(): void {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
@@ -384,6 +617,12 @@ function main(): void {
   // Library compilation mode
   if (options.compileLib) {
     compileLibraryMode(options);
+    return;
+  }
+
+  // Test mode
+  if (options.test.length > 0) {
+    runTestMode(options);
     return;
   }
 

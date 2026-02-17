@@ -347,6 +347,82 @@ export const NULL = createToken({ name: "NULL", pattern: /NULL/i });
 export const __NEW = createToken({ name: "__NEW", pattern: /__NEW/i });
 export const __DELETE = createToken({ name: "__DELETE", pattern: /__DELETE/i });
 
+// Test framework keywords (only active in test file lexing)
+export const TEST = createToken({ name: "TEST", pattern: /TEST/i });
+export const END_TEST = createToken({
+  name: "END_TEST",
+  pattern: /END_TEST/i,
+});
+
+// Test framework assert built-in functions
+export const ASSERT_EQ = createToken({
+  name: "ASSERT_EQ",
+  pattern: /ASSERT_EQ/i,
+});
+export const ASSERT_TRUE = createToken({
+  name: "ASSERT_TRUE",
+  pattern: /ASSERT_TRUE/i,
+});
+export const ASSERT_FALSE = createToken({
+  name: "ASSERT_FALSE",
+  pattern: /ASSERT_FALSE/i,
+});
+export const ASSERT_NEQ = createToken({
+  name: "ASSERT_NEQ",
+  pattern: /ASSERT_NEQ/i,
+});
+export const ASSERT_GT = createToken({
+  name: "ASSERT_GT",
+  pattern: /ASSERT_GT/i,
+});
+export const ASSERT_LT = createToken({
+  name: "ASSERT_LT",
+  pattern: /ASSERT_LT/i,
+});
+export const ASSERT_GE = createToken({
+  name: "ASSERT_GE",
+  pattern: /ASSERT_GE/i,
+});
+export const ASSERT_LE = createToken({
+  name: "ASSERT_LE",
+  pattern: /ASSERT_LE/i,
+});
+export const ASSERT_NEAR = createToken({
+  name: "ASSERT_NEAR",
+  pattern: /ASSERT_NEAR/i,
+});
+
+// SETUP/TEARDOWN for test organization
+export const SETUP = createToken({ name: "SETUP", pattern: /SETUP/i });
+export const END_SETUP = createToken({
+  name: "END_SETUP",
+  pattern: /END_SETUP/i,
+});
+export const TEARDOWN = createToken({
+  name: "TEARDOWN",
+  pattern: /TEARDOWN/i,
+});
+export const END_TEARDOWN = createToken({
+  name: "END_TEARDOWN",
+  pattern: /END_TEARDOWN/i,
+});
+
+// Mocking framework keywords (test file only)
+export const MOCK_VERIFY_CALL_COUNT = createToken({
+  name: "MOCK_VERIFY_CALL_COUNT",
+  pattern: /MOCK_VERIFY_CALL_COUNT/i,
+});
+export const MOCK_VERIFY_CALLED = createToken({
+  name: "MOCK_VERIFY_CALLED",
+  pattern: /MOCK_VERIFY_CALLED/i,
+});
+export const MOCK_FUNCTION = createToken({
+  name: "MOCK_FUNCTION",
+  pattern: /MOCK_FUNCTION/i,
+});
+export const MOCK = createToken({ name: "MOCK", pattern: /MOCK/i });
+export const RETURNS = createToken({ name: "RETURNS", pattern: /RETURNS/i });
+
 // OOP extensions (IEC 61131-3 Edition 3)
 export const METHOD = createToken({ name: "METHOD", pattern: /METHOD/i });
 export const END_METHOD = createToken({
@@ -506,6 +582,35 @@ export const Identifier = createToken({
 // =============================================================================
 // Keyword Configuration
 // =============================================================================
+
+// Test-specific keyword tokens (separate from normal keywords)
+const testKeywordTokens = [
+  END_TEST,
+  TEST,
+  END_SETUP,
+  SETUP,
+  END_TEARDOWN,
+  TEARDOWN,
+  ASSERT_EQ,
+  ASSERT_NEQ,
+  ASSERT_TRUE,
+  ASSERT_FALSE,
+  ASSERT_GT,
+  ASSERT_LT,
+  ASSERT_GE,
+  ASSERT_LE,
+  ASSERT_NEAR,
+  MOCK_VERIFY_CALL_COUNT,
+  MOCK_VERIFY_CALLED,
+  MOCK_FUNCTION,
+  MOCK,
+  RETURNS,
+];
+
+// Set longer_alt for test keywords
+testKeywordTokens.forEach((token) => {
+  token.LONGER_ALT = Identifier;
+});
 
 // Configure all keywords to use Identifier as longer_alt
 // This ensures that 'var123' is tokenized as Identifier, not VAR + 123
@@ -753,6 +858,31 @@ export const allTokens = [
 export const STLexer = new Lexer(allTokens);
 
 /**
+ * Token list for test files. Built programmatically from allTokens by
+ * inserting test-specific keywords (TEST, END_TEST, ASSERT_*, MOCK*, etc.)
+ * before the normal keywords section.
+ *
+ * Test keywords must NOT be in allTokens to avoid conflicting with user
+ * identifiers named TEST in normal ST programs.
+ */
+export const allTestTokens = (() => {
+  // Find where normal keywords start (first keyword is END_PROGRAM)
+  const keywordIndex = allTokens.indexOf(END_PROGRAM);
+  return [
+    ...allTokens.slice(0, keywordIndex),
+    // Test-specific keywords (higher priority than normal keywords)
+    ...testKeywordTokens,
+    ...allTokens.slice(keywordIndex),
+  ];
+})();
+
+/**
+ * The STruC++ test file lexer instance.
+ * Uses allTestTokens which includes TEST/END_TEST/ASSERT_* tokens.
+ */
+export const TestLexer = new Lexer(allTestTokens);
+
+/**
  * Check for unclosed block comments in source code.
  * Returns error info if an unclosed comment is found.
  */
@@ -836,6 +966,33 @@ export function tokenize(source: string): ReturnType<typeof STLexer.tokenize> {
   const unclosedComment = findUnclosedBlockComment(source);
 
   const result = STLexer.tokenize(source);
+
+  if (unclosedComment) {
+    result.errors.push({
+      offset: unclosedComment.offset,
+      line: unclosedComment.line,
+      column: unclosedComment.column,
+      length: 2,
+      message: "Unclosed block comment",
+    });
+  }
+
+  return result;
+}
+
+/**
+ * Tokenize test file source code using the test lexer.
+ * Identical to tokenize() but uses TestLexer (which recognizes TEST/ASSERT_* tokens).
+ *
+ * @param source - The test file source code to tokenize
+ * @returns Lexer result with tokens and any lexing errors
+ */
+export function tokenizeTest(
+  source: string,
+): ReturnType<typeof TestLexer.tokenize> {
+  const unclosedComment = findUnclosedBlockComment(source);
+
+  const result = TestLexer.tokenize(source);
 
   if (unclosedComment) {
     result.errors.push({

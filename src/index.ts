@@ -295,6 +295,7 @@ export function compile(
     lineDirectives: mergedOptions.lineMapping,
     headerFileName: mergedOptions.headerFileName ?? "generated.hpp",
     libraryHeaders,
+    isTestBuild: mergedOptions.isTestBuild ?? false,
   });
   codegen.setProjectModel(projectModelResult.model);
 

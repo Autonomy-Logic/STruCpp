@@ -128,6 +128,9 @@ export interface CodeGenOptions {
 
   /** Additional library headers to include in the generated header */
   libraryHeaders: string[];
+
+  /** Whether this is a test build (adds mock infrastructure to FB classes) */
+  isTestBuild: boolean;
 }
 
 /**
@@ -140,6 +143,7 @@ export const defaultCodeGenOptions: CodeGenOptions = {
   lineEnding: "\n",
   headerFileName: "generated.hpp",
   libraryHeaders: [],
+  isTestBuild: false,
 };
 
 // =============================================================================
@@ -180,13 +184,12 @@ export interface CodeGenResult {
  */
 export class CodeGenerator {
   private options: CodeGenOptions;
-  private output: string[] = [];
+  protected output: string[] = [];
   private headerOutput: string[] = [];
   private lineMap: Map<number, LineMapEntry> = new Map();
   private headerLineMap: Map<number, LineMapEntry> = new Map();
   private currentLine = 1;
   private currentHeaderLine = 1;
-  private indentLevel = 0;
   private projectModel?: ProjectModel;
 
   /** Track located variables for descriptor array generation */
@@ -222,16 +225,19 @@ export class CodeGenerator {
   private currentStatementIndent = "    ";
 
   /** Set of known function block type names (upper case) for FB instance detection */
-  private knownFBTypes: Set<string> = new Set();
+  protected knownFBTypes: Set<string> = new Set();
 
   /** Set of known interface type names (upper case) */
-  private knownInterfaceTypes: Set<string> = new Set();
+  protected knownInterfaceTypes: Set<string> = new Set();
 
   /** Set of known struct/UDT type names (upper case) */
-  private knownStructTypes: Set<string> = new Set();
+  protected knownStructTypes: Set<string> = new Set();
+
+  /** Set of known program type names (upper case) for program invocation detection */
+  protected knownProgramTypes: Set<string> = new Set();
 
   /** Map of variable name (upper case) → type name (original case) for current scope */
-  private currentScopeVarTypes: Map<string, string> = new Map();
+  protected currentScopeVarTypes: Map<string, string> = new Map();
 
   /** Parent class name of current FB (for SUPER resolution) */
   private currentFBExtends: string | undefined;
@@ -256,7 +262,7 @@ export class CodeGenerator {
   private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
 
   constructor(
-    private readonly _symbolTables: SymbolTables,
+    private readonly _symbolTables?: SymbolTables,
     options: Partial<CodeGenOptions> = {},
   ) {
     this.options = { ...defaultCodeGenOptions, ...options };
@@ -268,6 +274,9 @@ export class CodeGenerator {
 
   /** Get symbol tables (for future use in Phase 3+) */
   get symbolTables(): SymbolTables {
+    if (!this._symbolTables) {
+      throw new Error("SymbolTables not available (test codegen mode)");
+    }
     return this._symbolTables;
   }
 
@@ -276,7 +285,7 @@ export class CodeGenerator {
    * Handles VLA synthetic names (__VLA_1D_INT → ArrayView1D<INT_t>)
    * and regular types (INT → IEC_INT).
    */
-  private mapVarTypeToCpp(typeName: string, maxLength?: number): string {
+  protected mapVarTypeToCpp(typeName: string, maxLength?: number): string {
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
     if (vlaMatch) {
@@ -304,7 +313,10 @@ export class CodeGenerator {
   /**
    * Map a TypeReference to its C++ type string, including parameterized length.
    */
-  private mapTypeRefToCpp(typeRef: { name: string; maxLength?: number }): string {
+  protected mapTypeRefToCpp(typeRef: {
+    name: string;
+    maxLength?: number;
+  }): string {
     return this.mapVarTypeToCpp(typeRef.name, typeRef.maxLength);
   }
 
@@ -335,7 +347,6 @@ export class CodeGenerator {
     this.headerLineMap = new Map();
     this.currentLine = 1;
     this.currentHeaderLine = 1;
-    this.indentLevel = 0;
     this.locatedVars = [];
     this.codegenWarnings = [];
     this.tempVarCounter = 0;
@@ -658,6 +669,14 @@ export class CodeGenerator {
       this.emitHeader(`    virtual ~${fb.name}() = default;`);
     }
 
+    // Test build: add mock infrastructure
+    if (this.options.isTestBuild) {
+      this.emitHeader("");
+      this.emitHeader("    // Test mock infrastructure");
+      this.emitHeader("    bool __mocked_ = false;");
+      this.emitHeader("    struct { int call_count = 0; } __mock_state_;");
+    }
+
     this.emitHeader("};");
     this.emitHeader("");
   }
@@ -721,7 +740,7 @@ export class CodeGenerator {
    * VAR_IN_OUT parameters are passed by reference.
    * VLA types use ArrayView instead of IECVar reference.
    */
-  private generateFunctionParams(
+  protected generateFunctionParams(
     func: CompilationUnit["functions"][0],
   ): string[] {
     const params: string[] = [];
@@ -779,7 +798,8 @@ export class CodeGenerator {
     this.emitHeader(`    virtual ~${iface.name}() = default;`);
 
     for (const method of iface.methods) {
-      const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
+      const isIfaceReturn =
+        method.returnType && this.isInterfaceType(method.returnType.name);
       const returnType = method.returnType
         ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
         : "void";
@@ -848,7 +868,8 @@ export class CodeGenerator {
       }
 
       for (const method of visMethods) {
-        const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
+        const isIfaceReturn =
+          method.returnType && this.isInterfaceType(method.returnType.name);
         const returnType = method.returnType
           ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
           : "void";
@@ -945,7 +966,8 @@ export class CodeGenerator {
     method: MethodDeclaration,
     className: string,
   ): void {
-    const isIfaceReturn = method.returnType && this.isInterfaceType(method.returnType.name);
+    const isIfaceReturn =
+      method.returnType && this.isInterfaceType(method.returnType.name);
     const returnType = method.returnType
       ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
       : "void";
@@ -959,7 +981,9 @@ export class CodeGenerator {
         // Interface return: assignments to result become return statements
         this.interfaceReturnMethod = true;
       } else {
-        this.emit(`    ${this.mapTypeRefToCpp(method.returnType)} ${method.name}_result;`);
+        this.emit(
+          `    ${this.mapTypeRefToCpp(method.returnType)} ${method.name}_result;`,
+        );
       }
       this.currentFunctionName = method.name;
     }
@@ -990,7 +1014,9 @@ export class CodeGenerator {
             const initValue = decl.initialValue
               ? ` = ${this.generateExpression(decl.initialValue)}`
               : "";
-            this.emit(`    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`);
+            this.emit(
+              `    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`,
+            );
           }
         }
       }
@@ -1110,6 +1136,9 @@ export class CodeGenerator {
 
     // Operator()
     this.emit(`void ${fb.name}::operator()() {`);
+    if (this.options.isTestBuild) {
+      this.emit("    if (__mocked_) { __mock_state_.call_count++; return; }");
+    }
     this.enterScope(fb.varBlocks);
     if (fb.body.length > 0) {
       this.generateStatements(fb.body);
@@ -1146,22 +1175,70 @@ export class CodeGenerator {
     func: CompilationUnit["functions"][0],
   ): void {
     const params = this.generateFunctionParams(func);
+    const retType = this.mapTypeRefToCpp(func.returnType);
 
-    this.emit(
-      `${this.mapTypeRefToCpp(func.returnType)} ${func.name}(${params.join(", ")}) {`,
-    );
-    this.emit(`    ${this.mapTypeRefToCpp(func.returnType)} ${func.name}_result;`);
-    // Set function context so assignments to function name redirect to result variable
-    this.currentFunctionName = func.name;
-    if (func.body.length > 0) {
-      this.generateStatements(func.body);
-    } else if (this.options.sourceComments) {
-      this.emit("    // Empty function body");
+    if (this.options.isTestBuild) {
+      // Test build: generate _real, dispatch pointer, and wrapper
+      // 1. _real implementation (original body with renamed function)
+      this.emit(`${retType} ${func.name}_real(${params.join(", ")}) {`);
+      this.emit(`    ${retType} ${func.name}_result;`);
+      this.currentFunctionName = func.name;
+      if (func.body.length > 0) {
+        this.generateStatements(func.body);
+      } else if (this.options.sourceComments) {
+        this.emit("    // Empty function body");
+      }
+      this.currentFunctionName = undefined;
+      this.emit(`    return ${func.name}_result;`);
+      this.emit("}");
+      this.emit("");
+
+      // 2. Dispatch pointer (defaults to real implementation)
+      this.emit(
+        `${retType} (*${func.name}_dispatch)(${params.join(", ")}) = ${func.name}_real;`,
+      );
+      this.emit("");
+
+      // 3. Wrapper that calls through dispatch pointer
+      const paramNames = this.generateFunctionParamNames(func);
+      this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
+      this.emit(`    return ${func.name}_dispatch(${paramNames.join(", ")});`);
+      this.emit("}");
+      this.emit("");
+    } else {
+      // Production build: normal function
+      this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
+      this.emit(`    ${retType} ${func.name}_result;`);
+      this.currentFunctionName = func.name;
+      if (func.body.length > 0) {
+        this.generateStatements(func.body);
+      } else if (this.options.sourceComments) {
+        this.emit("    // Empty function body");
+      }
+      this.currentFunctionName = undefined;
+      this.emit(`    return ${func.name}_result;`);
+      this.emit("}");
+      this.emit("");
     }
-    this.currentFunctionName = undefined;
-    this.emit(`    return ${func.name}_result;`);
-    this.emit("}");
-    this.emit("");
+  }
+
+  /**
+   * Generate function parameter name list (just names, no types).
+   */
+  private generateFunctionParamNames(
+    func: CompilationUnit["functions"][0],
+  ): string[] {
+    const names: string[] = [];
+    for (const block of func.varBlocks) {
+      if (block.blockType === "VAR_INPUT" || block.blockType === "VAR_IN_OUT") {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            names.push(name);
+          }
+        }
+      }
+    }
+    return names;
   }
 
   // ===========================================================================
@@ -1231,7 +1308,10 @@ export class CodeGenerator {
 
         // Collect retain variables
         if (decl.isRetain) {
-          retainVars.push({ name: decl.name, typeName: this.mapVarTypeToCpp(decl.typeName, decl.maxLength) });
+          retainVars.push({
+            name: decl.name,
+            typeName: this.mapVarTypeToCpp(decl.typeName, decl.maxLength),
+          });
         }
       }
     }
@@ -1240,7 +1320,9 @@ export class CodeGenerator {
     if (prog.varExternal.length > 0) {
       this.emitHeader("    // External variables (references to globals)");
       for (const ext of prog.varExternal) {
-        this.emitHeader(`    ${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name};`);
+        this.emitHeader(
+          `    ${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name};`,
+        );
       }
     }
 
@@ -1649,7 +1731,9 @@ export class CodeGenerator {
         break;
       case "FunctionCallStatement": {
         if (stmt.call.kind === "MethodCallExpression") {
-          this.emit(`${indent}${this.generateMethodCallExpression(stmt.call)};`);
+          this.emit(
+            `${indent}${this.generateMethodCallExpression(stmt.call)};`,
+          );
         } else {
           const fbType = this.getFBInvocationType(stmt.call.functionName);
           if (fbType) {
@@ -1693,6 +1777,9 @@ export class CodeGenerator {
         this.emit(
           `${indent}strucpp::iec_delete(${this.generateExpression(stmt.pointer)});`,
         );
+        break;
+      case "AssertCall":
+        // Assert calls only appear in test files, not in normal source compilation
         break;
       default: {
         const _exhaustive: never = stmt;
@@ -1982,7 +2069,7 @@ export class CodeGenerator {
   /**
    * Generate code for a list of statements.
    */
-  protected generateStatements(
+  private generateStatements(
     stmts: Statement[],
     indent: string = "    ",
   ): void {
@@ -2217,7 +2304,7 @@ export class CodeGenerator {
       if (mangledName) {
         result = mangledName;
       } else {
-        result = expr.name;
+        result = this.resolveVariableBaseName(expr.name);
       }
     }
 
@@ -2324,7 +2411,9 @@ export class CodeGenerator {
     // Try type-specific resolution first (avoids collisions when two FBs share a method name)
     let resolvedName: string;
     if (expr.object.kind === "VariableExpression") {
-      const varType = this.currentScopeVarTypes.get(expr.object.name.toUpperCase());
+      const varType = this.currentScopeVarTypes.get(
+        expr.object.name.toUpperCase(),
+      );
       resolvedName = varType
         ? this.resolveMethodName(varType, expr.methodName)
         : this.resolveMethodNameGlobal(expr.methodName);
@@ -2340,7 +2429,9 @@ export class CodeGenerator {
    * standard functions, *_TO_* conversions, DELETE->DELETE_STR mapping,
    * named argument reordering, and user-defined function calls.
    */
-  private generateFunctionCallExpression(expr: FunctionCallExpression): string {
+  protected generateFunctionCallExpression(
+    expr: FunctionCallExpression,
+  ): string {
     // Handle dotted method calls: THIS.method, SUPER.method, instance.method
     if (expr.functionName.includes(".")) {
       const dotIdx = expr.functionName.indexOf(".");
@@ -2809,7 +2900,11 @@ export class CodeGenerator {
    */
   private getFBInvocationType(functionName: string): string | undefined {
     const varType = this.currentScopeVarTypes.get(functionName.toUpperCase());
-    if (varType && this.isFBType(varType)) {
+    if (
+      varType &&
+      (this.isFBType(varType) ||
+        this.knownProgramTypes.has(varType.toUpperCase()))
+    ) {
       return varType;
     }
     return undefined;
@@ -2823,7 +2918,7 @@ export class CodeGenerator {
     call: FunctionCallExpression,
     indent: string,
   ): void {
-    const instanceName = call.functionName;
+    const instanceName = this.resolveVariableBaseName(call.functionName);
 
     // Assign each named input parameter
     for (const arg of call.arguments) {
@@ -2834,8 +2929,8 @@ export class CodeGenerator {
       }
     }
 
-    // Call the FB execution body
-    this.emit(`${indent}${instanceName}();`);
+    // Call the FB/program execution body
+    this.emitPOUCallLine(instanceName, call.functionName, indent);
 
     // Capture output arguments (=> syntax)
     for (const arg of call.arguments) {
@@ -2845,6 +2940,26 @@ export class CodeGenerator {
         );
       }
     }
+  }
+
+  /**
+   * Resolve the base name for a variable. Subclasses can override to add
+   * prefixes (e.g., "s." for SETUP variables in test codegen).
+   */
+  protected resolveVariableBaseName(name: string): string {
+    return name;
+  }
+
+  /**
+   * Emit the call line for a POU (FB or program) invocation.
+   * Subclasses can override to change the call pattern (e.g., ".run()" for programs).
+   */
+  protected emitPOUCallLine(
+    instanceName: string,
+    _rawName: string,
+    indent: string,
+  ): void {
+    this.emit(`${indent}${instanceName}();`);
   }
 
   /**
@@ -3076,7 +3191,7 @@ export class CodeGenerator {
   /**
    * Emit a line to the implementation output.
    */
-  private emit(line: string): void {
+  protected emit(line: string): void {
     this.output.push(line);
     this.currentLine++;
   }
@@ -3090,36 +3205,10 @@ export class CodeGenerator {
   }
 
   /**
-   * Get the current indentation string.
-   * Used in Phase 3+ for proper code formatting.
-   */
-  protected getIndent(): string {
-    return this.options.indent.repeat(this.indentLevel);
-  }
-
-  /**
-   * Increase indentation level.
-   * Used in Phase 3+ for proper code formatting.
-   */
-  protected indent(): void {
-    this.indentLevel++;
-  }
-
-  /**
-   * Decrease indentation level.
-   * Used in Phase 3+ for proper code formatting.
-   */
-  protected dedent(): void {
-    if (this.indentLevel > 0) {
-      this.indentLevel--;
-    }
-  }
-
-  /**
    * Record a line mapping from ST to C++.
    * Used in Phase 3+ for debugging support.
    */
-  protected recordLineMapping(stLine: number, cppStartLine: number): void {
+  private recordLineMapping(stLine: number, cppStartLine: number): void {
     // currentLine points to the *next* line to be emitted, so the last
     // emitted line is currentLine - 1.
     const lastEmittedLine = this.currentLine - 1;

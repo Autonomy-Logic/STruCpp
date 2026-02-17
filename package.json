@@ -13,15 +13,17 @@
     "build:pkg:win": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node18-win-x64 --output dist/bin/strucpp-win.exe --compress GZip",
     "build:pkg:macos": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node18-macos-x64 --output dist/bin/strucpp-macos --compress GZip",
     "dev": "tsc --watch",
-    "test": "vitest",
-    "test:coverage": "vitest --coverage",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist/",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "prepare": "husky"
   },
   "bin": {
     "strucpp": "./dist/cli.js"
@@ -39,7 +41,7 @@
     "openplc"
   ],
   "author": "Autonomy Logic / OpenPLC Project <thiago.alves@autonomylogic.com>",
-  "license": "GPL-3.0",
+  "license": "LGPL-3.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/Autonomy-Logic/STruCpp.git"
@@ -54,6 +56,10 @@
   "dependencies": {
     "chevrotain": "^11.0.0"
   },
+  "lint-staged": {
+    "src/**/*.{ts,tsx,js,jsx}": "prettier --write",
+    "src/**/*.{json,md}": "prettier --write"
+  },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
@@ -61,6 +67,8 @@
     "@vitest/coverage-v8": "^1.0.0",
     "esbuild": "^0.27.0",
     "eslint": "^8.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.2",
     "pkg": "^5.8.1",
     "prettier": "^3.0.0",
     "typescript": "^5.0.0",
