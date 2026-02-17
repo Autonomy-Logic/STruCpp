@@ -437,6 +437,115 @@ describe("Test Main Generator", () => {
     });
   });
 
+  describe("type resolution with AST", () => {
+    it("should preserve STRING(n) maxLength via TypeReference", () => {
+      const testFile = makeTestFile("test.st", [
+        {
+          name: "string length test",
+          varBlocks: [
+            {
+              kind: "VarBlock",
+              blockType: "VAR",
+              isConstant: false,
+              isRetain: false,
+              declarations: [
+                {
+                  kind: "VarDeclaration",
+                  names: ["msg"],
+                  type: {
+                    kind: "TypeReference",
+                    name: "STRING",
+                    isReference: false,
+                    referenceKind: "none",
+                    maxLength: 50,
+                    sourceSpan: span,
+                  },
+                  sourceSpan: span,
+                },
+              ],
+              sourceSpan: span,
+            },
+          ],
+          body: [],
+          sourceSpan: span,
+        },
+      ]);
+
+      const code = generateTestMain([testFile], {
+        headerFileName: "generated.hpp",
+        pous: [],
+      });
+
+      expect(code).toContain("IECStringVar<50> msg;");
+    });
+
+    it("should resolve struct types as bare names when AST is provided", () => {
+      const testFile = makeTestFile("test.st", [
+        {
+          name: "struct test",
+          varBlocks: [
+            {
+              kind: "VarBlock",
+              blockType: "VAR",
+              isConstant: false,
+              isRetain: false,
+              declarations: [
+                {
+                  kind: "VarDeclaration",
+                  names: ["pt"],
+                  type: {
+                    kind: "TypeReference",
+                    name: "MyStruct",
+                    isReference: false,
+                    referenceKind: "none",
+                    sourceSpan: span,
+                  },
+                  sourceSpan: span,
+                },
+              ],
+              sourceSpan: span,
+            },
+          ],
+          body: [],
+          sourceSpan: span,
+        },
+      ]);
+
+      // Provide AST with a struct type definition
+      const ast = {
+        kind: "CompilationUnit" as const,
+        programs: [],
+        functions: [],
+        functionBlocks: [],
+        interfaces: [],
+        types: [
+          {
+            kind: "TypeDeclaration" as const,
+            name: "MyStruct",
+            baseType: {
+              kind: "StructType" as const,
+              fields: [],
+              sourceSpan: span,
+            },
+            sourceSpan: span,
+          },
+        ],
+        configurations: [],
+        sourceSpan: span,
+      };
+
+      const code = generateTestMain([testFile], {
+        headerFileName: "generated.hpp",
+        pous: [],
+        ast: ast as any,
+      });
+
+      // Should use bare MyStruct (not IEC_MyStruct)
+      expect(code).toContain("MyStruct pt;");
+      expect(code).not.toContain("IEC_MyStruct");
+    });
+  });
+
   describe("runner structure", () => {
     it("should generate TestRunner with file name", () => {
       const testFile = makeTestFile("test_counter.st", [

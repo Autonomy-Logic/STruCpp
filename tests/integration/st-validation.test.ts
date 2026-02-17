@@ -60,10 +60,10 @@ function runValidation(
     );
   }
 
-  // 2. Build POU info and function info
-  const { pous, functions } = result.ast
+  // 2. Build POU info
+  const { pous } = result.ast
     ? buildPOUInfoFromAST(result.ast)
-    : { pous: [], functions: [] };
+    : { pous: [] };
 
   // 3. Parse test file
   const parseResult = parseTestFile(testST, testFileName);
@@ -78,7 +78,7 @@ function runValidation(
     headerFileName: "generated.hpp",
     pous,
     isTestBuild: true,
-    functions,
+    ast: result.ast,
   });
 
   // 5. Write to temp dir and compile

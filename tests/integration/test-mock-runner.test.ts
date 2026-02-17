@@ -37,9 +37,9 @@ function runMockTest(
   }
 
   // 2. Build POU info
-  const { pous, functions } = result.ast
+  const { pous } = result.ast
     ? buildPOUInfoFromAST(result.ast)
-    : { pous: [], functions: [] };
+    : { pous: [] };
 
   // 3. Parse test file
   const parseResult = parseTestFile(testST, testFileName);
@@ -54,7 +54,7 @@ function runMockTest(
     headerFileName: "generated.hpp",
     pous,
     isTestBuild: true,
-    functions,
+    ast: result.ast,
   });
 
   // 5. Write to temp dir and compile

@@ -5,9 +5,17 @@
  * - "s." prefix for SETUP variables
  * - ".run()" invocation for program POUs
  * - POU type resolution from POUInfo metadata
+ * - AST-aware type/signature generation via initFromAST()
  */
 
-import type { Statement, Expression, FunctionCallExpression } from "../frontend/ast.js";
+import type {
+  Statement,
+  Expression,
+  FunctionCallExpression,
+  CompilationUnit,
+  FunctionDeclaration,
+  TypeReference,
+} from "../frontend/ast.js";
 import type { POUInfo } from "./test-main-gen.js";
 import { CodeGenerator } from "./codegen.js";
 import type { CodeGenOptions } from "./codegen.js";
@@ -34,6 +42,44 @@ export class TestCodeGenerator extends CodeGenerator {
         this.userFunctionNames.add(pou.name.toUpperCase());
       }
     }
+  }
+
+  /**
+   * Populate known type sets from the AST.
+   * Mirrors what CodeGenerator.generate() does at startup so that
+   * isUserDefinedType(), mapVarTypeToCpp() etc. work correctly for
+   * struct/interface/FB types.
+   */
+  initFromAST(ast: CompilationUnit): void {
+    for (const fb of ast.functionBlocks) {
+      this.knownFBTypes.add(fb.name.toUpperCase());
+    }
+    for (const iface of ast.interfaces) {
+      this.knownInterfaceTypes.add(iface.name.toUpperCase());
+    }
+    for (const td of ast.types) {
+      this.knownStructTypes.add(td.name.toUpperCase());
+    }
+    for (const prog of ast.programs) {
+      this.knownProgramTypes.add(prog.name.toUpperCase());
+    }
+    for (const func of ast.functions) {
+      this.userFunctionNames.add(func.name.toUpperCase());
+    }
+  }
+
+  /**
+   * Generate a function signature using production codegen methods.
+   * Returns the C++ return type and parameter strings.
+   */
+  generateFunctionSignature(func: FunctionDeclaration): {
+    returnType: string;
+    params: string[];
+  } {
+    return {
+      returnType: this.mapTypeRefToCpp(func.returnType),
+      params: this.generateFunctionParams(func),
+    };
   }
 
   /** Set names of SETUP variables that need "s." prefix. */
@@ -75,15 +121,19 @@ export class TestCodeGenerator extends CodeGenerator {
   }
 
   /**
-   * Resolve a type name to its C++ equivalent.
+   * Resolve a type to its C++ equivalent.
+   * Accepts either a string type name or a TypeReference (preserving maxLength).
    * For POUs, maps to the C++ class name. For elementary types, delegates to base.
    */
-  resolveType(typeName: string): string {
-    const pou = this.pouMap.get(typeName.toUpperCase());
+  resolveType(typeOrName: TypeReference | string): string {
+    const name = typeof typeOrName === "string" ? typeOrName : typeOrName.name;
+    const maxLength =
+      typeof typeOrName === "string" ? undefined : typeOrName.maxLength;
+    const pou = this.pouMap.get(name.toUpperCase());
     if (pou) {
       return pou.cppClassName;
     }
-    return this.mapVarTypeToCpp(typeName);
+    return this.mapVarTypeToCpp(name, maxLength);
   }
 
   // --- Hook overrides ---

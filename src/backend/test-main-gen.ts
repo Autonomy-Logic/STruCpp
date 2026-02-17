@@ -23,6 +23,8 @@ import type {
   MockVerifyCallCountStatement,
 } from "../testing/test-model.js";
 import type {
+  CompilationUnit,
+  FunctionDeclaration,
   VarBlock,
   VarDeclaration,
   Statement,
@@ -44,6 +46,7 @@ export interface POUInfo {
 
 /**
  * Information about a function for mock dispatch generation.
+ * @deprecated Use `ast` option instead — FunctionInfo loses maxLength, blockType, and VAR_OUTPUT info.
  */
 export interface FunctionInfo {
   name: string;
@@ -61,20 +64,23 @@ export interface TestMainGenOptions {
   pous: POUInfo[];
   /** Whether this is a test build (enables mock infrastructure) */
   isTestBuild?: boolean;
-  /** Known functions for mock dispatch generation */
+  /** Source AST — primary way to pass type and function info (preferred over `functions`) */
+  ast?: CompilationUnit;
+  /**
+   * Known functions for mock dispatch generation.
+   * @deprecated Use `ast` instead for correct type resolution.
+   */
   functions?: FunctionInfo[];
 }
 
 /**
- * Build POUInfo and FunctionInfo arrays from a CompilationUnit AST.
+ * Build POUInfo from a CompilationUnit AST.
  * Shared helper used by CLI, integration tests, and validation suite.
  */
-export function buildPOUInfoFromAST(ast: import("../frontend/ast.js").CompilationUnit): {
+export function buildPOUInfoFromAST(ast: CompilationUnit): {
   pous: POUInfo[];
-  functions: FunctionInfo[];
 } {
   const pous: POUInfo[] = [];
-  const functions: FunctionInfo[] = [];
 
   for (const prog of ast.programs) {
     const vars = new Map<string, string>();
@@ -111,30 +117,15 @@ export function buildPOUInfoFromAST(ast: import("../frontend/ast.js").Compilatio
   }
 
   for (const func of ast.functions) {
-    const params: Array<{ name: string; type: string }> = [];
-    for (const block of func.varBlocks) {
-      if (block.blockType === "VAR_INPUT" || block.blockType === "VAR_IN_OUT") {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            params.push({ name, type: decl.type.name });
-          }
-        }
-      }
-    }
     pous.push({
       name: func.name,
       kind: "function",
       cppClassName: func.name,
       variables: new Map(),
     });
-    functions.push({
-      name: func.name,
-      returnType: func.returnType.name,
-      parameters: params,
-    });
   }
 
-  return { pous, functions };
+  return { pous };
 }
 
 /**
@@ -150,6 +141,11 @@ export function generateTestMain(
 ): string {
   const lines: string[] = [];
   const testCodegen = new TestCodeGenerator(options.pous);
+
+  // Initialize type sets from AST if provided
+  if (options.ast) {
+    testCodegen.initFromAST(options.ast);
+  }
 
   // Includes
   lines.push(`#include "${options.headerFileName}"`);
@@ -167,11 +163,19 @@ export function generateTestMain(
     funcName: string;
   }> = [];
 
-  // Build function info map for mock dispatch
-  const functionMap = new Map<string, FunctionInfo>();
-  if (options.functions) {
+  // Build function declaration map from AST for mock dispatch
+  const astFunctionMap = new Map<string, FunctionDeclaration>();
+  if (options.ast) {
+    for (const func of options.ast.functions) {
+      astFunctionMap.set(func.name.toUpperCase(), func);
+    }
+  }
+
+  // Legacy fallback: build FunctionInfo map if no AST provided
+  const legacyFunctionMap = new Map<string, FunctionInfo>();
+  if (!options.ast && options.functions) {
     for (const func of options.functions) {
-      functionMap.set(func.name.toUpperCase(), func);
+      legacyFunctionMap.set(func.name.toUpperCase(), func);
     }
   }
 
@@ -188,14 +192,23 @@ export function generateTestMain(
   if (mockedFunctionNames.size > 0) {
     lines.push("namespace strucpp {");
     for (const funcName of mockedFunctionNames) {
-      const func = functionMap.get(funcName.toUpperCase());
-      if (func) {
-        const retType = testCodegen.resolveType(func.returnType);
-        const params = func.parameters
-          .map((p) => `${testCodegen.resolveType(p.type)} ${p.name}`)
-          .join(", ");
-        lines.push(`extern ${retType} ${func.name}_real(${params});`);
-        lines.push(`extern ${retType} (*${func.name}_dispatch)(${params});`);
+      const astFunc = astFunctionMap.get(funcName.toUpperCase());
+      if (astFunc) {
+        // Use production codegen for correct type resolution
+        const sig = testCodegen.generateFunctionSignature(astFunc);
+        lines.push(`extern ${sig.returnType} ${astFunc.name}_real(${sig.params.join(", ")});`);
+        lines.push(`extern ${sig.returnType} (*${astFunc.name}_dispatch)(${sig.params.join(", ")});`);
+      } else {
+        // Legacy fallback
+        const func = legacyFunctionMap.get(funcName.toUpperCase());
+        if (func) {
+          const retType = testCodegen.resolveType(func.returnType);
+          const params = func.parameters
+            .map((p) => `${testCodegen.resolveType(p.type)} ${p.name}`)
+            .join(", ");
+          lines.push(`extern ${retType} ${func.name}_real(${params});`);
+          lines.push(`extern ${retType} (*${func.name}_dispatch)(${params});`);
+        }
       }
     }
     lines.push("} // namespace strucpp");
@@ -208,7 +221,7 @@ export function generateTestMain(
     if (testFile.setup) {
       setupIndex++;
       setupStructName = `TestSetup_${setupIndex}`;
-      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, functionMap);
+      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, astFunctionMap);
       const structCode = gen.generateSetupStruct(
         setupStructName,
         testFile.setup,
@@ -221,7 +234,7 @@ export function generateTestMain(
     for (const tc of testFile.testCases) {
       testIndex++;
       const funcName = `test_${testIndex}`;
-      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, functionMap);
+      const gen = new TestFunctionGenerator(testCodegen, testFile.fileName, astFunctionMap);
       const code = gen.generateTestFunction(
         funcName,
         tc,
@@ -310,7 +323,7 @@ function collectMockedFunctions(
  */
 class TestFunctionGenerator {
   private testCodegen: TestCodeGenerator;
-  private functionMap: Map<string, FunctionInfo>;
+  private astFunctionMap: Map<string, FunctionDeclaration>;
   private fileName: string;
   private indent = "    ";
   /** Names of variables from SETUP block (need s. prefix for mock paths) */
@@ -319,11 +332,11 @@ class TestFunctionGenerator {
   constructor(
     testCodegen: TestCodeGenerator,
     fileName: string,
-    functionMap?: Map<string, FunctionInfo>,
+    astFunctionMap?: Map<string, FunctionDeclaration>,
   ) {
     this.testCodegen = testCodegen;
     this.fileName = fileName;
-    this.functionMap = functionMap ?? new Map<string, FunctionInfo>();
+    this.astFunctionMap = astFunctionMap ?? new Map<string, FunctionDeclaration>();
   }
 
   /**
@@ -353,7 +366,7 @@ class TestFunctionGenerator {
     // Member variables from SETUP VAR blocks
     for (const varBlock of setup.varBlocks) {
       for (const decl of varBlock.declarations) {
-        const cppType = this.testCodegen.resolveType(decl.type.name);
+        const cppType = this.testCodegen.resolveType(decl.type);
         for (const name of decl.names) {
           lines.push(`    ${cppType} ${name};`);
         }
@@ -491,7 +504,7 @@ class TestFunctionGenerator {
     lines: string[],
     decl: VarDeclaration,
   ): void {
-    const cppType = this.testCodegen.resolveType(decl.type.name);
+    const cppType = this.testCodegen.resolveType(decl.type);
 
     for (const name of decl.names) {
       if (decl.initialValue) {
@@ -555,14 +568,21 @@ class TestFunctionGenerator {
   ): void {
     const name = stmt.functionName;
     const retVal = this.testCodegen.emitExpression(stmt.returnValue);
-    const func = this.functionMap.get(name.toUpperCase());
-    if (func) {
-      const retType = this.testCodegen.resolveType(func.returnType);
-      const params = func.parameters
-        .map((p) => `${this.testCodegen.resolveType(p.type)} /*${p.name}*/`)
+    const astFunc = this.astFunctionMap.get(name.toUpperCase());
+    if (astFunc) {
+      // Use production codegen for correct signature
+      const sig = this.testCodegen.generateFunctionSignature(astFunc);
+      const params = sig.params
+        .map((p) => {
+          // Extract param name from "Type name" and comment it out for lambda
+          const parts = p.split(/\s+/);
+          const paramName = parts[parts.length - 1]!;
+          const paramType = parts.slice(0, -1).join(" ");
+          return `${paramType} /*${paramName}*/`;
+        })
         .join(", ");
       lines.push(
-        `${this.indent}${name}_dispatch = [](${params}) -> ${retType} { return ${retType}(${retVal}); };`,
+        `${this.indent}${name}_dispatch = [](${params}) -> ${sig.returnType} { return ${sig.returnType}(${retVal}); };`,
       );
     } else {
       // Fallback: generate without type info

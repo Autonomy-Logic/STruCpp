@@ -739,7 +739,7 @@ export class CodeGenerator {
    * VAR_IN_OUT parameters are passed by reference.
    * VLA types use ArrayView instead of IECVar reference.
    */
-  private generateFunctionParams(
+  protected generateFunctionParams(
     func: CompilationUnit["functions"][0],
   ): string[] {
     const params: string[] = [];
@@ -2848,7 +2848,7 @@ export class CodeGenerator {
    * Check if a type name refers to any user-defined type (FB, interface, or struct/UDT).
    * These types should NOT get the IEC_ prefix.
    */
-  private isUserDefinedType(typeName: string): boolean {
+  protected isUserDefinedType(typeName: string): boolean {
     const upper = typeName.toUpperCase();
     return (
       this.knownFBTypes.has(upper) ||

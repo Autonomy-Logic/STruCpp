@@ -452,9 +452,9 @@ function runTestMode(options: CLIOptions): void {
   }
 
   // 2. Build POU info from the compiled AST
-  const { pous, functions } = result.ast
+  const { pous } = result.ast
     ? buildPOUInfoFromAST(result.ast)
-    : { pous: [], functions: [] };
+    : { pous: [] };
 
   // 3. Parse test files
   const testFiles: import("./testing/test-model.js").TestFile[] = [];
@@ -487,12 +487,15 @@ function runTestMode(options: CLIOptions): void {
   }
 
   // 4. Generate test_main.cpp
-  const testMainCpp = generateTestMain(testFiles, {
+  const testMainOpts: import("./backend/test-main-gen.js").TestMainGenOptions = {
     headerFileName: "generated.hpp",
     pous,
     isTestBuild: true,
-    functions,
-  });
+  };
+  if (result.ast) {
+    testMainOpts.ast = result.ast;
+  }
+  const testMainCpp = generateTestMain(testFiles, testMainOpts);
 
   // 5. Write to temp directory
   const tempDir = mkdtempSync(join(tmpdir(), "strucpp-test-"));

@@ -50,6 +50,7 @@ function runTest(
   const testMainCpp = generateTestMain([parseResult.testFile!], {
     headerFileName: "generated.hpp",
     pous,
+    ast: result.ast,
   });
 
   // 5. Write to temp dir and compile
