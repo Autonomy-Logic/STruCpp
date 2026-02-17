@@ -7,6 +7,12 @@
 
 import { describe, it, expect } from "vitest";
 import { parseTestFile } from "../../src/testing/test-parser.js";
+import type {
+  MockFBStatement,
+  MockFunctionStatement,
+  MockVerifyCalledStatement,
+  MockVerifyCallCountStatement,
+} from "../../src/frontend/ast.js";
 
 describe("Mock Statement Parser", () => {
   describe("MOCK (FB mocking)", () => {
@@ -23,7 +29,7 @@ END_TEST
       const body = result.testFile!.testCases[0]!.body;
       expect(body).toHaveLength(2);
       expect(body[0]!.kind).toBe("MockFBStatement");
-      const mock = body[0] as { kind: string; instancePath: string[] };
+      const mock = body[0] as MockFBStatement;
       expect(mock.instancePath).toEqual(["fb"]);
     });
 
@@ -38,7 +44,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const mock = body[0] as { kind: string; instancePath: string[] };
+      const mock = body[0] as MockFBStatement;
       expect(mock.kind).toBe("MockFBStatement");
       expect(mock.instancePath).toEqual(["ctrl", "sensor"]);
     });
@@ -53,10 +59,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const mock = result.testFile!.testCases[0]!.body[0] as {
-        kind: string;
-        instancePath: string[];
-      };
+      const mock = result.testFile!.testCases[0]!.body[0] as MockFBStatement;
       expect(mock.kind).toBe("MockFBStatement");
       expect(mock.instancePath).toEqual(["sys", "subsystem", "valve"]);
     });
@@ -103,11 +106,7 @@ END_TEST
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
       expect(body[0]!.kind).toBe("MockFunctionStatement");
-      const mock = body[0] as {
-        kind: string;
-        functionName: string;
-        returnValue: { kind: string };
-      };
+      const mock = body[0] as MockFunctionStatement;
       expect(mock.functionName).toBe("ReadSensor");
       expect(mock.returnValue.kind).toBe("LiteralExpression");
     });
@@ -121,11 +120,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const mock = result.testFile!.testCases[0]!.body[0] as {
-        kind: string;
-        functionName: string;
-        returnValue: { kind: string };
-      };
+      const mock = result.testFile!.testCases[0]!.body[0] as MockFunctionStatement;
       expect(mock.kind).toBe("MockFunctionStatement");
       expect(mock.functionName).toBe("IsReady");
     });
@@ -139,10 +134,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const mock = result.testFile!.testCases[0]!.body[0] as {
-        kind: string;
-        functionName: string;
-      };
+      const mock = result.testFile!.testCases[0]!.body[0] as MockFunctionStatement;
       expect(mock.kind).toBe("MockFunctionStatement");
       expect(mock.functionName).toBe("GetTemp");
     });
@@ -156,10 +148,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const mock = result.testFile!.testCases[0]!.body[0] as {
-        kind: string;
-        functionName: string;
-      };
+      const mock = result.testFile!.testCases[0]!.body[0] as MockFunctionStatement;
       expect(mock.kind).toBe("MockFunctionStatement");
       expect(mock.functionName).toBe("GetError");
     });
@@ -188,7 +177,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const verify = body[2] as { kind: string; instancePath: string[] };
+      const verify = body[2] as MockVerifyCalledStatement;
       expect(verify.kind).toBe("MockVerifyCalledStatement");
       expect(verify.instancePath).toEqual(["fb"]);
     });
@@ -205,7 +194,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const verify = body[2] as { kind: string; instancePath: string[] };
+      const verify = body[2] as MockVerifyCalledStatement;
       expect(verify.kind).toBe("MockVerifyCalledStatement");
       expect(verify.instancePath).toEqual(["ctrl", "sensor"]);
     });
@@ -235,11 +224,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const verify = body[3] as {
-        kind: string;
-        instancePath: string[];
-        expectedCount: { kind: string };
-      };
+      const verify = body[3] as MockVerifyCallCountStatement;
       expect(verify.kind).toBe("MockVerifyCallCountStatement");
       expect(verify.instancePath).toEqual(["fb"]);
       expect(verify.expectedCount.kind).toBe("LiteralExpression");
@@ -255,10 +240,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const verify = result.testFile!.testCases[0]!.body[1] as {
-        kind: string;
-        instancePath: string[];
-      };
+      const verify = result.testFile!.testCases[0]!.body[1] as MockVerifyCallCountStatement;
       expect(verify.kind).toBe("MockVerifyCallCountStatement");
       expect(verify.instancePath).toEqual(["ctrl", "sensor"]);
     });

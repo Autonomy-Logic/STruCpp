@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <exception>
 #include <vector>
 #include <functional>
 #include <string>
@@ -249,19 +250,28 @@ public:
         for (auto& tc : tests_) {
             TestContext ctx;
             ctx.test_file = test_file_;
-            bool result = tc.func(ctx);
-            if (result && ctx.failures == 0) {
-                printf("  [PASS] %s\n", tc.name);
-                passed_++;
-            } else {
-                printf("  [FAIL] %s\n", tc.name);
+            try {
+                bool result = tc.func(ctx);
+                if (result && ctx.failures == 0) {
+                    printf("  [PASS] %s\n", tc.name);
+                    passed_++;
+                } else {
+                    printf("  [FAIL] %s\n", tc.name);
+                    failed_++;
+                }
+            } catch (const std::exception& e) {
+                printf("  [FAIL] %s (exception: %s)\n", tc.name, e.what());
+                failed_++;
+            } catch (...) {
+                printf("  [FAIL] %s (unknown exception)\n", tc.name);
                 failed_++;
             }
         }
 
         printf("\n-----------------------------------------\n");
-        printf("%d tests, %d passed, %d failed\n",
-               passed_ + failed_, passed_, failed_);
+        int total = passed_ + failed_;
+        printf("%d %s, %d passed, %d failed\n",
+               total, total == 1 ? "test" : "tests", passed_, failed_);
 
         return failed_ > 0 ? 1 : 0;
     }

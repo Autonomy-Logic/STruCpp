@@ -216,6 +216,7 @@ Library compilation:
 
 Testing:
   --test <file> [file2...]   Run tests from test file(s) against source files
+                             (must come after -o if used)
 
 Examples:
   strucpp program.st -o program.cpp

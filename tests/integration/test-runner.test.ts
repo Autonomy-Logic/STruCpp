@@ -5,17 +5,8 @@
  * source ST → compile → parse test file → generate test_main.cpp → g++ → run → check output
  */
 
-import { describe, it, expect, beforeAll } from "vitest";
-import { execSync } from "child_process";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
-import { compile } from "../../src/index.js";
-import { parseTestFile } from "../../src/testing/test-parser.js";
-import { generateTestMain, buildPOUInfoFromAST } from "../../src/backend/test-main-gen.js";
-import { hasGpp, RUNTIME_INCLUDE_PATH } from "./test-helpers.js";
-
-const TEST_RUNTIME_PATH = path.resolve(__dirname, "../../src/runtime/test");
+import { describe, it, expect } from "vitest";
+import { hasGpp, runE2ETestPipeline } from "./test-helpers.js";
 
 /**
  * End-to-end helper: compile source + test, build binary, run and return output.
@@ -25,78 +16,12 @@ function runTest(
   testST: string,
   testFileName = "test.st",
 ): { stdout: string; exitCode: number } {
-  // 1. Compile source
-  const result = compile(sourceST, { headerFileName: "generated.hpp" });
-  if (!result.success) {
-    throw new Error(
-      `Source compilation failed: ${result.errors.map((e) => e.message).join(", ")}`,
-    );
-  }
-
-  // 2. Build POU info
-  const { pous } = result.ast
-    ? buildPOUInfoFromAST(result.ast)
-    : { pous: [] };
-
-  // 3. Parse test file
-  const parseResult = parseTestFile(testST, testFileName);
-  if (parseResult.errors.length > 0) {
-    throw new Error(
-      `Test parse failed: ${parseResult.errors.map((e) => e.message).join(", ")}`,
-    );
-  }
-
-  // 4. Generate test_main.cpp
-  const testMainCpp = generateTestMain([parseResult.testFile!], {
-    headerFileName: "generated.hpp",
-    pous,
-    ast: result.ast,
+  return runE2ETestPipeline({
+    sourceST,
+    testST,
+    testFileName,
+    tempDirPrefix: "strucpp-test-int-",
   });
-
-  // 5. Write to temp dir and compile
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-test-int-"));
-  try {
-    fs.writeFileSync(path.join(tempDir, "generated.hpp"), result.headerCode);
-    fs.writeFileSync(path.join(tempDir, "generated.cpp"), result.cppCode);
-    fs.writeFileSync(path.join(tempDir, "test_main.cpp"), testMainCpp);
-
-    const binaryPath = path.join(tempDir, "test_runner");
-
-    execSync(
-      [
-        "g++",
-        "-std=c++17",
-        `-I${RUNTIME_INCLUDE_PATH}`,
-        `-I${TEST_RUNTIME_PATH}`,
-        `-I${tempDir}`,
-        path.join(tempDir, "test_main.cpp"),
-        path.join(tempDir, "generated.cpp"),
-        "-o",
-        binaryPath,
-      ].join(" "),
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    // 6. Run binary
-    try {
-      const stdout = execSync(`"${binaryPath}"`, {
-        encoding: "utf-8",
-        timeout: 10000,
-      });
-      return { stdout, exitCode: 0 };
-    } catch (err: unknown) {
-      const execErr = err as {
-        status?: number;
-        stdout?: string;
-      };
-      return {
-        stdout: execErr.stdout ?? "",
-        exitCode: execErr.status ?? 1,
-      };
-    }
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
 }
 
 describe.skipIf(!hasGpp)("Test Runner Integration", () => {
@@ -144,7 +69,7 @@ END_TEST
     expect(exitCode).toBe(1);
     expect(stdout).toContain("[FAIL] Should fail");
     expect(stdout).toContain("ASSERT_EQ failed");
-    expect(stdout).toContain("1 tests, 0 passed, 1 failed");
+    expect(stdout).toContain("1 test, 0 passed, 1 failed");
   });
 
   it("should report file name and line number on failure", () => {

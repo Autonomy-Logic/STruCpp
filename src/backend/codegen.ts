@@ -190,7 +190,6 @@ export class CodeGenerator {
   private headerLineMap: Map<number, LineMapEntry> = new Map();
   private currentLine = 1;
   private currentHeaderLine = 1;
-  private indentLevel = 0;
   private projectModel?: ProjectModel;
 
   /** Track located variables for descriptor array generation */
@@ -206,10 +205,10 @@ export class CodeGenerator {
   private ast?: CompilationUnit;
 
   /** Current function name (for redirecting function name := to result variable) */
-  protected currentFunctionName: string | undefined;
+  private currentFunctionName: string | undefined;
 
   /** Standard function registry for name mapping and conversion resolution */
-  protected stdRegistry: StdFunctionRegistry;
+  private stdRegistry: StdFunctionRegistry;
 
   /** Warnings collected during code generation */
   private codegenWarnings: Array<{
@@ -223,7 +222,7 @@ export class CodeGenerator {
   private tempVarCounter = 0;
 
   /** Current statement indent level (set by generateStatement before expression generation) */
-  protected currentStatementIndent = "    ";
+  private currentStatementIndent = "    ";
 
   /** Set of known function block type names (upper case) for FB instance detection */
   protected knownFBTypes: Set<string> = new Set();
@@ -348,7 +347,6 @@ export class CodeGenerator {
     this.headerLineMap = new Map();
     this.currentLine = 1;
     this.currentHeaderLine = 1;
-    this.indentLevel = 0;
     this.locatedVars = [];
     this.codegenWarnings = [];
     this.tempVarCounter = 0;
@@ -2071,7 +2069,7 @@ export class CodeGenerator {
   /**
    * Generate code for a list of statements.
    */
-  protected generateStatements(
+  private generateStatements(
     stmts: Statement[],
     indent: string = "    ",
   ): void {
@@ -2233,7 +2231,7 @@ export class CodeGenerator {
   /**
    * Generate C++ for a variable expression.
    */
-  protected generateVariableExpression(expr: VariableExpression): string {
+  private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
     // Handle THIS reference
@@ -2720,7 +2718,7 @@ export class CodeGenerator {
   /**
    * Check if a type name refers to a known function block type.
    */
-  protected isFBType(typeName: string): boolean {
+  private isFBType(typeName: string): boolean {
     return this.knownFBTypes.has(typeName.toUpperCase());
   }
 
@@ -2863,7 +2861,7 @@ export class CodeGenerator {
    * Check if a type name refers to any user-defined type (FB, interface, or struct/UDT).
    * These types should NOT get the IEC_ prefix.
    */
-  protected isUserDefinedType(typeName: string): boolean {
+  private isUserDefinedType(typeName: string): boolean {
     const upper = typeName.toUpperCase();
     return (
       this.knownFBTypes.has(upper) ||
@@ -2876,7 +2874,7 @@ export class CodeGenerator {
    * Enter a new scope for code generation. Populates currentScopeVarTypes
    * from the variable blocks of a program or function block.
    */
-  protected enterScope(
+  private enterScope(
     varBlocks: CompilationUnit["programs"][0]["varBlocks"],
   ): void {
     this.currentScopeVarTypes.clear();
@@ -2892,7 +2890,7 @@ export class CodeGenerator {
   /**
    * Exit the current scope, clearing variable type tracking.
    */
-  protected exitScope(): void {
+  private exitScope(): void {
     this.currentScopeVarTypes.clear();
   }
 
@@ -2900,7 +2898,7 @@ export class CodeGenerator {
    * Check if a function call statement is actually an FB invocation.
    * Returns the FB type name if it is, undefined otherwise.
    */
-  protected getFBInvocationType(functionName: string): string | undefined {
+  private getFBInvocationType(functionName: string): string | undefined {
     const varType = this.currentScopeVarTypes.get(functionName.toUpperCase());
     if (
       varType &&
@@ -2916,7 +2914,7 @@ export class CodeGenerator {
    * Generate code for an FB invocation.
    * Pattern: assign inputs → call operator() → capture outputs
    */
-  protected generateFBInvocation(
+  private generateFBInvocation(
     call: FunctionCallExpression,
     indent: string,
   ): void {
@@ -3207,36 +3205,10 @@ export class CodeGenerator {
   }
 
   /**
-   * Get the current indentation string.
-   * Used in Phase 3+ for proper code formatting.
-   */
-  protected getIndent(): string {
-    return this.options.indent.repeat(this.indentLevel);
-  }
-
-  /**
-   * Increase indentation level.
-   * Used in Phase 3+ for proper code formatting.
-   */
-  protected indent(): void {
-    this.indentLevel++;
-  }
-
-  /**
-   * Decrease indentation level.
-   * Used in Phase 3+ for proper code formatting.
-   */
-  protected dedent(): void {
-    if (this.indentLevel > 0) {
-      this.indentLevel--;
-    }
-  }
-
-  /**
    * Record a line mapping from ST to C++.
    * Used in Phase 3+ for debugging support.
    */
-  protected recordLineMapping(stLine: number, cppStartLine: number): void {
+  private recordLineMapping(stLine: number, cppStartLine: number): void {
     // currentLine points to the *next* line to be emitted, so the last
     // emitted line is currentLine - 1.
     const lastEmittedLine = this.currentLine - 1;

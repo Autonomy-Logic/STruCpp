@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { parseTestFile } from "../../src/testing/test-parser.js";
+import type { AssertCall } from "../../src/frontend/ast.js";
 
 describe("Test File Parser", () => {
   describe("basic parsing", () => {
@@ -91,7 +92,7 @@ END_TEST
       const body = result.testFile!.testCases[0]!.body;
       expect(body).toHaveLength(1);
       expect(body[0]!.kind).toBe("AssertCall");
-      const assert = body[0] as { kind: string; assertType: string; args: unknown[] };
+      const assert = body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_EQ");
       expect(assert.args).toHaveLength(2);
     });
@@ -105,7 +106,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const assert = body[0] as { kind: string; assertType: string; args: unknown[] };
+      const assert = body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_TRUE");
       expect(assert.args).toHaveLength(1);
     });
@@ -119,7 +120,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const assert = body[0] as { kind: string; assertType: string; args: unknown[] };
+      const assert = body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_FALSE");
       expect(assert.args).toHaveLength(1);
     });
@@ -134,7 +135,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const assert = body[0] as { kind: string; args: Array<{ kind: string }> };
+      const assert = body[0] as AssertCall;
       expect(assert.args[0]!.kind).toBe("BinaryExpression");
     });
   });
@@ -295,7 +296,7 @@ END_TEST
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
-      const assert = body[0] as { kind: string; assertType: string; args: unknown[] };
+      const assert = body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_NEQ");
       expect(assert.args).toHaveLength(2);
     });
@@ -308,7 +309,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string; args: unknown[] };
+      const assert = result.testFile!.testCases[0]!.body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_GT");
       expect(assert.args).toHaveLength(2);
     });
@@ -321,7 +322,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string };
+      const assert = result.testFile!.testCases[0]!.body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_LT");
     });
 
@@ -336,8 +337,8 @@ END_TEST
       expect(result.errors).toHaveLength(0);
       const body = result.testFile!.testCases[0]!.body;
       expect(body).toHaveLength(2);
-      expect((body[0] as { assertType: string }).assertType).toBe("ASSERT_GE");
-      expect((body[1] as { assertType: string }).assertType).toBe("ASSERT_LE");
+      expect((body[0] as AssertCall).assertType).toBe("ASSERT_GE");
+      expect((body[1] as AssertCall).assertType).toBe("ASSERT_LE");
     });
 
     it("should parse ASSERT_NEAR with three arguments", () => {
@@ -348,7 +349,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string; args: unknown[] };
+      const assert = result.testFile!.testCases[0]!.body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_NEAR");
       expect(assert.args).toHaveLength(3);
     });
@@ -363,7 +364,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const assert = result.testFile!.testCases[0]!.body[0] as { assertType: string; args: unknown[]; message?: string };
+      const assert = result.testFile!.testCases[0]!.body[0] as AssertCall;
       expect(assert.assertType).toBe("ASSERT_EQ");
       expect(assert.args).toHaveLength(2);
       expect(assert.message).toBe("Values should match");
@@ -377,7 +378,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const assert = result.testFile!.testCases[0]!.body[0] as { args: unknown[]; message?: string };
+      const assert = result.testFile!.testCases[0]!.body[0] as AssertCall;
       expect(assert.args).toHaveLength(1);
       expect(assert.message).toBe("Should be true");
     });
@@ -390,7 +391,7 @@ END_TEST
 `;
       const result = parseTestFile(source, "test.st");
       expect(result.errors).toHaveLength(0);
-      const assert = result.testFile!.testCases[0]!.body[0] as { args: unknown[]; message?: string };
+      const assert = result.testFile!.testCases[0]!.body[0] as AssertCall;
       expect(assert.args).toHaveLength(3);
       expect(assert.message).toBe("Within tolerance");
     });

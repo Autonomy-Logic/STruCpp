@@ -8,16 +8,10 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { execSync } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
-import { compile } from "../../src/index.js";
-import { parseTestFile } from "../../src/testing/test-parser.js";
-import { generateTestMain, buildPOUInfoFromAST } from "../../src/backend/test-main-gen.js";
-import { hasGpp, RUNTIME_INCLUDE_PATH } from "./test-helpers.js";
+import { hasGpp, runE2ETestPipeline } from "./test-helpers.js";
 
-const TEST_RUNTIME_PATH = path.resolve(__dirname, "../../src/runtime/test");
 const VALIDATION_DIR = path.resolve(__dirname, "../st-validation");
 
 /**
@@ -47,81 +41,13 @@ function runValidation(
 ): { stdout: string; exitCode: number } {
   const sourceST = fs.readFileSync(sourcePath, "utf-8");
   const testST = fs.readFileSync(testPath, "utf-8");
-  const testFileName = path.basename(testPath);
-
-  // 1. Compile source with isTestBuild for mock infrastructure
-  const result = compile(sourceST, {
-    headerFileName: "generated.hpp",
+  return runE2ETestPipeline({
+    sourceST,
+    testST,
+    testFileName: path.basename(testPath),
     isTestBuild: true,
+    tempDirPrefix: "strucpp-val-",
   });
-  if (!result.success) {
-    throw new Error(
-      `Compilation of ${path.basename(sourcePath)} failed: ${result.errors.map((e) => e.message).join(", ")}`,
-    );
-  }
-
-  // 2. Build POU info
-  const { pous } = result.ast
-    ? buildPOUInfoFromAST(result.ast)
-    : { pous: [] };
-
-  // 3. Parse test file
-  const parseResult = parseTestFile(testST, testFileName);
-  if (parseResult.errors.length > 0) {
-    throw new Error(
-      `Test parse of ${testFileName} failed: ${parseResult.errors.map((e) => e.message).join(", ")}`,
-    );
-  }
-
-  // 4. Generate test_main.cpp
-  const testMainCpp = generateTestMain([parseResult.testFile!], {
-    headerFileName: "generated.hpp",
-    pous,
-    isTestBuild: true,
-    ast: result.ast,
-  });
-
-  // 5. Write to temp dir and compile
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-val-"));
-  try {
-    fs.writeFileSync(path.join(tempDir, "generated.hpp"), result.headerCode);
-    fs.writeFileSync(path.join(tempDir, "generated.cpp"), result.cppCode);
-    fs.writeFileSync(path.join(tempDir, "test_main.cpp"), testMainCpp);
-
-    const binaryPath = path.join(tempDir, "test_runner");
-
-    execSync(
-      [
-        "g++",
-        "-std=c++17",
-        `-I${RUNTIME_INCLUDE_PATH}`,
-        `-I${TEST_RUNTIME_PATH}`,
-        `-I${tempDir}`,
-        path.join(tempDir, "test_main.cpp"),
-        path.join(tempDir, "generated.cpp"),
-        "-o",
-        binaryPath,
-      ].join(" "),
-      { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    // 6. Run binary
-    try {
-      const stdout = execSync(`"${binaryPath}"`, {
-        encoding: "utf-8",
-        timeout: 10000,
-      });
-      return { stdout, exitCode: 0 };
-    } catch (err: unknown) {
-      const execErr = err as { status?: number; stdout?: string };
-      return {
-        stdout: execErr.stdout ?? "",
-        exitCode: execErr.status ?? 1,
-      };
-    }
-  } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  }
 }
 
 describe.skipIf(!hasGpp)("ST Validation Suite", () => {
@@ -133,11 +59,14 @@ describe.skipIf(!hasGpp)("ST Validation Suite", () => {
     const baseName = path.basename(testPath).replace(/^test_/, "");
     const sourcePath = path.join(dir, baseName);
 
-    // Skip if source file doesn't exist
-    if (!fs.existsSync(sourcePath)) continue;
-
     const category = path.relative(VALIDATION_DIR, dir);
     const featureName = baseName.replace(/\.st$/, "");
+
+    // Skip if source file doesn't exist (visible in test output)
+    if (!fs.existsSync(sourcePath)) {
+      it.skip(`validates ${category}/${featureName} (missing source: ${baseName})`, () => {});
+      continue;
+    }
     const testName = `${category}/${featureName}`;
 
     it(
