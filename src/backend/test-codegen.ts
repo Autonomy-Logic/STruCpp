@@ -151,7 +151,10 @@ export class TestCodeGenerator extends CodeGenerator {
     if (pou) {
       return pou.cppClassName;
     }
-    return this.mapVarTypeToCpp(name, maxLength);
+    return this.mapVarTypeToCpp(
+      name,
+      typeof maxLength === "number" ? maxLength : undefined,
+    );
   }
 
   // --- Hook overrides ---

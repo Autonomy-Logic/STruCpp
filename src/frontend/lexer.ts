@@ -343,6 +343,9 @@ export const DREF = createToken({ name: "DREF", pattern: /DREF/i });
 export const REF = createToken({ name: "REF", pattern: /REF/i });
 export const NULL = createToken({ name: "NULL", pattern: /NULL/i });
 
+// Pointer type (CODESYS compatibility)
+export const POINTER = createToken({ name: "POINTER", pattern: /POINTER/i });
+
 // Dynamic memory (extension keywords)
 export const __NEW = createToken({ name: "__NEW", pattern: /__NEW/i });
 export const __DELETE = createToken({ name: "__DELETE", pattern: /__DELETE/i });
@@ -476,7 +479,7 @@ export const VAR_INST = createToken({
 // Longer suffixes (ms, us, ns) must come before shorter ones (m, s) in the alternation
 export const TimeLiteral = createToken({
   name: "TimeLiteral",
-  pattern: /(?:T|TIME)#(?:[0-9_]+(?:ms|us|ns|d|h|m|s))+/i,
+  pattern: /(?:T|TIME)#(?:[0-9_]+(?:\.[0-9_]+)?(?:ms|us|ns|d|h|m|s))+/i,
 });
 
 // Date literal: D#2024-01-15
@@ -488,7 +491,7 @@ export const DateLiteral = createToken({
 // Time of day literal: TOD#12:30:00
 export const TimeOfDayLiteral = createToken({
   name: "TimeOfDayLiteral",
-  pattern: /(?:TOD|TIME_OF_DAY)#[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?/i,
+  pattern: /(?:TOD|TIME_OF_DAY)#[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\.[0-9]+)?)?/i,
 });
 
 // Date and time literal: DT#2024-01-15-12:30:00
@@ -496,6 +499,14 @@ export const DateTimeLiteral = createToken({
   name: "DateTimeLiteral",
   pattern:
     /(?:DT|DATE_AND_TIME)#[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]+)?/i,
+});
+
+// Typed literal: BYTE#255, DWORD#16#FF, INT#0, BOOL#1, etc.
+// Must be before keyword tokens and RealLiteral/IntegerLiteral so that BYTE#255 isn't split
+export const TypedLiteral = createToken({
+  name: "TypedLiteral",
+  pattern:
+    /(?:BYTE|WORD|DWORD|LWORD|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BOOL|REAL|LREAL)#(?:16#[0-9A-Fa-f_]+|8#[0-7_]+|2#[01_]+|[0-9][0-9_]*(?:\.[0-9]+)?)/i,
 });
 
 // Real number literal: 3.14, 1.0e-10
@@ -673,6 +684,7 @@ const keywordTokens = [
   MOD,
   REFERENCE_TO,
   REF_TO,
+  POINTER,
   DREF,
   REF,
   NULL,
@@ -731,6 +743,13 @@ export const allTokens = [
   NotEqual,
   LessEqual,
   GreaterEqual,
+
+  // Typed and time/date literals (before keywords — BYTE#255, TOD#12:00 must not split)
+  TimeLiteral,
+  DateTimeLiteral,
+  DateLiteral,
+  TimeOfDayLiteral,
+  TypedLiteral,
 
   // Keywords (before Identifier)
   END_PROGRAM,
@@ -792,6 +811,7 @@ export const allTokens = [
   MOD,
   REFERENCE_TO,
   REF_TO,
+  POINTER,
   DREF,
   REF,
   NULL,
@@ -819,10 +839,6 @@ export const allTokens = [
   PROTECTED,
 
   // Literals
-  TimeLiteral,
-  DateTimeLiteral,
-  DateLiteral,
-  TimeOfDayLiteral,
   RealLiteral,
   IntegerLiteral,
   StringLiteral,

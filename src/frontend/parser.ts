@@ -59,6 +59,11 @@ export class STParser extends CstParser {
             ALT: () => this.SUBRULE(this.configurationDeclaration),
             GATE: () => this.LA(1).tokenType === tokens.CONFIGURATION,
           },
+          {
+            // Top-level VAR_GLOBAL ... END_VAR (GVL files)
+            ALT: () => this.SUBRULE(this.varBlock),
+            GATE: () => this.LA(1).tokenType === tokens.VAR_GLOBAL,
+          },
         ],
         IGNORE_AMBIGUITIES: true,
       });
@@ -89,7 +94,7 @@ export class STParser extends CstParser {
    */
   public functionDeclaration = this.RULE("functionDeclaration", () => {
     this.CONSUME(tokens.FUNCTION);
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     this.CONSUME(tokens.Colon);
     this.SUBRULE(this.dataType);
     this.MANY(() => {
@@ -116,7 +121,7 @@ export class STParser extends CstParser {
       this.OPTION6(() => {
         this.CONSUME(tokens.FINAL);
       });
-      this.CONSUME(tokens.Identifier);
+      this.SUBRULE(this.identifierOrKeyword);
       // Optional EXTENDS clause
       this.OPTION2(() => {
         this.CONSUME(tokens.EXTENDS);
@@ -339,6 +344,30 @@ export class STParser extends CstParser {
   });
 
   // ==========================================================================
+  // Contextual keyword-as-identifier support (CODESYS compatibility)
+  // ==========================================================================
+
+  /**
+   * Identifier or contextual keyword.
+   * Allows SET, GET, ON, OVERRIDE, ABSTRACT, FINAL to be used as
+   * variable/parameter/function names in contexts where they are unambiguous.
+   */
+  public identifierOrKeyword = this.RULE("identifierOrKeyword", () => {
+    this.OR({
+      DEF: [
+        { ALT: () => this.CONSUME(tokens.Identifier) },
+        { ALT: () => this.CONSUME(tokens.SET) },
+        { ALT: () => this.CONSUME(tokens.GET) },
+        { ALT: () => this.CONSUME(tokens.ON) },
+        { ALT: () => this.CONSUME(tokens.OVERRIDE) },
+        { ALT: () => this.CONSUME(tokens.ABSTRACT) },
+        { ALT: () => this.CONSUME(tokens.FINAL) },
+      ],
+      IGNORE_AMBIGUITIES: true,
+    });
+  });
+
+  // ==========================================================================
   // Variable declarations
   // ==========================================================================
 
@@ -373,13 +402,18 @@ export class STParser extends CstParser {
   public varDeclaration = this.RULE("varDeclaration", () => {
     this.AT_LEAST_ONE_SEP({
       SEP: tokens.Comma,
-      DEF: () => this.CONSUME(tokens.Identifier),
+      DEF: () => this.SUBRULE(this.identifierOrKeyword),
     });
     this.OPTION(() => {
       this.CONSUME(tokens.AT);
       this.CONSUME(tokens.DirectAddress);
     });
     this.CONSUME(tokens.Colon);
+    // Optional POINTER TO prefix (for POINTER TO ARRAY[...] OF REAL etc.)
+    this.OPTION5(() => {
+      this.CONSUME(tokens.POINTER);
+      this.CONSUME2(tokens.TO);
+    });
     this.OR([
       {
         ALT: () => this.SUBRULE(this.arrayType),
@@ -389,9 +423,21 @@ export class STParser extends CstParser {
     ]);
     this.OPTION2(() => {
       this.CONSUME(tokens.Assign);
-      this.SUBRULE(this.expression);
+      this.SUBRULE(this.initializerExpression);
     });
     this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
+   * Initializer expression: single expression or comma-separated list for array init.
+   * Handles: x := 5; and arr := 0, 31, 59, 90, ...;
+   */
+  public initializerExpression = this.RULE("initializerExpression", () => {
+    this.SUBRULE(this.expression);
+    this.MANY(() => {
+      this.CONSUME(tokens.Comma);
+      this.SUBRULE2(this.expression);
+    });
   });
 
   // ==========================================================================
@@ -432,7 +478,10 @@ export class STParser extends CstParser {
       ],
       IGNORE_AMBIGUITIES: true,
     });
-    this.CONSUME(tokens.Semicolon);
+    // Semicolon is optional after END_STRUCT END_TYPE (CODESYS tolerance)
+    this.OPTION3(() => {
+      this.CONSUME(tokens.Semicolon);
+    });
   });
 
   /**
@@ -585,20 +634,34 @@ export class STParser extends CstParser {
       this.OR([
         { ALT: () => this.CONSUME(tokens.REF_TO) },
         { ALT: () => this.CONSUME(tokens.REFERENCE_TO) },
+        {
+          ALT: () => {
+            this.CONSUME(tokens.POINTER);
+            this.CONSUME(tokens.TO);
+          },
+        },
       ]);
     });
     this.CONSUME(tokens.Identifier);
-    // Optional parameterized length for STRING(n) / WSTRING(n)
-    // GATE: only consume ( IntegerLiteral ) -- avoid ( Identifier ) for typed enums
-    // and ( IntegerLiteral .. ) for subrange types
+    // Optional parameterized length for STRING(n) / WSTRING(n) / STRING(CONSTANT_NAME)
+    // GATE: consume ( IntegerLiteral ) or ( Identifier ) when preceded by STRING/WSTRING
+    // Avoid ( Identifier ) for typed enums and ( IntegerLiteral .. ) for subrange types
     this.OPTION2({
       GATE: () =>
         this.LA(1).tokenType === tokens.LParen &&
-        this.LA(2).tokenType === tokens.IntegerLiteral &&
-        this.LA(3).tokenType === tokens.RParen,
+        ((this.LA(2).tokenType === tokens.IntegerLiteral &&
+          this.LA(3).tokenType === tokens.RParen) ||
+          (this.LA(2).tokenType === tokens.Identifier &&
+            this.LA(3).tokenType === tokens.RParen)),
       DEF: () => {
         this.CONSUME(tokens.LParen);
-        this.CONSUME(tokens.IntegerLiteral);
+        this.OR4({
+          DEF: [
+            { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
+            { ALT: () => this.CONSUME4(tokens.Identifier) },
+          ],
+          IGNORE_AMBIGUITIES: true,
+        });
         this.CONSUME(tokens.RParen);
       },
     });
@@ -758,6 +821,11 @@ export class STParser extends CstParser {
           ALT: () => this.SUBRULE(this.assertCall),
           GATE: () => this.isAssertAhead(),
         },
+        {
+          // Empty statement (bare semicolon) — tolerates ELSE; and similar CODESYS patterns
+          ALT: () => this.CONSUME2(tokens.Semicolon),
+          GATE: () => this.LA(1).tokenType === tokens.Semicolon,
+        },
       ],
       IGNORE_AMBIGUITIES: true,
     });
@@ -819,11 +887,23 @@ export class STParser extends CstParser {
   /**
    * Lookahead helper to detect if we're parsing a method call: Ident.Ident(
    */
+  private isIdentifierOrKeywordToken(tokenType: any): boolean {
+    return (
+      tokenType === tokens.Identifier ||
+      tokenType === tokens.SET ||
+      tokenType === tokens.GET ||
+      tokenType === tokens.ON ||
+      tokenType === tokens.OVERRIDE ||
+      tokenType === tokens.ABSTRACT ||
+      tokenType === tokens.FINAL
+    );
+  }
+
   private isMethodCallAhead(): boolean {
     return (
-      this.LA(1).tokenType === tokens.Identifier &&
+      this.isIdentifierOrKeywordToken(this.LA(1).tokenType) &&
       this.LA(2).tokenType === tokens.Dot &&
-      this.LA(3).tokenType === tokens.Identifier &&
+      this.isIdentifierOrKeywordToken(this.LA(3).tokenType) &&
       this.LA(4)?.tokenType === tokens.LParen
     );
   }
@@ -832,9 +912,9 @@ export class STParser extends CstParser {
    * instance.method(args); statement
    */
   public methodCallStatement = this.RULE("methodCallStatement", () => {
-    this.CONSUME(tokens.Identifier); // instance name
+    this.SUBRULE(this.identifierOrKeyword); // instance name
     this.CONSUME(tokens.Dot);
-    this.CONSUME2(tokens.Identifier); // method name
+    this.SUBRULE2(this.identifierOrKeyword); // method name
     this.CONSUME(tokens.LParen);
     this.OPTION(() => {
       this.SUBRULE(this.argumentList);
@@ -1236,9 +1316,9 @@ export class STParser extends CstParser {
    * instance.method(args) expression
    */
   public methodCall = this.RULE("methodCall", () => {
-    this.CONSUME(tokens.Identifier); // instance name
+    this.SUBRULE(this.identifierOrKeyword); // instance name
     this.CONSUME(tokens.Dot);
-    this.CONSUME2(tokens.Identifier); // method name
+    this.SUBRULE2(this.identifierOrKeyword); // method name
     this.CONSUME(tokens.LParen);
     this.OPTION(() => {
       this.SUBRULE(this.argumentList);
@@ -1256,7 +1336,7 @@ export class STParser extends CstParser {
    */
   public chainedMethodCall = this.RULE("chainedMethodCall", () => {
     this.CONSUME(tokens.Dot);
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     this.CONSUME(tokens.LParen);
     this.OPTION(() => {
       this.SUBRULE(this.argumentList);
@@ -1350,7 +1430,7 @@ export class STParser extends CstParser {
    * Variable reference (with optional array subscripts and field access)
    */
   public variable = this.RULE("variable", () => {
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     this.MANY(() => {
       this.OR([
         {
@@ -1366,7 +1446,14 @@ export class STParser extends CstParser {
         {
           ALT: () => {
             this.CONSUME(tokens.Dot);
-            this.CONSUME2(tokens.Identifier);
+            this.OR3({
+              DEF: [
+                { ALT: () => this.SUBRULE2(this.identifierOrKeyword) },
+                // Bit access: var.0, var.31
+                { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
+              ],
+              IGNORE_AMBIGUITIES: true,
+            });
           },
         },
         {
@@ -1382,7 +1469,7 @@ export class STParser extends CstParser {
    * Function or FB call
    */
   public functionCall = this.RULE("functionCall", () => {
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     this.CONSUME(tokens.LParen);
     this.OPTION(() => {
       this.SUBRULE(this.argumentList);
@@ -1405,7 +1492,7 @@ export class STParser extends CstParser {
    */
   public argument = this.RULE("argument", () => {
     this.OPTION(() => {
-      this.CONSUME(tokens.Identifier);
+      this.SUBRULE(this.identifierOrKeyword);
       this.OR([
         { ALT: () => this.CONSUME(tokens.Assign) },
         { ALT: () => this.CONSUME(tokens.OutputAssign) },
@@ -1421,6 +1508,7 @@ export class STParser extends CstParser {
     this.OR([
       { ALT: () => this.CONSUME(tokens.TRUE) },
       { ALT: () => this.CONSUME(tokens.FALSE) },
+      { ALT: () => this.CONSUME(tokens.TypedLiteral) },
       { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
       { ALT: () => this.CONSUME(tokens.RealLiteral) },
       { ALT: () => this.CONSUME(tokens.StringLiteral) },

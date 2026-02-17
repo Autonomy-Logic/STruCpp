@@ -285,7 +285,10 @@ export class CodeGenerator {
    * Handles VLA synthetic names (__VLA_1D_INT → ArrayView1D<INT_t>)
    * and regular types (INT → IEC_INT).
    */
-  protected mapVarTypeToCpp(typeName: string, maxLength?: number): string {
+  protected mapVarTypeToCpp(
+    typeName: string,
+    maxLength?: number | string,
+  ): string {
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
     if (vlaMatch) {
@@ -293,7 +296,7 @@ export class CodeGenerator {
       const elemType = this.typeCodeGen.mapTypeToCpp(vlaMatch[2]!);
       return `ArrayView${ndims}D<${elemType}>`;
     }
-    // Handle parameterized STRING(n) / WSTRING(n)
+    // Handle parameterized STRING(n) / WSTRING(n) / STRING(CONSTANT_NAME)
     if (maxLength !== undefined) {
       const upper = typeName.toUpperCase();
       if (upper === "STRING") {
@@ -311,13 +314,32 @@ export class CodeGenerator {
   }
 
   /**
-   * Map a TypeReference to its C++ type string, including parameterized length.
+   * Map a TypeReference to its C++ type string, including parameterized length
+   * and pointer/reference qualifiers.
    */
   protected mapTypeRefToCpp(typeRef: {
     name: string;
-    maxLength?: number;
+    maxLength?: number | string;
+    referenceKind?: string;
   }): string {
-    return this.mapVarTypeToCpp(typeRef.name, typeRef.maxLength);
+    const baseType = this.mapVarTypeToCpp(
+      typeRef.name,
+      typeof typeRef.maxLength === "number" ? typeRef.maxLength : undefined,
+    );
+    if (typeRef.referenceKind === "pointer_to") {
+      return `${baseType}*`;
+    }
+    // For STRING(CONSTANT_NAME), emit template with the constant name
+    if (typeof typeRef.maxLength === "string") {
+      const upper = typeRef.name.toUpperCase();
+      if (upper === "STRING") {
+        return `IECStringVar<${typeRef.maxLength}>`;
+      }
+      if (upper === "WSTRING") {
+        return `IECWStringVar<${typeRef.maxLength}>`;
+      }
+    }
+    return baseType;
   }
 
   /**
@@ -467,6 +489,28 @@ export class CodeGenerator {
       for (const line of typeCode.split(this.options.lineEnding)) {
         this.emitHeader(line);
       }
+    }
+
+    // Generate top-level global variables (GVL files)
+    if (ast.globalVarBlocks.length > 0) {
+      this.emitHeader("// Global variables");
+      for (const block of ast.globalVarBlocks) {
+        const constQualifier = block.isConstant ? "constexpr " : "";
+        for (const decl of block.declarations) {
+          const cppType = this.mapTypeRefToCpp(decl.type);
+          for (const name of decl.names) {
+            if (decl.initialValue) {
+              const initExpr = this.generateExpression(decl.initialValue);
+              this.emitHeader(
+                `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
+              );
+            } else {
+              this.emitHeader(`inline ${cppType} ${name}{};`);
+            }
+          }
+        }
+      }
+      this.emitHeader("");
     }
 
     // Generate forward declarations
@@ -1811,6 +1855,27 @@ export class CodeGenerator {
       return;
     }
 
+    // Bit access write: var.N := value → var = (var & ~(1u << N)) | ((value ? 1u : 0u) << N)
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      stmt.target.fieldAccess.length > 0 &&
+      /^\d+$/.test(stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!)
+    ) {
+      const bitIdx =
+        stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!;
+      // Build the base variable (without the bit index)
+      const baseVar: VariableExpression = {
+        ...stmt.target,
+        fieldAccess: stmt.target.fieldAccess.slice(0, -1),
+      };
+      const baseCode = this.generateExpression(baseVar);
+      const value = this.generateExpression(stmt.value);
+      this.emit(
+        `${indent}${baseCode} = (${baseCode} & ~(1u << ${bitIdx})) | ((${value} ? 1u : 0u) << ${bitIdx});`,
+      );
+      return;
+    }
+
     const target = this.generateExpression(stmt.target);
     const value = this.generateExpression(stmt.value);
 
@@ -2113,6 +2178,10 @@ export class CodeGenerator {
         }
         return `strucpp::iec_new<${cppType}>()`;
       }
+      case "ArrayLiteralExpression": {
+        const elements = expr.elements.map((e) => this.generateExpression(e));
+        return `{${elements.join(", ")}}`;
+      }
     }
   }
 
@@ -2120,6 +2189,26 @@ export class CodeGenerator {
    * Generate C++ for a literal expression.
    */
   private generateLiteralExpression(expr: LiteralExpression): string {
+    // Handle typed literals: BYTE#255 → static_cast<IEC_BYTE>(255)
+    if (expr.typePrefix) {
+      const cppType = `IEC_${expr.typePrefix}`;
+      // For hex/oct/bin bases, preserve the base notation
+      const rawVal = expr.rawValue;
+      const hashIdx = rawVal.indexOf("#");
+      const valuePart = rawVal.substring(hashIdx + 1);
+      let cppValue: string;
+      if (valuePart.startsWith("16#")) {
+        cppValue = `0x${valuePart.substring(3).replace(/_/g, "")}`;
+      } else if (valuePart.startsWith("8#")) {
+        cppValue = `0${valuePart.substring(2).replace(/_/g, "")}`;
+      } else if (valuePart.startsWith("2#")) {
+        cppValue = `0b${valuePart.substring(2).replace(/_/g, "")}`;
+      } else {
+        cppValue = valuePart.replace(/_/g, "");
+      }
+      return `static_cast<${cppType}>(${cppValue})`;
+    }
+
     switch (expr.literalType) {
       case "BOOL":
         return expr.value === true ||
@@ -2319,12 +2408,17 @@ export class CodeGenerator {
       }
     }
 
-    // Field access (struct members) — detect property reads on last field
+    // Field access (struct members) — detect property reads and bit access on last field
     if (expr.fieldAccess.length > 0) {
       let currentType = this.currentScopeVarTypes.get(nameUpper);
       for (let i = 0; i < expr.fieldAccess.length; i++) {
         const field = expr.fieldAccess[i]!;
         const isLast = i === expr.fieldAccess.length - 1;
+        // Bit access: numeric field like .0, .15, .31 → ((var >> N) & 1)
+        if (/^\d+$/.test(field)) {
+          result = `((static_cast<uint32_t>(${result}) >> ${field}) & 1)`;
+          continue;
+        }
         if (isLast) {
           const propName = this.resolvePropertyName(currentType, field);
           if (propName) {
@@ -2458,6 +2552,14 @@ export class CodeGenerator {
     }
 
     const nameUpper = expr.functionName.toUpperCase();
+
+    // 0. ADR(x) → &(x) (CODESYS address-of operator)
+    if (nameUpper === "ADR") {
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
+      return `&(${args[0] ?? ""})`;
+    }
 
     // 1. Check for *_TO_* conversion pattern (e.g., INT_TO_REAL -> TO_REAL)
     const conversion = this.stdRegistry.resolveConversion(nameUpper);

@@ -164,6 +164,35 @@ function getAllTokens(items: (CstNode | IToken)[] | undefined): IToken[] {
   return items.filter((item): item is IToken => "image" in item);
 }
 
+/**
+ * Extract the identifier string from an identifierOrKeyword CST node.
+ * The node contains either an Identifier token or one of the contextual keyword tokens
+ * (SET, GET, ON, OVERRIDE, ABSTRACT, FINAL).
+ */
+function getIdentifierOrKeywordImage(node: CstNode): string {
+  const children = node.children as CstChildren;
+  // Check Identifier first (most common case)
+  const identToken = getFirstToken(children.Identifier);
+  if (identToken) return identToken.image;
+  // Check each contextual keyword token
+  for (const key of ["SET", "GET", "ON", "OVERRIDE", "ABSTRACT", "FINAL"]) {
+    const kwToken = getFirstToken(children[key]);
+    if (kwToken) return kwToken.image;
+  }
+  return "";
+}
+
+/**
+ * Extract all identifier strings from an array of identifierOrKeyword CST nodes.
+ */
+function getAllIdentifierOrKeywordImages(
+  items: (CstNode | IToken)[] | undefined,
+): string[] {
+  if (!items) return [];
+  const nodes = items.filter((item): item is CstNode => "children" in item);
+  return nodes.map(getIdentifierOrKeywordImage);
+}
+
 // =============================================================================
 // AST Builder Class
 // =============================================================================
@@ -214,6 +243,12 @@ export class ASTBuilder {
       configurations.push(this.buildConfigurationDeclaration(node));
     }
 
+    // Process top-level VAR_GLOBAL blocks (GVL files)
+    const globalVarBlocks: VarBlock[] = [];
+    for (const node of getAllNodes(children.varBlock)) {
+      globalVarBlocks.push(this.buildVarBlock(node));
+    }
+
     return {
       kind: "CompilationUnit",
       sourceSpan: nodeToSourceSpan(cst),
@@ -223,6 +258,7 @@ export class ASTBuilder {
       interfaces,
       types,
       configurations,
+      globalVarBlocks,
     };
   }
 
@@ -264,8 +300,11 @@ export class ASTBuilder {
    */
   buildFunctionDeclaration(node: CstNode): FunctionDeclaration {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+    // Function name comes from identifierOrKeyword (allows OVERRIDE etc. as names)
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const name = idOrKwNodes[0]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[0])
+      : "";
 
     // Get return type from the dataType subrule
     const dataTypeNode = getFirstNode(children.dataType);
@@ -315,26 +354,31 @@ export class ASTBuilder {
   buildFunctionBlockDeclaration(node: CstNode): FunctionBlockDeclaration {
     const children = node.children as CstChildren;
 
-    // FB name is the first Identifier (after optional ABSTRACT/FINAL)
-    const allIdentifiers = getAllTokens(children.Identifier);
-    const name = allIdentifiers[0]?.image ?? "";
+    // FB name comes from identifierOrKeyword subrule (allows contextual keywords as names)
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const name = idOrKwNodes[0]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[0])
+      : "";
 
     // Check for ABSTRACT/FINAL modifiers
     const isAbstract = !!children.ABSTRACT;
     const isFinal = !!children.FINAL;
 
-    // Check for EXTENDS clause (second Identifier if EXTENDS token present)
+    // Remaining Identifier tokens are for EXTENDS and IMPLEMENTS clauses
+    const allIdentifiers = getAllTokens(children.Identifier);
+
+    // Check for EXTENDS clause
     let extendsName: string | undefined;
     if (children.EXTENDS) {
-      // The identifier after EXTENDS is at index 1
-      extendsName = allIdentifiers[1]?.image;
+      // The identifier after EXTENDS is the first Identifier token
+      extendsName = allIdentifiers[0]?.image;
     }
 
     // Check for IMPLEMENTS clause (identifiers after IMPLEMENTS keyword)
     let implementsList: string[] | undefined;
     if (children.IMPLEMENTS) {
-      // Identifiers after IMPLEMENTS - skip FB name and optional EXTENDS name
-      const startIdx = extendsName ? 2 : 1;
+      // Skip the EXTENDS identifier if present
+      const startIdx = extendsName ? 1 : 0;
       const implNames = allIdentifiers.slice(startIdx).map((t) => t.image);
       if (implNames.length > 0) {
         implementsList = implNames;
@@ -1044,8 +1088,11 @@ export class ASTBuilder {
    */
   buildVarDeclaration(node: CstNode): VarDeclaration {
     const children = node.children as CstChildren;
-    const identifiers = getAllTokens(children.Identifier);
-    const names = identifiers.map((t) => t.image);
+    // Variable names come from identifierOrKeyword subrule nodes (allows SET, ON, etc. as names)
+    const names = getAllIdentifierOrKeywordImages(children.identifierOrKeyword);
+
+    // Check for POINTER TO prefix at varDeclaration level (handles POINTER TO ARRAY[...] OF T)
+    const hasPointerTo = !!children.POINTER;
 
     // Check for inline array type first (ARRAY[...] OF type)
     const arrayTypeNode = getFirstNode(children.arrayType);
@@ -1069,13 +1116,36 @@ export class ASTBuilder {
       }
     }
 
-    // Get initial value if present
+    // Apply POINTER TO from varDeclaration level (overrides any existing reference kind)
+    if (hasPointerTo && type.referenceKind === "none") {
+      type.referenceKind = "pointer_to";
+      type.isReference = true;
+    }
+
+    // Get initial value if present (from initializerExpression rule)
     let initialValue: Expression | undefined;
-    const exprNode = getFirstNode(children.expression);
-    if (exprNode) {
-      const expr = this.buildExpression(exprNode);
-      if (expr) {
-        initialValue = expr;
+    const initExprNode = getFirstNode(children.initializerExpression);
+    if (initExprNode) {
+      const initChildren = initExprNode.children as CstChildren;
+      const exprNodes = getAllNodes(initChildren.expression);
+      if (exprNodes.length > 1) {
+        // Multiple expressions → ArrayLiteralExpression
+        const elements: Expression[] = [];
+        for (const en of exprNodes) {
+          const e = this.buildExpression(en);
+          if (e) elements.push(e);
+        }
+        initialValue = {
+          kind: "ArrayLiteralExpression",
+          sourceSpan: nodeToSourceSpan(initExprNode),
+          elements,
+        };
+      } else if (exprNodes.length === 1) {
+        // Single expression → use directly
+        const expr = this.buildExpression(exprNodes[0]!);
+        if (expr) {
+          initialValue = expr;
+        }
       }
     }
 
@@ -1110,20 +1180,30 @@ export class ASTBuilder {
     const name = nameToken?.image ?? "INT";
     const isRefTo = !!children.REF_TO;
     const isReferenceTo = !!children.REFERENCE_TO;
-    const isReference = isRefTo || isReferenceTo;
+    const isPointerTo = !!children.POINTER;
+    const isReference = isRefTo || isReferenceTo || isPointerTo;
 
     let referenceKind: ReferenceKind = "none";
     if (isRefTo) {
       referenceKind = "ref_to";
     } else if (isReferenceTo) {
       referenceKind = "reference_to";
+    } else if (isPointerTo) {
+      referenceKind = "pointer_to";
     }
 
-    // Extract optional parameterized length: STRING(n) / WSTRING(n)
-    let maxLength: number | undefined;
+    // Extract optional parameterized length: STRING(n) / WSTRING(n) / STRING(CONSTANT)
+    let maxLength: number | string | undefined;
     const lengthToken = getFirstToken(children.IntegerLiteral);
     if (lengthToken) {
       maxLength = parseInt(lengthToken.image, 10);
+    } else {
+      // Check for identifier-based length (STRING(CONSTANT_NAME))
+      // Note: children.Identifier[0] is the type name itself; [1] would be the length constant
+      const allIdents = getAllTokens(children.Identifier);
+      if (allIdents.length > 1) {
+        maxLength = allIdents[1]!.image;
+      }
     }
 
     const result: TypeReference = {
@@ -2166,6 +2246,39 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
 
     // Check for different literal types
+
+    // Typed literal: BYTE#255, DWORD#16#FF, INT#0, etc.
+    if (children.TypedLiteral) {
+      const token = getFirstToken(children.TypedLiteral)!;
+      const raw = token.image;
+      const hashIdx = raw.indexOf("#");
+      const typePrefix = raw.substring(0, hashIdx).toUpperCase();
+      const valuePart = raw.substring(hashIdx + 1);
+      // Parse the numeric value
+      let numValue: number;
+      if (valuePart.startsWith("16#") || valuePart.startsWith("16#")) {
+        numValue = parseInt(valuePart.substring(3).replace(/_/g, ""), 16);
+      } else if (valuePart.startsWith("8#")) {
+        numValue = parseInt(valuePart.substring(2).replace(/_/g, ""), 8);
+      } else if (valuePart.startsWith("2#")) {
+        numValue = parseInt(valuePart.substring(2).replace(/_/g, ""), 2);
+      } else {
+        numValue = valuePart.includes(".")
+          ? parseFloat(valuePart.replace(/_/g, ""))
+          : parseInt(valuePart.replace(/_/g, ""), 10);
+      }
+      const litType =
+        typePrefix === "REAL" || typePrefix === "LREAL" ? "REAL" : "INT";
+      return {
+        kind: "LiteralExpression",
+        sourceSpan: tokenToSourceSpan(token),
+        literalType: litType,
+        value: numValue,
+        rawValue: raw,
+        typePrefix,
+      };
+    }
+
     if (children.IntegerLiteral) {
       const token = getFirstToken(children.IntegerLiteral)!;
       return {
@@ -2258,20 +2371,26 @@ export class ASTBuilder {
    */
   buildVariableExpression(node: CstNode): VariableExpression {
     const children = node.children as CstChildren;
-    const nameToken = getFirstToken(children.Identifier);
-    const name = nameToken?.image ?? "";
+    // identifierOrKeyword subrule nodes: first is the variable name, rest are field accessors
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const name = idOrKwNodes[0]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[0])
+      : "";
 
     // Check for dereference operator (^)
     const isDereference = !!children.Caret;
 
-    // Get additional field access identifiers (Identifier[0] is the variable name)
-    const allIdentifiers = getAllTokens(children.Identifier);
+    // Get additional field access from identifierOrKeyword nodes (index 1+)
+    // Also include IntegerLiteral tokens for bit access (var.0, var.31)
+    const allIntLiterals = getAllTokens(children.IntegerLiteral);
     const fieldAccess: string[] = [];
-    for (let i = 1; i < allIdentifiers.length; i++) {
-      const token = allIdentifiers[i];
-      if (token) {
-        fieldAccess.push(token.image);
-      }
+    for (let i = 1; i < idOrKwNodes.length; i++) {
+      const node = idOrKwNodes[i];
+      if (node) fieldAccess.push(getIdentifierOrKeywordImage(node));
+    }
+    // Bit access indices appear as IntegerLiteral tokens after Dot
+    for (const intToken of allIntLiterals) {
+      fieldAccess.push(intToken.image);
     }
 
     // Extract subscript expressions from array access: arr[i], arr[i,j], etc.
@@ -2390,9 +2509,13 @@ export class ASTBuilder {
     node: CstNode,
   ): FunctionCallExpression | MethodCallExpression {
     const children = node.children as CstChildren;
-    const identifiers = getAllTokens(children.Identifier);
-    const instanceName = identifiers[0]?.image ?? "";
-    const methodName = identifiers[1]?.image ?? "";
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const instanceName = idOrKwNodes[0]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[0])
+      : "";
+    const methodName = idOrKwNodes[1]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[1])
+      : "";
 
     const args: Argument[] = [];
     const argListNode = getFirstNode(children.argumentList);
@@ -2425,8 +2548,10 @@ export class ASTBuilder {
    */
   buildFunctionCallExpression(node: CstNode): FunctionCallExpression {
     const children = node.children as CstChildren;
-    const nameToken = getFirstToken(children.Identifier);
-    const functionName = nameToken?.image ?? "";
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const functionName = idOrKwNodes[0]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[0])
+      : "";
 
     const args: Argument[] = [];
     const argListNode = getFirstNode(children.argumentList);
@@ -2455,8 +2580,10 @@ export class ASTBuilder {
     parentNode: CstNode,
   ): MethodCallExpression {
     const chainChildren = chainNode.children as CstChildren;
-    const chainMethodName =
-      getAllTokens(chainChildren.Identifier)[0]?.image ?? "";
+    const chainIdOrKw = getAllNodes(chainChildren.identifierOrKeyword);
+    const chainMethodName = chainIdOrKw[0]
+      ? getIdentifierOrKeywordImage(chainIdOrKw[0])
+      : "";
 
     const chainArgs: Argument[] = [];
     const chainArgList = getFirstNode(chainChildren.argumentList);
@@ -2485,12 +2612,13 @@ export class ASTBuilder {
     let name: string | undefined;
     let isOutput = false;
 
-    // Check for named argument: Identifier (Assign | OutputAssign)
-    const identToken = getFirstToken(children.Identifier);
-    if (identToken) {
+    // Check for named argument: identifierOrKeyword (Assign | OutputAssign)
+    // Named params can use contextual keywords like SET := TRUE
+    const idOrKwNode = getFirstNode(children.identifierOrKeyword);
+    if (idOrKwNode) {
       // Named argument - check if it's input (:=) or output (=>)
       if (children.Assign || children.OutputAssign) {
-        name = identToken.image;
+        name = getIdentifierOrKeywordImage(idOrKwNode);
         isOutput = !!children.OutputAssign;
       }
     }
@@ -2538,9 +2666,13 @@ export class ASTBuilder {
    */
   buildMethodCallStatement(node: CstNode): FunctionCallStatement {
     const children = node.children as CstChildren;
-    const identifiers = getAllTokens(children.Identifier);
-    const instanceName = identifiers[0]?.image ?? "";
-    const methodName = identifiers[1]?.image ?? "";
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const instanceName = idOrKwNodes[0]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[0])
+      : "";
+    const methodName = idOrKwNodes[1]
+      ? getIdentifierOrKeywordImage(idOrKwNodes[1])
+      : "";
 
     const args: Argument[] = [];
     const argListNode = getFirstNode(children.argumentList);

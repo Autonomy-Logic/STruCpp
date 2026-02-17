@@ -65,7 +65,7 @@ export interface TimeValue {
 export interface ProjectVarDeclaration {
   name: string;
   typeName: string;
-  maxLength?: number; // For STRING(n) / WSTRING(n) parameterized length
+  maxLength?: number | string; // For STRING(n) / WSTRING(n) parameterized length; string for constant names
   initialValue?: string;
   isConstant: boolean;
   isRetain: boolean;

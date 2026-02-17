@@ -203,7 +203,10 @@ export class TypeCodeGenerator {
     this.emit(`struct ${name} {`);
 
     for (const field of def.fields) {
-      const cppType = this.mapTypeToCpp(field.type.name);
+      let cppType = this.mapTypeToCpp(field.type.name);
+      if (field.type.referenceKind === "pointer_to") {
+        cppType += "*";
+      }
       for (const fieldName of field.names) {
         if (field.initialValue) {
           const initVal = this.expressionToCpp(field.initialValue);
@@ -211,7 +214,13 @@ export class TypeCodeGenerator {
             `${this.options.indent}${cppType} ${fieldName} = ${initVal};`,
           );
         } else {
-          this.emit(`${this.options.indent}${cppType} ${fieldName}{};`);
+          if (field.type.referenceKind === "pointer_to") {
+            this.emit(
+              `${this.options.indent}${cppType} ${fieldName} = nullptr;`,
+            );
+          } else {
+            this.emit(`${this.options.indent}${cppType} ${fieldName}{};`);
+          }
         }
       }
     }

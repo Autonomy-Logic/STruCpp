@@ -604,15 +604,17 @@ export class SemanticAnalyzer {
 
     // CONSTANT validation
     if (block.isConstant) {
-      // CONSTANT requires initializer
-      for (const decl of block.declarations) {
-        if (!decl.initialValue) {
-          const names = decl.names.join(", ");
-          this.addError(
-            `CONSTANT variable '${names}' must have an initializer`,
-            decl.sourceSpan.startLine,
-            decl.sourceSpan.startCol,
-          );
+      // CONSTANT requires initializer (except VAR_INPUT CONSTANT — caller provides value)
+      if (blockType !== "VAR_INPUT") {
+        for (const decl of block.declarations) {
+          if (!decl.initialValue) {
+            const names = decl.names.join(", ");
+            this.addError(
+              `CONSTANT variable '${names}' must have an initializer`,
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+            );
+          }
         }
       }
 
