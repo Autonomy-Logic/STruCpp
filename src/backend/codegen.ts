@@ -261,6 +261,44 @@ export class CodeGenerator {
   /** Current FB's var blocks, kept so method scopes can see FB member types */
   private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
 
+  /** Bit-width of each IEC elementary type */
+  private static readonly IEC_TYPE_BITS: Record<string, number> = {
+    BOOL: 1,
+    BYTE: 8,
+    WORD: 16,
+    DWORD: 32,
+    LWORD: 64,
+    SINT: 8,
+    INT: 16,
+    DINT: 32,
+    LINT: 64,
+    USINT: 8,
+    UINT: 16,
+    UDINT: 32,
+    ULINT: 64,
+    REAL: 32,
+    LREAL: 64,
+  };
+
+  /** Category grouping for IEC types (same category = safe widening) */
+  private static readonly IEC_TYPE_CAT: Record<string, string> = {
+    BOOL: "BIT",
+    BYTE: "BIT",
+    WORD: "BIT",
+    DWORD: "BIT",
+    LWORD: "BIT",
+    SINT: "SINT",
+    INT: "SINT",
+    DINT: "SINT",
+    LINT: "SINT",
+    USINT: "UINT",
+    UINT: "UINT",
+    UDINT: "UINT",
+    ULINT: "UINT",
+    REAL: "REAL",
+    LREAL: "REAL",
+  };
+
   constructor(
     private readonly _symbolTables?: SymbolTables,
     options: Partial<CodeGenOptions> = {},
@@ -2526,6 +2564,244 @@ export class CodeGenerator {
     return `${obj}.${resolvedName}(${args})`;
   }
 
+  // ===========================================================================
+  // Implicit type widening / argument coercion helpers
+  // ===========================================================================
+
+  /**
+   * Returns true when `source` can be implicitly widened to `target`.
+   * Covers same-category widening (BYTE→DWORD), BIT→INT crossover (BYTE→INT),
+   * and integer→REAL promotion.
+   */
+  private canImplicitWiden(source: string, target: string): boolean {
+    const s = source.toUpperCase();
+    const t = target.toUpperCase();
+    if (s === t) return true;
+    const sBits = CodeGenerator.IEC_TYPE_BITS[s];
+    const tBits = CodeGenerator.IEC_TYPE_BITS[t];
+    const sCat = CodeGenerator.IEC_TYPE_CAT[s];
+    const tCat = CodeGenerator.IEC_TYPE_CAT[t];
+    if (sBits === undefined || tBits === undefined || !sCat || !tCat)
+      return false;
+    // Same category, wider target
+    if (sCat === tCat && tBits >= sBits) return true;
+    // BIT → signed/unsigned integer (CODESYS: BYTE→INT)
+    if (
+      sCat === "BIT" &&
+      (tCat === "SINT" || tCat === "UINT") &&
+      tBits >= sBits
+    )
+      return true;
+    // Integer/unsigned → REAL promotion
+    if (
+      (sCat === "SINT" || sCat === "UINT" || sCat === "BIT") &&
+      tCat === "REAL" &&
+      tBits >= sBits
+    )
+      return true;
+    return false;
+  }
+
+  /**
+   * Lightweight type inference for an expression using the current scope's
+   * variable type map. Returns the IEC type name (upper case) or undefined.
+   */
+  private inferExprType(expr: Expression): string | undefined {
+    switch (expr.kind) {
+      case "VariableExpression":
+        return this.currentScopeVarTypes
+          .get((expr as VariableExpression).name.toUpperCase())
+          ?.toUpperCase();
+      case "LiteralExpression": {
+        const lit = expr as LiteralExpression;
+        if (lit.typePrefix) return lit.typePrefix.toUpperCase();
+        // Map literal types to IEC names
+        switch (lit.literalType) {
+          case "INT":
+            return "INT";
+          case "REAL":
+            return "REAL";
+          case "BOOL":
+            return "BOOL";
+          case "STRING":
+            return "STRING";
+          default:
+            return undefined;
+        }
+      }
+      case "UnaryExpression":
+        return this.inferExprType((expr as UnaryExpression).operand);
+      case "FunctionCallExpression": {
+        const call = expr as FunctionCallExpression;
+        const fnUpper = call.functionName.toUpperCase();
+        // Check user-defined functions
+        if (this.ast) {
+          const funcDecl = this.ast.functions.find(
+            (f) => f.name.toUpperCase() === fnUpper,
+          );
+          if (funcDecl) return funcDecl.returnType?.name.toUpperCase();
+        }
+        // Check conversion functions (INT_TO_REAL → REAL)
+        const conv = this.stdRegistry.resolveConversion(fnUpper);
+        if (conv) return conv.toType.toUpperCase();
+        // Check std functions with specific return type
+        const std = this.stdRegistry.lookup(fnUpper);
+        if (std?.specificReturnType)
+          return std.specificReturnType.toUpperCase();
+        return undefined;
+      }
+      case "ParenthesizedExpression":
+        return this.inferExprType(
+          (expr as { expression: Expression }).expression,
+        );
+      default:
+        return undefined;
+    }
+  }
+
+  /**
+   * Extract ordered parameter types from a user-defined function declaration.
+   * Returns undefined if function not found.
+   */
+  private getParamTypes(funcName: string): string[] | undefined {
+    if (!this.ast) return undefined;
+    const nameUpper = funcName.toUpperCase();
+    const funcDecl = this.ast.functions.find(
+      (f) => f.name.toUpperCase() === nameUpper,
+    );
+    if (!funcDecl) return undefined;
+    const types: string[] = [];
+    for (const block of funcDecl.varBlocks) {
+      if (
+        block.blockType === "VAR_INPUT" ||
+        block.blockType === "VAR_IN_OUT" ||
+        block.blockType === "VAR_OUTPUT"
+      ) {
+        for (const decl of block.declarations) {
+          for (let i = 0; i < decl.names.length; i++) {
+            types.push(decl.type.name.toUpperCase());
+          }
+        }
+      }
+    }
+    return types.length > 0 ? types : undefined;
+  }
+
+  /**
+   * Apply implicit widening casts to a list of argument strings for a
+   * user-defined function call. Modifies `args` in place.
+   */
+  private coerceUserFuncArgs(
+    args: string[],
+    argExprs: FunctionCallExpression["arguments"],
+    paramTypes: string[],
+  ): void {
+    const exprCount = argExprs.length;
+    for (let i = 0; i < args.length && i < paramTypes.length; i++) {
+      if (i >= exprCount) break; // padded temp vars have no expr to infer from
+      const expr = argExprs[i]!.value;
+      const argType = this.inferExprType(expr);
+      if (!argType) continue;
+      const paramType = paramTypes[i]!;
+      if (argType === paramType) continue;
+      // Bare literals (no typePrefix) are untyped — always castable to param type
+      const innerExpr =
+        expr.kind === "UnaryExpression"
+          ? (expr as UnaryExpression).operand
+          : expr;
+      const isBareLiteral =
+        innerExpr.kind === "LiteralExpression" &&
+        !(innerExpr as LiteralExpression).typePrefix;
+      if (isBareLiteral || this.canImplicitWiden(argType, paramType)) {
+        args[i] = `static_cast<IEC_${paramType}>(${args[i]})`;
+      }
+    }
+  }
+
+  /**
+   * For std-lib template functions (like LIMIT, MAX, MIN) where all params
+   * share the same generic constraint, harmonize argument types so C++ template
+   * deduction succeeds. Casts literals to the dominant variable type, or widens
+   * all args to the widest type if variables differ.
+   */
+  private harmonizeStdFuncArgs(
+    args: string[],
+    argExprs: FunctionCallExpression["arguments"],
+    stdFunc: { params: Array<{ constraint: string }> },
+  ): void {
+    // Only harmonize when all params share the same generic constraint
+    if (stdFunc.params.length === 0) return;
+    const firstConstraint = stdFunc.params[0]!.constraint;
+    if (firstConstraint === "specific" || firstConstraint === "BOOL") return;
+    const allSame = stdFunc.params.every(
+      (p) => p.constraint === firstConstraint,
+    );
+    if (!allSame) return;
+
+    // Infer types for all arguments
+    const argTypes: (string | undefined)[] = argExprs.map((a) =>
+      this.inferExprType(a.value),
+    );
+
+    // Separate variable types from literal types
+    const varTypes: string[] = [];
+    const literalIndices: number[] = [];
+    for (let i = 0; i < argExprs.length && i < args.length; i++) {
+      const expr = argExprs[i]!.value;
+      const t = argTypes[i];
+      if (!t) continue;
+      if (
+        expr.kind === "LiteralExpression" ||
+        (expr.kind === "UnaryExpression" &&
+          (expr as UnaryExpression).operand.kind === "LiteralExpression")
+      ) {
+        literalIndices.push(i);
+      } else {
+        varTypes.push(t);
+      }
+    }
+
+    if (varTypes.length === 0) return; // All literals, no coercion needed
+
+    // Find dominant type: if all var types agree, use that; otherwise pick widest
+    let dominant = varTypes[0]!;
+    for (let i = 1; i < varTypes.length; i++) {
+      if (varTypes[i] !== dominant) {
+        // Pick wider type
+        const bits1 = CodeGenerator.IEC_TYPE_BITS[dominant] ?? 0;
+        const bits2 = CodeGenerator.IEC_TYPE_BITS[varTypes[i]!] ?? 0;
+        if (bits2 > bits1) dominant = varTypes[i]!;
+      }
+    }
+
+    // Cast literals to dominant type.
+    // Bare literals (no typePrefix) are untyped — always castable to dominant.
+    for (const i of literalIndices) {
+      const litType = argTypes[i];
+      if (!litType || litType === dominant) continue;
+      const expr = argExprs[i]!.value;
+      const innerExpr =
+        expr.kind === "UnaryExpression"
+          ? (expr as UnaryExpression).operand
+          : expr;
+      const isBareLiteral =
+        innerExpr.kind === "LiteralExpression" &&
+        !(innerExpr as LiteralExpression).typePrefix;
+      if (isBareLiteral || this.canImplicitWiden(litType, dominant)) {
+        args[i] = `static_cast<IEC_${dominant}>(${args[i]})`;
+      }
+    }
+
+    // Cast variable args that need widening to dominant type
+    for (let i = 0; i < args.length && i < argExprs.length; i++) {
+      if (literalIndices.includes(i)) continue;
+      const t = argTypes[i];
+      if (t && t !== dominant && this.canImplicitWiden(t, dominant)) {
+        args[i] = `static_cast<IEC_${dominant}>(${args[i]})`;
+      }
+    }
+  }
+
   /**
    * Generate C++ for a function call expression.
    * Handles: dotted method calls (THIS.method, SUPER.method, instance.method),
@@ -2585,6 +2861,7 @@ export class CodeGenerator {
       const args = expr.arguments.map((arg) =>
         this.generateExpression(arg.value),
       );
+      this.harmonizeStdFuncArgs(args, expr.arguments, stdFunc);
       return `${stdFunc.cppName}(${args.join(", ")})`;
     }
 
@@ -2646,6 +2923,12 @@ export class CodeGenerator {
           }
         }
       }
+    }
+
+    // Apply implicit widening casts for user-defined function args
+    const paramTypes = this.getParamTypes(nameUpper);
+    if (paramTypes) {
+      this.coerceUserFuncArgs(args, expr.arguments, paramTypes);
     }
 
     return `${expr.functionName}(${args.join(", ")})`;
