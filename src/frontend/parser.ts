@@ -5,7 +5,7 @@
  * Uses Chevrotain's embedded DSL for grammar definition.
  */
 
-import { CstParser, CstNode } from "chevrotain";
+import { CstParser, CstNode, type TokenType } from "chevrotain";
 import * as tokens from "./lexer.js";
 
 /**
@@ -887,7 +887,7 @@ export class STParser extends CstParser {
   /**
    * Lookahead helper to detect if we're parsing a method call: Ident.Ident(
    */
-  private isIdentifierOrKeywordToken(tokenType: any): boolean {
+  private isIdentifierOrKeywordToken(tokenType: TokenType): boolean {
     return (
       tokenType === tokens.Identifier ||
       tokenType === tokens.SET ||

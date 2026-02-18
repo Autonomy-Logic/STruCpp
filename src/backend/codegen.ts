@@ -2610,13 +2610,12 @@ export class CodeGenerator {
     switch (expr.kind) {
       case "VariableExpression":
         return this.currentScopeVarTypes
-          .get((expr as VariableExpression).name.toUpperCase())
+          .get(expr.name.toUpperCase())
           ?.toUpperCase();
       case "LiteralExpression": {
-        const lit = expr as LiteralExpression;
-        if (lit.typePrefix) return lit.typePrefix.toUpperCase();
+        if (expr.typePrefix) return expr.typePrefix.toUpperCase();
         // Map literal types to IEC names
-        switch (lit.literalType) {
+        switch (expr.literalType) {
           case "INT":
             return "INT";
           case "REAL":
@@ -2630,10 +2629,9 @@ export class CodeGenerator {
         }
       }
       case "UnaryExpression":
-        return this.inferExprType((expr as UnaryExpression).operand);
+        return this.inferExprType(expr.operand);
       case "FunctionCallExpression": {
-        const call = expr as FunctionCallExpression;
-        const fnUpper = call.functionName.toUpperCase();
+        const fnUpper = expr.functionName.toUpperCase();
         // Check user-defined functions
         if (this.ast) {
           const funcDecl = this.ast.functions.find(
@@ -2651,9 +2649,7 @@ export class CodeGenerator {
         return undefined;
       }
       case "ParenthesizedExpression":
-        return this.inferExprType(
-          (expr as { expression: Expression }).expression,
-        );
+        return this.inferExprType(expr.expression);
       default:
         return undefined;
     }
@@ -2705,17 +2701,19 @@ export class CodeGenerator {
       const paramType = paramTypes[i]!;
       if (argType === paramType) continue;
       // Bare literals (no typePrefix) are untyped — always castable to param type
-      const innerExpr =
-        expr.kind === "UnaryExpression"
-          ? (expr as UnaryExpression).operand
-          : expr;
-      const isBareLiteral =
-        innerExpr.kind === "LiteralExpression" &&
-        !(innerExpr as LiteralExpression).typePrefix;
-      if (isBareLiteral || this.canImplicitWiden(argType, paramType)) {
+      if (
+        this.isBareLiteral(expr) ||
+        this.canImplicitWiden(argType, paramType)
+      ) {
         args[i] = `static_cast<IEC_${paramType}>(${args[i]})`;
       }
     }
+  }
+
+  /** Returns true if expr is a bare literal (no typePrefix), possibly negated */
+  private isBareLiteral(expr: Expression): boolean {
+    const inner = expr.kind === "UnaryExpression" ? expr.operand : expr;
+    return inner.kind === "LiteralExpression" && !inner.typePrefix;
   }
 
   /**
@@ -2753,7 +2751,7 @@ export class CodeGenerator {
       if (
         expr.kind === "LiteralExpression" ||
         (expr.kind === "UnaryExpression" &&
-          (expr as UnaryExpression).operand.kind === "LiteralExpression")
+          expr.operand.kind === "LiteralExpression")
       ) {
         literalIndices.push(i);
       } else {
@@ -2780,14 +2778,10 @@ export class CodeGenerator {
       const litType = argTypes[i];
       if (!litType || litType === dominant) continue;
       const expr = argExprs[i]!.value;
-      const innerExpr =
-        expr.kind === "UnaryExpression"
-          ? (expr as UnaryExpression).operand
-          : expr;
-      const isBareLiteral =
-        innerExpr.kind === "LiteralExpression" &&
-        !(innerExpr as LiteralExpression).typePrefix;
-      if (isBareLiteral || this.canImplicitWiden(litType, dominant)) {
+      if (
+        this.isBareLiteral(expr) ||
+        this.canImplicitWiden(litType, dominant)
+      ) {
         args[i] = `static_cast<IEC_${dominant}>(${args[i]})`;
       }
     }
