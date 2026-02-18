@@ -2267,7 +2267,7 @@ export class ASTBuilder {
       const valuePart = raw.substring(hashIdx + 1);
       // Parse the numeric value
       let numValue: number;
-      if (valuePart.startsWith("16#") || valuePart.startsWith("16#")) {
+      if (valuePart.startsWith("16#")) {
         numValue = parseInt(valuePart.substring(3).replace(/_/g, ""), 16);
       } else if (valuePart.startsWith("8#")) {
         numValue = parseInt(valuePart.substring(2).replace(/_/g, ""), 8);

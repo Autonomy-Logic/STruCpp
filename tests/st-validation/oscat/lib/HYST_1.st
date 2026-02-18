@@ -1,0 +1,44 @@
+FUNCTION_BLOCK HYST_1
+VAR_INPUT
+	In : REAL;
+	high : REAL;
+	low : REAL;
+END_VAR
+VAR_OUTPUT
+	Q : BOOL;
+	win : BOOL;
+END_VAR
+
+
+(*
+version 1.1	2. jun. 2008
+programmer 	hugo
+tested BY	oscat
+
+this hysteresis function switches the output high if the input signal reaches obove high and will switch to low when the input falls back below low value.
+a separate output mid is set if the input stays between low and high value.
+
+*)
+
+IF in < low THEN
+	Q := FALSE;
+	win := FALSE;
+ELSIF in > high THEN
+	Q := TRUE;
+	win := FALSE;
+ELSE
+	win := TRUE;
+END_IF;
+
+
+
+
+(* revision history
+hm		4.  aug. 2006	rev 1.0
+	original version
+
+hm		2. jun. 2008	rev 1.1
+	improved performance
+*)
+
+END_FUNCTION_BLOCK

@@ -1,0 +1,59 @@
+(* OSCAT Encoding/Numeric Functions — BCD encoding and combinatorics *)
+
+FUNCTION INT_TO_BCDC : BYTE
+VAR_INPUT
+	IN : INT;
+END_VAR
+INT_TO_BCDC := SHL(INT_TO_BYTE(IN / 10), 4) OR INT_TO_BYTE(IN MOD 10);
+END_FUNCTION
+
+FUNCTION BINOM : DINT
+VAR_INPUT
+	N : INT;
+	K : INT;
+END_VAR
+VAR
+	I : INT;
+END_VAR
+IF 2 * K > N THEN
+	K := N - K;
+END_IF;
+IF K > N THEN
+	RETURN;
+ELSIF K = 0 OR K = N THEN
+	BINOM := 1;
+ELSIF K = 1 THEN
+	BINOM := N;
+ELSE
+	BINOM := N;
+	N := N + 1;
+	FOR I := 2 TO K DO
+		BINOM := BINOM * (N - I) / I;
+	END_FOR;
+END_IF;
+END_FUNCTION
+
+FUNCTION FIB : DINT
+VAR_INPUT
+	X : INT;
+END_VAR
+VAR
+	T1 : DINT;
+	T2 : DINT;
+END_VAR
+IF X < 0 OR X > 46 THEN
+	FIB := -1;
+ELSIF X < 2 THEN
+	FIB := X;
+	RETURN;
+ELSE
+	T2 := 1;
+	WHILE X > 3 DO
+		X := X - 2;
+		T1 := T1 + T2;
+		T2 := T1 + T2;
+	END_WHILE;
+	IF X > 2 THEN T1 := T1 + T2; END_IF;
+	FIB := T1 + T2;
+END_IF;
+END_FUNCTION

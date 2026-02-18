@@ -10,10 +10,10 @@
  */
 
 import { readFileSync, readdirSync, writeFileSync } from 'fs';
-import { join, basename } from 'path';
+import { join, basename, resolve } from 'path';
 import { compile } from '../dist/index.js';
 
-const OSCAT_DIR = '/Users/autonomyserver/Downloads/oscat_experiments/oscat_basic_v23_extracted';
+const OSCAT_DIR = resolve(import.meta.dirname, '../tests/st-validation/oscat/lib');
 const files = readdirSync(OSCAT_DIR).filter(f => f.endsWith('.st')).sort();
 
 // Root cause categories with Phase references

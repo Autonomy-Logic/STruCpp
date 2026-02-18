@@ -1,0 +1,47 @@
+FUNCTION_BLOCK PIN_CODE
+VAR_INPUT
+	CB : BYTE;
+	E : BOOL;
+END_VAR
+VAR_INPUT CONSTANT
+	PIN : STRING(8);
+END_VAR
+VAR_OUTPUT
+	TP : BOOL;
+END_VAR
+VAR
+	POS: INT := 1;
+END_VAR
+
+(*
+version 1.0	30. oct. 2008
+programmer 	hugo
+tested by	oscat
+
+MATRIX_CODE scans the input of a key_pad (MATRIX) for a sequence of characters.
+
+*)
+
+tp := FALSE;
+IF e THEN
+	IF CB = CODE(pin, pos) THEN
+		pos := pos + 1;
+		IF pos > LEN(PIN) THEN
+			(* proper code is detected *)
+			TP := TRUE;
+			pos := 1;
+		END_IF;
+	ELSE
+		pos := 1;
+	END_IF;
+END_IF;
+
+
+(* revision history
+hm	30. oct. 2008	rev 1.0		
+	original version 
+
+
+*)
+
+END_FUNCTION_BLOCK

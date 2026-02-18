@@ -537,7 +537,7 @@ export class CodeGenerator {
     if (ast.globalVarBlocks.length > 0) {
       this.emitHeader("// Global variables");
       for (const block of ast.globalVarBlocks) {
-        const constQualifier = block.isConstant ? "constexpr " : "";
+        const constQualifier = block.isConstant ? "const " : "";
         for (const decl of block.declarations) {
           const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
@@ -2497,7 +2497,7 @@ export class CodeGenerator {
         const isLast = i === expr.fieldAccess.length - 1;
         // Bit access: numeric field like .0, .15, .31 → ((var >> N) & 1)
         if (/^\d+$/.test(field)) {
-          result = `((static_cast<uint32_t>(${result}) >> ${field}) & 1)`;
+          result = `((static_cast<uint64_t>(${result}) >> ${field}) & 1)`;
           continue;
         }
         if (isLast) {

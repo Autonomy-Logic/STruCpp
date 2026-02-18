@@ -1,23 +1,12 @@
 {
-  "timestamp": "2026-02-18T02:40:21.541Z",
+  "timestamp": "2026-02-18T16:00:41.944Z",
   "summary": {
-    "totalFiles": 552,
+    "totalFiles": 551,
     "successCount": 551,
-    "failureCount": 1,
-    "successRate": "99.8%"
+    "failureCount": 0,
+    "successRate": "100.0%"
   },
-  "rootCauses": [
-    {
-      "id": "GVL_BINARY_ARTIFACT",
-      "description": "GVL file with binary artifacts from V2.3 export",
-      "phase": "n/a",
-      "count": 1,
-      "percentOfFailures": "100.0%",
-      "files": [
-        "GVL_0.gvl"
-      ]
-    }
-  ],
+  "rootCauses": [],
   "successFiles": [
     "ACOSH",
     "ACOTH",
@@ -571,11 +560,5 @@
     "_RMP_W",
     "_STRING_TO_BUFFER"
   ],
-  "failedFiles": [
-    {
-      "name": "GVL_0.gvl",
-      "cause": "GVL_BINARY_ARTIFACT",
-      "error": "unexpected character: ->\u0000<- at offset: 19, skipped 102 characters."
-    }
-  ]
+  "failedFiles": []
 }

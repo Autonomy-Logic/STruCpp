@@ -1,0 +1,10 @@
+TYPE CONSTANTS_PHYS :
+STRUCT
+	C : REAL := 299792458.0;				(* Lichtgeschwindigkeit in m/s *)
+	E : REAL := 1.60217653E-19;				(* elementarladung in Colomb = A * s *)
+	G : REAL := 9.80665; 						(* Erdbeschleunigung in m / s² *)
+	T0 : REAL := -273.15;						(* absoluter Nullpunkt in °C *)
+	RU : REAL := 8.314472; 					(* Universelle Gaskonstante in J / (mol · K) *)
+	PN : REAL := 101325.0;					(* NormalDruck in Pa *)
+END_STRUCT
+END_TYPE
