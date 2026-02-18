@@ -135,7 +135,7 @@ export class TestCodeGenerator extends CodeGenerator {
     for (let i = 1; i < path.length; i++) {
       const field = path[i]!;
       if (currentType && this.ast) {
-        const memberType = this.resolveMemberTypePublic(currentType, field);
+        const memberType = this.resolveMemberType(currentType, field);
         if (
           memberType &&
           this.isUserDefinedType(memberType) &&
@@ -151,41 +151,6 @@ export class TestCodeGenerator extends CodeGenerator {
       }
     }
     return parts.join(".");
-  }
-
-  /** Expose resolveMemberType for mock path resolution */
-  private resolveMemberTypePublic(
-    typeName: string,
-    memberName: string,
-  ): string | undefined {
-    if (!this.ast) return undefined;
-    const typeUpper = typeName.toUpperCase();
-    const memberUpper = memberName.toUpperCase();
-    for (const fb of this.ast.functionBlocks) {
-      if (fb.name.toUpperCase() === typeUpper) {
-        for (const block of fb.varBlocks) {
-          for (const decl of block.declarations) {
-            for (const name of decl.names) {
-              if (name.toUpperCase() === memberUpper) return decl.type.name;
-            }
-          }
-        }
-        return undefined;
-      }
-    }
-    for (const prog of this.ast.programs) {
-      if (prog.name.toUpperCase() === typeUpper) {
-        for (const block of prog.varBlocks) {
-          for (const decl of block.declarations) {
-            for (const name of decl.names) {
-              if (name.toUpperCase() === memberUpper) return decl.type.name;
-            }
-          }
-        }
-        return undefined;
-      }
-    }
-    return undefined;
   }
 
   /** Generate a C++ expression string from an AST Expression. */

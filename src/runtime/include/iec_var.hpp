@@ -289,7 +289,7 @@ inline IECVar<T> operator/(const IECVar<T>& a, const IECVar<T>& b) noexcept {
     return IECVar<T>(a.get() / b.get());
 }
 
-template<typename T>
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
 inline IECVar<T> operator%(const IECVar<T>& a, const IECVar<T>& b) noexcept {
     return IECVar<T>(a.get() % b.get());
 }
@@ -303,8 +303,8 @@ template<typename T> inline IECVar<T> operator*(const IECVar<T>& a, T b) noexcep
 template<typename T> inline IECVar<T> operator*(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a * b.get()); }
 template<typename T> inline IECVar<T> operator/(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() / b); }
 template<typename T> inline IECVar<T> operator/(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a / b.get()); }
-template<typename T> inline IECVar<T> operator%(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() % b); }
-template<typename T> inline IECVar<T> operator%(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a % b.get()); }
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>> inline IECVar<T> operator%(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() % b); }
+template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>> inline IECVar<T> operator%(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a % b.get()); }
 
 // =============================================================================
 // Comparison Operators

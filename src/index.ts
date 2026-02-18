@@ -37,6 +37,14 @@ export const defaultOptions: CompileOptions = {
 let cachedStdFBCode: { headerCode: string; cppCode: string } | undefined;
 
 /**
+ * Reset the cached compiled standard FB C++ code.
+ * Useful for tests that modify the FB library sources.
+ */
+export function resetStdFBCodeCache(): void {
+  cachedStdFBCode = undefined;
+}
+
+/**
  * Extract the body inside `namespace ... { ... }` from generated C++ code.
  * Strips includes, pragma once, and the namespace wrapper.
  */

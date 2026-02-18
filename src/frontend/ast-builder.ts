@@ -2840,9 +2840,6 @@ export class ASTBuilder {
   }
 
   /**
-   * Create a dummy literal expression for error recovery.
-   */
-  /**
    * Try to extract an integer value from a simple expression CST node.
    * Handles integer literals and unary minus on integer literals.
    */

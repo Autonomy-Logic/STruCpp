@@ -19,6 +19,7 @@ import type {
   UnaryExpression,
 } from "../frontend/ast.js";
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
+import { formatArrayType } from "./codegen-utils.js";
 
 /**
  * Options for type code generation
@@ -205,22 +206,9 @@ export class TypeCodeGenerator {
     for (const field of def.fields) {
       let cppType: string;
       if (field.type.arrayDimensions && field.type.elementTypeName) {
-        // Inline array type: emit Array1D<ElementType, start, end>
+        // Inline array type: emit Array1D/2D/3D<ElementType, bounds...>
         const elemCpp = this.mapTypeToCpp(field.type.elementTypeName);
-        if (field.type.arrayDimensions.length === 1) {
-          const dim = field.type.arrayDimensions[0]!;
-          cppType = `Array1D<${elemCpp}, ${dim.start}, ${dim.end}>`;
-        } else if (field.type.arrayDimensions.length === 2) {
-          const d1 = field.type.arrayDimensions[0]!;
-          const d2 = field.type.arrayDimensions[1]!;
-          cppType = `Array2D<${elemCpp}, ${d1.start}, ${d1.end}, ${d2.start}, ${d2.end}>`;
-        } else {
-          cppType = elemCpp;
-          for (let i = field.type.arrayDimensions.length - 1; i >= 0; i--) {
-            const dim = field.type.arrayDimensions[i]!;
-            cppType = `Array1D<${cppType}, ${dim.start}, ${dim.end}>`;
-          }
-        }
+        cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
         cppType = this.mapTypeToCpp(field.type.name);
       }
@@ -318,12 +306,8 @@ export class TypeCodeGenerator {
 
     // Generate appropriate Array template based on dimensions
     let cppType: string;
-    if (numDims === 1 && bounds[0]) {
-      cppType = `Array1D<${elementType}, ${bounds[0].start}, ${bounds[0].end}>`;
-    } else if (numDims === 2 && bounds[0] && bounds[1]) {
-      cppType = `Array2D<${elementType}, ${bounds[0].start}, ${bounds[0].end}, ${bounds[1].start}, ${bounds[1].end}>`;
-    } else if (numDims === 3 && bounds[0] && bounds[1] && bounds[2]) {
-      cppType = `Array3D<${elementType}, ${bounds[0].start}, ${bounds[0].end}, ${bounds[1].start}, ${bounds[1].end}, ${bounds[2].start}, ${bounds[2].end}>`;
+    if (numDims <= 3 && bounds.length === numDims) {
+      cppType = formatArrayType(elementType, bounds);
     } else {
       // Fallback for higher dimensions: use nested std::array (loses bounds info)
       // This maintains backwards compatibility but loses arbitrary index support

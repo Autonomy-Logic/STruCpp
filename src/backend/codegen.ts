@@ -40,6 +40,7 @@ import type {
 import { getProjectNamespace, parseTimeLiteral } from "../project-model.js";
 import { TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator } from "./type-codegen.js";
+import { formatArrayType } from "./codegen-utils.js";
 
 // =============================================================================
 // Located Variable Support
@@ -386,22 +387,7 @@ export class CodeGenerator {
       const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
         ? typeRef.elementTypeName
         : this.typeCodeGen.mapTypeToCpp(typeRef.elementTypeName);
-      if (typeRef.arrayDimensions.length === 1) {
-        const dim = typeRef.arrayDimensions[0]!;
-        return `Array1D<${elemCpp}, ${dim.start}, ${dim.end}>`;
-      }
-      if (typeRef.arrayDimensions.length === 2) {
-        const d1 = typeRef.arrayDimensions[0]!;
-        const d2 = typeRef.arrayDimensions[1]!;
-        return `Array2D<${elemCpp}, ${d1.start}, ${d1.end}, ${d2.start}, ${d2.end}>`;
-      }
-      // 3+ dimensions: nested Array1D
-      let result = elemCpp;
-      for (let i = typeRef.arrayDimensions.length - 1; i >= 0; i--) {
-        const dim = typeRef.arrayDimensions[i]!;
-        result = `Array1D<${result}, ${dim.start}, ${dim.end}>`;
-      }
-      return result;
+      return formatArrayType(elemCpp, typeRef.arrayDimensions);
     }
     const baseType = this.mapVarTypeToCpp(
       typeRef.name,
@@ -3296,7 +3282,7 @@ export class CodeGenerator {
    * Used for chained access like ctrl.motor.Speed where we need to know
    * motor's type to check if Speed is a property.
    */
-  private resolveMemberType(
+  protected resolveMemberType(
     typeName: string | undefined,
     memberName: string,
   ): string | undefined {

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { tokenize, STLexer } from '../../src/frontend/lexer.js';
+import { tokenize, STLexer, uppercaseSource } from '../../src/frontend/lexer.js';
 
 describe('STLexer', () => {
   describe('initialization', () => {
@@ -580,5 +580,67 @@ describe('STLexer', () => {
         expect(result.tokens.filter(t => t.tokenType.name === 'END_PROGRAM')).toHaveLength(1);
       });
     });
+  });
+});
+
+describe('uppercaseSource', () => {
+  it('should uppercase basic identifiers', () => {
+    expect(uppercaseSource('hello WORLD')).toBe('HELLO WORLD');
+  });
+
+  it('should preserve single-quoted string literals', () => {
+    expect(uppercaseSource("VAR x := 'Hello World';")).toBe("VAR X := 'Hello World';");
+  });
+
+  it('should preserve dollar escapes in strings', () => {
+    expect(uppercaseSource("x := 'text$Nmore';")).toBe("X := 'text$Nmore';");
+  });
+
+  it('should preserve doubled single-quote escapes', () => {
+    expect(uppercaseSource("x := 'it''s';")).toBe("X := 'it''s';");
+  });
+
+  it('should preserve double-quoted wide string literals', () => {
+    expect(uppercaseSource('x := "Hello"')).toBe('X := "Hello"');
+  });
+
+  it('should preserve block comment content but uppercase surrounding code', () => {
+    expect(uppercaseSource('x (* Comment *) y')).toBe('X (* Comment *) Y');
+  });
+
+  it('should handle nested block comments', () => {
+    expect(uppercaseSource('a (* outer (* inner *) *) b')).toBe('A (* outer (* inner *) *) B');
+  });
+
+  it('should preserve line comment content but uppercase code before it', () => {
+    expect(uppercaseSource('x // comment\ny')).toBe('X // comment\nY');
+  });
+
+  it('should handle line comment at EOF without newline', () => {
+    expect(uppercaseSource('x // tail')).toBe('X // tail');
+  });
+
+  it('should uppercase external pragma keyword but preserve body', () => {
+    expect(uppercaseSource('{external int x = 0; }')).toBe('{EXTERNAL int x = 0; }');
+  });
+
+  it('should handle external pragma with nested braces', () => {
+    expect(uppercaseSource('{external if(x) { y=1; } }')).toBe('{EXTERNAL if(x) { y=1; } }');
+  });
+
+  it('should handle external pragma with string containing closing brace', () => {
+    expect(uppercaseSource('{external printf("}"); }')).toBe('{EXTERNAL printf("}"); }');
+  });
+
+  it('should uppercase non-external brace content normally', () => {
+    expect(uppercaseSource('{notexternal}')).toBe('{NOTEXTERNAL}');
+  });
+
+  it('should handle empty input', () => {
+    expect(uppercaseSource('')).toBe('');
+  });
+
+  it('should preserve strings that contain comment syntax', () => {
+    expect(uppercaseSource("x := '(* not a comment *)';")).toBe("X := '(* not a comment *)';");
   });
 });
