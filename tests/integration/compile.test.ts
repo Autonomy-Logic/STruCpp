@@ -41,7 +41,7 @@ describe('STruC++ Compiler', () => {
       const result = compile('PROGRAM Main END_PROGRAM');
       // Phase 2.1: Compiler now generates code for programs
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('Program_Main');
+      expect(result.headerCode).toContain('Program_MAIN');
     });
 
     it('should accept compilation options', () => {
@@ -70,8 +70,8 @@ describe('Phase 2.1 - Project Structure Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('Configuration_MyConfig');
-      expect(result.headerCode).toContain('Program_Main');
+      expect(result.headerCode).toContain('Configuration_MYCONFIG');
+      expect(result.headerCode).toContain('Program_MAIN');
     });
 
     it('should compile multiple resources in a configuration', () => {
@@ -92,7 +92,7 @@ describe('Phase 2.1 - Project Structure Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('Configuration_MultiResourceConfig');
+      expect(result.headerCode).toContain('Configuration_MULTIRESOURCECONFIG');
     });
   });
 
@@ -118,7 +118,7 @@ describe('Phase 2.1 - Project Structure Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('globalCounter');
+      expect(result.headerCode).toContain('GLOBALCOUNTER');
     });
 
     it('should compile program with VAR_GLOBAL CONSTANT', () => {
@@ -224,7 +224,7 @@ describe('Phase 2.1 - Project Structure Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('Program_Main');
+      expect(result.headerCode).toContain('Program_MAIN');
     });
 
     it('should compile program with initialized variables', () => {
@@ -369,7 +369,7 @@ describe('Error Handling Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(false);
-      expect(result.errors.some(e => e.message.includes('nonExistentVar'))).toBe(true);
+      expect(result.errors.some(e => e.message.includes('NONEXISTENTVAR'))).toBe(true);
     });
 
     it('should report error for VAR_EXTERNAL with type mismatch', () => {
@@ -409,7 +409,7 @@ describe('Error Handling Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(false);
-      expect(result.errors.some(e => e.message.includes('NonExistentTask'))).toBe(true);
+      expect(result.errors.some(e => e.message.includes('NONEXISTENTTASK'))).toBe(true);
     });
   });
 });
@@ -1918,7 +1918,7 @@ describe('External Code Pragma Tests (Phase 2.8)', () => {
       const result = compile(source);
       expect(result.success).toBe(true);
       // Verify code appears after run() { and before closing }
-      const runMethodMatch = result.cppCode?.match(/void Program_TestPlacement::run\(\)\s*\{([^}]*int localVar = 42;[^}]*)\}/);
+      const runMethodMatch = result.cppCode?.match(/void Program_TESTPLACEMENT::run\(\)\s*\{([^}]*int localVar = 42;[^}]*)\}/);
       expect(runMethodMatch).not.toBeNull();
     });
 
@@ -2031,7 +2031,7 @@ describe('Future Integration Tests', () => {
     `;
     const result = compile(source);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain('class Program_Main');
+    expect(result.cppCode).toContain('class Program_MAIN');
   });
 
   it.skip('should compile a function', () => {
@@ -2043,7 +2043,7 @@ describe('Future Integration Tests', () => {
     `;
     const result = compile(source);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain('IEC_INT Add(');
+    expect(result.cppCode).toContain('IEC_INT ADD(');
   });
 
   it.skip('should compile a function block', () => {
@@ -2060,7 +2060,7 @@ describe('Future Integration Tests', () => {
     `;
     const result = compile(source);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain('class Counter');
+    expect(result.cppCode).toContain('class COUNTER');
   });
 
   it.skip('should generate line mapping', () => {

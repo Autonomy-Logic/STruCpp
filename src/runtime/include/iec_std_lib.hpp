@@ -124,10 +124,10 @@ struct ConfigurationInstance {
  */
 template<typename T, enable_if_any_num<T> = 0>
 inline T ABS(T value) noexcept {
-    if constexpr (std::is_same_v<T, IEC_REAL> || std::is_same_v<T, IEC_LREAL>) {
-        return T(std::abs(value.get()));
-    } else if constexpr (std::is_signed_v<typename T::value_type>) {
-        auto v = value.get();
+    auto v = iec_unwrap(value);
+    if constexpr (std::is_floating_point_v<decltype(v)>) {
+        return T(std::abs(v));
+    } else if constexpr (std::is_signed_v<decltype(v)>) {
         return T(v < 0 ? -v : v);
     } else {
         return value;
@@ -140,7 +140,7 @@ inline T ABS(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T SQRT(T value) noexcept {
-    return T(std::sqrt(static_cast<double>(value.get())));
+    return T(std::sqrt(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -149,7 +149,7 @@ inline T SQRT(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T LN(T value) noexcept {
-    return T(std::log(static_cast<double>(value.get())));
+    return T(std::log(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -158,7 +158,7 @@ inline T LN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T LOG(T value) noexcept {
-    return T(std::log10(static_cast<double>(value.get())));
+    return T(std::log10(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -167,7 +167,7 @@ inline T LOG(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T EXP(T value) noexcept {
-    return T(std::exp(static_cast<double>(value.get())));
+    return T(std::exp(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -176,7 +176,7 @@ inline T EXP(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T EXPT(T base, T exponent) noexcept {
-    return T(std::pow(static_cast<double>(base.get()), static_cast<double>(exponent.get())));
+    return T(std::pow(static_cast<double>(iec_unwrap(base)), static_cast<double>(iec_unwrap(exponent))));
 }
 
 // =============================================================================
@@ -189,7 +189,7 @@ inline T EXPT(T base, T exponent) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T SIN(T value) noexcept {
-    return T(std::sin(static_cast<double>(value.get())));
+    return T(std::sin(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -198,7 +198,7 @@ inline T SIN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T COS(T value) noexcept {
-    return T(std::cos(static_cast<double>(value.get())));
+    return T(std::cos(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -207,7 +207,7 @@ inline T COS(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T TAN(T value) noexcept {
-    return T(std::tan(static_cast<double>(value.get())));
+    return T(std::tan(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -216,7 +216,7 @@ inline T TAN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ASIN(T value) noexcept {
-    return T(std::asin(static_cast<double>(value.get())));
+    return T(std::asin(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -225,7 +225,7 @@ inline T ASIN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ACOS(T value) noexcept {
-    return T(std::acos(static_cast<double>(value.get())));
+    return T(std::acos(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -234,7 +234,7 @@ inline T ACOS(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ATAN(T value) noexcept {
-    return T(std::atan(static_cast<double>(value.get())));
+    return T(std::atan(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -243,7 +243,7 @@ inline T ATAN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ATAN2(T y, T x) noexcept {
-    return T(std::atan2(static_cast<double>(y.get()), static_cast<double>(x.get())));
+    return T(std::atan2(static_cast<double>(iec_unwrap(y)), static_cast<double>(iec_unwrap(x))));
 }
 
 /**
@@ -252,7 +252,7 @@ inline T ATAN2(T y, T x) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T TRUNC(T value) noexcept {
-    return T(std::trunc(static_cast<double>(value.get())));
+    return T(std::trunc(static_cast<double>(iec_unwrap(value))));
 }
 
 /**
@@ -262,7 +262,7 @@ inline T TRUNC(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ROUND(T value) noexcept {
-    return T(std::round(static_cast<double>(value.get())));
+    return T(std::round(static_cast<double>(iec_unwrap(value))));
 }
 
 // =============================================================================
@@ -276,7 +276,7 @@ inline T ROUND(T value) noexcept {
  */
 template<typename T>
 inline T SEL(IEC_BOOL g, T in0, T in1) noexcept {
-    return g.get() ? in1 : in0;
+    return iec_unwrap(g) ? in1 : in0;
 }
 
 /**
@@ -285,7 +285,7 @@ inline T SEL(IEC_BOOL g, T in0, T in1) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline T MAX(T a, T b) noexcept {
-    return a.get() > b.get() ? a : b;
+    return iec_unwrap(a) > iec_unwrap(b) ? a : b;
 }
 
 /**
@@ -294,7 +294,7 @@ inline T MAX(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline T MIN(T a, T b) noexcept {
-    return a.get() < b.get() ? a : b;
+    return iec_unwrap(a) < iec_unwrap(b) ? a : b;
 }
 
 /**
@@ -303,8 +303,8 @@ inline T MIN(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline T LIMIT(T mn, T in, T mx) noexcept {
-    if (in.get() < mn.get()) return mn;
-    if (in.get() > mx.get()) return mx;
+    if (iec_unwrap(in) < iec_unwrap(mn)) return mn;
+    if (iec_unwrap(in) > iec_unwrap(mx)) return mx;
     return in;
 }
 
@@ -315,7 +315,7 @@ inline T LIMIT(T mn, T in, T mx) noexcept {
  */
 template<typename T>
 inline T MUX(IEC_INT k, T in0, T in1) noexcept {
-    return k.get() == 0 ? in0 : in1;
+    return iec_unwrap(k) == 0 ? in0 : in1;
 }
 
 // =============================================================================
@@ -328,7 +328,7 @@ inline T MUX(IEC_INT k, T in0, T in1) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL GT(T a, T b) noexcept {
-    return IEC_BOOL(a.get() > b.get());
+    return IEC_BOOL(iec_unwrap(a) > iec_unwrap(b));
 }
 
 /**
@@ -337,7 +337,7 @@ inline IEC_BOOL GT(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL GE(T a, T b) noexcept {
-    return IEC_BOOL(a.get() >= b.get());
+    return IEC_BOOL(iec_unwrap(a) >= iec_unwrap(b));
 }
 
 /**
@@ -346,7 +346,7 @@ inline IEC_BOOL GE(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL EQ(T a, T b) noexcept {
-    return IEC_BOOL(a.get() == b.get());
+    return IEC_BOOL(iec_unwrap(a) == iec_unwrap(b));
 }
 
 /**
@@ -355,7 +355,7 @@ inline IEC_BOOL EQ(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL LE(T a, T b) noexcept {
-    return IEC_BOOL(a.get() <= b.get());
+    return IEC_BOOL(iec_unwrap(a) <= iec_unwrap(b));
 }
 
 /**
@@ -364,7 +364,7 @@ inline IEC_BOOL LE(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL LT(T a, T b) noexcept {
-    return IEC_BOOL(a.get() < b.get());
+    return IEC_BOOL(iec_unwrap(a) < iec_unwrap(b));
 }
 
 /**
@@ -373,7 +373,7 @@ inline IEC_BOOL LT(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL NE(T a, T b) noexcept {
-    return IEC_BOOL(a.get() != b.get());
+    return IEC_BOOL(iec_unwrap(a) != iec_unwrap(b));
 }
 
 // =============================================================================
@@ -386,7 +386,7 @@ inline IEC_BOOL NE(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T SHL(T in, IEC_INT n) noexcept {
-    return T(in.get() << n.get());
+    return T(iec_unwrap(in) << iec_unwrap(n));
 }
 
 /**
@@ -395,7 +395,7 @@ inline T SHL(T in, IEC_INT n) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T SHR(T in, IEC_INT n) noexcept {
-    return T(in.get() >> n.get());
+    return T(iec_unwrap(in) >> iec_unwrap(n));
 }
 
 /**
@@ -404,9 +404,9 @@ inline T SHR(T in, IEC_INT n) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T ROL(T in, IEC_INT n) noexcept {
-    constexpr int bits = sizeof(typename T::value_type) * 8;
-    auto v = in.get();
-    auto shift = n.get() % bits;
+    constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
+    auto v = iec_unwrap(in);
+    auto shift = iec_unwrap(n) % bits;
     return T((v << shift) | (v >> (bits - shift)));
 }
 
@@ -416,9 +416,9 @@ inline T ROL(T in, IEC_INT n) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T ROR(T in, IEC_INT n) noexcept {
-    constexpr int bits = sizeof(typename T::value_type) * 8;
-    auto v = in.get();
-    auto shift = n.get() % bits;
+    constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
+    auto v = iec_unwrap(in);
+    auto shift = iec_unwrap(n) % bits;
     return T((v >> shift) | (v << (bits - shift)));
 }
 
@@ -432,7 +432,7 @@ inline T ROR(T in, IEC_INT n) noexcept {
 template<typename To, typename From>
 inline auto CONVERT(From value) noexcept
     -> std::enable_if_t<!std::is_arithmetic_v<From>, To> {
-    return To(static_cast<typename To::value_type>(value.get()));
+    return To(static_cast<typename To::value_type>(iec_unwrap(value)));
 }
 
 /**
@@ -456,6 +456,10 @@ template<typename T> inline IEC_UDINT TO_UDINT(T v) noexcept { return CONVERT<IE
 template<typename T> inline IEC_ULINT TO_ULINT(T v) noexcept { return CONVERT<IEC_ULINT>(v); }
 template<typename T> inline IEC_REAL TO_REAL(T v) noexcept { return CONVERT<IEC_REAL>(v); }
 template<typename T> inline IEC_LREAL TO_LREAL(T v) noexcept { return CONVERT<IEC_LREAL>(v); }
+template<typename T> inline IEC_BYTE TO_BYTE(T v) noexcept { return CONVERT<IEC_BYTE>(v); }
+template<typename T> inline IEC_WORD TO_WORD(T v) noexcept { return CONVERT<IEC_WORD>(v); }
+template<typename T> inline IEC_DWORD TO_DWORD(T v) noexcept { return CONVERT<IEC_DWORD>(v); }
+template<typename T> inline IEC_LWORD TO_LWORD(T v) noexcept { return CONVERT<IEC_LWORD>(v); }
 
 // =============================================================================
 // Time Utilities
@@ -479,14 +483,14 @@ inline IEC_TIME TIME_FROM_S(double s) noexcept {
  * Get milliseconds from a TIME value
  */
 inline int64_t TIME_TO_MS(IEC_TIME t) noexcept {
-    return t.get() / 1000000;
+    return iec_unwrap(t) / 1000000;
 }
 
 /**
  * Get seconds from a TIME value
  */
 inline double TIME_TO_S(IEC_TIME t) noexcept {
-    return static_cast<double>(t.get()) / 1000000000.0;
+    return static_cast<double>(iec_unwrap(t)) / 1000000000.0;
 }
 
 // =============================================================================
@@ -499,7 +503,7 @@ inline double TIME_TO_S(IEC_TIME t) noexcept {
  */
 template<typename T, enable_if_any_num<T> = 0>
 inline T NEG(T value) noexcept {
-    return T(-value.get());
+    return T(-iec_unwrap(value));
 }
 
 /**
@@ -509,12 +513,12 @@ inline T NEG(T value) noexcept {
  */
 template<typename T, enable_if_any_num<T> = 0>
 inline T ADD(T a, T b) noexcept {
-    return T(a.get() + b.get());
+    return T(iec_unwrap(a) + iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_num<T> = 0>
 inline T ADD(T first, T second, Args... rest) noexcept {
-    return ADD(T(first.get() + second.get()), rest...);
+    return ADD(T(iec_unwrap(first) + iec_unwrap(second)), rest...);
 }
 
 /**
@@ -524,12 +528,12 @@ inline T ADD(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_num<T> = 0>
 inline T MUL(T a, T b) noexcept {
-    return T(a.get() * b.get());
+    return T(iec_unwrap(a) * iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_num<T> = 0>
 inline T MUL(T first, T second, Args... rest) noexcept {
-    return MUL(T(first.get() * second.get()), rest...);
+    return MUL(T(iec_unwrap(first) * iec_unwrap(second)), rest...);
 }
 
 /**
@@ -539,7 +543,7 @@ inline T MUL(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_num<T> = 0>
 inline T SUB(T a, T b) noexcept {
-    return T(a.get() - b.get());
+    return T(iec_unwrap(a) - iec_unwrap(b));
 }
 
 /**
@@ -549,7 +553,7 @@ inline T SUB(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_num<T> = 0>
 inline T DIV(T a, T b) noexcept {
-    return T(a.get() / b.get());
+    return T(iec_unwrap(a) / iec_unwrap(b));
 }
 
 /**
@@ -559,10 +563,10 @@ inline T DIV(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_num<T> = 0>
 inline T MOD(T a, T b) noexcept {
-    if constexpr (std::is_floating_point_v<typename T::value_type>) {
-        return T(std::fmod(static_cast<double>(a.get()), static_cast<double>(b.get())));
+    if constexpr (std::is_floating_point_v<iec_underlying_type_t<T>>) {
+        return T(std::fmod(static_cast<double>(iec_unwrap(a)), static_cast<double>(iec_unwrap(b))));
     } else {
-        return T(a.get() % b.get());
+        return T(iec_unwrap(a) % iec_unwrap(b));
     }
 }
 
@@ -576,7 +580,7 @@ inline T MOD(T a, T b) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T NOT(T value) noexcept {
-    return T(~value.get());
+    return T(~iec_unwrap(value));
 }
 
 /**
@@ -585,12 +589,12 @@ inline T NOT(T value) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T AND(T a, T b) noexcept {
-    return T(a.get() & b.get());
+    return T(iec_unwrap(a) & iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_bit<T> = 0>
 inline T AND(T first, T second, Args... rest) noexcept {
-    return AND(T(first.get() & second.get()), rest...);
+    return AND(T(iec_unwrap(first) & iec_unwrap(second)), rest...);
 }
 
 /**
@@ -599,12 +603,12 @@ inline T AND(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T OR(T a, T b) noexcept {
-    return T(a.get() | b.get());
+    return T(iec_unwrap(a) | iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_bit<T> = 0>
 inline T OR(T first, T second, Args... rest) noexcept {
-    return OR(T(first.get() | second.get()), rest...);
+    return OR(T(iec_unwrap(first) | iec_unwrap(second)), rest...);
 }
 
 /**
@@ -613,12 +617,12 @@ inline T OR(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T XOR(T a, T b) noexcept {
-    return T(a.get() ^ b.get());
+    return T(iec_unwrap(a) ^ iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_bit<T> = 0>
 inline T XOR(T first, T second, Args... rest) noexcept {
-    return XOR(T(first.get() ^ second.get()), rest...);
+    return XOR(T(iec_unwrap(first) ^ iec_unwrap(second)), rest...);
 }
 
 // =============================================================================
@@ -632,7 +636,7 @@ inline T XOR(T first, T second, Args... rest) noexcept {
  */
 template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
 inline T MAX(T first, T second, Args... rest) noexcept {
-    T current_max = first.get() > second.get() ? first : second;
+    T current_max = iec_unwrap(first) > iec_unwrap(second) ? first : second;
     if constexpr (sizeof...(rest) > 0) {
         return MAX(current_max, rest...);
     } else {
@@ -647,7 +651,7 @@ inline T MAX(T first, T second, Args... rest) noexcept {
  */
 template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
 inline T MIN(T first, T second, Args... rest) noexcept {
-    T current_min = first.get() < second.get() ? first : second;
+    T current_min = iec_unwrap(first) < iec_unwrap(second) ? first : second;
     if constexpr (sizeof...(rest) > 0) {
         return MIN(current_min, rest...);
     } else {
@@ -668,8 +672,8 @@ inline T MUX_V([[maybe_unused]] IEC_INT k, T in0) noexcept {
 
 template<typename T, typename... Args>
 inline T MUX_V(IEC_INT k, T in0, Args... rest) noexcept {
-    if (k.get() == 0) return in0;
-    return MUX_V(IEC_INT(k.get() - 1), rest...);
+    if (iec_unwrap(k) == 0) return in0;
+    return MUX_V(IEC_INT(iec_unwrap(k) - 1), rest...);
 }
 
 /**
@@ -694,12 +698,12 @@ inline T MOVE(T value) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL GT_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(a.get() > b.get());
+    return IEC_BOOL(iec_unwrap(a) > iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL GT_CHAIN(T first, T second, Args... rest) noexcept {
-    if (first.get() <= second.get()) return IEC_BOOL(false);
+    if (iec_unwrap(first) <= iec_unwrap(second)) return IEC_BOOL(false);
     if constexpr (sizeof...(rest) > 0) {
         return GT_CHAIN(second, rest...);
     } else {
@@ -715,12 +719,12 @@ inline IEC_BOOL GT_CHAIN(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL GE_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(a.get() >= b.get());
+    return IEC_BOOL(iec_unwrap(a) >= iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL GE_CHAIN(T first, T second, Args... rest) noexcept {
-    if (first.get() < second.get()) return IEC_BOOL(false);
+    if (iec_unwrap(first) < iec_unwrap(second)) return IEC_BOOL(false);
     if constexpr (sizeof...(rest) > 0) {
         return GE_CHAIN(second, rest...);
     } else {
@@ -736,12 +740,12 @@ inline IEC_BOOL GE_CHAIN(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL EQ_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(a.get() == b.get());
+    return IEC_BOOL(iec_unwrap(a) == iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL EQ_CHAIN(T first, T second, Args... rest) noexcept {
-    if (first.get() != second.get()) return IEC_BOOL(false);
+    if (iec_unwrap(first) != iec_unwrap(second)) return IEC_BOOL(false);
     if constexpr (sizeof...(rest) > 0) {
         return EQ_CHAIN(second, rest...);
     } else {
@@ -757,12 +761,12 @@ inline IEC_BOOL EQ_CHAIN(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL LE_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(a.get() <= b.get());
+    return IEC_BOOL(iec_unwrap(a) <= iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL LE_CHAIN(T first, T second, Args... rest) noexcept {
-    if (first.get() > second.get()) return IEC_BOOL(false);
+    if (iec_unwrap(first) > iec_unwrap(second)) return IEC_BOOL(false);
     if constexpr (sizeof...(rest) > 0) {
         return LE_CHAIN(second, rest...);
     } else {
@@ -778,12 +782,12 @@ inline IEC_BOOL LE_CHAIN(T first, T second, Args... rest) noexcept {
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL LT_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(a.get() < b.get());
+    return IEC_BOOL(iec_unwrap(a) < iec_unwrap(b));
 }
 
 template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
 inline IEC_BOOL LT_CHAIN(T first, T second, Args... rest) noexcept {
-    if (first.get() >= second.get()) return IEC_BOOL(false);
+    if (iec_unwrap(first) >= iec_unwrap(second)) return IEC_BOOL(false);
     if constexpr (sizeof...(rest) > 0) {
         return LT_CHAIN(second, rest...);
     } else {

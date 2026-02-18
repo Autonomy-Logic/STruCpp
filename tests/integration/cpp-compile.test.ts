@@ -223,9 +223,9 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // Verify 2D access uses operator() syntax, not chained brackets
-    expect(result.cppCode).toContain('m(0, 0)');
-    expect(result.cppCode).toContain('m(1, 2)');
-    expect(result.cppCode).toContain('m(i, j)');
+    expect(result.cppCode).toContain('M(0, 0)');
+    expect(result.cppCode).toContain('M(1, 2)');
+    expect(result.cppCode).toContain('M(I, J)');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'array_2d_access');
     expect(cppResult.success).toBe(true);
@@ -258,9 +258,9 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // 1D uses brackets, 2D uses parenthesized call syntax
-    expect(result.cppCode).toContain('row[1]');
-    expect(result.cppCode).toContain('grid(1, 1)');
-    expect(result.cppCode).toContain('grid(i, i)');
+    expect(result.cppCode).toContain('ROW[1]');
+    expect(result.cppCode).toContain('GRID(1, 1)');
+    expect(result.cppCode).toContain('GRID(I, I)');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'mixed_1d_2d_access');
     expect(cppResult.success).toBe(true);
@@ -291,10 +291,10 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // Verify the function signature has reference parameter
-    expect(result.headerCode).toContain('IEC_INT& remainder');
+    expect(result.headerCode).toContain('IEC_INT& REMAINDER');
 
     // Verify the call site passes r directly
-    expect(result.cppCode).toContain('Divide(10, 3, r)');
+    expect(result.cppCode).toContain('DIVIDE(10, 3, R)');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'func_var_output');
     expect(cppResult.success).toBe(true);
@@ -335,6 +335,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     // Verify const qualifier is generated
     expect(result.headerCode).toContain('const IEC_REAL PI');
     expect(result.headerCode).toContain('const IEC_INT MAX_SIZE');
+    // Note: PI and MAX_SIZE are already uppercase in ST source
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'constant_vars');
     expect(cppResult.success).toBe(true);
@@ -357,6 +358,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.headerCode).toContain('getRetainVars');
     expect(result.headerCode).toContain('getRetainCount');
     expect(result.cppCode).toContain('RetainVarInfo');
+    // Variable names in retain table are uppercased (COUNTER, LAST_STATE)
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'retain_vars');
     expect(cppResult.success).toBe(true);
@@ -383,7 +385,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.headerCode).toContain('const IEC_INT MAX_VALUE');
     // Verify retain table (only for retained vars)
     expect(result.headerCode).toContain('__retain_vars[1]');
-    expect(result.cppCode).toContain('accumulated');
+    expect(result.cppCode).toContain('ACCUMULATED');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'mixed_modifiers');
     expect(cppResult.success).toBe(true);
@@ -452,8 +454,8 @@ describeIfGpp('C++ Compilation Tests', () => {
 
     // Verify types are in namespace
     expect(result.headerCode).toContain('namespace strucpp {');
-    expect(result.headerCode).toContain('enum class MotorState');
-    expect(result.headerCode).toContain('struct Point');
+    expect(result.headerCode).toContain('enum class MOTORSTATE');
+    expect(result.headerCode).toContain('struct POINT');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'types_in_namespace');
     expect(cppResult.success).toBe(true);
@@ -481,7 +483,7 @@ describeIfGpp('C++ Compilation Tests', () => {
 
     // Verify FB is in namespace
     expect(result.headerCode).toContain('namespace strucpp {');
-    expect(result.headerCode).toContain('class Counter {');
+    expect(result.headerCode).toContain('class COUNTER {');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'fb_in_namespace');
     if (!cppResult.success) {
@@ -512,7 +514,7 @@ describeIfGpp('C++ Compilation Tests', () => {
 
     // Verify configuration is in namespace
     expect(result.headerCode).toContain('namespace strucpp {');
-    expect(result.headerCode).toContain('class Configuration_TestConfig');
+    expect(result.headerCode).toContain('class Configuration_TESTCONFIG');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'config_in_namespace');
     expect(cppResult.success).toBe(true);
@@ -575,8 +577,8 @@ describeIfGpp('C++ Compilation Tests', () => {
         VAR_INPUT enable : BOOL; END_VAR
         VAR_OUTPUT count : INT; END_VAR
         {external
-          if (enable.get()) {
-            count.set(count.get() + 1);
+          if (ENABLE.get()) {
+            COUNT.set(COUNT.get() + 1);
           }
         }
       END_FUNCTION_BLOCK
@@ -593,8 +595,8 @@ describeIfGpp('C++ Compilation Tests', () => {
       FUNCTION ExternalFunc : INT
         VAR_INPUT x : INT; END_VAR
         {external
-          int doubled = x.get() * 2;
-          ExternalFunc_result.set(doubled);
+          int doubled = X.get() * 2;
+          EXTERNALFUNC_result.set(doubled);
         }
       END_FUNCTION
     `;
@@ -745,7 +747,7 @@ describeIfGpp('C++ Runtime Behavior Tests', () => {
 int main() {
     using namespace strucpp;
 
-    Configuration_RuntimeTestConfig config;
+    Configuration_RUNTIMETESTCONFIG config;
 
     ResourceInstance* resources = config.get_resources();
     size_t resource_count = config.get_resource_count();
@@ -769,8 +771,8 @@ int main() {
     int slow_calls = 0;
 
     // Get pointers to program instances for identification
-    ProgramBase* fast_prog = &config.FastInstance;
-    ProgramBase* slow_prog = &config.SlowInstance;
+    ProgramBase* fast_prog = &config.FASTINSTANCE;
+    ProgramBase* slow_prog = &config.SLOWINSTANCE;
 
     // Simulated time loop
     for (int64_t now = 0; now < total_time_ns; now += min_interval_ns) {
@@ -874,7 +876,7 @@ int main() {
 int main() {
     using namespace strucpp;
 
-    Configuration_MultiTaskConfig config;
+    Configuration_MULTITASKCONFIG config;
 
     ResourceInstance* resources = config.get_resources();
     size_t resource_count = config.get_resource_count();
@@ -897,9 +899,9 @@ int main() {
     int calls_40 = 0;
     int calls_100 = 0;
 
-    ProgramBase* prog_20 = &config.Prog20;
-    ProgramBase* prog_40 = &config.Prog40;
-    ProgramBase* prog_100 = &config.Prog100;
+    ProgramBase* prog_20 = &config.PROG20;
+    ProgramBase* prog_40 = &config.PROG40;
+    ProgramBase* prog_100 = &config.PROG100;
 
     for (int64_t now = 0; now < total_time_ns; now += min_interval_ns) {
         for (size_t r = 0; r < resource_count; ++r) {
@@ -986,7 +988,7 @@ int main() {
 int main() {
     using namespace strucpp;
 
-    Configuration_IntervalTestConfig config;
+    Configuration_INTERVALTESTCONFIG config;
 
     ResourceInstance* resources = config.get_resources();
 
@@ -1009,9 +1011,9 @@ int main() {
     // T#10ms = 10,000,000 ns
     // T#500ms = 500,000,000 ns
     // T#1s = 1,000,000,000 ns
-    const match10 = /Task10ms_interval_ns=(\d+)/.exec(runResult.output!);
-    const match500 = /Task500ms_interval_ns=(\d+)/.exec(runResult.output!);
-    const match1s = /Task1s_interval_ns=(\d+)/.exec(runResult.output!);
+    const match10 = /TASK10MS_interval_ns=(\d+)/.exec(runResult.output!);
+    const match500 = /TASK500MS_interval_ns=(\d+)/.exec(runResult.output!);
+    const match1s = /TASK1S_interval_ns=(\d+)/.exec(runResult.output!);
 
     expect(match10).not.toBeNull();
     expect(match500).not.toBeNull();
@@ -1049,10 +1051,10 @@ int main() {
 int main() {
     using namespace strucpp;
 
-    Program_Main prog;
+    Program_MAIN prog;
     prog.run();
 
-    std::cout << "q=" << static_cast<int>(prog.q.get()) << std::endl;
+    std::cout << "q=" << static_cast<int>(prog.Q.get()) << std::endl;
 
     return 0;
 }
@@ -1090,11 +1092,11 @@ int main() {
 int main() {
     using namespace strucpp;
 
-    Program_Main prog;
+    Program_MAIN prog;
     prog.run();
 
-    std::cout << "q=" << static_cast<int>(prog.q.get()) << std::endl;
-    std::cout << "r=" << static_cast<int>(prog.r.get()) << std::endl;
+    std::cout << "q=" << static_cast<int>(prog.Q.get()) << std::endl;
+    std::cout << "r=" << static_cast<int>(prog.R.get()) << std::endl;
 
     return 0;
 }
@@ -1166,7 +1168,7 @@ describeIfGpp('External Code Pragma Runtime Tests', () => {
     const mainCode = `
 #include <cstdio>
 int main() {
-    strucpp::Program_PrintTest prog;
+    strucpp::Program_PRINTTEST prog;
     prog.run();
     return 0;
 }
@@ -1185,8 +1187,8 @@ int main() {
           flag : BOOL;
         END_VAR
         {external
-          counter.set(counter.get() + 10);
-          flag.set(true);
+          COUNTER.set(COUNTER.get() + 10);
+          FLAG.set(true);
         }
       END_PROGRAM
     `;
@@ -1197,12 +1199,12 @@ int main() {
     const mainCode = `
 #include <cstdio>
 int main() {
-    strucpp::Program_VarAccessTest prog;
+    strucpp::Program_VARACCESSTEST prog;
     // Run twice to verify accumulation
     prog.run();
     prog.run();
-    printf("counter=%d\\n", static_cast<int>(prog.counter.get()));
-    printf("flag=%d\\n", static_cast<int>(prog.flag.get()));
+    printf("counter=%d\\n", static_cast<int>(prog.COUNTER.get()));
+    printf("flag=%d\\n", static_cast<int>(prog.FLAG.get()));
     return 0;
 }
 `;
@@ -1224,7 +1226,7 @@ int main() {
               sum += i;
             }
           }
-          result.set(sum);
+          RESULT.set(sum);
         }
       END_PROGRAM
     `;
@@ -1235,10 +1237,10 @@ int main() {
     const mainCode = `
 #include <cstdio>
 int main() {
-    strucpp::Program_ControlFlowTest prog;
+    strucpp::Program_CONTROLFLOWTEST prog;
     prog.run();
     // sum of even numbers 1..5: 2 + 4 = 6
-    printf("result=%d\\n", static_cast<int>(prog.result.get()));
+    printf("result=%d\\n", static_cast<int>(prog.RESULT.get()));
     return 0;
 }
 `;
@@ -1252,9 +1254,9 @@ int main() {
     const source = `
       PROGRAM MultiPragmaTest
         VAR x : INT; END_VAR
-        {external x.set(1); }
-        {external x.set(x.get() * 3); }
-        {external x.set(x.get() + 7); }
+        {external X.set(1); }
+        {external X.set(X.get() * 3); }
+        {external X.set(X.get() + 7); }
       END_PROGRAM
     `;
 
@@ -1264,10 +1266,10 @@ int main() {
     const mainCode = `
 #include <cstdio>
 int main() {
-    strucpp::Program_MultiPragmaTest prog;
+    strucpp::Program_MULTIPRAGMATEST prog;
     prog.run();
     // 1 * 3 + 7 = 10
-    printf("x=%d\\n", static_cast<int>(prog.x.get()));
+    printf("x=%d\\n", static_cast<int>(prog.X.get()));
     return 0;
 }
 `;

@@ -278,7 +278,7 @@ describe('Phase 2.6 - Variable Modifiers', () => {
       expect(result.headerCode).toContain('getRetainCount');
       // Check for retain table definition in source
       expect(result.cppCode).toContain('RetainVarInfo');
-      expect(result.cppCode).toContain('counter');
+      expect(result.cppCode).toContain('COUNTER');
       expect(result.cppCode).toContain('offsetof');
     });
 
@@ -294,8 +294,8 @@ describe('Phase 2.6 - Variable Modifiers', () => {
       const result = compile(source);
       expect(result.success).toBe(true);
       expect(result.headerCode).toContain('__retain_vars[2]');
-      expect(result.cppCode).toContain('total_count');
-      expect(result.cppCode).toContain('last_state');
+      expect(result.cppCode).toContain('TOTAL_COUNT');
+      expect(result.cppCode).toContain('LAST_STATE');
     });
 
     it('should not generate retain table when no RETAIN variables', () => {

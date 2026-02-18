@@ -58,7 +58,7 @@ describe("Library System", () => {
       expect(result.manifest.name).toBe("math-lib");
       expect(result.manifest.version).toBe("1.0.0");
       expect(result.manifest.functions).toHaveLength(1);
-      expect(result.manifest.functions[0]!.name).toBe("MathAdd");
+      expect(result.manifest.functions[0]!.name).toBe("MATHADD");
       expect(result.manifest.functions[0]!.returnType).toBe("INT");
       expect(result.manifest.isBuiltin).toBe(false);
       expect(result.headerCode).toBeTruthy();
@@ -85,7 +85,7 @@ describe("Library System", () => {
 
       expect(result.success).toBe(true);
       expect(result.manifest.types).toHaveLength(1);
-      expect(result.manifest.types[0]!.name).toBe("MyStruct");
+      expect(result.manifest.types[0]!.name).toBe("MYSTRUCT");
       expect(result.manifest.types[0]!.kind).toBe("struct");
     });
 
@@ -398,7 +398,7 @@ describe("Library System", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("MathAdd");
+      expect(result.cppCode).toContain("MATHADD");
     });
 
     it("should compile a library and use its type in a program", () => {
@@ -433,7 +433,7 @@ describe("Library System", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("p.x = 10");
+      expect(result.cppCode).toContain("P.X = 10");
     });
 
     it("should include library headers in generated code", () => {
@@ -480,7 +480,7 @@ describe("Library System", () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("x = 42");
+      expect(result.cppCode).toContain("X = 42");
     });
   });
 
@@ -661,7 +661,7 @@ describe("Library System", () => {
       const result = compile(source, { libraryPaths: [dir] });
 
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("ExtFunc");
+      expect(result.cppCode).toContain("EXTFUNC");
       expect(result.headerCode).toContain('#include "ext-lib.hpp"');
     });
 
@@ -736,8 +736,8 @@ describe("Library System", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("DiskFunc");
-      expect(result.cppCode).toContain("InlineFunc");
+      expect(result.cppCode).toContain("DISKFUNC");
+      expect(result.cppCode).toContain("INLINEFUNC");
       expect(result.headerCode).toContain('#include "disk-lib.hpp"');
       expect(result.headerCode).toContain('#include "inline-lib.hpp"');
     });

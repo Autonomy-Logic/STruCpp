@@ -193,6 +193,17 @@ function getAllIdentifierOrKeywordImages(
   return nodes.map(getIdentifierOrKeywordImage);
 }
 
+/**
+ * Parse an IEC 61131-3 integer literal that may use based notation (16#FF, 8#77, 2#1010).
+ */
+function parseIECInteger(raw: string): number {
+  const upper = raw.toUpperCase().replace(/_/g, "");
+  if (upper.startsWith("16#")) return parseInt(upper.slice(3), 16);
+  if (upper.startsWith("8#")) return parseInt(upper.slice(2), 8);
+  if (upper.startsWith("2#")) return parseInt(upper.slice(2), 2);
+  return parseInt(upper, 10);
+}
+
 // =============================================================================
 // AST Builder Class
 // =============================================================================
@@ -2171,7 +2182,7 @@ export class ASTBuilder {
         kind: "LiteralExpression",
         sourceSpan: tokenToSourceSpan(token),
         literalType: "INT",
-        value: parseInt(token.image, 10),
+        value: parseIECInteger(token.image),
         rawValue: token.image,
       };
     }
@@ -2285,7 +2296,7 @@ export class ASTBuilder {
         kind: "LiteralExpression",
         sourceSpan: tokenToSourceSpan(token),
         literalType: "INT",
-        value: parseInt(token.image, 10),
+        value: parseIECInteger(token.image),
         rawValue: token.image,
       };
     }

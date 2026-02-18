@@ -29,7 +29,7 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("Square(");
+      expect(result.cppCode).toContain("SQUARE(");
     });
 
     it("should generate code for function call as statement", () => {
@@ -44,7 +44,7 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("DoWork(");
+      expect(result.cppCode).toContain("DOWORK(");
     });
 
     it("should generate function with multiple parameters", () => {
@@ -60,7 +60,7 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("Add2(");
+      expect(result.cppCode).toContain("ADD2(");
     });
   });
 
@@ -142,7 +142,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // The function header should have remainder as a reference
-      expect(result.headerCode).toContain("IEC_INT& remainder");
+      expect(result.headerCode).toContain("IEC_INT& REMAINDER");
     });
   });
 
@@ -163,7 +163,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // The output argument r should be passed directly (no copies or temporaries)
-      expect(result.cppCode).toMatch(/Divide\(10, 3, r\)/);
+      expect(result.cppCode).toMatch(/DIVIDE\(10, 3, R\)/);
     });
 
     it("should handle mixed input/output with reordering", () => {
@@ -182,7 +182,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // Named args should be reordered to declaration order: (dividend, divisor, remainder)
-      expect(result.cppCode).toMatch(/Divide\(10, 3, r\)/);
+      expect(result.cppCode).toMatch(/DIVIDE\(10, 3, R\)/);
     });
 
     it("should warn when output argument is not a variable", () => {
@@ -205,7 +205,7 @@ describe("Codegen - Function Calls", () => {
         w.message.includes("should be a variable"),
       );
       expect(outputWarnings.length).toBe(1);
-      expect(outputWarnings[0]!.message).toContain("remainder");
+      expect(outputWarnings[0]!.message).toContain("REMAINDER");
     });
 
     it("should warn when => is used on a VAR_INPUT parameter", () => {
@@ -250,7 +250,7 @@ describe("Codegen - Function Calls", () => {
 
       // Should emit a temp variable declaration and pass it
       expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
-      expect(result.cppCode).toMatch(/Divide\(10, 3, __output_tmp_0\)/);
+      expect(result.cppCode).toMatch(/DIVIDE\(10, 3, __output_tmp_0\)/);
     });
 
     it("should generate temp variable for named call omitting VAR_OUTPUT", () => {
@@ -270,7 +270,7 @@ describe("Codegen - Function Calls", () => {
 
       // Should emit a temp variable declaration and pass it
       expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
-      expect(result.cppCode).toMatch(/Divide\(10, 3, __output_tmp_0\)/);
+      expect(result.cppCode).toMatch(/DIVIDE\(10, 3, __output_tmp_0\)/);
     });
 
     it("should generate multiple temp variables for multiple omitted VAR_OUTPUT", () => {
@@ -293,7 +293,7 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
       expect(result.cppCode).toContain("IEC_REAL __output_tmp_1;");
       expect(result.cppCode).toMatch(
-        /MultiOut\(5, __output_tmp_0, __output_tmp_1\)/,
+        /MULTIOUT\(5, __output_tmp_0, __output_tmp_1\)/,
       );
     });
 
@@ -315,7 +315,7 @@ describe("Codegen - Function Calls", () => {
 
       // quotient is provided (q), remainder should get a temp
       expect(result.cppCode).toContain("IEC_INT __output_tmp_0;");
-      expect(result.cppCode).toMatch(/DivMod\(10, 3, q, __output_tmp_0\)/);
+      expect(result.cppCode).toMatch(/DIVMOD\(10, 3, Q, __output_tmp_0\)/);
     });
   });
 
@@ -338,7 +338,7 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("Outer(Inner(");
+      expect(result.cppCode).toContain("OUTER(INNER(");
     });
   });
 
@@ -357,7 +357,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // Named args should be reordered to (a, b, c) = (10, 20, 30)
-      expect(result.cppCode).toMatch(/Calc\(10, 20, 30\)/);
+      expect(result.cppCode).toMatch(/CALC\(10, 20, 30\)/);
     });
 
     it("should handle positional args after named args correctly", () => {
@@ -374,7 +374,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // b is claimed by named arg (20), positional 10 fills a, positional 30 fills c
-      expect(result.cppCode).toMatch(/Calc\(10, 20, 30\)/);
+      expect(result.cppCode).toMatch(/CALC\(10, 20, 30\)/);
     });
 
     it("should fill unfilled parameters with zero default", () => {
@@ -391,7 +391,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // a=10, b and c should get default 0
-      expect(result.cppCode).toMatch(/Calc\(10, 0, 0\)/);
+      expect(result.cppCode).toMatch(/CALC\(10, 0, 0\)/);
     });
 
     it("should use declared default values for unfilled parameters", () => {
@@ -408,7 +408,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // a defaults to 99, b=5, c defaults to 77
-      expect(result.cppCode).toMatch(/Calc\(99, 5, 77\)/);
+      expect(result.cppCode).toMatch(/CALC\(99, 5, 77\)/);
     });
 
     it("should warn about named args referencing non-existent parameters", () => {
@@ -449,7 +449,7 @@ describe("Codegen - Function Calls", () => {
 
       expect(result.success).toBe(true);
       // x and y are unfilled (typos don't match), so they get default 0
-      expect(result.cppCode).toMatch(/Calc\(0, 0\)/);
+      expect(result.cppCode).toMatch(/CALC\(0, 0\)/);
     });
 
     it("should handle mix of positional before named correctly", () => {
@@ -466,7 +466,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // a=10 (positional), b=0 (unfilled default), c=30 (named)
-      expect(result.cppCode).toMatch(/Calc\(10, 0, 30\)/);
+      expect(result.cppCode).toMatch(/CALC\(10, 0, 30\)/);
     });
 
     it("should handle REAL parameter defaults correctly", () => {
@@ -483,7 +483,7 @@ describe("Codegen - Function Calls", () => {
       `);
 
       // factor should default to 0.0 for REAL type
-      expect(result.cppCode).toMatch(/Scale\(3\.14, 0\.0\)/);
+      expect(result.cppCode).toMatch(/SCALE\(3\.14, 0\.0\)/);
     });
   });
 });

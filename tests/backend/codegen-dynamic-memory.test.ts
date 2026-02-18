@@ -83,7 +83,7 @@ describe("Phase 3.5: __NEW Scalar Allocation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("strucpp::iec_new<Point>()");
+    expect(result.cppCode).toContain("strucpp::iec_new<POINT>()");
   });
 });
 
@@ -117,7 +117,7 @@ describe("Phase 3.5: __NEW Array Allocation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("strucpp::iec_new_array<REAL_t>(size)");
+    expect(result.cppCode).toContain("strucpp::iec_new_array<REAL_t>(SIZE)");
   });
 
   it("should parse __NEW with expression as size", () => {
@@ -132,7 +132,7 @@ describe("Phase 3.5: __NEW Array Allocation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("strucpp::iec_new_array<INT_t>(n * 2)");
+    expect(result.cppCode).toContain("strucpp::iec_new_array<INT_t>(N * 2)");
   });
 });
 
@@ -153,7 +153,7 @@ describe("Phase 3.5: __DELETE Statement", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("strucpp::iec_new<INT_t>()");
-    expect(result.cppCode).toContain("strucpp::iec_delete(pInt)");
+    expect(result.cppCode).toContain("strucpp::iec_delete(PINT)");
   });
 
   it("should parse __DELETE with struct pointer", () => {
@@ -172,8 +172,8 @@ describe("Phase 3.5: __DELETE Statement", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("strucpp::iec_new<Data>()");
-    expect(result.cppCode).toContain("strucpp::iec_delete(pData)");
+    expect(result.cppCode).toContain("strucpp::iec_new<DATA>()");
+    expect(result.cppCode).toContain("strucpp::iec_delete(PDATA)");
   });
 });
 
@@ -196,7 +196,7 @@ describe("Phase 3.5: Combined __NEW/__DELETE Usage", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("strucpp::iec_new_array<INT_t>(10)");
-    expect(result.cppCode).toContain("strucpp::iec_delete(pArr)");
+    expect(result.cppCode).toContain("strucpp::iec_delete(PARR)");
   });
 
   it("should handle multiple allocations", () => {
@@ -269,6 +269,6 @@ describe("Phase 3.5: Case Insensitivity", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("strucpp::iec_delete(p)");
+    expect(result.cppCode).toContain("strucpp::iec_delete(P)");
   });
 });

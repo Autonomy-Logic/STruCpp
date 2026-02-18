@@ -40,7 +40,7 @@ describe("AST Builder - Function Calls", () => {
       expect(stmt.value.kind).toBe("FunctionCallExpression");
 
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("MyFunc");
+      expect(call.functionName).toBe("MYFUNC");
       expect(call.arguments).toHaveLength(1);
       expect(call.arguments[0]!.value.kind).toBe("LiteralExpression");
     });
@@ -55,7 +55,7 @@ describe("AST Builder - Function Calls", () => {
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("Add3");
+      expect(call.functionName).toBe("ADD3");
       expect(call.arguments).toHaveLength(3);
     });
 
@@ -69,7 +69,7 @@ describe("AST Builder - Function Calls", () => {
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("GetValue");
+      expect(call.functionName).toBe("GETVALUE");
       expect(call.arguments).toHaveLength(0);
     });
 
@@ -83,12 +83,12 @@ describe("AST Builder - Function Calls", () => {
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("Outer");
+      expect(call.functionName).toBe("OUTER");
       expect(call.arguments).toHaveLength(1);
 
       const innerCall = call.arguments[0]!.value as FunctionCallExpression;
       expect(innerCall.kind).toBe("FunctionCallExpression");
-      expect(innerCall.functionName).toBe("Inner");
+      expect(innerCall.functionName).toBe("INNER");
     });
   });
 
@@ -105,7 +105,7 @@ describe("AST Builder - Function Calls", () => {
 
       const stmt = body[0] as FunctionCallStatement;
       expect(stmt.kind).toBe("FunctionCallStatement");
-      expect(stmt.call.functionName).toBe("DoSomething");
+      expect(stmt.call.functionName).toBe("DOSOMETHING");
       expect(stmt.call.arguments).toHaveLength(1);
     });
   });
@@ -124,7 +124,7 @@ describe("AST Builder - Function Calls", () => {
       expect(call.arguments).toHaveLength(1);
 
       const arg = call.arguments[0]!;
-      expect(arg.name).toBe("x");
+      expect(arg.name).toBe("X");
       expect(arg.isOutput).toBe(false);
     });
 
@@ -139,7 +139,7 @@ describe("AST Builder - Function Calls", () => {
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
       const arg = call.arguments[0]!;
-      expect(arg.name).toBe("y");
+      expect(arg.name).toBe("Y");
       expect(arg.isOutput).toBe(true);
     });
 
@@ -155,7 +155,7 @@ describe("AST Builder - Function Calls", () => {
       const call = stmt.value as FunctionCallExpression;
       expect(call.arguments).toHaveLength(2);
       expect(call.arguments[0]!.name).toBeUndefined();
-      expect(call.arguments[1]!.name).toBe("mode");
+      expect(call.arguments[1]!.name).toBe("MODE");
     });
   });
 
@@ -174,12 +174,12 @@ describe("AST Builder - Function Calls", () => {
       `);
 
       expect(ast.functions).toHaveLength(1);
-      expect(ast.functions[0]!.name).toBe("Square");
+      expect(ast.functions[0]!.name).toBe("SQUARE");
       expect(ast.functions[0]!.returnType.name).toBe("INT");
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("Square");
+      expect(call.functionName).toBe("SQUARE");
     });
   });
 

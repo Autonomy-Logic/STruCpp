@@ -26,9 +26,9 @@ describe('Phase 3.6 - REPL Main Generator', () => {
 
       expect(mainCpp).toContain('#include "generated.hpp"');
       expect(mainCpp).toContain('#include "iec_repl.hpp"');
-      expect(mainCpp).toContain('Program_Counter');
+      expect(mainCpp).toContain('Program_COUNTER');
       expect(mainCpp).toContain('VarTypeTag::INT');
-      expect(mainCpp).toContain('"count"');
+      expect(mainCpp).toContain('"COUNT"');
       expect(mainCpp).toContain('repl_run(programs');
       expect(mainCpp).toContain('int main()');
     });
@@ -49,9 +49,9 @@ describe('Phase 3.6 - REPL Main Generator', () => {
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('"x", VarTypeTag::INT');
-      expect(mainCpp).toContain('"y", VarTypeTag::REAL');
-      expect(mainCpp).toContain('"flag", VarTypeTag::BOOL');
+      expect(mainCpp).toContain('"X", VarTypeTag::INT');
+      expect(mainCpp).toContain('"Y", VarTypeTag::REAL');
+      expect(mainCpp).toContain('"FLAG", VarTypeTag::BOOL');
     });
 
     it('should handle multiple programs', () => {
@@ -71,10 +71,10 @@ describe('Phase 3.6 - REPL Main Generator', () => {
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('Program_Prog1 prog_Prog1');
-      expect(mainCpp).toContain('Program_Prog2 prog_Prog2');
-      expect(mainCpp).toContain('"Prog1"');
-      expect(mainCpp).toContain('"Prog2"');
+      expect(mainCpp).toContain('Program_PROG1 prog_PROG1');
+      expect(mainCpp).toContain('Program_PROG2 prog_PROG2');
+      expect(mainCpp).toContain('"PROG1"');
+      expect(mainCpp).toContain('"PROG2"');
       expect(mainCpp).toContain('VarTypeTag::INT');
       expect(mainCpp).toContain('VarTypeTag::DINT');
       expect(mainCpp).toContain('repl_run(programs, 2, g_st_source, g_cpp_source, g_line_map, g_line_map_count)');
@@ -154,9 +154,9 @@ describe('Phase 3.6 - REPL Main Generator', () => {
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('Program_Empty');
-      expect(mainCpp).toContain('prog_Empty_vars = nullptr');
-      expect(mainCpp).toContain('"Empty", &prog_Empty, prog_Empty_vars, 0');
+      expect(mainCpp).toContain('Program_EMPTY');
+      expect(mainCpp).toContain('prog_EMPTY_vars = nullptr');
+      expect(mainCpp).toContain('"EMPTY", &prog_EMPTY, prog_EMPTY_vars, 0');
     });
 
     it('should include VAR_INPUT and VAR_OUTPUT but skip VAR_EXTERNAL', () => {
@@ -173,9 +173,9 @@ describe('Phase 3.6 - REPL Main Generator', () => {
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('"x"');
-      expect(mainCpp).toContain('"start"');
-      expect(mainCpp).toContain('"result"');
+      expect(mainCpp).toContain('"X"');
+      expect(mainCpp).toContain('"START"');
+      expect(mainCpp).toContain('"RESULT"');
     });
   });
 
@@ -199,9 +199,9 @@ describe('Phase 3.6 - REPL Main Generator', () => {
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('Configuration_MyConfig config_MyConfig');
-      expect(mainCpp).toContain('config_MyConfig.counter1.count');
-      expect(mainCpp).toContain('"counter1"');
+      expect(mainCpp).toContain('Configuration_MYCONFIG config_MYCONFIG');
+      expect(mainCpp).toContain('config_MYCONFIG.COUNTER1.COUNT');
+      expect(mainCpp).toContain('"COUNTER1"');
       expect(mainCpp).toContain('VarTypeTag::INT');
       expect(mainCpp).toContain('repl_run(programs');
     });
@@ -292,7 +292,7 @@ END_PROGRAM`;
       expect(mainCpp).toContain('g_cpp_source');
       expect(mainCpp).toContain('R"STRUCPP_CPP(');
       expect(mainCpp).toContain(')STRUCPP_CPP"');
-      expect(mainCpp).toContain('Program_Counter');
+      expect(mainCpp).toContain('Program_COUNTER');
     });
 
     it('should emit nullptr for g_cpp_source when no cppCode provided', () => {
@@ -488,8 +488,8 @@ END_PROGRAM`;
       });
 
       // g_cpp_source should contain both header and implementation
-      expect(mainCpp).toContain('class Program_Counter');
-      expect(mainCpp).toContain('Program_Counter::Program_Counter()');
+      expect(mainCpp).toContain('class Program_COUNTER');
+      expect(mainCpp).toContain('Program_COUNTER::Program_COUNTER()');
     });
 
     it('should merge header and impl line maps with correct offsets', () => {
@@ -537,7 +537,7 @@ END_PROGRAM`;
       // Should still contain C++ source (just impl, no header)
       expect(mainCpp).toContain('g_cpp_source');
       expect(mainCpp).toContain('R"STRUCPP_CPP(');
-      expect(mainCpp).toContain('Program_Counter::Program_Counter()');
+      expect(mainCpp).toContain('Program_COUNTER::Program_COUNTER()');
     });
 
     it('should populate headerLineMap after compilation', () => {

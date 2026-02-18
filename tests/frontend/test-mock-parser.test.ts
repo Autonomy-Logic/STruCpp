@@ -30,7 +30,7 @@ END_TEST
       expect(body).toHaveLength(2);
       expect(body[0]!.kind).toBe("MockFBStatement");
       const mock = body[0] as MockFBStatement;
-      expect(mock.instancePath).toEqual(["fb"]);
+      expect(mock.instancePath).toEqual(["FB"]);
     });
 
     it("should parse MOCK with dotted instance path", () => {
@@ -46,7 +46,7 @@ END_TEST
       const body = result.testFile!.testCases[0]!.body;
       const mock = body[0] as MockFBStatement;
       expect(mock.kind).toBe("MockFBStatement");
-      expect(mock.instancePath).toEqual(["ctrl", "sensor"]);
+      expect(mock.instancePath).toEqual(["CTRL", "SENSOR"]);
     });
 
     it("should parse MOCK with deeply nested path", () => {
@@ -61,7 +61,7 @@ END_TEST
       expect(result.errors).toHaveLength(0);
       const mock = result.testFile!.testCases[0]!.body[0] as MockFBStatement;
       expect(mock.kind).toBe("MockFBStatement");
-      expect(mock.instancePath).toEqual(["sys", "subsystem", "valve"]);
+      expect(mock.instancePath).toEqual(["SYS", "SUBSYSTEM", "VALVE"]);
     });
 
     it("should parse multiple MOCK statements", () => {
@@ -107,7 +107,7 @@ END_TEST
       const body = result.testFile!.testCases[0]!.body;
       expect(body[0]!.kind).toBe("MockFunctionStatement");
       const mock = body[0] as MockFunctionStatement;
-      expect(mock.functionName).toBe("ReadSensor");
+      expect(mock.functionName).toBe("READSENSOR");
       expect(mock.returnValue.kind).toBe("LiteralExpression");
     });
 
@@ -122,7 +122,7 @@ END_TEST
       expect(result.errors).toHaveLength(0);
       const mock = result.testFile!.testCases[0]!.body[0] as MockFunctionStatement;
       expect(mock.kind).toBe("MockFunctionStatement");
-      expect(mock.functionName).toBe("IsReady");
+      expect(mock.functionName).toBe("ISREADY");
     });
 
     it("should parse MOCK_FUNCTION with real return value", () => {
@@ -136,7 +136,7 @@ END_TEST
       expect(result.errors).toHaveLength(0);
       const mock = result.testFile!.testCases[0]!.body[0] as MockFunctionStatement;
       expect(mock.kind).toBe("MockFunctionStatement");
-      expect(mock.functionName).toBe("GetTemp");
+      expect(mock.functionName).toBe("GETTEMP");
     });
 
     it("should parse MOCK_FUNCTION with negative return value", () => {
@@ -150,7 +150,7 @@ END_TEST
       expect(result.errors).toHaveLength(0);
       const mock = result.testFile!.testCases[0]!.body[0] as MockFunctionStatement;
       expect(mock.kind).toBe("MockFunctionStatement");
-      expect(mock.functionName).toBe("GetError");
+      expect(mock.functionName).toBe("GETERROR");
     });
 
     it("should track source span for MOCK_FUNCTION", () => {
@@ -179,7 +179,7 @@ END_TEST
       const body = result.testFile!.testCases[0]!.body;
       const verify = body[2] as MockVerifyCalledStatement;
       expect(verify.kind).toBe("MockVerifyCalledStatement");
-      expect(verify.instancePath).toEqual(["fb"]);
+      expect(verify.instancePath).toEqual(["FB"]);
     });
 
     it("should parse MOCK_VERIFY_CALLED with dotted path", () => {
@@ -196,7 +196,7 @@ END_TEST
       const body = result.testFile!.testCases[0]!.body;
       const verify = body[2] as MockVerifyCalledStatement;
       expect(verify.kind).toBe("MockVerifyCalledStatement");
-      expect(verify.instancePath).toEqual(["ctrl", "sensor"]);
+      expect(verify.instancePath).toEqual(["CTRL", "SENSOR"]);
     });
 
     it("should track source span for MOCK_VERIFY_CALLED", () => {
@@ -226,7 +226,7 @@ END_TEST
       const body = result.testFile!.testCases[0]!.body;
       const verify = body[3] as MockVerifyCallCountStatement;
       expect(verify.kind).toBe("MockVerifyCallCountStatement");
-      expect(verify.instancePath).toEqual(["fb"]);
+      expect(verify.instancePath).toEqual(["FB"]);
       expect(verify.expectedCount.kind).toBe("LiteralExpression");
     });
 
@@ -242,7 +242,7 @@ END_TEST
       expect(result.errors).toHaveLength(0);
       const verify = result.testFile!.testCases[0]!.body[1] as MockVerifyCallCountStatement;
       expect(verify.kind).toBe("MockVerifyCallCountStatement");
-      expect(verify.instancePath).toEqual(["ctrl", "sensor"]);
+      expect(verify.instancePath).toEqual(["CTRL", "SENSOR"]);
     });
 
     it("should track source span for MOCK_VERIFY_CALL_COUNT", () => {

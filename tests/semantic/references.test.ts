@@ -58,7 +58,7 @@ describe('Phase 2.4 - References and Pointers', () => {
       expect(result.errors).toHaveLength(0);
       const decl = result.ast?.programs[0].varBlocks[0].declarations[0];
       expect(decl?.type.isReference).toBe(true);
-      expect(decl?.type.name).toBe('MyStruct');
+      expect(decl?.type.name).toBe('MYSTRUCT');
     });
 
     it.skip('should parse nested REF_TO REF_TO type (pending grammar extension)', () => {
@@ -120,7 +120,7 @@ describe('Phase 2.4 - References and Pointers', () => {
       expect(result.errors).toHaveLength(0);
       const decl = result.ast?.programs[0].varBlocks[0].declarations[0];
       expect(decl?.type.referenceKind).toBe('reference_to');
-      expect(decl?.type.name).toBe('MyStruct');
+      expect(decl?.type.name).toBe('MYSTRUCT');
     });
   });
 
@@ -165,7 +165,7 @@ describe('Phase 2.4 - References and Pointers', () => {
       const varBlock = result.ast?.programs[0].varBlocks[0];
       expect(varBlock?.declarations).toHaveLength(2);
       // First declaration has two names
-      expect(varBlock?.declarations[0].names).toEqual(['ptr1', 'ptr2']);
+      expect(varBlock?.declarations[0].names).toEqual(['PTR1', 'PTR2']);
       expect(varBlock?.declarations[0].type.referenceKind).toBe('ref_to');
     });
   });

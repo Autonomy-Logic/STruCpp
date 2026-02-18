@@ -38,18 +38,18 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Header: class with virtual methods and virtual destructor
-      expect(result.headerCode).toContain("class Motor {");
-      expect(result.headerCode).toContain("virtual void Start();");
-      expect(result.headerCode).toContain("virtual IEC_INT GetSpeed();");
-      expect(result.headerCode).toContain("virtual ~Motor() = default;");
+      expect(result.headerCode).toContain("class MOTOR {");
+      expect(result.headerCode).toContain("virtual void START();");
+      expect(result.headerCode).toContain("virtual IEC_INT GETSPEED();");
+      expect(result.headerCode).toContain("virtual ~MOTOR() = default;");
 
       // Implementation: method bodies
-      expect(result.cppCode).toContain("void Motor::Start() {");
-      expect(result.cppCode).toContain("_speed = 100;");
-      expect(result.cppCode).toContain("IEC_INT Motor::GetSpeed() {");
-      expect(result.cppCode).toContain("IEC_INT GetSpeed_result;");
-      expect(result.cppCode).toContain("GetSpeed_result = _speed;");
-      expect(result.cppCode).toContain("return GetSpeed_result;");
+      expect(result.cppCode).toContain("void MOTOR::START() {");
+      expect(result.cppCode).toContain("_SPEED = 100;");
+      expect(result.cppCode).toContain("IEC_INT MOTOR::GETSPEED() {");
+      expect(result.cppCode).toContain("IEC_INT GETSPEED_result;");
+      expect(result.cppCode).toContain("GETSPEED_result = _SPEED;");
+      expect(result.cppCode).toContain("return GETSPEED_result;");
     });
 
     it("should generate void method with no return type", () => {
@@ -63,8 +63,8 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("virtual void TurnOn();");
-      expect(result.cppCode).toContain("void Light::TurnOn() {");
+      expect(result.headerCode).toContain("virtual void TURNON();");
+      expect(result.cppCode).toContain("void LIGHT::TURNON() {");
     });
   });
 
@@ -85,12 +85,12 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Header: abstract class
-      expect(result.headerCode).toContain("class IMovable {");
-      expect(result.headerCode).toContain("virtual ~IMovable() = default;");
+      expect(result.headerCode).toContain("class IMOVABLE {");
+      expect(result.headerCode).toContain("virtual ~IMOVABLE() = default;");
       expect(result.headerCode).toContain(
-        "virtual void Move(IEC_REAL distance) = 0;",
+        "virtual void MOVE(IEC_REAL DISTANCE) = 0;",
       );
-      expect(result.headerCode).toContain("virtual void Stop() = 0;");
+      expect(result.headerCode).toContain("virtual void STOP() = 0;");
     });
 
     it("should generate interface with return-type methods", () => {
@@ -102,8 +102,8 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("class IReadable {");
-      expect(result.headerCode).toContain("virtual IEC_INT Read() = 0;");
+      expect(result.headerCode).toContain("class IREADABLE {");
+      expect(result.headerCode).toContain("virtual IEC_INT READ() = 0;");
     });
 
     it("should NOT generate implementation for interface methods", () => {
@@ -116,7 +116,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // No method implementation for interface
-      expect(result.cppCode).not.toContain("ISensor::GetValue");
+      expect(result.cppCode).not.toContain("ISENSOR::GETVALUE");
     });
   });
 
@@ -138,7 +138,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("class Derived : public Base {");
+      expect(result.headerCode).toContain("class DERIVED : public BASE {");
     });
 
     it("should generate both base and derived class declarations", () => {
@@ -152,8 +152,8 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("class Animal {");
-      expect(result.headerCode).toContain("class Dog : public Animal {");
+      expect(result.headerCode).toContain("class ANIMAL {");
+      expect(result.headerCode).toContain("class DOG : public ANIMAL {");
     });
   });
 
@@ -179,7 +179,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       expect(result.headerCode).toContain(
-        "class Robot : public IFirst, public ISecond {",
+        "class ROBOT : public IFIRST, public ISECOND {",
       );
     });
 
@@ -196,7 +196,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       expect(result.headerCode).toContain(
-        "class Worker : public IRunnable {",
+        "class WORKER : public IRUNNABLE {",
       );
     });
   });
@@ -221,7 +221,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       expect(result.headerCode).toContain(
-        "class SmartMotor : public Base, public IMovable {",
+        "class SMARTMOTOR : public BASE, public IMOVABLE {",
       );
     });
 
@@ -240,7 +240,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       expect(result.headerCode).toContain(
-        "class Child : public Parent, public IA, public IB {",
+        "class CHILD : public PARENT, public IA, public IB {",
       );
     });
   });
@@ -267,8 +267,8 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      // SUPER.SetSpeed(s) → Motor::SetSpeed(s)
-      expect(result.cppCode).toContain("Motor::SetSpeed(s)");
+      // SUPER.SetSpeed(s) → MOTOR::SETSPEED(S)
+      expect(result.cppCode).toContain("MOTOR::SETSPEED(S)");
     });
 
     it("should use override (not virtual) on overriding methods in derived class", () => {
@@ -290,9 +290,9 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // In AdvancedMotor, SetSpeed should be override, not virtual
-      // Extract only AdvancedMotor header section
+      // Extract only ADVANCEDMOTOR header section
       const headerCode = result.headerCode;
-      const advancedMotorIdx = headerCode.indexOf("class AdvancedMotor");
+      const advancedMotorIdx = headerCode.indexOf("class ADVANCEDMOTOR");
       const advancedMotorSection = headerCode.slice(advancedMotorIdx);
 
       // The overriding method should have override, not virtual
@@ -315,7 +315,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("this->_speed = 100;");
+      expect(result.cppCode).toContain("this->_SPEED = 100;");
     });
 
     it("should translate THIS in expressions", () => {
@@ -329,7 +329,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("this->value");
+      expect(result.cppCode).toContain("this->VALUE");
     });
   });
 
@@ -354,21 +354,21 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Header: getter and setter declarations
-      expect(result.headerCode).toContain("virtual IEC_INT get_Speed() const;");
+      expect(result.headerCode).toContain("virtual IEC_INT get_SPEED() const;");
       expect(result.headerCode).toContain(
-        "virtual void set_Speed(IEC_INT Speed);",
+        "virtual void set_SPEED(IEC_INT SPEED);",
       );
 
       // Implementation: getter body
-      expect(result.cppCode).toContain("IEC_INT Motor::get_Speed() const {");
-      expect(result.cppCode).toContain("Speed_result = _speed;");
-      expect(result.cppCode).toContain("return Speed_result;");
+      expect(result.cppCode).toContain("IEC_INT MOTOR::get_SPEED() const {");
+      expect(result.cppCode).toContain("SPEED_result = _SPEED;");
+      expect(result.cppCode).toContain("return SPEED_result;");
 
       // Implementation: setter body
       expect(result.cppCode).toContain(
-        "void Motor::set_Speed(IEC_INT Speed) {",
+        "void MOTOR::set_SPEED(IEC_INT SPEED) {",
       );
-      expect(result.cppCode).toContain("_speed = Speed;");
+      expect(result.cppCode).toContain("_SPEED = SPEED;");
     });
 
     it("should generate read-only property (GET only)", () => {
@@ -384,9 +384,9 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("virtual IEC_INT get_Count() const;");
+      expect(result.headerCode).toContain("virtual IEC_INT get_COUNT() const;");
       // No setter should be generated
-      expect(result.headerCode).not.toContain("set_Count");
+      expect(result.headerCode).not.toContain("set_COUNT");
     });
 
     it("should generate write-only property (SET only)", () => {
@@ -403,10 +403,10 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       expect(result.headerCode).toContain(
-        "virtual void set_Target(IEC_REAL Target);",
+        "virtual void set_TARGET(IEC_REAL TARGET);",
       );
       // No getter should be generated
-      expect(result.headerCode).not.toContain("get_Target");
+      expect(result.headerCode).not.toContain("get_TARGET");
     });
   });
 
@@ -431,15 +431,15 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Header: mangled member declarations
-      expect(result.headerCode).toContain("IEC_REAL __GetAvg__sum;");
-      expect(result.headerCode).toContain("IEC_INT __GetAvg__count;");
+      expect(result.headerCode).toContain("IEC_REAL __GETAVG__SUM;");
+      expect(result.headerCode).toContain("IEC_INT __GETAVG__COUNT;");
 
       // Implementation: references use mangled names
       expect(result.cppCode).toContain(
-        "__GetAvg__sum = __GetAvg__sum + newValue;",
+        "__GETAVG__SUM = __GETAVG__SUM + NEWVALUE;",
       );
       expect(result.cppCode).toContain(
-        "__GetAvg__count = __GetAvg__count + 1;",
+        "__GETAVG__COUNT = __GETAVG__COUNT + 1;",
       );
     });
 
@@ -459,15 +459,15 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // VAR_INST → class member (mangled)
-      expect(result.headerCode).toContain("IEC_INT __Process__state;");
+      expect(result.headerCode).toContain("IEC_INT __PROCESS__STATE;");
 
       // Regular VAR → local variable (not mangled, not in header)
-      expect(result.headerCode).not.toContain("__Process__temp");
-      expect(result.headerCode).not.toContain("temp;");
+      expect(result.headerCode).not.toContain("__PROCESS__TEMP");
+      expect(result.headerCode).not.toContain("TEMP;");
 
       // In implementation, temp is local, state is mangled
-      expect(result.cppCode).toContain("IEC_INT temp;");
-      expect(result.cppCode).toContain("__Process__state");
+      expect(result.cppCode).toContain("IEC_INT TEMP;");
+      expect(result.cppCode).toContain("__PROCESS__STATE");
     });
   });
 
@@ -506,14 +506,14 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       const header = result.headerCode;
       // Public method should follow a public: section
-      const publicIdx = header.indexOf("virtual void PubMethod()");
-      const privateIdx = header.indexOf("virtual void PrivMethod()");
+      const publicIdx = header.indexOf("virtual void PUBMETHOD()");
+      const privateIdx = header.indexOf("virtual void PRIVMETHOD()");
       expect(publicIdx).toBeGreaterThan(-1);
       expect(privateIdx).toBeGreaterThan(-1);
 
       // Both methods should be generated as implementations
-      expect(result.cppCode).toContain("void AccessTest::PubMethod()");
-      expect(result.cppCode).toContain("void AccessTest::PrivMethod()");
+      expect(result.cppCode).toContain("void ACCESSTEST::PUBMETHOD()");
+      expect(result.cppCode).toContain("void ACCESSTEST::PRIVMETHOD()");
     });
   });
 
@@ -533,11 +533,11 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Header: pure virtual declaration
       expect(result.headerCode).toContain(
-        "virtual IEC_REAL Calculate(IEC_REAL input) = 0;",
+        "virtual IEC_REAL CALCULATE(IEC_REAL INPUT) = 0;",
       );
 
       // Implementation: no body for abstract methods
-      expect(result.cppCode).not.toContain("BaseController::Calculate");
+      expect(result.cppCode).not.toContain("BASECONTROLLER::CALCULATE");
     });
 
     it("should allow abstract FB with mix of abstract and concrete methods", () => {
@@ -551,13 +551,13 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Abstract method = pure virtual
-      expect(result.headerCode).toContain("virtual IEC_REAL Area() = 0;");
+      expect(result.headerCode).toContain("virtual IEC_REAL AREA() = 0;");
       // Concrete method = normal virtual
-      expect(result.headerCode).toContain("virtual void Describe();");
+      expect(result.headerCode).toContain("virtual void DESCRIBE();");
 
       // Only concrete method gets implementation
-      expect(result.cppCode).toContain("void Shape::Describe()");
-      expect(result.cppCode).not.toContain("Shape::Area");
+      expect(result.cppCode).toContain("void SHAPE::DESCRIBE()");
+      expect(result.cppCode).not.toContain("SHAPE::AREA");
     });
   });
 
@@ -574,7 +574,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("virtual void Seal() final;");
+      expect(result.headerCode).toContain("virtual void SEAL() final;");
     });
 
     it("should generate final class for FINAL FB", () => {
@@ -588,7 +588,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       expect(result.headerCode).toContain(
-        "class SealedMotor final : public Motor {",
+        "class SEALEDMOTOR final : public MOTOR {",
       );
     });
   });
@@ -606,7 +606,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("virtual ~Widget() = default;");
+      expect(result.headerCode).toContain("virtual ~WIDGET() = default;");
     });
 
     it("should generate virtual destructor for interfaces", () => {
@@ -617,7 +617,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("virtual ~IDisposable() = default;");
+      expect(result.headerCode).toContain("virtual ~IDISPOSABLE() = default;");
     });
   });
 
@@ -640,12 +640,12 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Extract derived class section from header
       const header = result.headerCode;
-      const derivedIdx = header.indexOf("class Derived");
+      const derivedIdx = header.indexOf("class DERIVED");
       const derivedSection = header.slice(derivedIdx);
 
       // Should have "override" but NOT "virtual" on the override method
-      expect(derivedSection).toContain("DoWork() override;");
-      expect(derivedSection).not.toContain("virtual void DoWork() override;");
+      expect(derivedSection).toContain("DOWORK() override;");
+      expect(derivedSection).not.toContain("virtual void DOWORK() override;");
     });
 
     it("should still generate virtual on base class method", () => {
@@ -661,13 +661,13 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      // Extract base class body (skip forward declarations like "class Base;")
+      // Extract base class body (skip forward declarations like "class BASE;")
       const header = result.headerCode;
-      const baseStart = header.indexOf("class Base {");
-      const derivedStart = header.indexOf("class Derived : public Base {");
+      const baseStart = header.indexOf("class BASE {");
+      const derivedStart = header.indexOf("class DERIVED : public BASE {");
       const baseSection = header.slice(baseStart, derivedStart);
 
-      expect(baseSection).toContain("virtual void DoWork();");
+      expect(baseSection).toContain("virtual void DOWORK();");
     });
   });
 
@@ -689,14 +689,14 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Local var declaration in implementation
-      expect(result.cppCode).toContain("IEC_INT temp;");
+      expect(result.cppCode).toContain("IEC_INT TEMP;");
 
       // Method body
-      expect(result.cppCode).toContain("temp = a + b;");
+      expect(result.cppCode).toContain("TEMP = A + B;");
 
       // Return value
-      expect(result.cppCode).toContain("Compute_result = temp;");
-      expect(result.cppCode).toContain("return Compute_result;");
+      expect(result.cppCode).toContain("COMPUTE_result = TEMP;");
+      expect(result.cppCode).toContain("return COMPUTE_result;");
     });
 
     it("should handle method with multiple local variables", () => {
@@ -716,8 +716,8 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("IEC_REAL squared;");
-      expect(result.cppCode).toContain("IEC_REAL offset;");
+      expect(result.cppCode).toContain("IEC_REAL SQUARED;");
+      expect(result.cppCode).toContain("IEC_REAL OFFSET;");
     });
   });
 
@@ -736,7 +736,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("class IDerived : public IBase {");
+      expect(result.headerCode).toContain("class IDERIVED : public IBASE {");
     });
 
     it("should generate correct pure virtual methods for derived interface", () => {
@@ -753,10 +753,10 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Base interface methods
-      expect(result.headerCode).toContain("virtual IEC_INT GetValue() = 0;");
+      expect(result.headerCode).toContain("virtual IEC_INT GETVALUE() = 0;");
       // Derived interface only declares its own new methods
       expect(result.headerCode).toContain(
-        "virtual void SetValue(IEC_INT v) = 0;",
+        "virtual void SETVALUE(IEC_INT V) = 0;",
       );
     });
   });
@@ -783,7 +783,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Method call expression generates direct member call
-      expect(result.cppCode).toContain("m.GetSpeed()");
+      expect(result.cppCode).toContain("M.GETSPEED()");
     });
 
     it("should generate method call with arguments in assignment", () => {
@@ -803,7 +803,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("calc.Add(3, 7)");
+      expect(result.cppCode).toContain("CALC.ADD(3, 7)");
     });
 
     it("should generate method call on instance within method body", () => {
@@ -824,7 +824,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Method call in another FB's method
-      expect(result.cppCode).toContain("m.GetSpeed()");
+      expect(result.cppCode).toContain("M.GETSPEED()");
     });
   });
 
@@ -858,21 +858,21 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Interface
-      expect(result.headerCode).toContain("class IControllable {");
-      expect(result.headerCode).toContain("virtual void Start() = 0;");
-      expect(result.headerCode).toContain("virtual void Stop() = 0;");
+      expect(result.headerCode).toContain("class ICONTROLLABLE {");
+      expect(result.headerCode).toContain("virtual void START() = 0;");
+      expect(result.headerCode).toContain("virtual void STOP() = 0;");
 
       // Base FB
-      expect(result.headerCode).toContain("class Device {");
+      expect(result.headerCode).toContain("class DEVICE {");
 
       // Derived FB with both extends and implements
       expect(result.headerCode).toContain(
-        "class Motor : public Device, public IControllable {",
+        "class MOTOR : public DEVICE, public ICONTROLLABLE {",
       );
 
       // Method implementations
-      expect(result.cppCode).toContain("void Motor::Start()");
-      expect(result.cppCode).toContain("void Motor::Stop()");
+      expect(result.cppCode).toContain("void MOTOR::START()");
+      expect(result.cppCode).toContain("void MOTOR::STOP()");
     });
 
     it("should handle FB with properties, methods, and VAR_INST", () => {
@@ -899,16 +899,16 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Property
       expect(result.headerCode).toContain(
-        "virtual IEC_REAL get_Value() const;",
+        "virtual IEC_REAL get_VALUE() const;",
       );
 
       // VAR_INST mangled
       expect(result.headerCode).toContain(
-        "IEC_REAL __Update__calibrationOffset;",
+        "IEC_REAL __UPDATE__CALIBRATIONOFFSET;",
       );
 
       // Method implementation uses mangled name
-      expect(result.cppCode).toContain("__Update__calibrationOffset");
+      expect(result.cppCode).toContain("__UPDATE__CALIBRATIONOFFSET");
     });
 
     it("should handle method parameters of multiple types", () => {
@@ -926,7 +926,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       expect(result.headerCode).toContain(
-        "virtual IEC_STRING Format(IEC_STRING name, IEC_REAL value, IEC_INT precision);",
+        "virtual IEC_STRING FORMAT(IEC_STRING NAME, IEC_REAL VALUE, IEC_INT PRECISION);",
       );
     });
 
@@ -939,9 +939,9 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("class Minimal {");
-      expect(result.headerCode).toContain("virtual void DoNothing();");
-      expect(result.cppCode).toContain("void Minimal::DoNothing()");
+      expect(result.headerCode).toContain("class MINIMAL {");
+      expect(result.headerCode).toContain("virtual void DONOTHING();");
+      expect(result.cppCode).toContain("void MINIMAL::DONOTHING()");
     });
 
     it("should handle multiple FBs in inheritance chain", () => {
@@ -990,7 +990,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("x = m.get_Speed()");
+      expect(result.cppCode).toContain("X = M.get_SPEED()");
     });
 
     it("should generate setter call for property write", () => {
@@ -1012,7 +1012,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("m.set_Speed(75)");
+      expect(result.cppCode).toContain("M.set_SPEED(75)");
     });
 
     it("should generate getter for chained field + property read", () => {
@@ -1037,7 +1037,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("x = ctrl.motor.get_Speed()");
+      expect(result.cppCode).toContain("X = CTRL.MOTOR.get_SPEED()");
     });
 
     it("should generate setter for chained field + property write", () => {
@@ -1059,7 +1059,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("ctrl.motor.set_Speed(10)");
+      expect(result.cppCode).toContain("CTRL.MOTOR.set_SPEED(10)");
     });
 
     it("should NOT generate getter/setter for regular field access", () => {
@@ -1082,9 +1082,9 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      // Regular field access should remain direct, not get_result()
-      expect(result.cppCode).toContain("x = m.result");
-      expect(result.cppCode).not.toContain("get_result");
+      // Regular field access should remain direct, not get_RESULT()
+      expect(result.cppCode).toContain("X = M.RESULT");
+      expect(result.cppCode).not.toContain("get_RESULT");
     });
 
     it("should generate getter for THIS property read in method", () => {
@@ -1103,7 +1103,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("this->get_Speed()");
+      expect(result.cppCode).toContain("this->get_SPEED()");
     });
 
     it("should generate setter for THIS property write in method", () => {
@@ -1123,7 +1123,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("this->set_Speed(s)");
+      expect(result.cppCode).toContain("this->set_SPEED(S)");
     });
   });
 
@@ -1149,8 +1149,8 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // The method should be able to reference m.GetVal() — m is an FB member
-      expect(result.cppCode).toContain("Outer::ReadInner()");
-      expect(result.cppCode).toContain("m.GetVal()");
+      expect(result.cppCode).toContain("OUTER::READINNER()");
+      expect(result.cppCode).toContain("M.GETVAL()");
     });
   });
 
@@ -1179,8 +1179,8 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Both calls should resolve correctly
-      expect(result.cppCode).toContain("a.DoWork()");
-      expect(result.cppCode).toContain("b.DoWork()");
+      expect(result.cppCode).toContain("A.DOWORK()");
+      expect(result.cppCode).toContain("B.DOWORK()");
     });
   });
 

@@ -39,8 +39,8 @@ describe("Phase 3.2: IF Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (x > 0) {");
-    expect(result.cppCode).toContain("y = 1;");
+    expect(result.cppCode).toContain("if (X > 0) {");
+    expect(result.cppCode).toContain("Y = 1;");
     expect(result.cppCode).toContain("}");
   });
 
@@ -56,10 +56,10 @@ describe("Phase 3.2: IF Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (x > 0) {");
-    expect(result.cppCode).toContain("y = 1;");
+    expect(result.cppCode).toContain("if (X > 0) {");
+    expect(result.cppCode).toContain("Y = 1;");
     expect(result.cppCode).toContain("} else {");
-    expect(result.cppCode).toContain("y = -1;");
+    expect(result.cppCode).toContain("Y = -1;");
   });
 
   it("should generate IF-ELSIF-ELSE chain", () => {
@@ -76,12 +76,12 @@ describe("Phase 3.2: IF Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (x < 0) {");
-    expect(result.cppCode).toContain("result = -1;");
-    expect(result.cppCode).toContain("} else if (x == 0) {");
-    expect(result.cppCode).toContain("result = 0;");
+    expect(result.cppCode).toContain("if (X < 0) {");
+    expect(result.cppCode).toContain("RESULT = -1;");
+    expect(result.cppCode).toContain("} else if (X == 0) {");
+    expect(result.cppCode).toContain("RESULT = 0;");
     expect(result.cppCode).toContain("} else {");
-    expect(result.cppCode).toContain("result = 1;");
+    expect(result.cppCode).toContain("RESULT = 1;");
   });
 
   it("should generate multiple ELSIF clauses", () => {
@@ -100,9 +100,9 @@ describe("Phase 3.2: IF Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (x == 1) {");
-    expect(result.cppCode).toContain("} else if (x == 2) {");
-    expect(result.cppCode).toContain("} else if (x == 3) {");
+    expect(result.cppCode).toContain("if (X == 1) {");
+    expect(result.cppCode).toContain("} else if (X == 2) {");
+    expect(result.cppCode).toContain("} else if (X == 3) {");
     expect(result.cppCode).toContain("} else {");
   });
 
@@ -120,11 +120,11 @@ describe("Phase 3.2: IF Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (x > 0) {");
-    expect(result.cppCode).toContain("if (y > 0) {");
-    expect(result.cppCode).toContain("result = 1;");
+    expect(result.cppCode).toContain("if (X > 0) {");
+    expect(result.cppCode).toContain("if (Y > 0) {");
+    expect(result.cppCode).toContain("RESULT = 1;");
     expect(result.cppCode).toContain("} else {");
-    expect(result.cppCode).toContain("result = 2;");
+    expect(result.cppCode).toContain("RESULT = 2;");
   });
 });
 
@@ -145,14 +145,14 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("switch (state) {");
+    expect(result.cppCode).toContain("switch (STATE) {");
     expect(result.cppCode).toContain("case 1:");
-    expect(result.cppCode).toContain("x = 10;");
+    expect(result.cppCode).toContain("X = 10;");
     expect(result.cppCode).toContain("break;");
     expect(result.cppCode).toContain("case 2:");
-    expect(result.cppCode).toContain("x = 20;");
+    expect(result.cppCode).toContain("X = 20;");
     expect(result.cppCode).toContain("case 3:");
-    expect(result.cppCode).toContain("x = 30;");
+    expect(result.cppCode).toContain("X = 30;");
   });
 
   it("should generate CASE with multiple labels (fall-through)", () => {
@@ -168,7 +168,7 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.cppCode).toContain("case 1:");
     expect(result.cppCode).toContain("case 2:");
     expect(result.cppCode).toContain("case 3:");
-    expect(result.cppCode).toContain("x = 100;");
+    expect(result.cppCode).toContain("X = 100;");
   });
 
   it("should generate CASE with range expansion", () => {
@@ -184,7 +184,7 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.cppCode).toContain("case 4:");
     expect(result.cppCode).toContain("case 5:");
     expect(result.cppCode).toContain("case 6:");
-    expect(result.cppCode).toContain("x = 200;");
+    expect(result.cppCode).toContain("X = 200;");
   });
 
   it("should generate CASE with ELSE (default)", () => {
@@ -200,9 +200,9 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("case 1:");
-    expect(result.cppCode).toContain("x = 10;");
+    expect(result.cppCode).toContain("X = 10;");
     expect(result.cppCode).toContain("default:");
-    expect(result.cppCode).toContain("x = 0;");
+    expect(result.cppCode).toContain("X = 0;");
   });
 
   it("should generate CASE with mixed labels and ranges", () => {
@@ -219,7 +219,7 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("switch (grade) {");
+    expect(result.cppCode).toContain("switch (GRADE) {");
     expect(result.cppCode).toContain("case 90:");
     expect(result.cppCode).toContain("case 100:");
     expect(result.cppCode).toContain("case 80:");
@@ -243,8 +243,8 @@ describe("Phase 3.2: FOR Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (i = 1; i <= 10; i++) {");
-    expect(result.cppCode).toContain("sum = sum + i;");
+    expect(result.cppCode).toContain("for (I = 1; I <= 10; I++) {");
+    expect(result.cppCode).toContain("SUM = SUM + I;");
   });
 
   it("should generate FOR loop with positive BY step", () => {
@@ -257,7 +257,7 @@ describe("Phase 3.2: FOR Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (i = 1; i <= 10; i += 2) {");
+    expect(result.cppCode).toContain("for (I = 1; I <= 10; I += 2) {");
   });
 
   it("should generate descending FOR loop with negative step", () => {
@@ -270,7 +270,7 @@ describe("Phase 3.2: FOR Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (i = 10; i >= 1; i += -1) {");
+    expect(result.cppCode).toContain("for (I = 10; I >= 1; I += -1) {");
   });
 
   it("should generate FOR loop with expression bounds", () => {
@@ -283,7 +283,7 @@ describe("Phase 3.2: FOR Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (i = 0; i <= n; i++) {");
+    expect(result.cppCode).toContain("for (I = 0; I <= N; I++) {");
   });
 });
 
@@ -302,8 +302,8 @@ describe("Phase 3.2: WHILE Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while (count < 100) {");
-    expect(result.cppCode).toContain("count = count + 1;");
+    expect(result.cppCode).toContain("while (COUNT < 100) {");
+    expect(result.cppCode).toContain("COUNT = COUNT + 1;");
   });
 
   it("should generate WHILE loop with complex condition", () => {
@@ -317,9 +317,9 @@ describe("Phase 3.2: WHILE Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while ((x < 10) && (y > 0)) {");
-    expect(result.cppCode).toContain("x = x + 1;");
-    expect(result.cppCode).toContain("y = y - 1;");
+    expect(result.cppCode).toContain("while ((X < 10) && (Y > 0)) {");
+    expect(result.cppCode).toContain("X = X + 1;");
+    expect(result.cppCode).toContain("Y = Y - 1;");
   });
 });
 
@@ -340,8 +340,8 @@ describe("Phase 3.2: REPEAT Statement Code Generation", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("do {");
-    expect(result.cppCode).toContain("count = count + 1;");
-    expect(result.cppCode).toContain("} while (!(count >= 100));");
+    expect(result.cppCode).toContain("COUNT = COUNT + 1;");
+    expect(result.cppCode).toContain("} while (!(COUNT >= 100));");
   });
 
   it("should generate REPEAT with simple condition", () => {
@@ -357,9 +357,9 @@ describe("Phase 3.2: REPEAT Statement Code Generation", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("do {");
-    expect(result.cppCode).toContain("factorial = factorial * n;");
-    expect(result.cppCode).toContain("n = n + 1;");
-    expect(result.cppCode).toContain("} while (!(n > 5));");
+    expect(result.cppCode).toContain("FACTORIAL = FACTORIAL * N;");
+    expect(result.cppCode).toContain("N = N + 1;");
+    expect(result.cppCode).toContain("} while (!(N > 5));");
   });
 });
 
@@ -381,8 +381,8 @@ describe("Phase 3.2: EXIT Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (i = 1; i <= 100; i++) {");
-    expect(result.cppCode).toContain("if (sum > 50) {");
+    expect(result.cppCode).toContain("for (I = 1; I <= 100; I++) {");
+    expect(result.cppCode).toContain("if (SUM > 50) {");
     expect(result.cppCode).toContain("break;");
   });
 
@@ -399,7 +399,7 @@ describe("Phase 3.2: EXIT Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while (!done) {");
+    expect(result.cppCode).toContain("while (!DONE) {");
     expect(result.cppCode).toContain("break;");
   });
 });
@@ -435,8 +435,8 @@ describe("Phase 3.2: RETURN Statement Code Generation", () => {
       END_FUNCTION
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("Abs_result = -x;");
-    expect(result.cppCode).toContain("return Abs_result;");
+    expect(result.cppCode).toContain("ABS_result = -X;");
+    expect(result.cppCode).toContain("return ABS_result;");
   });
 });
 
@@ -460,10 +460,10 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (i = 0; i <= 9; i++) {");
-    expect(result.cppCode).toContain("for (j = 0; j <= 9; j++) {");
-    expect(result.cppCode).toContain("if (i == j) {");
-    expect(result.cppCode).toContain("found = true;");
+    expect(result.cppCode).toContain("for (I = 0; I <= 9; I++) {");
+    expect(result.cppCode).toContain("for (J = 0; J <= 9; J++) {");
+    expect(result.cppCode).toContain("if (I == J) {");
+    expect(result.cppCode).toContain("FOUND = true;");
     expect(result.cppCode).toContain("break;");
   });
 
@@ -484,12 +484,12 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (x < 0) {");
-    expect(result.cppCode).toContain("result = -1;");
-    expect(result.cppCode).toContain("} else if (x == 0) {");
-    expect(result.cppCode).toContain("result = 0;");
+    expect(result.cppCode).toContain("if (X < 0) {");
+    expect(result.cppCode).toContain("RESULT = -1;");
+    expect(result.cppCode).toContain("} else if (X == 0) {");
+    expect(result.cppCode).toContain("RESULT = 0;");
     expect(result.cppCode).toContain("} else {");
-    expect(result.cppCode).toContain("result = 1;");
+    expect(result.cppCode).toContain("RESULT = 1;");
   });
 
   it("should handle validation example: FOR loop with EXIT", () => {
@@ -508,9 +508,9 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (i = 1; i <= 100; i++) {");
-    expect(result.cppCode).toContain("sum = sum + i;");
-    expect(result.cppCode).toContain("if (sum > 50) {");
+    expect(result.cppCode).toContain("for (I = 1; I <= 100; I++) {");
+    expect(result.cppCode).toContain("SUM = SUM + I;");
+    expect(result.cppCode).toContain("if (SUM > 50) {");
     expect(result.cppCode).toContain("break;");
   });
 
@@ -528,9 +528,9 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while (count < 5) {");
-    expect(result.cppCode).toContain("count = count + 1;");
-    expect(result.cppCode).toContain("sum = sum + count;");
+    expect(result.cppCode).toContain("while (COUNT < 5) {");
+    expect(result.cppCode).toContain("COUNT = COUNT + 1;");
+    expect(result.cppCode).toContain("SUM = SUM + COUNT;");
   });
 
   it("should handle validation example: REPEAT-UNTIL", () => {
@@ -549,9 +549,9 @@ describe("Phase 3.2: Complex Control Flow", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("do {");
-    expect(result.cppCode).toContain("factorial = factorial * n;");
-    expect(result.cppCode).toContain("n = n + 1;");
-    expect(result.cppCode).toContain("} while (!(n > 5));");
+    expect(result.cppCode).toContain("FACTORIAL = FACTORIAL * N;");
+    expect(result.cppCode).toContain("N = N + 1;");
+    expect(result.cppCode).toContain("} while (!(N > 5));");
   });
 
   it("should handle CASE with ranges (validation example)", () => {
@@ -572,17 +572,17 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("switch (grade) {");
+    expect(result.cppCode).toContain("switch (GRADE) {");
     // Check some range expansion
     expect(result.cppCode).toContain("case 90:");
     expect(result.cppCode).toContain("case 91:");
     expect(result.cppCode).toContain("case 100:");
-    expect(result.cppCode).toContain("letter = 65;");
+    expect(result.cppCode).toContain("LETTER = 65;");
     expect(result.cppCode).toContain("case 80:");
     expect(result.cppCode).toContain("case 89:");
-    expect(result.cppCode).toContain("letter = 66;");
+    expect(result.cppCode).toContain("LETTER = 66;");
     expect(result.cppCode).toContain("default:");
-    expect(result.cppCode).toContain("letter = 70;");
+    expect(result.cppCode).toContain("LETTER = 70;");
   });
 
   it("should handle control flow in function block", () => {
@@ -598,9 +598,9 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_FUNCTION_BLOCK
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (enable && !prev) {");
-    expect(result.cppCode).toContain("count = count + 1;");
-    expect(result.cppCode).toContain("prev = enable;");
+    expect(result.cppCode).toContain("if (ENABLE && !PREV) {");
+    expect(result.cppCode).toContain("COUNT = COUNT + 1;");
+    expect(result.cppCode).toContain("PREV = ENABLE;");
   });
 
   it("should handle IF-ELSIF without ELSE", () => {
@@ -615,8 +615,8 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (x == 1) {");
-    expect(result.cppCode).toContain("} else if (x == 2) {");
+    expect(result.cppCode).toContain("if (X == 1) {");
+    expect(result.cppCode).toContain("} else if (X == 2) {");
     // Should NOT contain } else { (no else clause)
     const lines = result.cppCode.split("\n");
     const elseLines = lines.filter(l => l.trim() === "} else {");
@@ -634,7 +634,7 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("switch (state) {");
+    expect(result.cppCode).toContain("switch (STATE) {");
     expect(result.cppCode).toContain("case 1:");
     expect(result.cppCode).toContain("case 2:");
     // Should NOT contain default:

@@ -294,6 +294,18 @@ inline IECVar<T> operator%(const IECVar<T>& a, const IECVar<T>& b) noexcept {
     return IECVar<T>(a.get() % b.get());
 }
 
+// Mixed-type arithmetic operators (IECVar<T> op T) and (T op IECVar<T>)
+template<typename T> inline IECVar<T> operator+(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() + b); }
+template<typename T> inline IECVar<T> operator+(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a + b.get()); }
+template<typename T> inline IECVar<T> operator-(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() - b); }
+template<typename T> inline IECVar<T> operator-(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a - b.get()); }
+template<typename T> inline IECVar<T> operator*(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() * b); }
+template<typename T> inline IECVar<T> operator*(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a * b.get()); }
+template<typename T> inline IECVar<T> operator/(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() / b); }
+template<typename T> inline IECVar<T> operator/(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a / b.get()); }
+template<typename T> inline IECVar<T> operator%(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() % b); }
+template<typename T> inline IECVar<T> operator%(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a % b.get()); }
+
 // =============================================================================
 // Comparison Operators
 // =============================================================================
@@ -328,6 +340,20 @@ inline bool operator>=(const IECVar<T>& a, const IECVar<T>& b) noexcept {
     return a.get() >= b.get();
 }
 
+// Mixed-type comparison operators
+template<typename T> inline bool operator==(const IECVar<T>& a, T b) noexcept { return a.get() == b; }
+template<typename T> inline bool operator==(T a, const IECVar<T>& b) noexcept { return a == b.get(); }
+template<typename T> inline bool operator!=(const IECVar<T>& a, T b) noexcept { return a.get() != b; }
+template<typename T> inline bool operator!=(T a, const IECVar<T>& b) noexcept { return a != b.get(); }
+template<typename T> inline bool operator<(const IECVar<T>& a, T b) noexcept { return a.get() < b; }
+template<typename T> inline bool operator<(T a, const IECVar<T>& b) noexcept { return a < b.get(); }
+template<typename T> inline bool operator>(const IECVar<T>& a, T b) noexcept { return a.get() > b; }
+template<typename T> inline bool operator>(T a, const IECVar<T>& b) noexcept { return a > b.get(); }
+template<typename T> inline bool operator<=(const IECVar<T>& a, T b) noexcept { return a.get() <= b; }
+template<typename T> inline bool operator<=(T a, const IECVar<T>& b) noexcept { return a <= b.get(); }
+template<typename T> inline bool operator>=(const IECVar<T>& a, T b) noexcept { return a.get() >= b; }
+template<typename T> inline bool operator>=(T a, const IECVar<T>& b) noexcept { return a >= b.get(); }
+
 // =============================================================================
 // Bitwise Operators
 // =============================================================================
@@ -346,6 +372,14 @@ template<typename T>
 inline IECVar<T> operator^(const IECVar<T>& a, const IECVar<T>& b) noexcept {
     return IECVar<T>(a.get() ^ b.get());
 }
+
+// Mixed-type bitwise operators
+template<typename T> inline IECVar<T> operator&(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() & b); }
+template<typename T> inline IECVar<T> operator&(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a & b.get()); }
+template<typename T> inline IECVar<T> operator|(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() | b); }
+template<typename T> inline IECVar<T> operator|(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a | b.get()); }
+template<typename T> inline IECVar<T> operator^(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() ^ b); }
+template<typename T> inline IECVar<T> operator^(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a ^ b.get()); }
 
 template<typename T>
 inline IECVar<T> operator~(const IECVar<T>& a) noexcept {

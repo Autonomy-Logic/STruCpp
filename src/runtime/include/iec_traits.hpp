@@ -309,6 +309,13 @@ struct iec_underlying_type<IECVar<T>> { using type = T; };
 template<typename T>
 using iec_underlying_type_t = typename iec_underlying_type<T>::type;
 
+/** Extract the raw value from an IECVar or pass through a raw value unchanged */
+template<typename T>
+inline constexpr T iec_unwrap(T v) noexcept { return v; }
+
+template<typename T>
+inline constexpr T iec_unwrap(const IECVar<T>& v) noexcept { return v.get(); }
+
 // =============================================================================
 // Type Limits
 // =============================================================================

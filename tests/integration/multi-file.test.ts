@@ -29,8 +29,8 @@ describe("Multi-File Compilation", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("Square(");
-    expect(result.headerCode).toContain("Square");
+    expect(result.cppCode).toContain("SQUARE(");
+    expect(result.headerCode).toContain("SQUARE");
   });
 
   it("should compile types from additional source", () => {
@@ -84,8 +84,8 @@ describe("Multi-File Compilation", () => {
     });
 
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("Double(");
-    expect(result.cppCode).toContain("Triple(");
+    expect(result.cppCode).toContain("DOUBLE(");
+    expect(result.cppCode).toContain("TRIPLE(");
   });
 
   it("should report parse errors in additional sources", () => {
@@ -130,7 +130,7 @@ describe("Multi-File Compilation", () => {
     expect(result.success).toBe(true);
     // The AST should have the function from lib.st
     expect(result.ast).toBeDefined();
-    const libFunc = result.ast!.functions.find((f) => f.name === "LibFunc");
+    const libFunc = result.ast!.functions.find((f) => f.name === "LIBFUNC");
     expect(libFunc).toBeDefined();
     expect(libFunc!.sourceSpan.file).toBe("lib.st");
   });

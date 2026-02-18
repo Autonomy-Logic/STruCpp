@@ -33,17 +33,17 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Header should contain the class declaration
-      expect(result.headerCode).toContain("class Adder {");
+      expect(result.headerCode).toContain("class ADDER {");
       expect(result.headerCode).toContain("public:");
-      expect(result.headerCode).toContain("IEC_INT a;");
-      expect(result.headerCode).toContain("IEC_INT b;");
-      expect(result.headerCode).toContain("IEC_INT result;");
+      expect(result.headerCode).toContain("IEC_INT A;");
+      expect(result.headerCode).toContain("IEC_INT B;");
+      expect(result.headerCode).toContain("IEC_INT RESULT;");
       expect(result.headerCode).toContain("void operator()();");
 
       // Implementation should contain constructor and operator()
-      expect(result.cppCode).toContain("Adder::Adder()");
-      expect(result.cppCode).toContain("void Adder::operator()()");
-      expect(result.cppCode).toContain("result = a + b;");
+      expect(result.cppCode).toContain("ADDER::ADDER()");
+      expect(result.cppCode).toContain("void ADDER::operator()()");
+      expect(result.cppCode).toContain("RESULT = A + B;");
     });
   });
 
@@ -66,12 +66,12 @@ describe("Codegen - Function Blocks", () => {
         END_PROGRAM
       `);
 
-      // FB instance should be plain class member, not IEC_MyFB
-      expect(result.headerCode).toContain("MyFB fb;");
-      expect(result.headerCode).not.toContain("IEC_MyFB fb;");
+      // FB instance should be plain class member, not IEC_MYFB
+      expect(result.headerCode).toContain("MYFB FB;");
+      expect(result.headerCode).not.toContain("IEC_MYFB FB;");
 
       // Regular variable should still use IEC_ prefix
-      expect(result.headerCode).toContain("IEC_INT result;");
+      expect(result.headerCode).toContain("IEC_INT RESULT;");
     });
 
     it("should generate multiple independent FB instances", () => {
@@ -89,8 +89,8 @@ describe("Codegen - Function Blocks", () => {
         END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("Timer t1;");
-      expect(result.headerCode).toContain("Timer t2;");
+      expect(result.headerCode).toContain("TIMER T1;");
+      expect(result.headerCode).toContain("TIMER T2;");
     });
   });
 
@@ -114,12 +114,12 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // FB invocation should assign inputs then call operator()
-      expect(result.cppCode).toContain("add.a = 5;");
-      expect(result.cppCode).toContain("add.b = 3;");
-      expect(result.cppCode).toContain("add();");
+      expect(result.cppCode).toContain("ADD.A = 5;");
+      expect(result.cppCode).toContain("ADD.B = 3;");
+      expect(result.cppCode).toContain("ADD();");
 
       // Member access should be direct property access
-      expect(result.cppCode).toContain("sum = add.result;");
+      expect(result.cppCode).toContain("SUM = ADD.RESULT;");
     });
 
     it("should generate FB output capture with => syntax", () => {
@@ -140,11 +140,11 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Input assignment
-      expect(result.cppCode).toContain("fb.x = 10;");
+      expect(result.cppCode).toContain("FB.X = 10;");
       // Call
-      expect(result.cppCode).toContain("fb();");
+      expect(result.cppCode).toContain("FB();");
       // Output capture
-      expect(result.cppCode).toContain("output = fb.y;");
+      expect(result.cppCode).toContain("OUTPUT = FB.Y;");
     });
 
     it("should generate FB member access as direct property access", () => {
@@ -165,7 +165,7 @@ describe("Codegen - Function Blocks", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("val = s.calibrated;");
+      expect(result.cppCode).toContain("VAL = S.CALIBRATED;");
     });
 
     it("should generate FB input write as direct property assignment", () => {
@@ -182,7 +182,7 @@ describe("Codegen - Function Blocks", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("fb.x = 42;");
+      expect(result.cppCode).toContain("FB.X = 42;");
     });
   });
 
@@ -198,7 +198,7 @@ describe("Codegen - Function Blocks", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("MyFB::MyFB()");
+      expect(result.cppCode).toContain("MYFB::MYFB()");
     });
   });
 
@@ -226,16 +226,16 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Inner FB instance inside Outer should be a plain class member
-      expect(result.headerCode).toContain("class Outer {");
-      expect(result.headerCode).toMatch(/Inner edge;/);
+      expect(result.headerCode).toContain("class OUTER {");
+      expect(result.headerCode).toMatch(/INNER EDGE;/);
 
       // Outer body should invoke Inner
-      expect(result.cppCode).toContain("edge.CLK = signal;");
-      expect(result.cppCode).toContain("edge();");
+      expect(result.cppCode).toContain("EDGE.CLK = SIGNAL;");
+      expect(result.cppCode).toContain("EDGE();");
 
       // Program should invoke Outer
-      expect(result.cppCode).toContain("ctrl.signal = true;");
-      expect(result.cppCode).toContain("ctrl();");
+      expect(result.cppCode).toContain("CTRL.SIGNAL = true;");
+      expect(result.cppCode).toContain("CTRL();");
     });
   });
 
@@ -257,7 +257,7 @@ describe("Codegen - Function Blocks", () => {
 
       // Two separate invocations of the same instance
       const cppCode = result.cppCode;
-      const invocations = cppCode.match(/c\(\);/g);
+      const invocations = cppCode.match(/C\(\);/g);
       expect(invocations).toHaveLength(2);
     });
   });
@@ -287,10 +287,10 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Function call should remain as regular call
-      expect(result.cppCode).toContain("r = MyFunc(5);");
+      expect(result.cppCode).toContain("R = MYFUNC(5);");
       // FB invocation should use assign+call pattern
-      expect(result.cppCode).toContain("fb.x = 10;");
-      expect(result.cppCode).toContain("fb();");
+      expect(result.cppCode).toContain("FB.X = 10;");
+      expect(result.cppCode).toContain("FB();");
     });
   });
 });

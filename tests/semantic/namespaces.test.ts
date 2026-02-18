@@ -130,12 +130,12 @@ describe('Phase 2.7 - Namespaces', () => {
 
       // Header should have namespace wrapper
       expect(result.headerCode).toContain('namespace strucpp {');
-      expect(result.headerCode).toContain('class Program_TestProgram');
+      expect(result.headerCode).toContain('class Program_TESTPROGRAM');
       expect(result.headerCode).toContain('}  // namespace strucpp');
 
       // Implementation should have matching namespace
       expect(result.cppCode).toContain('namespace strucpp {');
-      expect(result.cppCode).toContain('Program_TestProgram::Program_TestProgram');
+      expect(result.cppCode).toContain('Program_TESTPROGRAM::Program_TESTPROGRAM');
       expect(result.cppCode).toContain('}  // namespace strucpp');
     });
 
@@ -154,7 +154,7 @@ describe('Phase 2.7 - Namespaces', () => {
       expect(result.success).toBe(true);
 
       expect(result.headerCode).toContain('namespace strucpp {');
-      expect(result.headerCode).toContain('class MyFB {');
+      expect(result.headerCode).toContain('class MYFB {');
       expect(result.headerCode).toContain('}  // namespace strucpp');
     });
 
@@ -170,7 +170,7 @@ describe('Phase 2.7 - Namespaces', () => {
       expect(result.success).toBe(true);
 
       expect(result.headerCode).toContain('namespace strucpp {');
-      expect(result.headerCode).toContain('IEC_INT AddOne(');
+      expect(result.headerCode).toContain('IEC_INT ADDONE(');
       expect(result.headerCode).toContain('}  // namespace strucpp');
     });
 
@@ -190,7 +190,7 @@ describe('Phase 2.7 - Namespaces', () => {
       expect(result.success).toBe(true);
 
       expect(result.headerCode).toContain('namespace strucpp {');
-      expect(result.headerCode).toContain('class Configuration_MyConfig');
+      expect(result.headerCode).toContain('class Configuration_MYCONFIG');
       expect(result.headerCode).toContain('}  // namespace strucpp');
     });
   });
@@ -213,7 +213,7 @@ describe('Phase 2.7 - Namespaces', () => {
 
       // Enum should be inside namespace
       expect(result.headerCode).toContain('namespace strucpp {');
-      expect(result.headerCode).toContain('enum class MotorState');
+      expect(result.headerCode).toContain('enum class MOTORSTATE');
     });
 
     it('should place structs inside namespace', () => {
@@ -236,7 +236,7 @@ describe('Phase 2.7 - Namespaces', () => {
 
       // Struct should be inside namespace
       expect(result.headerCode).toContain('namespace strucpp {');
-      expect(result.headerCode).toContain('struct Point');
+      expect(result.headerCode).toContain('struct POINT');
     });
   });
 

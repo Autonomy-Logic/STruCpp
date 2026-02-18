@@ -42,7 +42,7 @@ describe("AST Builder - OOP Features", () => {
       expect(fb.methods).toHaveLength(1);
       const method = fb.methods[0]!;
       expect(method.kind).toBe("MethodDeclaration");
-      expect(method.name).toBe("Start");
+      expect(method.name).toBe("START");
       expect(method.visibility).toBe("PUBLIC");
       expect(method.isAbstract).toBe(false);
       expect(method.isFinal).toBe(false);
@@ -75,7 +75,7 @@ describe("AST Builder - OOP Features", () => {
       expect(method.varBlocks).toHaveLength(1);
       expect(method.varBlocks[0]!.blockType).toBe("VAR_INPUT");
       expect(method.varBlocks[0]!.declarations).toHaveLength(1);
-      expect(method.varBlocks[0]!.declarations[0]!.names).toEqual(["speed"]);
+      expect(method.varBlocks[0]!.declarations[0]!.names).toEqual(["SPEED"]);
     });
 
     it("should build a method with PRIVATE visibility", () => {
@@ -184,9 +184,9 @@ describe("AST Builder - OOP Features", () => {
 
       const fb = ast.functionBlocks[0]!;
       expect(fb.methods).toHaveLength(3);
-      expect(fb.methods[0]!.name).toBe("Start");
-      expect(fb.methods[1]!.name).toBe("Stop");
-      expect(fb.methods[2]!.name).toBe("GetStatus");
+      expect(fb.methods[0]!.name).toBe("START");
+      expect(fb.methods[1]!.name).toBe("STOP");
+      expect(fb.methods[2]!.name).toBe("GETSTATUS");
       expect(fb.methods[2]!.returnType).toBeDefined();
       expect(fb.methods[2]!.returnType!.name).toBe("BOOL");
     });
@@ -240,7 +240,7 @@ describe("AST Builder - OOP Features", () => {
       expect(ast.interfaces).toHaveLength(1);
       const iface = ast.interfaces[0]!;
       expect(iface.kind).toBe("InterfaceDeclaration");
-      expect(iface.name).toBe("IRunnable");
+      expect(iface.name).toBe("IRUNNABLE");
       expect(iface.methods).toHaveLength(0);
     });
 
@@ -258,13 +258,13 @@ describe("AST Builder - OOP Features", () => {
       expect(iface.methods).toHaveLength(2);
 
       const start = iface.methods[0]!;
-      expect(start.name).toBe("Start");
+      expect(start.name).toBe("START");
       expect(start.isAbstract).toBe(true);
       expect(start.visibility).toBe("PUBLIC");
       expect(start.body).toHaveLength(0);
 
       const stop = iface.methods[1]!;
-      expect(stop.name).toBe("Stop");
+      expect(stop.name).toBe("STOP");
       expect(stop.isAbstract).toBe(true);
       expect(stop.visibility).toBe("PUBLIC");
     });
@@ -305,7 +305,7 @@ describe("AST Builder - OOP Features", () => {
 
       const iface = ast.interfaces[0]!;
       expect(iface.extends).toBeDefined();
-      expect(iface.extends).toEqual(["IMotor"]);
+      expect(iface.extends).toEqual(["IMOTOR"]);
     });
 
     it("should build an interface EXTENDS multiple parents", () => {
@@ -316,7 +316,7 @@ describe("AST Builder - OOP Features", () => {
 
       const iface = ast.interfaces[0]!;
       expect(iface.extends).toBeDefined();
-      expect(iface.extends).toEqual(["IRunnable", "ILoggable"]);
+      expect(iface.extends).toEqual(["IRUNNABLE", "ILOGGABLE"]);
     });
 
     it("should build an interface EXTENDS with methods", () => {
@@ -328,9 +328,9 @@ describe("AST Builder - OOP Features", () => {
       `);
 
       const iface = ast.interfaces[0]!;
-      expect(iface.extends).toEqual(["IMotor"]);
+      expect(iface.extends).toEqual(["IMOTOR"]);
       expect(iface.methods).toHaveLength(1);
-      expect(iface.methods[0]!.name).toBe("GetDiagnostics");
+      expect(iface.methods[0]!.name).toBe("GETDIAGNOSTICS");
       expect(iface.methods[0]!.isAbstract).toBe(true);
     });
   });
@@ -347,7 +347,7 @@ describe("AST Builder - OOP Features", () => {
       `);
 
       const fb = ast.functionBlocks[0]!;
-      expect(fb.extends).toBe("Motor");
+      expect(fb.extends).toBe("MOTOR");
     });
 
     it("should build FB IMPLEMENTS single interface", () => {
@@ -358,7 +358,7 @@ describe("AST Builder - OOP Features", () => {
 
       const fb = ast.functionBlocks[0]!;
       expect(fb.implements).toBeDefined();
-      expect(fb.implements).toEqual(["IRunnable"]);
+      expect(fb.implements).toEqual(["IRUNNABLE"]);
     });
 
     it("should build FB IMPLEMENTS multiple interfaces", () => {
@@ -368,7 +368,7 @@ describe("AST Builder - OOP Features", () => {
       `);
 
       const fb = ast.functionBlocks[0]!;
-      expect(fb.implements).toEqual(["IRunnable", "ILoggable", "ISerializable"]);
+      expect(fb.implements).toEqual(["IRUNNABLE", "ILOGGABLE", "ISERIALIZABLE"]);
     });
 
     it("should build FB EXTENDS and IMPLEMENTS", () => {
@@ -378,8 +378,8 @@ describe("AST Builder - OOP Features", () => {
       `);
 
       const fb = ast.functionBlocks[0]!;
-      expect(fb.extends).toBe("Motor");
-      expect(fb.implements).toEqual(["IRunnable", "ILoggable"]);
+      expect(fb.extends).toBe("MOTOR");
+      expect(fb.implements).toEqual(["IRUNNABLE", "ILOGGABLE"]);
     });
 
     it("should build ABSTRACT FB", () => {
@@ -414,8 +414,8 @@ describe("AST Builder - OOP Features", () => {
 
       const fb = ast.functionBlocks[0]!;
       expect(fb.isAbstract).toBe(true);
-      expect(fb.extends).toBe("BaseMotor");
-      expect(fb.implements).toEqual(["IRunnable"]);
+      expect(fb.extends).toBe("BASEMOTOR");
+      expect(fb.implements).toEqual(["IRUNNABLE"]);
       expect(fb.methods).toHaveLength(1);
       expect(fb.methods[0]!.isAbstract).toBe(true);
     });
@@ -432,7 +432,7 @@ describe("AST Builder - OOP Features", () => {
       `);
 
       const fb = ast.functionBlocks[0]!;
-      expect(fb.extends).toBe("BaseMotor");
+      expect(fb.extends).toBe("BASEMOTOR");
       expect(fb.varBlocks).toHaveLength(2);
       expect(fb.methods).toHaveLength(1);
       expect(fb.body).toHaveLength(1);
@@ -463,7 +463,7 @@ describe("AST Builder - OOP Features", () => {
       expect(fb.properties).toHaveLength(1);
       const prop = fb.properties[0]!;
       expect(prop.kind).toBe("PropertyDeclaration");
-      expect(prop.name).toBe("Speed");
+      expect(prop.name).toBe("SPEED");
       expect(prop.type.name).toBe("INT");
       expect(prop.getter).toBeDefined();
       expect(prop.getter!.length).toBeGreaterThan(0);
@@ -484,7 +484,7 @@ describe("AST Builder - OOP Features", () => {
       `);
 
       const prop = ast.functionBlocks[0]!.properties[0]!;
-      expect(prop.name).toBe("IsRunning");
+      expect(prop.name).toBe("ISRUNNING");
       expect(prop.type.name).toBe("BOOL");
       expect(prop.getter).toBeDefined();
       expect(prop.setter).toBeUndefined();
@@ -503,7 +503,7 @@ describe("AST Builder - OOP Features", () => {
       `);
 
       const prop = ast.functionBlocks[0]!.properties[0]!;
-      expect(prop.name).toBe("TargetSpeed");
+      expect(prop.name).toBe("TARGETSPEED");
       expect(prop.getter).toBeUndefined();
       expect(prop.setter).toBeDefined();
     });
@@ -542,6 +542,7 @@ describe("AST Builder - OOP Features", () => {
 
       const prop = ast.functionBlocks[0]!.properties[0]!;
       expect(prop.visibility).toBe("PROTECTED");
+
     });
 
     it("should build multiple properties in one FB", () => {
@@ -556,8 +557,8 @@ describe("AST Builder - OOP Features", () => {
 
       const fb = ast.functionBlocks[0]!;
       expect(fb.properties).toHaveLength(2);
-      expect(fb.properties[0]!.name).toBe("Speed");
-      expect(fb.properties[1]!.name).toBe("Direction");
+      expect(fb.properties[0]!.name).toBe("SPEED");
+      expect(fb.properties[1]!.name).toBe("DIRECTION");
     });
   });
 
@@ -583,7 +584,7 @@ describe("AST Builder - OOP Features", () => {
       expect(stmt.kind).toBe("AssignmentStatement");
       const target = stmt.target as VariableExpression;
       expect(target.name).toBe("THIS");
-      expect(target.fieldAccess).toEqual(["_speed"]);
+      expect(target.fieldAccess).toEqual(["_SPEED"]);
     });
 
     it("should build THIS member assignment with expression value", () => {
@@ -601,7 +602,7 @@ describe("AST Builder - OOP Features", () => {
       expect(stmt.kind).toBe("AssignmentStatement");
       const target = stmt.target as VariableExpression;
       expect(target.name).toBe("THIS");
-      expect(target.fieldAccess).toEqual(["_speed"]);
+      expect(target.fieldAccess).toEqual(["_SPEED"]);
     });
 
     it("should build THIS method call", () => {
@@ -619,7 +620,7 @@ describe("AST Builder - OOP Features", () => {
       expect(method.body).toHaveLength(1);
       const stmt = method.body[0] as FunctionCallStatement;
       expect(stmt.kind).toBe("FunctionCallStatement");
-      expect(stmt.call.functionName).toBe("THIS.Start");
+      expect(stmt.call.functionName).toBe("THIS.START");
     });
 
     it("should build THIS method call with arguments", () => {
@@ -636,9 +637,9 @@ describe("AST Builder - OOP Features", () => {
 
       const method = ast.functionBlocks[0]!.methods[0]!;
       const stmt = method.body[0] as FunctionCallStatement;
-      expect(stmt.call.functionName).toBe("THIS.SetSpeed");
+      expect(stmt.call.functionName).toBe("THIS.SETSPEED");
       expect(stmt.call.arguments).toHaveLength(1);
-      expect(stmt.call.arguments[0]!.name).toBe("speed");
+      expect(stmt.call.arguments[0]!.name).toBe("SPEED");
     });
   });
 
@@ -656,7 +657,7 @@ describe("AST Builder - OOP Features", () => {
       expect(method.body).toHaveLength(1);
       const stmt = method.body[0] as FunctionCallStatement;
       expect(stmt.kind).toBe("FunctionCallStatement");
-      expect(stmt.call.functionName).toBe("SUPER.Start");
+      expect(stmt.call.functionName).toBe("SUPER.START");
     });
 
     it("should build SUPER method call with arguments", () => {
@@ -670,9 +671,9 @@ describe("AST Builder - OOP Features", () => {
 
       const method = ast.functionBlocks[0]!.methods[0]!;
       const stmt = method.body[0] as FunctionCallStatement;
-      expect(stmt.call.functionName).toBe("SUPER.SetSpeed");
+      expect(stmt.call.functionName).toBe("SUPER.SETSPEED");
       expect(stmt.call.arguments).toHaveLength(1);
-      expect(stmt.call.arguments[0]!.name).toBe("speed");
+      expect(stmt.call.arguments[0]!.name).toBe("SPEED");
     });
   });
 
@@ -693,7 +694,7 @@ describe("AST Builder - OOP Features", () => {
       expect(stmt.kind).toBe("AssignmentStatement");
       const call = stmt.value as FunctionCallExpression;
       expect(call.kind).toBe("FunctionCallExpression");
-      expect(call.functionName).toBe("motor.GetStatus");
+      expect(call.functionName).toBe("MOTOR.GETSTATUS");
       expect(call.arguments).toHaveLength(0);
     });
 
@@ -707,9 +708,9 @@ describe("AST Builder - OOP Features", () => {
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("motor.Calculate");
+      expect(call.functionName).toBe("MOTOR.CALCULATE");
       expect(call.arguments).toHaveLength(1);
-      expect(call.arguments[0]!.name).toBe("speed");
+      expect(call.arguments[0]!.name).toBe("SPEED");
     });
 
     it("should build method call expression with multiple arguments", () => {
@@ -722,10 +723,10 @@ describe("AST Builder - OOP Features", () => {
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("motor.Configure");
+      expect(call.functionName).toBe("MOTOR.CONFIGURE");
       expect(call.arguments).toHaveLength(2);
-      expect(call.arguments[0]!.name).toBe("speed");
-      expect(call.arguments[1]!.name).toBe("direction");
+      expect(call.arguments[0]!.name).toBe("SPEED");
+      expect(call.arguments[1]!.name).toBe("DIRECTION");
     });
 
     it("should build method call expression with no arguments", () => {
@@ -738,7 +739,7 @@ describe("AST Builder - OOP Features", () => {
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const call = stmt.value as FunctionCallExpression;
-      expect(call.functionName).toBe("motor.Stop");
+      expect(call.functionName).toBe("MOTOR.STOP");
       expect(call.arguments).toHaveLength(0);
     });
   });
@@ -776,7 +777,7 @@ describe("AST Builder - OOP Features", () => {
       // Interface
       expect(ast.interfaces).toHaveLength(1);
       const iface = ast.interfaces[0]!;
-      expect(iface.name).toBe("IMotor");
+      expect(iface.name).toBe("IMOTOR");
       expect(iface.methods).toHaveLength(2);
       expect(iface.methods[0]!.isAbstract).toBe(true);
       expect(iface.methods[1]!.isAbstract).toBe(true);
@@ -784,9 +785,9 @@ describe("AST Builder - OOP Features", () => {
       // Abstract FB
       expect(ast.functionBlocks).toHaveLength(2);
       const baseFb = ast.functionBlocks[0]!;
-      expect(baseFb.name).toBe("BaseMotor");
+      expect(baseFb.name).toBe("BASEMOTOR");
       expect(baseFb.isAbstract).toBe(true);
-      expect(baseFb.implements).toEqual(["IMotor"]);
+      expect(baseFb.implements).toEqual(["IMOTOR"]);
       expect(baseFb.methods).toHaveLength(2);
       expect(baseFb.methods[0]!.isAbstract).toBe(true);
       expect(baseFb.methods[1]!.isAbstract).toBe(false);
@@ -794,8 +795,8 @@ describe("AST Builder - OOP Features", () => {
 
       // Concrete FB
       const concreteFb = ast.functionBlocks[1]!;
-      expect(concreteFb.name).toBe("ConcreteMotor");
-      expect(concreteFb.extends).toBe("BaseMotor");
+      expect(concreteFb.name).toBe("CONCRETEMOTOR");
+      expect(concreteFb.extends).toBe("BASEMOTOR");
       expect(concreteFb.isAbstract).toBe(false);
       expect(concreteFb.methods).toHaveLength(1);
       expect(concreteFb.methods[0]!.isOverride).toBe(true);
@@ -856,14 +857,14 @@ describe("AST Builder - OOP Features", () => {
       // First statement: SUPER.Start();
       const superCall = method.body[0] as FunctionCallStatement;
       expect(superCall.kind).toBe("FunctionCallStatement");
-      expect(superCall.call.functionName).toBe("SUPER.Start");
+      expect(superCall.call.functionName).toBe("SUPER.START");
 
       // Second statement: THIS._boost := TRUE;
       const thisAssign = method.body[1] as AssignmentStatement;
       expect(thisAssign.kind).toBe("AssignmentStatement");
       const target = thisAssign.target as VariableExpression;
       expect(target.name).toBe("THIS");
-      expect(target.fieldAccess).toEqual(["_boost"]);
+      expect(target.fieldAccess).toEqual(["_BOOST"]);
     });
 
     it("should build FB without extends/implements having undefined for those fields", () => {

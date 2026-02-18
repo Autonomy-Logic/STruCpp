@@ -1,18 +1,18 @@
 TEST 'Add two positive integers'
   VAR result : INT; END_VAR
-  result := Add(a := 3, b := 7);
+  result := AddInts(a := 3, b := 7);
   ASSERT_EQ(result, 10);
 END_TEST
 
 TEST 'Add with negative'
   VAR result : INT; END_VAR
-  result := Add(a := -5, b := 3);
+  result := AddInts(a := -5, b := 3);
   ASSERT_EQ(result, -2);
 END_TEST
 
 TEST 'Add zeros'
   VAR result : INT; END_VAR
-  result := Add(a := 0, b := 0);
+  result := AddInts(a := 0, b := 0);
   ASSERT_EQ(result, 0);
 END_TEST
 
@@ -30,12 +30,12 @@ END_TEST
 
 TEST 'Max returns larger value'
   VAR result : INT; END_VAR
-  result := Max(a := 10, b := 20);
+  result := MaxInt(a := 10, b := 20);
   ASSERT_EQ(result, 20);
 END_TEST
 
 TEST 'Max with equal values'
   VAR result : INT; END_VAR
-  result := Max(a := 5, b := 5);
+  result := MaxInt(a := 5, b := 5);
   ASSERT_EQ(result, 5);
 END_TEST

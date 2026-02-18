@@ -37,7 +37,7 @@ describe("AST Builder - Function Blocks", () => {
       expect(ast.functionBlocks).toHaveLength(1);
       const fb = ast.functionBlocks[0]!;
       expect(fb.kind).toBe("FunctionBlockDeclaration");
-      expect(fb.name).toBe("Adder");
+      expect(fb.name).toBe("ADDER");
       expect(fb.varBlocks).toHaveLength(2);
       expect(fb.varBlocks[0]!.blockType).toBe("VAR_INPUT");
       expect(fb.varBlocks[1]!.blockType).toBe("VAR_OUTPUT");
@@ -77,9 +77,9 @@ describe("AST Builder - Function Blocks", () => {
       expect(ast.programs).toHaveLength(1);
       const prog = ast.programs[0]!;
       expect(prog.varBlocks).toHaveLength(1);
-      expect(prog.varBlocks[0]!.declarations[0]!.names).toEqual(["fb1"]);
+      expect(prog.varBlocks[0]!.declarations[0]!.names).toEqual(["FB1"]);
       // The type name is the FB name - resolved as a regular type reference
-      expect(prog.varBlocks[0]!.declarations[0]!.type.name).toBe("MyFB");
+      expect(prog.varBlocks[0]!.declarations[0]!.type.name).toBe("MYFB");
     });
 
     it("should build multiple FB instances of same type", () => {
@@ -99,8 +99,8 @@ describe("AST Builder - Function Blocks", () => {
       const prog = ast.programs[0]!;
       const decls = prog.varBlocks[0]!.declarations;
       expect(decls).toHaveLength(2);
-      expect(decls[0]!.type.name).toBe("Timer");
-      expect(decls[1]!.type.name).toBe("Timer");
+      expect(decls[0]!.type.name).toBe("TIMER");
+      expect(decls[1]!.type.name).toBe("TIMER");
     });
   });
 
@@ -115,10 +115,10 @@ describe("AST Builder - Function Blocks", () => {
 
       const stmt = ast.programs[0]!.body[0] as FunctionCallStatement;
       expect(stmt.kind).toBe("FunctionCallStatement");
-      expect(stmt.call.functionName).toBe("fb");
+      expect(stmt.call.functionName).toBe("FB");
       expect(stmt.call.arguments).toHaveLength(2);
-      expect(stmt.call.arguments[0]!.name).toBe("a");
-      expect(stmt.call.arguments[1]!.name).toBe("b");
+      expect(stmt.call.arguments[0]!.name).toBe("A");
+      expect(stmt.call.arguments[1]!.name).toBe("B");
     });
 
     it("should build FB invocation with output capture (=> syntax)", () => {
@@ -131,9 +131,9 @@ describe("AST Builder - Function Blocks", () => {
 
       const stmt = ast.programs[0]!.body[0] as FunctionCallStatement;
       expect(stmt.call.arguments).toHaveLength(2);
-      expect(stmt.call.arguments[0]!.name).toBe("a");
+      expect(stmt.call.arguments[0]!.name).toBe("A");
       expect(stmt.call.arguments[0]!.isOutput).toBe(false);
-      expect(stmt.call.arguments[1]!.name).toBe("result");
+      expect(stmt.call.arguments[1]!.name).toBe("RESULT");
       expect(stmt.call.arguments[1]!.isOutput).toBe(true);
     });
   });
@@ -150,8 +150,8 @@ describe("AST Builder - Function Blocks", () => {
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       expect(stmt.value.kind).toBe("VariableExpression");
       const varExpr = stmt.value as VariableExpression;
-      expect(varExpr.name).toBe("fb");
-      expect(varExpr.fieldAccess).toEqual(["result"]);
+      expect(varExpr.name).toBe("FB");
+      expect(varExpr.fieldAccess).toEqual(["RESULT"]);
     });
 
     it("should build assignment to FB input members", () => {
@@ -164,8 +164,8 @@ describe("AST Builder - Function Blocks", () => {
 
       const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
       const target = stmt.target as VariableExpression;
-      expect(target.name).toBe("fb");
-      expect(target.fieldAccess).toEqual(["input"]);
+      expect(target.name).toBe("FB");
+      expect(target.fieldAccess).toEqual(["INPUT"]);
     });
   });
 
@@ -186,18 +186,18 @@ describe("AST Builder - Function Blocks", () => {
 
       expect(ast.functionBlocks).toHaveLength(2);
       const outer = ast.functionBlocks[1]!;
-      expect(outer.name).toBe("Outer");
+      expect(outer.name).toBe("OUTER");
       // Local var block should contain the 'edge' FB instance
       const localVarBlock = outer.varBlocks.find(
         (b) => b.blockType === "VAR",
       );
       expect(localVarBlock).toBeDefined();
-      expect(localVarBlock!.declarations[0]!.type.name).toBe("Inner");
+      expect(localVarBlock!.declarations[0]!.type.name).toBe("INNER");
 
       // Body should contain the FB invocation
       expect(outer.body).toHaveLength(1);
       const stmt = outer.body[0] as FunctionCallStatement;
-      expect(stmt.call.functionName).toBe("edge");
+      expect(stmt.call.functionName).toBe("EDGE");
     });
   });
 });

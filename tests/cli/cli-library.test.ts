@@ -96,7 +96,7 @@ describe("CLI Library Features", () => {
       expect(manifest.name).toBe("math-lib");
       expect(manifest.version).toBe("1.0.0");
       expect(manifest.functions).toHaveLength(1);
-      expect(manifest.functions[0].name).toBe("MathAdd");
+      expect(manifest.functions[0].name).toBe("MATHADD");
 
       // Check C++ files
       expect(existsSync(join(outDir, "math-lib.hpp"))).toBe(true);
@@ -212,7 +212,7 @@ describe("CLI Library Features", () => {
       expect(stdout).toContain("Compilation successful!");
 
       const cppCode = readFileSync(outFile, "utf-8");
-      expect(cppCode).toContain("ExtFunc");
+      expect(cppCode).toContain("EXTFUNC");
 
       // The header should include the library header
       const hppCode = readFileSync(
@@ -278,7 +278,7 @@ describe("CLI Library Features", () => {
       expect(stdout).toContain("Compilation successful!");
 
       const cppCode = readFileSync(outFile, "utf-8");
-      expect(cppCode).toContain("UtilAdd");
+      expect(cppCode).toContain("UTILADD");
     });
   });
 
@@ -326,8 +326,8 @@ describe("CLI Library Features", () => {
       const names = manifest.functions.map(
         (f: { name: string }) => f.name,
       );
-      expect(names).toContain("LibAdd");
-      expect(names).toContain("LibSub");
+      expect(names).toContain("LIBADD");
+      expect(names).toContain("LIBSUB");
     });
   });
 });

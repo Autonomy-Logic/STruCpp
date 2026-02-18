@@ -1,6 +1,6 @@
-FUNCTION Add : INT
+FUNCTION AddInts : INT
   VAR_INPUT a : INT; b : INT; END_VAR
-  Add := a + b;
+  AddInts := a + b;
 END_FUNCTION
 
 FUNCTION IsPositive : BOOL
@@ -8,11 +8,11 @@ FUNCTION IsPositive : BOOL
   IsPositive := val > 0;
 END_FUNCTION
 
-FUNCTION Max : INT
+FUNCTION MaxInt : INT
   VAR_INPUT a : INT; b : INT; END_VAR
   IF a > b THEN
-    Max := a;
+    MaxInt := a;
   ELSE
-    Max := b;
+    MaxInt := b;
   END_IF;
 END_FUNCTION

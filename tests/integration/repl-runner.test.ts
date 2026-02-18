@@ -93,7 +93,7 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
     `;
     const output = buildAndRun(source, 'programs\nquit', 'counter');
     expect(output).toContain('STruC++ Interactive PLC Test REPL');
-    expect(output).toContain('Counter');
+    expect(output).toContain('COUNTER');
   });
 
   it('should execute cycles and show updated values', () => {
@@ -103,9 +103,9 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
         count := count + 1;
       END_PROGRAM
     `;
-    const output = buildAndRun(source, 'run 3\nvars Counter\nquit', 'counter_run');
+    const output = buildAndRun(source, 'run 3\nvars COUNTER\nquit', 'counter_run');
     expect(output).toContain('Executed 3 cycle(s)');
-    expect(output).toContain('Counter.count');
+    expect(output).toContain('COUNTER.COUNT');
     expect(output).toContain('INT');
     expect(output).toContain('3');
   });
@@ -118,16 +118,16 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
       END_PROGRAM
     `;
     const commands = [
-      'set Test.x 42',
-      'get Test.x',
-      'set Test.y TRUE',
-      'get Test.y',
+      'set TEST.X 42',
+      'get TEST.X',
+      'set TEST.Y TRUE',
+      'get TEST.Y',
       'quit',
     ].join('\n');
     const output = buildAndRun(source, commands, 'get_set');
-    expect(output).toContain('Test.x');
+    expect(output).toContain('TEST.X');
     expect(output).toContain('42');
-    expect(output).toContain('Test.y');
+    expect(output).toContain('TEST.Y');
     expect(output).toContain('TRUE');
   });
 
@@ -139,12 +139,12 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
       END_PROGRAM
     `;
     const commands = [
-      'force Test.counter 100',
+      'force TEST.COUNTER 100',
       'run 5',
-      'get Test.counter',
-      'unforce Test.counter',
+      'get TEST.COUNTER',
+      'unforce TEST.COUNTER',
       'run 1',
-      'get Test.counter',
+      'get TEST.COUNTER',
       'quit',
     ].join('\n');
     const output = buildAndRun(source, commands, 'force');
@@ -172,8 +172,8 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
       'quit',
     ].join('\n');
     const output = buildAndRun(source, commands, 'multi');
-    expect(output).toContain('Prog1');
-    expect(output).toContain('Prog2');
+    expect(output).toContain('PROG1');
+    expect(output).toContain('PROG2');
     expect(output).toContain('2');
     expect(output).toContain('20');
   });
@@ -204,8 +204,8 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
       END_PROGRAM
     `;
     const commands = [
-      'set Test.x 3.14',
-      'get Test.x',
+      'set TEST.X 3.14',
+      'get TEST.X',
       'quit',
     ].join('\n');
     const output = buildAndRun(source, commands, 'real_type');
@@ -234,7 +234,7 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
     const commands = [
       'step',
       'step',
-      'get Counter.count',
+      'get COUNTER.COUNT',
       'quit',
     ].join('\n');
     const output = buildAndRun(source, commands, 'step_cmd');
@@ -279,7 +279,7 @@ END_PROGRAM`;
       END_PROGRAM
     `;
     const commands = [
-      'watch Counter.count',
+      'watch COUNTER.COUNT',
       'run 3',
       'watch list',
       'quit',
@@ -287,7 +287,7 @@ END_PROGRAM`;
     const output = buildAndRun(source, commands, 'watch_cmd');
     expect(output).toContain('Watching:');
     expect(output).toContain('--- watch ---');
-    expect(output).toContain('Counter.count');
+    expect(output).toContain('COUNTER.COUNT');
     expect(output).toContain('3');
   });
 
@@ -299,7 +299,7 @@ END_PROGRAM`;
       END_PROGRAM
     `;
     const commands = [
-      'watch Counter.count',
+      'watch COUNTER.COUNT',
       'watch clear',
       'watch list',
       'quit',
@@ -323,7 +323,7 @@ END_PROGRAM`;
     expect(output).toContain('Dashboard');
     expect(output).toContain('Cycle: 5');
     expect(output).toContain('Variables');
-    expect(output).toContain('Counter.count');
+    expect(output).toContain('COUNTER.COUNT');
     expect(output).toContain('Source');
     expect(output).toContain('PROGRAM Counter');
   });
@@ -358,7 +358,7 @@ END_PROGRAM`;
     // Should show ST source
     expect(output).toContain('PROGRAM Counter');
     // Should show C++ generated code (run method)
-    expect(output).toContain('Program_Counter');
+    expect(output).toContain('Program_COUNTER');
     // Should have separator
     expect(output).toContain('|');
   });
@@ -374,9 +374,9 @@ END_PROGRAM`;
     ].join('\n');
     const output = buildAndRun(source, commands, 'code_sbs_nums');
     // C++ side should show class definition alongside PROGRAM/VAR
-    expect(output).toContain('class Program_Counter');
-    expect(output).toContain('IEC_INT count');
+    expect(output).toContain('class Program_COUNTER');
+    expect(output).toContain('IEC_INT COUNT');
     // C++ side should also show statement code
-    expect(output).toContain('count = count + 1');
+    expect(output).toContain('COUNT = COUNT + 1');
   });
 });

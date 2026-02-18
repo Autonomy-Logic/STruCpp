@@ -98,7 +98,7 @@ describe('Phase 2.3 - Located Variables', () => {
       expect(result.ast?.programs[0].varBlocks[0].declarations[0].address).toBe('%ML0');
     });
 
-    it('should parse lowercase address', () => {
+    it('should parse lowercase address (uppercased by lexer)', () => {
       const source = `
         PROGRAM Main
           VAR input_bit AT %ix0.0 : BOOL; END_VAR
@@ -106,7 +106,8 @@ describe('Phase 2.3 - Located Variables', () => {
       `;
       const result = parse(source);
       expect(result.errors).toHaveLength(0);
-      expect(result.ast?.programs[0].varBlocks[0].declarations[0].address).toBe('%ix0.0');
+      // uppercaseSource() converts the address to uppercase before lexing
+      expect(result.ast?.programs[0].varBlocks[0].declarations[0].address).toBe('%IX0.0');
     });
 
     it('should parse multiple located variables', () => {
@@ -417,7 +418,7 @@ describe('Phase 2.3 - Located Variables', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('Program_test');
+      expect(result.headerCode).toContain('Program_TEST');
       expect(result.cppCode).toContain('locatedVars');
     });
 

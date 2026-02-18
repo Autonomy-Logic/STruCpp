@@ -12,6 +12,7 @@ import * as os from 'os';
 import { compile } from '../../src/index.js';
 import { parseTestFile } from '../../src/testing/test-parser.js';
 import { generateTestMain, buildPOUInfoFromAST } from '../../src/backend/test-main-gen.js';
+import { uppercaseSource } from '../../src/frontend/lexer.js';
 
 /** Resolved path to the C++ runtime headers */
 export const RUNTIME_INCLUDE_PATH = path.resolve(__dirname, '../../src/runtime/include');
@@ -256,8 +257,8 @@ export function runE2ETestPipeline(
   // 2. Build POU info
   const { pous } = result.ast ? buildPOUInfoFromAST(result.ast) : { pous: [] };
 
-  // 3. Parse test file
-  const parseResult = parseTestFile(testST, testFileName);
+  // 3. Parse test file (uppercase to match case-insensitive ST semantics)
+  const parseResult = parseTestFile(uppercaseSource(testST), testFileName);
   if (parseResult.errors.length > 0) {
     throw new Error(
       `Test parse failed: ${parseResult.errors.map((e) => e.message).join(', ')}`,

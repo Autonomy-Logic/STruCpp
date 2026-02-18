@@ -43,7 +43,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("arr[1] = 100;");
+    expect(result.cppCode).toContain("ARR[1] = 100;");
   });
 
   it("should generate 1D array element read", () => {
@@ -60,7 +60,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("x = arr[5];");
+    expect(result.cppCode).toContain("X = ARR[5];");
   });
 
   it("should generate array access with variable index", () => {
@@ -77,7 +77,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("arr[i] = arr[i] + 1;");
+    expect(result.cppCode).toContain("ARR[I] = ARR[I] + 1;");
   });
 
   it("should generate array access with expression index", () => {
@@ -94,7 +94,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("arr[i + 1] = arr[i - 1] + arr[i];");
+    expect(result.cppCode).toContain("ARR[I + 1] = ARR[I - 1] + ARR[I];");
   });
 
   it("should generate 2D array access with multiple subscripts", () => {
@@ -113,8 +113,8 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("matrix(0, 0) = 1.0;");
-    expect(result.cppCode).toContain("matrix(i, j) = 0.0;");
+    expect(result.cppCode).toContain("MATRIX(0, 0) = 1.0;");
+    expect(result.cppCode).toContain("MATRIX(I, J) = 0.0;");
   });
 
   it("should generate array access in FOR loop", () => {
@@ -137,8 +137,8 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("arr[i] = i * 10;");
-    expect(result.cppCode).toContain("sum = sum + arr[i];");
+    expect(result.cppCode).toContain("ARR[I] = I * 10;");
+    expect(result.cppCode).toContain("SUM = SUM + ARR[I];");
   });
 });
 
@@ -162,8 +162,8 @@ describe("Phase 3.3: Structure Member Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("p.x = 10;");
-    expect(result.cppCode).toContain("p.y = 20;");
+    expect(result.cppCode).toContain("P.X = 10;");
+    expect(result.cppCode).toContain("P.Y = 20;");
   });
 
   it("should generate struct member read", () => {
@@ -180,7 +180,7 @@ describe("Phase 3.3: Structure Member Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("dist = p.x + p.y;");
+    expect(result.cppCode).toContain("DIST = P.X + P.Y;");
   });
 
   it("should generate nested struct access", () => {
@@ -202,8 +202,8 @@ describe("Phase 3.3: Structure Member Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("line.startPt.x = 0;");
-    expect(result.cppCode).toContain("line.endPt.y = 100;");
+    expect(result.cppCode).toContain("LINE.STARTPT.X = 0;");
+    expect(result.cppCode).toContain("LINE.ENDPT.Y = 100;");
   });
 
   it("should generate struct assignment", () => {
@@ -220,7 +220,7 @@ describe("Phase 3.3: Structure Member Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("p2 = p1;");
+    expect(result.cppCode).toContain("P2 = P1;");
   });
 });
 
@@ -248,8 +248,8 @@ describe("Phase 3.3: Combined Array/Struct Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("points[1].x = 100;");
-    expect(result.cppCode).toContain("points[i].y = 200;");
+    expect(result.cppCode).toContain("POINTS[1].X = 100;");
+    expect(result.cppCode).toContain("POINTS[I].Y = 200;");
   });
 
   it("should generate array of struct access in loop", () => {
@@ -273,8 +273,8 @@ describe("Phase 3.3: Combined Array/Struct Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("points[i].x = i;");
-    expect(result.cppCode).toContain("points[i].y = i * 2;");
+    expect(result.cppCode).toContain("POINTS[I].X = I;");
+    expect(result.cppCode).toContain("POINTS[I].Y = I * 2;");
   });
 });
 
@@ -303,8 +303,8 @@ describe("Phase 3.3: Validation Examples", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("arr[i] = i * 10;");
-    expect(result.cppCode).toContain("sum = sum + arr[i];");
+    expect(result.cppCode).toContain("ARR[I] = I * 10;");
+    expect(result.cppCode).toContain("SUM = SUM + ARR[I];");
   });
 
   it("should handle structure access (Test 2)", () => {
@@ -329,11 +329,11 @@ describe("Phase 3.3: Validation Examples", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("p1.x = 0;");
-    expect(result.cppCode).toContain("p1.y = 0;");
-    expect(result.cppCode).toContain("p2.x = 3;");
-    expect(result.cppCode).toContain("p2.y = 4;");
-    expect(result.cppCode).toContain("dist = (p2.x - p1.x) + (p2.y - p1.y);");
+    expect(result.cppCode).toContain("P1.X = 0;");
+    expect(result.cppCode).toContain("P1.Y = 0;");
+    expect(result.cppCode).toContain("P2.X = 3;");
+    expect(result.cppCode).toContain("P2.Y = 4;");
+    expect(result.cppCode).toContain("DIST = (P2.X - P1.X) + (P2.Y - P1.Y);");
   });
 
   it("should handle array of structures (Test 3)", () => {
@@ -357,7 +357,7 @@ describe("Phase 3.3: Validation Examples", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("points[i].x = i;");
-    expect(result.cppCode).toContain("points[i].y = i * 2;");
+    expect(result.cppCode).toContain("POINTS[I].X = I;");
+    expect(result.cppCode).toContain("POINTS[I].Y = I * 2;");
   });
 });

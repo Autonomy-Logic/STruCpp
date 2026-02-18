@@ -82,7 +82,7 @@ describe("Phase 3.4: Inline ARRAY Types in VAR Blocks", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("myArr[1] = 42;");
+    expect(result.cppCode).toContain("MYARR[1] = 42;");
   });
 
   it("should parse inline ARRAY[0..4] OF REAL in VAR block", () => {
@@ -95,7 +95,7 @@ describe("Phase 3.4: Inline ARRAY Types in VAR Blocks", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("values[0] = 3.14;");
+    expect(result.cppCode).toContain("VALUES[0] = 3.14;");
   });
 });
 
@@ -175,7 +175,7 @@ describe("Phase 3.4: VLA Code Generation", () => {
     `);
     expect(result.success).toBe(true);
     // Non-VLA VAR_IN_OUT should be passed by reference
-    expect(result.cppCode).toContain("IEC_INT& counter");
+    expect(result.cppCode).toContain("IEC_INT& COUNTER");
   });
 });
 
@@ -198,7 +198,7 @@ describe("Phase 3.4: Fixed Array Type Declarations Still Work", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.headerCode).toContain("Array1D<INT_t, 0, 4>");
-    expect(result.cppCode).toContain("arr[0] = 1;");
+    expect(result.cppCode).toContain("ARR[0] = 1;");
   });
 
   it("should still generate 2D array types in TYPE blocks", () => {

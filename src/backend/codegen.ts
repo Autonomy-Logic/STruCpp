@@ -2217,7 +2217,7 @@ export class CodeGenerator {
           ? "true"
           : "false";
       case "INT": {
-        return String(expr.value);
+        return this.formatIntegerLiteral(expr.rawValue, expr.value as number);
       }
       case "REAL": {
         const str = String(expr.value);
@@ -2256,6 +2256,15 @@ export class CodeGenerator {
    * $P/$p (form feed), $$ (literal $), $' (single quote), $XX (hex byte),
    * '' (doubled single quote), and C++ escaping for backslash and double-quote.
    */
+
+  private formatIntegerLiteral(rawValue: string, value: number): string {
+    const upper = rawValue.toUpperCase().replace(/_/g, "");
+    if (upper.startsWith("16#")) return "0x" + upper.slice(3);
+    if (upper.startsWith("8#")) return "0" + upper.slice(2);
+    if (upper.startsWith("2#")) return "0b" + upper.slice(2);
+    return String(value);
+  }
+
   private translateIECString(inner: string): string {
     let result = "";
     for (let i = 0; i < inner.length; i++) {
