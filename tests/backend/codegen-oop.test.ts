@@ -1037,7 +1037,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("X = CTRL.MOTOR.get_SPEED()");
+      expect(result.cppCode).toContain("X = CTRL.MOTOR_.get_SPEED()");
     });
 
     it("should generate setter for chained field + property write", () => {
@@ -1059,7 +1059,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("CTRL.MOTOR.set_SPEED(10)");
+      expect(result.cppCode).toContain("CTRL.MOTOR_.set_SPEED(10)");
     });
 
     it("should NOT generate getter/setter for regular field access", () => {

@@ -570,7 +570,7 @@ class TestFunctionGenerator {
 
   private generateMockFB(lines: string[], stmt: MockFBStatement): void {
     const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
-    const path = prefix + stmt.instancePath.join(".");
+    const path = this.testCodegen.resolveMemberPath(stmt.instancePath, prefix);
     lines.push(`${this.indent}${path}.__mocked_ = true;`);
   }
 
@@ -610,7 +610,7 @@ class TestFunctionGenerator {
   ): void {
     const line = stmt.sourceSpan.startLine;
     const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
-    const path = prefix + stmt.instancePath.join(".");
+    const path = this.testCodegen.resolveMemberPath(stmt.instancePath, prefix);
     lines.push(
       `${this.indent}if (!ctx.assert_true(${path}.__mock_state_.call_count > 0, "MOCK_VERIFY_CALLED(${escapeString(stmt.instancePath.join("."))})", ${line})) return false;`,
     );
@@ -622,7 +622,7 @@ class TestFunctionGenerator {
   ): void {
     const line = stmt.sourceSpan.startLine;
     const prefix = this.resolveSetupPrefix(stmt.instancePath[0] ?? "");
-    const path = prefix + stmt.instancePath.join(".");
+    const path = this.testCodegen.resolveMemberPath(stmt.instancePath, prefix);
     const expected = this.testCodegen.emitExpression(stmt.expectedCount);
     lines.push(
       `${this.indent}if (!ctx.assert_eq<int>(${path}.__mock_state_.call_count, ${expected}, "${escapeString(stmt.instancePath.join("."))} call count", "${escapeString(expected)}", ${line})) return false;`,

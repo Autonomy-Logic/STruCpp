@@ -51,6 +51,7 @@ export class TestCodeGenerator extends CodeGenerator {
    * struct/interface/FB types.
    */
   initFromAST(ast: CompilationUnit): void {
+    this.ast = ast;
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
       for (const method of fb.methods) {
@@ -116,6 +117,76 @@ export class TestCodeGenerator extends CodeGenerator {
     for (const [name, typeName] of varTypes) {
       this.currentScopeVarTypes.set(name.toUpperCase(), typeName);
     }
+  }
+
+  /**
+   * Resolve a dot-separated member access path, applying name mangling
+   * where a member name collides with its type name in a class context.
+   * E.g., ["CTRL", "SENSOR"] → "CTRL.SENSOR_" when SENSOR is type Sensor in Controller.
+   */
+  resolveMemberPath(path: string[], prefix: string): string {
+    if (path.length === 0) return prefix;
+    const parts: string[] = [];
+    // First element is the root variable
+    const rootName = path[0]!;
+    parts.push(prefix + rootName);
+    let currentType = this.currentScopeVarTypes.get(rootName.toUpperCase());
+
+    for (let i = 1; i < path.length; i++) {
+      const field = path[i]!;
+      if (currentType && this.ast) {
+        const memberType = this.resolveMemberTypePublic(currentType, field);
+        if (
+          memberType &&
+          this.isUserDefinedType(memberType) &&
+          field.toUpperCase() === memberType.toUpperCase() &&
+          !this.knownStructTypes.has(currentType.toUpperCase())
+        ) {
+          parts.push(`${field}_`);
+        } else {
+          parts.push(field);
+        }
+        currentType = memberType;
+      } else {
+        parts.push(field);
+      }
+    }
+    return parts.join(".");
+  }
+
+  /** Expose resolveMemberType for mock path resolution */
+  private resolveMemberTypePublic(
+    typeName: string,
+    memberName: string,
+  ): string | undefined {
+    if (!this.ast) return undefined;
+    const typeUpper = typeName.toUpperCase();
+    const memberUpper = memberName.toUpperCase();
+    for (const fb of this.ast.functionBlocks) {
+      if (fb.name.toUpperCase() === typeUpper) {
+        for (const block of fb.varBlocks) {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              if (name.toUpperCase() === memberUpper) return decl.type.name;
+            }
+          }
+        }
+        return undefined;
+      }
+    }
+    for (const prog of this.ast.programs) {
+      if (prog.name.toUpperCase() === typeUpper) {
+        for (const block of prog.varBlocks) {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              if (name.toUpperCase() === memberUpper) return decl.type.name;
+            }
+          }
+        }
+        return undefined;
+      }
+    }
+    return undefined;
   }
 
   /** Generate a C++ expression string from an AST Expression. */

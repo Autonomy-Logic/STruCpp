@@ -202,7 +202,7 @@ export class CodeGenerator {
   > = new Map();
 
   /** Store AST for looking up program bodies when using project model */
-  private ast?: CompilationUnit;
+  protected ast?: CompilationUnit;
 
   /** Current function name (for redirecting function name := to result variable) */
   private currentFunctionName: string | undefined;
@@ -257,6 +257,10 @@ export class CodeGenerator {
 
   /** Mapping of VAR_INST names (upper case) to mangled class member names */
   private varInstMangledNames: Map<string, string> = new Map();
+
+  /** Mapping of member names (upper case) that collide with their type name
+   *  to mangled names (e.g., SENSOR → SENSOR_ to avoid GCC -Wchanges-meaning) */
+  private memberMangledNames: Map<string, string> = new Map();
 
   /** Current FB's var blocks, kept so method scopes can see FB member types */
   private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
@@ -710,8 +714,14 @@ export class CodeGenerator {
 
       this.emitHeader(`    ${comment}`);
       for (const decl of block.declarations) {
+        const cppType = this.mapTypeRefToCpp(decl.type);
         for (const name of decl.names) {
-          this.emitHeader(`    ${this.mapTypeRefToCpp(decl.type)} ${name};`);
+          const memberName = this.mangleMemberIfNeeded(
+            name,
+            cppType,
+            decl.type.name,
+          );
+          this.emitHeader(`    ${cppType} ${memberName};`);
         }
       }
     }
@@ -777,17 +787,23 @@ export class CodeGenerator {
     // Generate member variables and collect located variables
     for (const block of prog.varBlocks) {
       for (const decl of block.declarations) {
+        const cppType = this.mapTypeRefToCpp(decl.type);
         for (const name of decl.names) {
+          const memberName = this.mangleMemberIfNeeded(
+            name,
+            cppType,
+            decl.type.name,
+          );
           const memberLine = this.currentHeaderLine;
           if (decl.address) {
             // Generate variable with optional address comment
             this.emitHeader(
-              `    ${this.mapTypeRefToCpp(decl.type)} ${name};  // AT ${decl.address}`,
+              `    ${cppType} ${memberName};  // AT ${decl.address}`,
             );
             // Collect located variable info
             this.collectLocatedVar(name, decl, prog.name);
           } else {
-            this.emitHeader(`    ${this.mapTypeRefToCpp(decl.type)} ${name};`);
+            this.emitHeader(`    ${cppType} ${memberName};`);
           }
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
@@ -1369,17 +1385,21 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const constQualifier = decl.isConstant ? "const " : "";
 
+        const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
+        const memberName = this.mangleMemberIfNeeded(
+          decl.name,
+          cppType,
+          decl.typeName,
+        );
         const memberLine = this.currentHeaderLine;
         if (decl.address) {
-          const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
           this.emitHeader(
-            `    ${constQualifier}${cppType} ${decl.name};  // AT ${decl.address}`,
+            `    ${constQualifier}${cppType} ${memberName};  // AT ${decl.address}`,
           );
           // Collect located variable info
           this.collectLocatedVarFromModel(decl, prog.name);
         } else {
-          const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
-          this.emitHeader(`    ${constQualifier}${cppType} ${decl.name};`);
+          this.emitHeader(`    ${constQualifier}${cppType} ${memberName};`);
         }
 
         // Map variable ST line → header member line
@@ -2391,10 +2411,18 @@ export class CodeGenerator {
               return result;
             }
           }
+          const fieldType = this.resolveMemberType(currentType, field);
+          const fieldCppName = this.needsFieldMangling(
+            field,
+            fieldType,
+            currentType,
+          )
+            ? `${field}_`
+            : field;
           if (i > 0) result += ".";
-          result += field;
+          result += fieldCppName;
           if (!isLast) {
-            currentType = this.resolveMemberType(currentType, field);
+            currentType = fieldType;
           }
         }
       }
@@ -2417,10 +2445,18 @@ export class CodeGenerator {
               return result;
             }
           }
+          const fieldType = this.resolveMemberType(currentType, field);
+          const fieldCppName = this.needsFieldMangling(
+            field,
+            fieldType,
+            currentType,
+          )
+            ? `${field}_`
+            : field;
           if (i > 0) result += ".";
-          result += field;
+          result += fieldCppName;
           if (!isLast) {
-            currentType = this.resolveMemberType(currentType, field);
+            currentType = fieldType;
           }
         }
       }
@@ -2440,7 +2476,13 @@ export class CodeGenerator {
       if (mangledName) {
         result = mangledName;
       } else {
-        result = this.resolveVariableBaseName(expr.name);
+        // Check for member name collision mangling (SENSOR SENSOR → SENSOR SENSOR_)
+        const memberMangled = this.memberMangledNames.get(nameUpper);
+        if (memberMangled) {
+          result = memberMangled;
+        } else {
+          result = this.resolveVariableBaseName(expr.name);
+        }
       }
     }
 
@@ -2473,9 +2515,18 @@ export class CodeGenerator {
             continue;
           }
         }
-        result += `.${field}`;
+        // Check if this field needs mangling (name == type in its parent class)
+        const fieldType = this.resolveMemberType(currentType, field);
+        const fieldCppName = this.needsFieldMangling(
+          field,
+          fieldType,
+          currentType,
+        )
+          ? `${field}_`
+          : field;
+        result += `.${fieldCppName}`;
         if (!isLast) {
-          currentType = this.resolveMemberType(currentType, field);
+          currentType = fieldType;
         }
       }
     }
@@ -3228,13 +3279,21 @@ export class CodeGenerator {
     let objectCode: string;
     if (nameUpper === "THIS") {
       objectCode = "this->";
+      let ct: string | undefined = this.currentFBName;
       for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
-        objectCode += expr.fieldAccess[i]! + ".";
+        const f = expr.fieldAccess[i]!;
+        const ft = this.resolveMemberType(ct, f);
+        objectCode += (this.needsFieldMangling(f, ft, ct) ? `${f}_` : f) + ".";
+        ct = ft;
       }
     } else if (nameUpper === "SUPER" && this.currentFBExtends) {
       objectCode = this.currentFBExtends + "::";
+      let ct: string | undefined = this.currentFBExtends;
       for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
-        objectCode += expr.fieldAccess[i]! + ".";
+        const f = expr.fieldAccess[i]!;
+        const ft = this.resolveMemberType(ct, f);
+        objectCode += (this.needsFieldMangling(f, ft, ct) ? `${f}_` : f) + ".";
+        ct = ft;
       }
     } else {
       // Generate a VariableExpression with fieldAccess trimmed to all-but-last
@@ -3249,7 +3308,7 @@ export class CodeGenerator {
    * Check if a type name refers to any user-defined type (FB, interface, or struct/UDT).
    * These types should NOT get the IEC_ prefix.
    */
-  private isUserDefinedType(typeName: string): boolean {
+  protected isUserDefinedType(typeName: string): boolean {
     const upper = typeName.toUpperCase();
     return (
       this.knownFBTypes.has(upper) ||
@@ -3266,10 +3325,21 @@ export class CodeGenerator {
     varBlocks: CompilationUnit["programs"][0]["varBlocks"],
   ): void {
     this.currentScopeVarTypes.clear();
+    this.memberMangledNames.clear();
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
+        const cppType = this.isUserDefinedType(decl.type.name)
+          ? decl.type.name
+          : `IEC_${decl.type.name}`;
         for (const name of decl.names) {
           this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
+          // Detect member name collisions with type name (GCC -Wchanges-meaning)
+          if (
+            this.isUserDefinedType(decl.type.name) &&
+            name.toUpperCase() === cppType.toUpperCase()
+          ) {
+            this.memberMangledNames.set(name.toUpperCase(), `${name}_`);
+          }
         }
       }
     }
@@ -3306,7 +3376,9 @@ export class CodeGenerator {
     call: FunctionCallExpression,
     indent: string,
   ): void {
-    const instanceName = this.resolveVariableBaseName(call.functionName);
+    const rawName = this.resolveVariableBaseName(call.functionName);
+    const instanceName =
+      this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName;
 
     // Assign each named input parameter
     for (const arg of call.arguments) {
@@ -3328,6 +3400,45 @@ export class CodeGenerator {
         );
       }
     }
+  }
+
+  /**
+   * If a member variable name matches its C++ type name (case-insensitive),
+   * append '_' to avoid GCC -Wchanges-meaning error.
+   * Populates memberMangledNames map and returns the (possibly mangled) name.
+   */
+  private mangleMemberIfNeeded(
+    name: string,
+    cppType: string,
+    stTypeName: string,
+  ): string {
+    // Only FB/struct/interface instances can collide (IEC_ prefixed types can't)
+    if (!this.isUserDefinedType(stTypeName)) return name;
+    if (name.toUpperCase() !== cppType.toUpperCase()) return name;
+    const mangled = `${name}_`;
+    this.memberMangledNames.set(name.toUpperCase(), mangled);
+    return mangled;
+  }
+
+  /**
+   * Check if a field access needs mangling — true when the field's resolved
+   * type name matches the field name AND the parent type is a class (FB/Program),
+   * not a struct. GCC -Wchanges-meaning only applies to class members.
+   */
+  private needsFieldMangling(
+    fieldName: string,
+    fieldTypeName: string | undefined,
+    parentTypeName?: string,
+  ): boolean {
+    if (!fieldTypeName) return false;
+    if (!this.isUserDefinedType(fieldTypeName)) return false;
+    if (fieldName.toUpperCase() !== fieldTypeName.toUpperCase()) return false;
+    // Only mangle in class contexts (FBs, programs), not in structs
+    if (parentTypeName) {
+      const pUpper = parentTypeName.toUpperCase();
+      if (this.knownStructTypes.has(pUpper)) return false;
+    }
+    return true;
   }
 
   /**

@@ -202,8 +202,8 @@ describe("Phase 3.3: Structure Member Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("LINE.STARTPT.X = 0;");
-    expect(result.cppCode).toContain("LINE.ENDPT.Y = 100;");
+    expect(result.cppCode).toContain("LINE_.STARTPT.X = 0;");
+    expect(result.cppCode).toContain("LINE_.ENDPT.Y = 100;");
   });
 
   it("should generate struct assignment", () => {
