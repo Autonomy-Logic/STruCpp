@@ -139,8 +139,7 @@ export class TestCodeGenerator extends CodeGenerator {
         if (
           memberType &&
           this.isUserDefinedType(memberType) &&
-          field.toUpperCase() === memberType.toUpperCase() &&
-          !this.knownStructTypes.has(currentType.toUpperCase())
+          field.toUpperCase() === memberType.toUpperCase()
         ) {
           parts.push(`${field}_`);
         } else {

@@ -2412,11 +2412,7 @@ export class CodeGenerator {
             }
           }
           const fieldType = this.resolveMemberType(currentType, field);
-          const fieldCppName = this.needsFieldMangling(
-            field,
-            fieldType,
-            currentType,
-          )
+          const fieldCppName = this.needsFieldMangling(field, fieldType)
             ? `${field}_`
             : field;
           if (i > 0) result += ".";
@@ -2446,11 +2442,7 @@ export class CodeGenerator {
             }
           }
           const fieldType = this.resolveMemberType(currentType, field);
-          const fieldCppName = this.needsFieldMangling(
-            field,
-            fieldType,
-            currentType,
-          )
+          const fieldCppName = this.needsFieldMangling(field, fieldType)
             ? `${field}_`
             : field;
           if (i > 0) result += ".";
@@ -2515,13 +2507,9 @@ export class CodeGenerator {
             continue;
           }
         }
-        // Check if this field needs mangling (name == type in its parent class)
+        // Check if this field needs mangling (name == type in parent)
         const fieldType = this.resolveMemberType(currentType, field);
-        const fieldCppName = this.needsFieldMangling(
-          field,
-          fieldType,
-          currentType,
-        )
+        const fieldCppName = this.needsFieldMangling(field, fieldType)
           ? `${field}_`
           : field;
         result += `.${fieldCppName}`;
@@ -3231,6 +3219,19 @@ export class CodeGenerator {
       }
     }
 
+    for (const prog of this.ast.programs) {
+      if (prog.name.toUpperCase() === typeUpper) {
+        for (const block of prog.varBlocks) {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              if (name.toUpperCase() === memberUpper) return decl.type.name;
+            }
+          }
+        }
+        return undefined;
+      }
+    }
+
     for (const td of this.ast.types) {
       if (
         td.name.toUpperCase() === typeUpper &&
@@ -3283,7 +3284,7 @@ export class CodeGenerator {
       for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
         const f = expr.fieldAccess[i]!;
         const ft = this.resolveMemberType(ct, f);
-        objectCode += (this.needsFieldMangling(f, ft, ct) ? `${f}_` : f) + ".";
+        objectCode += (this.needsFieldMangling(f, ft) ? `${f}_` : f) + ".";
         ct = ft;
       }
     } else if (nameUpper === "SUPER" && this.currentFBExtends) {
@@ -3292,7 +3293,7 @@ export class CodeGenerator {
       for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
         const f = expr.fieldAccess[i]!;
         const ft = this.resolveMemberType(ct, f);
-        objectCode += (this.needsFieldMangling(f, ft, ct) ? `${f}_` : f) + ".";
+        objectCode += (this.needsFieldMangling(f, ft) ? `${f}_` : f) + ".";
         ct = ft;
       }
     } else {
@@ -3422,22 +3423,16 @@ export class CodeGenerator {
 
   /**
    * Check if a field access needs mangling — true when the field's resolved
-   * type name matches the field name AND the parent type is a class (FB/Program),
-   * not a struct. GCC -Wchanges-meaning only applies to class members.
+   * type name matches the field name. GCC -Wchanges-meaning applies to both
+   * class and struct members.
    */
   private needsFieldMangling(
     fieldName: string,
     fieldTypeName: string | undefined,
-    parentTypeName?: string,
   ): boolean {
     if (!fieldTypeName) return false;
     if (!this.isUserDefinedType(fieldTypeName)) return false;
     if (fieldName.toUpperCase() !== fieldTypeName.toUpperCase()) return false;
-    // Only mangle in class contexts (FBs, programs), not in structs
-    if (parentTypeName) {
-      const pUpper = parentTypeName.toUpperCase();
-      if (this.knownStructTypes.has(pUpper)) return false;
-    }
     return true;
   }
 

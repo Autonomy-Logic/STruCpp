@@ -208,18 +208,25 @@ export class TypeCodeGenerator {
         cppType += "*";
       }
       for (const fieldName of field.names) {
+        // Mangle field name if it matches its user-defined type name
+        // to avoid GCC -Wchanges-meaning error
+        const emitName =
+          !isElementaryType(field.type.name.toUpperCase()) &&
+          fieldName.toUpperCase() === cppType.toUpperCase()
+            ? `${fieldName}_`
+            : fieldName;
         if (field.initialValue) {
           const initVal = this.expressionToCpp(field.initialValue);
           this.emit(
-            `${this.options.indent}${cppType} ${fieldName} = ${initVal};`,
+            `${this.options.indent}${cppType} ${emitName} = ${initVal};`,
           );
         } else {
           if (field.type.referenceKind === "pointer_to") {
             this.emit(
-              `${this.options.indent}${cppType} ${fieldName} = nullptr;`,
+              `${this.options.indent}${cppType} ${emitName} = nullptr;`,
             );
           } else {
-            this.emit(`${this.options.indent}${cppType} ${fieldName}{};`);
+            this.emit(`${this.options.indent}${cppType} ${emitName}{};`);
           }
         }
       }
