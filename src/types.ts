@@ -49,6 +49,10 @@ export interface CompileOptions {
 
   /** Whether this is a test build (adds mock infrastructure to generated code) */
   isTestBuild?: boolean;
+
+  /** Global constants injected as constexpr into the C++ header preamble (before namespace).
+   *  Useful for library-wide sizing parameters like STRING_LENGTH, LIST_LENGTH. */
+  globalConstants?: Record<string, number>;
 }
 
 /**

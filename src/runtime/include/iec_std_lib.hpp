@@ -179,6 +179,13 @@ inline T EXPT(T base, T exponent) noexcept {
     return T(std::pow(static_cast<double>(iec_unwrap(base)), static_cast<double>(iec_unwrap(exponent))));
 }
 
+// Mixed-type EXPT: allows e.g. EXPT(INT, REAL) → returns LREAL
+template<typename T1, typename T2,
+         typename = std::enable_if_t<!std::is_same_v<std::decay_t<T1>, std::decay_t<T2>>>>
+inline IEC_LREAL EXPT(T1 base, T2 exponent) noexcept {
+    return IEC_LREAL(std::pow(static_cast<double>(iec_unwrap(base)), static_cast<double>(iec_unwrap(exponent))));
+}
+
 // =============================================================================
 // Trigonometric Functions (ANY_REAL -> ANY_REAL)
 // =============================================================================

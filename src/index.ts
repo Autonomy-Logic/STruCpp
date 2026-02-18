@@ -19,7 +19,10 @@ import {
   discoverLibraries,
   LibraryManifestError,
 } from "./library/library-loader.js";
-import { getStdFBLibraryManifest } from "./library/builtin-stdlib.js";
+import {
+  getStdFBLibraryManifest,
+  getStdFBSources,
+} from "./library/builtin-stdlib.js";
 
 /**
  * Default compilation options
@@ -29,6 +32,43 @@ export const defaultOptions: CompileOptions = {
   lineMapping: true,
   optimizationLevel: 0,
 };
+
+/** Cached compiled C++ output from standard FB library */
+let cachedStdFBCode: { headerCode: string; cppCode: string } | undefined;
+
+/**
+ * Extract the body inside `namespace ... { ... }` from generated C++ code.
+ * Strips includes, pragma once, and the namespace wrapper.
+ */
+function extractNamespaceBody(code: string): string {
+  const lines = code.split("\n");
+  let inNamespace = false;
+  let braceDepth = 0;
+  const bodyLines: string[] = [];
+
+  for (const line of lines) {
+    if (!inNamespace) {
+      if (/^namespace\s+\w+\s*\{/.test(line)) {
+        inNamespace = true;
+        braceDepth = 1;
+        continue;
+      }
+      continue;
+    }
+
+    for (const ch of line) {
+      if (ch === "{") braceDepth++;
+      else if (ch === "}") braceDepth--;
+    }
+
+    if (braceDepth <= 0) break;
+    if (/^\s*using namespace strucpp;/.test(line)) continue;
+
+    bodyLines.push(line);
+  }
+
+  return bodyLines.join("\n");
+}
 
 /**
  * Compile IEC 61131-3 Structured Text source code to C++.
@@ -296,6 +336,7 @@ export function compile(
     headerFileName: mergedOptions.headerFileName ?? "generated.hpp",
     libraryHeaders,
     isTestBuild: mergedOptions.isTestBuild ?? false,
+    globalConstants: mergedOptions.globalConstants ?? {},
   });
   codegen.setProjectModel(projectModelResult.model);
 
@@ -306,6 +347,33 @@ export function compile(
     codegen.registerLibraryFBTypes(
       stdFBManifest.functionBlocks.map((fb) => fb.name),
     );
+    // Inject compiled standard FB C++ code (class declarations + implementations)
+    if (!cachedStdFBCode) {
+      const sources = getStdFBSources();
+      if (sources.length > 0) {
+        const fbResult = compile(sources[0]!.source, {
+          additionalSources: sources.slice(1),
+          noStdFBLibrary: true,
+          headerFileName: "__stdlib_fb.hpp",
+        });
+        if (fbResult.success) {
+          cachedStdFBCode = {
+            headerCode: extractNamespaceBody(fbResult.headerCode),
+            cppCode: extractNamespaceBody(fbResult.cppCode),
+          };
+        } else {
+          cachedStdFBCode = { headerCode: "", cppCode: "" };
+        }
+      } else {
+        cachedStdFBCode = { headerCode: "", cppCode: "" };
+      }
+    }
+    if (cachedStdFBCode.headerCode) {
+      codegen.setLibraryPreamble(
+        cachedStdFBCode.headerCode,
+        cachedStdFBCode.cppCode,
+      );
+    }
   }
   for (const manifest of allLibraries) {
     codegen.registerLibraryFBTypes(

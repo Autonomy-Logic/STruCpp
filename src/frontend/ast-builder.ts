@@ -1269,13 +1269,38 @@ export class ASTBuilder {
       ? `__VLA_${dimSuffix}_${elementTypeName}`
       : `__INLINE_ARRAY_${elementTypeName}`;
 
-    return {
+    // For fixed arrays, extract integer bounds from dimension expressions
+    let arrayDimensions: Array<{ start: number; end: number }> | undefined;
+    if (!isVLA) {
+      arrayDimensions = [];
+      for (const dimNode of dimNodes) {
+        const dimChildren = dimNode.children as CstChildren;
+        const exprNodes = getAllNodes(dimChildren.expression);
+        if (exprNodes.length >= 2) {
+          const startVal = this.extractIntegerFromExpression(exprNodes[0]!);
+          const endVal = this.extractIntegerFromExpression(exprNodes[1]!);
+          if (startVal !== undefined && endVal !== undefined) {
+            arrayDimensions.push({ start: startVal, end: endVal });
+          }
+        }
+      }
+      if (arrayDimensions.length === 0) {
+        arrayDimensions = undefined;
+      }
+    }
+
+    const result: TypeReference = {
       kind: "TypeReference",
       sourceSpan: nodeToSourceSpan(parentNode),
       name,
       isReference: false,
       referenceKind: "none",
     };
+    if (arrayDimensions) {
+      result.arrayDimensions = arrayDimensions;
+      result.elementTypeName = elementTypeName;
+    }
+    return result;
   }
 
   /**
@@ -2817,6 +2842,34 @@ export class ASTBuilder {
   /**
    * Create a dummy literal expression for error recovery.
    */
+  /**
+   * Try to extract an integer value from a simple expression CST node.
+   * Handles integer literals and unary minus on integer literals.
+   */
+  private extractIntegerFromExpression(exprNode: CstNode): number | undefined {
+    // Walk down expression → orExpression → xorExpression → ... → unaryExpression → primaryExpression → literal
+    // Rather than tracing through every level, build the expression AST and check if it's a literal
+    try {
+      const expr = this.buildExpression(exprNode);
+      if (!expr) return undefined;
+      if (expr.kind === "LiteralExpression") {
+        const val = Number(expr.value);
+        if (!isNaN(val) && Number.isInteger(val)) return val;
+      }
+      if (
+        expr.kind === "UnaryExpression" &&
+        expr.operator === "-" &&
+        expr.operand.kind === "LiteralExpression"
+      ) {
+        const val = -Number(expr.operand.value);
+        if (!isNaN(val) && Number.isInteger(val)) return val;
+      }
+    } catch {
+      // Fall through
+    }
+    return undefined;
+  }
+
   /**
    * Extract statements from a statementList CST node.
    */

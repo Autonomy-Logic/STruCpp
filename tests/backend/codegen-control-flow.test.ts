@@ -617,8 +617,15 @@ describe("Phase 3.2: Complex Control Flow", () => {
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("if (X == 1) {");
     expect(result.cppCode).toContain("} else if (X == 2) {");
-    // Should NOT contain } else { (no else clause)
-    const lines = result.cppCode.split("\n");
+    // The user program function should NOT contain } else { (no else clause)
+    // Extract just the user program's run() method (names are uppercased in codegen)
+    const progStart = result.cppCode.indexOf("::run()");
+    expect(progStart).toBeGreaterThan(-1);
+    const progSection = result.cppCode.slice(progStart);
+    // Only check up to end of the function (closing namespace brace)
+    const nsEnd = progSection.indexOf("}  // namespace");
+    const funcSection = nsEnd > 0 ? progSection.slice(0, nsEnd) : progSection;
+    const lines = funcSection.split("\n");
     const elseLines = lines.filter(l => l.trim() === "} else {");
     expect(elseLines.length).toBe(0);
   });

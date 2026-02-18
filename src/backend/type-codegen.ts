@@ -203,7 +203,27 @@ export class TypeCodeGenerator {
     this.emit(`struct ${name} {`);
 
     for (const field of def.fields) {
-      let cppType = this.mapTypeToCpp(field.type.name);
+      let cppType: string;
+      if (field.type.arrayDimensions && field.type.elementTypeName) {
+        // Inline array type: emit Array1D<ElementType, start, end>
+        const elemCpp = this.mapTypeToCpp(field.type.elementTypeName);
+        if (field.type.arrayDimensions.length === 1) {
+          const dim = field.type.arrayDimensions[0]!;
+          cppType = `Array1D<${elemCpp}, ${dim.start}, ${dim.end}>`;
+        } else if (field.type.arrayDimensions.length === 2) {
+          const d1 = field.type.arrayDimensions[0]!;
+          const d2 = field.type.arrayDimensions[1]!;
+          cppType = `Array2D<${elemCpp}, ${d1.start}, ${d1.end}, ${d2.start}, ${d2.end}>`;
+        } else {
+          cppType = elemCpp;
+          for (let i = field.type.arrayDimensions.length - 1; i >= 0; i--) {
+            const dim = field.type.arrayDimensions[i]!;
+            cppType = `Array1D<${cppType}, ${dim.start}, ${dim.end}>`;
+          }
+        }
+      } else {
+        cppType = this.mapTypeToCpp(field.type.name);
+      }
       if (field.type.referenceKind === "pointer_to") {
         cppType += "*";
       }

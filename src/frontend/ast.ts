@@ -338,6 +338,8 @@ export interface TypeReference extends ASTNode {
   isReference: boolean; // true for REF_TO (for backwards compat)
   referenceKind: ReferenceKind; // more specific: "none", "ref_to", or "reference_to"
   maxLength?: number | string; // For STRING(n) / WSTRING(n) parameterized length; string for constant names
+  arrayDimensions?: Array<{ start: number; end: number }>; // For __INLINE_ARRAY_* types
+  elementTypeName?: string; // Element type for inline arrays (e.g. "BYTE" for ARRAY[0..7] OF BYTE)
 }
 
 // =============================================================================

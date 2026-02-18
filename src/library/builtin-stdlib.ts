@@ -103,6 +103,35 @@ export function resetStdFBManifestCache(): void {
 }
 
 /**
+ * Get the ST source files for the standard FB library.
+ * Returns an array of { source, fileName } objects.
+ */
+export function getStdFBSources(): Array<{ source: string; fileName: string }> {
+  const manifestPath = findManifestPath();
+  const manifestDir = dirname(manifestPath);
+
+  const stFiles = [
+    "edge_detection.st",
+    "bistable.st",
+    "counter.st",
+    "timer.st",
+  ];
+  const sources: Array<{ source: string; fileName: string }> = [];
+
+  for (const file of stFiles) {
+    const filePath = resolve(manifestDir, file);
+    if (existsSync(filePath)) {
+      sources.push({
+        source: readFileSync(filePath, "utf-8"),
+        fileName: file,
+      });
+    }
+  }
+
+  return sources;
+}
+
+/**
  * Generate a LibraryManifest for the built-in standard library.
  * This manifest describes all standard functions for documentation and
  * library discovery purposes. The actual implementations live in the

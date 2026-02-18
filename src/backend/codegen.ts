@@ -131,6 +131,9 @@ export interface CodeGenOptions {
 
   /** Whether this is a test build (adds mock infrastructure to FB classes) */
   isTestBuild: boolean;
+
+  /** Global constants injected as constexpr into the header preamble (before namespace) */
+  globalConstants: Record<string, number>;
 }
 
 /**
@@ -144,6 +147,7 @@ export const defaultCodeGenOptions: CodeGenOptions = {
   headerFileName: "generated.hpp",
   libraryHeaders: [],
   isTestBuild: false,
+  globalConstants: {},
 };
 
 // =============================================================================
@@ -265,6 +269,15 @@ export class CodeGenerator {
   /** Current FB's var blocks, kept so method scopes can see FB member types */
   private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
 
+  /** Topologically sorted function blocks (computed once in generate(), used by header + impl) */
+  private sortedFBs: CompilationUnit["functionBlocks"] = [];
+
+  /** Library preamble code (e.g. compiled stdlib FB class declarations) injected into the header */
+  private libraryPreambleCode: string | undefined;
+
+  /** Library implementation code (e.g. compiled stdlib FB method bodies) injected into the .cpp */
+  private libraryImplCode: string | undefined;
+
   /** Bit-width of each IEC elementary type */
   private static readonly IEC_TYPE_BITS: Record<string, number> = {
     BOOL: 1,
@@ -363,7 +376,33 @@ export class CodeGenerator {
     name: string;
     maxLength?: number | string;
     referenceKind?: string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
   }): string {
+    // Handle inline array types with dimension info
+    // Use raw C++ types (INT_t, BOOL_t) for array elements, not IEC_* (IECVar<>)
+    // because Array1D internally wraps elements in IECVar<T> already
+    if (typeRef.arrayDimensions && typeRef.elementTypeName) {
+      const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
+        ? typeRef.elementTypeName
+        : this.typeCodeGen.mapTypeToCpp(typeRef.elementTypeName);
+      if (typeRef.arrayDimensions.length === 1) {
+        const dim = typeRef.arrayDimensions[0]!;
+        return `Array1D<${elemCpp}, ${dim.start}, ${dim.end}>`;
+      }
+      if (typeRef.arrayDimensions.length === 2) {
+        const d1 = typeRef.arrayDimensions[0]!;
+        const d2 = typeRef.arrayDimensions[1]!;
+        return `Array2D<${elemCpp}, ${d1.start}, ${d1.end}, ${d2.start}, ${d2.end}>`;
+      }
+      // 3+ dimensions: nested Array1D
+      let result = elemCpp;
+      for (let i = typeRef.arrayDimensions.length - 1; i >= 0; i--) {
+        const dim = typeRef.arrayDimensions[i]!;
+        result = `Array1D<${result}, ${dim.start}, ${dim.end}>`;
+      }
+      return result;
+    }
     const baseType = this.mapVarTypeToCpp(
       typeRef.name,
       typeof typeRef.maxLength === "number" ? typeRef.maxLength : undefined,
@@ -399,6 +438,15 @@ export class CodeGenerator {
     for (const name of names) {
       this.knownFBTypes.add(name.toUpperCase());
     }
+  }
+
+  /**
+   * Set library preamble code to inject into the generated header and implementation.
+   * Used for compiled standard FB library class definitions.
+   */
+  setLibraryPreamble(headerCode: string, implCode: string): void {
+    this.libraryPreambleCode = headerCode;
+    this.libraryImplCode = implCode;
   }
 
   /**
@@ -454,6 +502,9 @@ export class CodeGenerator {
       this.knownStructTypes.add(td.name.toUpperCase());
     }
 
+    // Topologically sort FBs once (used in both header and implementation)
+    this.sortedFBs = this.topologicalSortFBs(ast.functionBlocks);
+
     // Generate header
     this.generateHeader(ast);
 
@@ -507,6 +558,20 @@ export class CodeGenerator {
       }
     }
 
+    // Undefine macros that collide with IEC identifiers (e.g. macOS math.h OVERFLOW)
+    this.emitHeader("");
+    this.emitHeader("#undef OVERFLOW");
+
+    // Emit global constants (before namespace, so they work as template parameters)
+    const globalConsts = Object.entries(this.options.globalConstants);
+    if (globalConsts.length > 0) {
+      this.emitHeader("");
+      this.emitHeader("// Global constants");
+      for (const [name, value] of globalConsts) {
+        this.emitHeader(`constexpr size_t ${name} = ${value};`);
+      }
+    }
+
     this.emitHeader("");
 
     // Open namespace
@@ -555,6 +620,15 @@ export class CodeGenerator {
       this.emitHeader("");
     }
 
+    // Inject library preamble (e.g. standard FB class declarations from compiled ST)
+    if (this.libraryPreambleCode) {
+      this.emitHeader("// Standard library function block declarations");
+      for (const line of this.libraryPreambleCode.split("\n")) {
+        this.emitHeader(line);
+      }
+      this.emitHeader("");
+    }
+
     // Generate forward declarations
     for (const iface of ast.interfaces) {
       this.emitHeader(`class ${iface.name};`);
@@ -582,8 +656,8 @@ export class CodeGenerator {
       this.generateInterfaceHeaderDeclaration(iface);
     }
 
-    // Generate function block class declarations
-    for (const fb of ast.functionBlocks) {
+    // Generate function block class declarations (topologically sorted by dependency)
+    for (const fb of this.sortedFBs) {
       this.generateFBHeaderDeclaration(fb);
     }
 
@@ -641,6 +715,15 @@ export class CodeGenerator {
     this.emit(`namespace ${ns} {`);
     this.emit("");
 
+    // Inject library implementation code (e.g. standard FB method bodies)
+    if (this.libraryImplCode) {
+      this.emit("// Standard library function block implementations");
+      for (const line of this.libraryImplCode.split("\n")) {
+        this.emit(line);
+      }
+      this.emit("");
+    }
+
     // Generate located variables descriptor array definition
     this.generateLocatedVarsDefinition();
 
@@ -655,8 +738,8 @@ export class CodeGenerator {
       }
     }
 
-    // Generate function block implementations
-    for (const fb of ast.functionBlocks) {
+    // Generate function block implementations (same topological order as header)
+    for (const fb of this.sortedFBs) {
       this.generateFBImplementation(fb);
     }
 
@@ -1275,19 +1358,43 @@ export class CodeGenerator {
     const params = this.generateFunctionParams(func);
     const retType = this.mapTypeRefToCpp(func.returnType);
 
-    if (this.options.isTestBuild) {
-      // Test build: generate _real, dispatch pointer, and wrapper
-      // 1. _real implementation (original body with renamed function)
-      this.emit(`${retType} ${func.name}_real(${params.join(", ")}) {`);
-      this.emit(`    ${retType} ${func.name}_result;`);
+    // Helper to emit local variable declarations (VAR/VAR_TEMP) and body
+    const emitFunctionBody = (funcName: string) => {
+      this.emit(`    ${retType} ${funcName}_result;`);
       this.currentFunctionName = func.name;
+      this.enterScope(func.varBlocks);
+
+      // Declare local variables (VAR, VAR_TEMP) — same pattern as method locals
+      for (const block of func.varBlocks) {
+        if (block.blockType === "VAR" || block.blockType === "VAR_TEMP") {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              const initValue = decl.initialValue
+                ? ` = ${this.generateExpression(decl.initialValue)}`
+                : "";
+              this.emit(
+                `    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`,
+              );
+            }
+          }
+        }
+      }
+
       if (func.body.length > 0) {
         this.generateStatements(func.body);
       } else if (this.options.sourceComments) {
         this.emit("    // Empty function body");
       }
+      this.exitScope();
       this.currentFunctionName = undefined;
-      this.emit(`    return ${func.name}_result;`);
+      this.emit(`    return ${funcName}_result;`);
+    };
+
+    if (this.options.isTestBuild) {
+      // Test build: generate _real, dispatch pointer, and wrapper
+      // 1. _real implementation (original body with renamed function)
+      this.emit(`${retType} ${func.name}_real(${params.join(", ")}) {`);
+      emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");
 
@@ -1306,15 +1413,7 @@ export class CodeGenerator {
     } else {
       // Production build: normal function
       this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
-      this.emit(`    ${retType} ${func.name}_result;`);
-      this.currentFunctionName = func.name;
-      if (func.body.length > 0) {
-        this.generateStatements(func.body);
-      } else if (this.options.sourceComments) {
-        this.emit("    // Empty function body");
-      }
-      this.currentFunctionName = undefined;
-      this.emit(`    return ${func.name}_result;`);
+      emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");
     }
@@ -3351,6 +3450,85 @@ export class CodeGenerator {
    */
   private exitScope(): void {
     this.currentScopeVarTypes.clear();
+  }
+
+  /**
+   * Topologically sort function blocks so that FBs containing instances of
+   * other FBs are emitted after their dependencies (Kahn's algorithm).
+   */
+  private topologicalSortFBs(
+    fbs: CompilationUnit["functionBlocks"],
+  ): CompilationUnit["functionBlocks"] {
+    if (fbs.length <= 1) return fbs;
+
+    // Build name → FB mapping
+    const fbMap = new Map<string, (typeof fbs)[0]>();
+    for (const fb of fbs) {
+      fbMap.set(fb.name.toUpperCase(), fb);
+    }
+
+    // Build adjacency: fbName → set of FB names it depends on (has as members)
+    const deps = new Map<string, Set<string>>();
+    for (const fb of fbs) {
+      const fbDeps = new Set<string>();
+      for (const block of fb.varBlocks) {
+        for (const decl of block.declarations) {
+          const typeName = decl.type.name.toUpperCase();
+          if (fbMap.has(typeName) && typeName !== fb.name.toUpperCase()) {
+            fbDeps.add(typeName);
+          }
+        }
+      }
+      // Also check EXTENDS (parent FB must come first)
+      if (fb.extends) {
+        const parentUpper = fb.extends.toUpperCase();
+        if (fbMap.has(parentUpper)) {
+          fbDeps.add(parentUpper);
+        }
+      }
+      deps.set(fb.name.toUpperCase(), fbDeps);
+    }
+
+    // Kahn's algorithm
+    const inDegree = new Map<string, number>();
+    for (const fb of fbs) {
+      inDegree.set(
+        fb.name.toUpperCase(),
+        deps.get(fb.name.toUpperCase())!.size,
+      );
+    }
+
+    const queue: string[] = [];
+    for (const [name, degree] of inDegree) {
+      if (degree === 0) queue.push(name);
+    }
+
+    const sorted: (typeof fbs)[0][] = [];
+    while (queue.length > 0) {
+      const name = queue.shift()!;
+      sorted.push(fbMap.get(name)!);
+
+      // Reduce in-degree for FBs that depend on this one
+      for (const [fbName, fbDeps] of deps) {
+        if (fbDeps.has(name)) {
+          fbDeps.delete(name);
+          const newDeg = inDegree.get(fbName)! - 1;
+          inDegree.set(fbName, newDeg);
+          if (newDeg === 0) queue.push(fbName);
+        }
+      }
+    }
+
+    // If cycle detected, append remaining in original order
+    if (sorted.length < fbs.length) {
+      for (const fb of fbs) {
+        if (!sorted.includes(fb)) {
+          sorted.push(fb);
+        }
+      }
+    }
+
+    return sorted;
   }
 
   /**

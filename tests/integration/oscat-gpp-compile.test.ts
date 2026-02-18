@@ -62,6 +62,7 @@ describe.skipIf(!hasGpp || !oscatLibAvailable)("OSCAT g++ Compilation", () => {
         fileName: stFiles[0],
         additionalSources,
         noStdFBLibrary: false,
+        globalConstants: { STRING_LENGTH: 254, LIST_LENGTH: 254 },
       });
 
       // Report transpilation failures but don't fail the test
