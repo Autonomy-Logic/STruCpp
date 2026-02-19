@@ -23,6 +23,7 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  AccessStep,
   ExternalCodePragma,
   MethodDeclaration,
   InterfaceDeclaration,
@@ -2016,6 +2017,21 @@ export class CodeGenerator {
         ...stmt.target,
         fieldAccess: stmt.target.fieldAccess.slice(0, -1),
       };
+      // Also trim the accessChain if present
+      if (stmt.target.accessChain) {
+        const trimmedChain = [...stmt.target.accessChain];
+        for (let i = trimmedChain.length - 1; i >= 0; i--) {
+          if (trimmedChain[i]!.kind === "field") {
+            trimmedChain.splice(i, 1);
+            break;
+          }
+        }
+        if (trimmedChain.length > 0) {
+          baseVar.accessChain = trimmedChain;
+        } else {
+          delete baseVar.accessChain;
+        }
+      }
       const baseCode = this.generateExpression(baseVar);
       const value = this.generateExpression(stmt.value);
       this.emit(
@@ -2562,6 +2578,12 @@ export class CodeGenerator {
       }
     }
 
+    // Use ordered access chain when available (preserves interleaving)
+    if (expr.accessChain && expr.accessChain.length > 0) {
+      return this.generateAccessChain(result, expr.accessChain, nameUpper);
+    }
+
+    // Legacy path: flat subscripts/fieldAccess/dereference (no interleaving)
     // Subscripts (array access)
     // 2D+ arrays use operator() syntax: arr(i, j) — 1D uses operator[]: arr[i]
     if (expr.subscripts.length > 1) {
@@ -2606,6 +2628,88 @@ export class CodeGenerator {
     // Dereference (^ operator → pointer dereference)
     if (expr.isDereference) {
       result = `(*${result})`;
+    }
+
+    return result;
+  }
+
+  /**
+   * Generate C++ code from an ordered access chain.
+   * Handles correct interleaving of field accesses, subscripts, and dereferences.
+   *
+   * Key rules:
+   * - field after subscript: use -> (because Array operator[] returns IECVar<T>&)
+   * - field after field: use .
+   * - field after dereference: use .
+   * - subscript of 1 index: use [idx]
+   * - subscript of 2+ indices: use (idx1, idx2) (multidim Array)
+   * - dereference: wrap in (*...)
+   */
+  private generateAccessChain(
+    base: string,
+    chain: AccessStep[],
+    baseNameUpper: string,
+  ): string {
+    let result = base;
+    let prevKind: "field" | "subscript" | "dereference" | "base" = "base";
+    let currentType = this.currentScopeVarTypes.get(baseNameUpper);
+
+    for (let i = 0; i < chain.length; i++) {
+      const step = chain[i]!;
+      const isLast = i === chain.length - 1;
+
+      switch (step.kind) {
+        case "field": {
+          // Bit access: numeric field like .0, .15, .31
+          if (/^\d+$/.test(step.name)) {
+            result = `((static_cast<uint64_t>(${result}) >> ${step.name}) & 1)`;
+            prevKind = "field";
+            continue;
+          }
+          // Property access on the last step
+          if (isLast) {
+            const propName = this.resolvePropertyName(currentType, step.name);
+            if (propName) {
+              const accessor =
+                prevKind === "subscript"
+                  ? `->${`get_${propName}`}()`
+                  : `.get_${propName}()`;
+              result += accessor;
+              return result;
+            }
+          }
+          const fieldType = this.resolveMemberType(currentType, step.name);
+          const fieldCppName = this.needsFieldMangling(step.name, fieldType)
+            ? `${step.name}_`
+            : step.name;
+          // After subscript, use -> to access members of IECVar<struct>
+          if (prevKind === "subscript") {
+            result += `->${fieldCppName}`;
+          } else {
+            result += `.${fieldCppName}`;
+          }
+          currentType = fieldType;
+          prevKind = "field";
+          break;
+        }
+        case "subscript": {
+          if (step.indices.length > 1) {
+            const args = step.indices.map((idx) =>
+              this.generateExpression(idx),
+            );
+            result += `(${args.join(", ")})`;
+          } else if (step.indices.length === 1) {
+            result += `[${this.generateExpression(step.indices[0]!)}]`;
+          }
+          prevKind = "subscript";
+          break;
+        }
+        case "dereference": {
+          result = `(*${result})`;
+          prevKind = "dereference";
+          break;
+        }
+      }
     }
 
     return result;
@@ -3396,7 +3500,26 @@ export class CodeGenerator {
       }
     } else {
       // Generate a VariableExpression with fieldAccess trimmed to all-but-last
-      const baseExpr = { ...expr, fieldAccess: expr.fieldAccess.slice(0, -1) };
+      // Also trim the accessChain if present
+      const baseExpr: VariableExpression = {
+        ...expr,
+        fieldAccess: expr.fieldAccess.slice(0, -1),
+      };
+      if (expr.accessChain) {
+        // Remove the last field step from the access chain
+        const trimmedChain = [...expr.accessChain];
+        for (let i = trimmedChain.length - 1; i >= 0; i--) {
+          if (trimmedChain[i]!.kind === "field") {
+            trimmedChain.splice(i, 1);
+            break;
+          }
+        }
+        if (trimmedChain.length > 0) {
+          baseExpr.accessChain = trimmedChain;
+        } else {
+          delete baseExpr.accessChain;
+        }
+      }
       objectCode = this.generateVariableExpression(baseExpr) + ".";
     }
 

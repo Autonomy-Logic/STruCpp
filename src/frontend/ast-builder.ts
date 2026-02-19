@@ -36,6 +36,7 @@ import type {
   Expression,
   LiteralExpression,
   VariableExpression,
+  AccessStep,
   AssignmentStatement,
   RefAssignStatement,
   RefExpression,
@@ -162,6 +163,29 @@ function getAllNodes(items: (CstNode | IToken)[] | undefined): CstNode[] {
 function getAllTokens(items: (CstNode | IToken)[] | undefined): IToken[] {
   if (!items) return [];
   return items.filter((item): item is IToken => "image" in item);
+}
+
+/**
+ * Get the start offset of a CST node by finding its earliest token.
+ */
+function getNodeStartOffset(node: CstNode): number {
+  const children = node.children as CstChildren;
+  let minOffset = Number.MAX_SAFE_INTEGER;
+  for (const key of Object.keys(children)) {
+    const childArray = children[key];
+    if (!childArray) continue;
+    for (const child of childArray) {
+      if ("image" in child) {
+        // It's a token
+        if (child.startOffset < minOffset) minOffset = child.startOffset;
+      } else if ("children" in child) {
+        // It's a CST node — recurse
+        const childOffset = getNodeStartOffset(child);
+        if (childOffset < minOffset) minOffset = childOffset;
+      }
+    }
+  }
+  return minOffset;
 }
 
 /**
@@ -2549,7 +2573,11 @@ export class ASTBuilder {
       if (expr) subscripts.push(expr);
     }
 
-    return {
+    // Build ordered access chain by sorting markers by source position.
+    // This preserves the interleaving of field accesses, subscripts, and dereferences.
+    const accessChain = this.buildAccessChain(children);
+
+    const varExpr: VariableExpression = {
       kind: "VariableExpression",
       sourceSpan: nodeToSourceSpan(node),
       name,
@@ -2557,6 +2585,115 @@ export class ASTBuilder {
       fieldAccess,
       isDereference,
     };
+    if (accessChain.length > 0) {
+      varExpr.accessChain = accessChain;
+    }
+    return varExpr;
+  }
+
+  /**
+   * Build an ordered access chain from variable CST children.
+   * Sorts Dot tokens, LBracket tokens, and Caret tokens by source offset
+   * to reconstruct the correct interleaving order.
+   */
+  private buildAccessChain(children: CstChildren): AccessStep[] {
+    type Marker =
+      | { kind: "field"; offset: number; name: string }
+      | { kind: "subscript"; offset: number; indices: Expression[] }
+      | { kind: "dereference"; offset: number };
+
+    const markers: Marker[] = [];
+
+    // Collect field access markers (Dot tokens followed by identifierOrKeyword or IntegerLiteral)
+    const dotTokens = getAllTokens(children.Dot);
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const intLiteralTokens = getAllTokens(children.IntegerLiteral);
+
+    // Build a list of field targets sorted by offset: identifier and integer literal tokens after dots
+    const fieldTargets: Array<{ offset: number; name: string }> = [];
+    for (let i = 1; i < idOrKwNodes.length; i++) {
+      const n = idOrKwNodes[i]!;
+      fieldTargets.push({
+        offset: getNodeStartOffset(n),
+        name: getIdentifierOrKeywordImage(n),
+      });
+    }
+    for (const t of intLiteralTokens) {
+      fieldTargets.push({ offset: t.startOffset, name: t.image });
+    }
+    fieldTargets.sort((a, b) => a.offset - b.offset);
+
+    // Each dot token corresponds to one field target (in order)
+    const sortedDots = [...dotTokens].sort(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+    for (let i = 0; i < sortedDots.length && i < fieldTargets.length; i++) {
+      markers.push({
+        kind: "field",
+        offset: sortedDots[i]!.startOffset,
+        name: fieldTargets[i]!.name,
+      });
+    }
+
+    // Collect subscript markers (LBracket tokens with their associated expressions)
+    const lBracketTokens = getAllTokens(children.LBracket);
+    const rBracketTokens = getAllTokens(children.RBracket);
+    const exprNodes = getAllNodes(children.expression);
+    const sortedLBrackets = [...lBracketTokens].sort(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+    const sortedRBrackets = [...rBracketTokens].sort(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+
+    // Build subscript groups: each [..] pair contains the expressions between them
+    let exprIdx = 0;
+    for (
+      let bracketIdx = 0;
+      bracketIdx < sortedLBrackets.length;
+      bracketIdx++
+    ) {
+      const lb = sortedLBrackets[bracketIdx]!;
+      const rb = sortedRBrackets[bracketIdx];
+      const rbOffset = rb ? rb.startOffset : Infinity;
+
+      const indices: Expression[] = [];
+      while (exprIdx < exprNodes.length) {
+        const exprOffset = getNodeStartOffset(exprNodes[exprIdx]!);
+        if (exprOffset > rbOffset) break;
+        if (exprOffset > lb.startOffset) {
+          const expr = this.buildExpression(exprNodes[exprIdx]!);
+          if (expr) indices.push(expr);
+        }
+        exprIdx++;
+      }
+      markers.push({
+        kind: "subscript",
+        offset: lb.startOffset,
+        indices,
+      });
+    }
+
+    // Collect dereference markers (Caret tokens)
+    const caretTokens = getAllTokens(children.Caret);
+    for (const c of caretTokens) {
+      markers.push({ kind: "dereference", offset: c.startOffset });
+    }
+
+    // Sort all markers by source offset
+    markers.sort((a, b) => a.offset - b.offset);
+
+    // Convert to AccessStep array
+    return markers.map((m): AccessStep => {
+      switch (m.kind) {
+        case "field":
+          return { kind: "field", name: m.name };
+        case "subscript":
+          return { kind: "subscript", indices: m.indices };
+        case "dereference":
+          return { kind: "dereference" };
+      }
+    });
   }
 
   /**

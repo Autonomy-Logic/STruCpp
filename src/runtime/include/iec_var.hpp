@@ -12,6 +12,7 @@
 #pragma once
 
 #include "iec_types.hpp"
+#include <type_traits>
 #include <utility>
 
 namespace strucpp {
@@ -162,6 +163,13 @@ public:
     // =========================================================================
     // Container Access Forwarding (for array/struct types)
     // =========================================================================
+
+    /** Forward operator-> to underlying type (struct/FB member access) */
+    template<typename U = T, std::enable_if_t<std::is_class_v<U>, int> = 0>
+    T* operator->() noexcept { return &value_; }
+
+    template<typename U = T, std::enable_if_t<std::is_class_v<U>, int> = 0>
+    const T* operator->() const noexcept { return &value_; }
 
     /** Forward operator[] to underlying type (1D array access) */
     template<typename Index>
