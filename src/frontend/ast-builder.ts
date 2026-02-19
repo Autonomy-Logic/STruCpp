@@ -2299,9 +2299,10 @@ export class ASTBuilder {
       } else if (valuePart.startsWith("2#")) {
         numValue = parseInt(valuePart.substring(2).replace(/_/g, ""), 2);
       } else {
-        numValue = valuePart.includes(".")
-          ? parseFloat(valuePart.replace(/_/g, ""))
-          : parseInt(valuePart.replace(/_/g, ""), 10);
+        numValue =
+          valuePart.includes(".") || /[eE]/.test(valuePart)
+            ? parseFloat(valuePart.replace(/_/g, ""))
+            : parseInt(valuePart.replace(/_/g, ""), 10);
       }
       const litType =
         typePrefix === "REAL" || typePrefix === "LREAL" ? "REAL" : "INT";

@@ -642,17 +642,22 @@ export class STParser extends CstParser {
         },
       ]);
     });
-    this.CONSUME(tokens.Identifier);
+    const typeNameTok = this.CONSUME(tokens.Identifier);
     // Optional parameterized length for STRING(n) / WSTRING(n) / STRING(CONSTANT_NAME)
-    // GATE: consume ( IntegerLiteral ) or ( Identifier ) when preceded by STRING/WSTRING
+    // GATE: only when the type name is STRING or WSTRING, consume ( IntegerLiteral ) or ( Identifier )
     // Avoid ( Identifier ) for typed enums and ( IntegerLiteral .. ) for subrange types
     this.OPTION2({
-      GATE: () =>
-        this.LA(1).tokenType === tokens.LParen &&
-        ((this.LA(2).tokenType === tokens.IntegerLiteral &&
-          this.LA(3).tokenType === tokens.RParen) ||
-          (this.LA(2).tokenType === tokens.Identifier &&
-            this.LA(3).tokenType === tokens.RParen)),
+      GATE: () => {
+        const name = typeNameTok.image.toUpperCase();
+        return (
+          (name === "STRING" || name === "WSTRING") &&
+          this.LA(1).tokenType === tokens.LParen &&
+          ((this.LA(2).tokenType === tokens.IntegerLiteral &&
+            this.LA(3).tokenType === tokens.RParen) ||
+            (this.LA(2).tokenType === tokens.Identifier &&
+              this.LA(3).tokenType === tokens.RParen))
+        );
+      },
       DEF: () => {
         this.CONSUME(tokens.LParen);
         this.OR4({

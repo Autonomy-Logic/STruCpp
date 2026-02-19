@@ -10,6 +10,7 @@ import type {
   ElementaryType,
   Expression,
   FunctionBlockDeclaration,
+  FunctionCallExpression,
   MethodDeclaration,
   VarBlock,
   VarDeclaration,
@@ -17,6 +18,7 @@ import type {
   Visibility,
 } from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
+import { StdFunctionRegistry } from "./std-function-registry.js";
 import { SymbolTables } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 
@@ -134,6 +136,7 @@ interface LocatedVarInfo {
 export class SemanticAnalyzer {
   private symbolTables: SymbolTables;
   private typeChecker: TypeChecker;
+  private stdRegistry = new StdFunctionRegistry();
   private errors: CompileError[] = [];
   private warnings: CompileError[] = [];
 
@@ -1165,7 +1168,7 @@ export class SemanticAnalyzer {
 
   /**
    * Validate expressions across all programs, functions, and FBs.
-   * Checks bit access bounds and ADR l-value targets.
+   * Checks std function argument counts, bit access bounds, and ADR l-value targets.
    */
   private validateExpressions(ast: CompilationUnit): void {
     for (const prog of ast.programs) {
@@ -1275,7 +1278,7 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * Validate a single expression recursively for bit access and ADR issues.
+   * Validate a single expression recursively for std function args, bit access, and ADR issues.
    */
   private validateExpression(
     expr: Expression,
@@ -1287,21 +1290,12 @@ export class SemanticAnalyzer {
       this.checkBitAccess(expr, varTypeMap, ast, expr.subscripts.length > 0);
     }
 
-    // Check ADR l-value requirement
+    // Validate standard function argument counts and ADR l-value requirement
     if (
       expr.kind === "FunctionCallExpression" &&
-      expr.functionName.toUpperCase() === "ADR"
+      !expr.functionName.includes(".")
     ) {
-      if (expr.arguments.length > 0) {
-        const arg = expr.arguments[0]!.value;
-        if (!this.isLValue(arg)) {
-          this.addError(
-            "ADR() requires a variable reference, not an expression",
-            expr.sourceSpan.startLine,
-            expr.sourceSpan.startCol,
-          );
-        }
-      }
+      this.checkStdFunctionArgs(expr);
     }
 
     // Recurse into sub-expressions
@@ -1334,6 +1328,60 @@ export class SemanticAnalyzer {
       (expr.kind === "ParenthesizedExpression" &&
         this.isLValue(expr.expression))
     );
+  }
+
+  /**
+   * Validate standard function argument counts and special constraints (e.g., ADR l-value).
+   * Covers all registered std functions and *_TO_* conversion functions.
+   */
+  private checkStdFunctionArgs(expr: FunctionCallExpression): void {
+    const nameUpper = expr.functionName.toUpperCase();
+    const argCount = expr.arguments.length;
+
+    // Look up in std function registry
+    const desc = this.stdRegistry.lookup(nameUpper);
+    if (desc) {
+      if (desc.isVariadic) {
+        const minArgs = desc.minArgs ?? desc.params.length;
+        if (argCount < minArgs) {
+          this.addError(
+            `'${nameUpper}' requires at least ${minArgs} argument(s), got ${argCount}`,
+            expr.sourceSpan.startLine,
+            expr.sourceSpan.startCol,
+          );
+        }
+      } else {
+        const expected = desc.params.length;
+        if (argCount !== expected) {
+          this.addError(
+            `'${nameUpper}' requires ${expected} argument(s), got ${argCount}`,
+            expr.sourceSpan.startLine,
+            expr.sourceSpan.startCol,
+          );
+        }
+      }
+    } else if (this.stdRegistry.resolveConversion(nameUpper)) {
+      // *_TO_* conversion functions always take exactly 1 argument
+      if (argCount !== 1) {
+        this.addError(
+          `'${nameUpper}' requires 1 argument, got ${argCount}`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+        );
+      }
+    }
+
+    // Additional ADR constraint: argument must be an l-value
+    if (nameUpper === "ADR" && argCount > 0) {
+      const arg = expr.arguments[0]!.value;
+      if (!this.isLValue(arg)) {
+        this.addError(
+          "ADR() requires a variable reference, not an expression",
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+        );
+      }
+    }
   }
 
   /**

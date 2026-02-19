@@ -1998,7 +1998,8 @@ export class CodeGenerator {
       return;
     }
 
-    // Bit access write: var.N := value → var = (var & ~(1u << N)) | ((value ? 1u : 0u) << N)
+    // Bit access write: var.N := value → var = (var & ~(1ULL << N)) | ((value ? 1ULL : 0ULL) << N)
+    // Uses 1ULL (64-bit) to avoid UB when bit index >= 32 (e.g., LWORD.33)
     if (
       stmt.target.kind === "VariableExpression" &&
       stmt.target.fieldAccess.length > 0 &&
@@ -2014,7 +2015,7 @@ export class CodeGenerator {
       const baseCode = this.generateExpression(baseVar);
       const value = this.generateExpression(stmt.value);
       this.emit(
-        `${indent}${baseCode} = (${baseCode} & ~(1u << ${bitIdx})) | ((${value} ? 1u : 0u) << ${bitIdx});`,
+        `${indent}${baseCode} = (${baseCode} & ~(1ULL << ${bitIdx})) | ((${value} ? 1ULL : 0ULL) << ${bitIdx});`,
       );
       return;
     }
