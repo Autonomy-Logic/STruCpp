@@ -156,9 +156,11 @@ export function compile(
     };
   }
   try {
+    const globalConstants = mergedOptions.globalConstants;
     const primaryAst = buildAST(
       parseResult.cst,
       mergedOptions.fileName ?? "main.st",
+      globalConstants,
     );
     const units: CompilationUnit[] = [primaryAst];
 
@@ -183,7 +185,9 @@ export function compile(
           continue;
         }
         if (addlParseResult.cst) {
-          units.push(buildAST(addlParseResult.cst, addlSource.fileName));
+          units.push(
+            buildAST(addlParseResult.cst, addlSource.fileName, globalConstants),
+          );
         }
       }
     }

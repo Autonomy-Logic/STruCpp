@@ -251,8 +251,17 @@ export class ASTBuilder {
    * Map of constant names to their integer values, populated per POU.
    * Used by extractIntegerFromExpression to resolve array dimension bounds
    * that reference VAR CONSTANT declarations (e.g., ARRAY[0..n] where n is a constant).
+   * Global constants (from compile options) are seeded first and persist across POUs.
    */
   private currentConstantMap: Map<string, number> = new Map();
+
+  /** Global constants that persist across POU scans (never cleared). */
+  private globalConstantMap: Map<string, number> = new Map();
+
+  /** Seed a global constant for dimension resolution. */
+  setGlobalConstant(name: string, value: number): void {
+    this.globalConstantMap.set(name.toUpperCase(), value);
+  }
 
   /**
    * Scan raw CST varBlock nodes for CONSTANT declarations and populate
@@ -260,6 +269,10 @@ export class ASTBuilder {
    */
   private scanVarBlocksForConstants(varBlockNodes: CstNode[]): void {
     this.currentConstantMap.clear();
+    // Seed with global constants so they're always available
+    for (const [name, value] of this.globalConstantMap) {
+      this.currentConstantMap.set(name, value);
+    }
     for (const vbNode of varBlockNodes) {
       const vbChildren = vbNode.children as CstChildren;
       if (!vbChildren.CONSTANT) continue;
@@ -3509,8 +3522,19 @@ export class ASTBuilder {
  * @param cst - The Chevrotain CST root node
  * @param fileName - Optional source file name to set on all sourceSpan.file fields
  */
-export function buildAST(cst: CstNode, fileName?: string): CompilationUnit {
+export function buildAST(
+  cst: CstNode,
+  fileName?: string,
+  globalConstants?: Record<string, number>,
+): CompilationUnit {
   const builder = new ASTBuilder();
+  // Seed the constant map with global constants (e.g., STRING_LENGTH, LIST_LENGTH)
+  // so inline array dimensions like ARRAY[0..STRING_LENGTH] resolve correctly.
+  if (globalConstants) {
+    for (const [name, value] of Object.entries(globalConstants)) {
+      builder.setGlobalConstant(name, value);
+    }
+  }
   const ast = builder.buildCompilationUnit(cst);
   if (fileName) {
     setFileOnSpans(ast, fileName);

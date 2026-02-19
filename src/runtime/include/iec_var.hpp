@@ -17,6 +17,9 @@
 
 namespace strucpp {
 
+// Forward declaration for pointer-to-integer assignment
+template<typename T> class IEC_Ptr;
+
 // =============================================================================
 // IEC Variable Wrapper
 // =============================================================================
@@ -157,6 +160,13 @@ public:
     /** Assignment from raw value */
     IECVar& operator=(T v) noexcept {
         set(v);
+        return *this;
+    }
+
+    /** Assignment from IEC_Ptr (CODESYS: DWORD_VAR := PT stores address as integer) */
+    template<typename U, typename V = T, std::enable_if_t<std::is_integral_v<V>, int> = 0>
+    IECVar& operator=(const IEC_Ptr<U>& ptr) noexcept {
+        set(static_cast<T>(ptr.to_addr()));
         return *this;
     }
 

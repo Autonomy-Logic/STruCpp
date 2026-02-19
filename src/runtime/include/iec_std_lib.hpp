@@ -19,6 +19,7 @@
 #include "iec_var.hpp"
 #include "iec_traits.hpp"
 #include "iec_retain.hpp"
+#include "iec_ptr.hpp"
 #include <cmath>
 #include <algorithm>
 #include <cstddef>
@@ -182,6 +183,13 @@ inline T EXPT(T base, T exponent) noexcept {
 template<typename T1, typename T2,
          typename = std::enable_if_t<!std::is_same_v<std::decay_t<T1>, std::decay_t<T2>>>>
 inline IEC_LREAL EXPT(T1 base, T2 exponent) noexcept {
+    return IEC_LREAL(std::pow(static_cast<double>(iec_unwrap(base)), static_cast<double>(iec_unwrap(exponent))));
+}
+
+// Same-type EXPT for non-REAL types (CODESYS extension: EXPT(INT, INT))
+template<typename T,
+    std::enable_if_t<(is_any_int_v<T> || is_any_bit_v<T>) && !is_any_real_v<T>, int> = 0>
+inline IEC_LREAL EXPT(T base, T exponent) noexcept {
     return IEC_LREAL(std::pow(static_cast<double>(iec_unwrap(base)), static_cast<double>(iec_unwrap(exponent))));
 }
 
@@ -457,6 +465,22 @@ inline T SHR(T in, IEC_INT n) noexcept {
 template<typename T, typename N,
     enable_if_any_bit<T> = 0,
     std::enable_if_t<!std::is_same_v<std::decay_t<N>, IEC_INT>, int> = 0>
+inline T SHR(T in, N n) noexcept {
+    return T(iec_unwrap(in) >> static_cast<int>(iec_unwrap(n)));
+}
+
+// SHL/SHR for signed integer types (CODESYS extension, used by OSCAT)
+// IEC standard restricts to ANY_BIT, but CODESYS allows ANY_INT
+template<typename T, typename N,
+    std::enable_if_t<is_any_int_v<T> && !is_any_bit_v<T>, int> = 0>
+inline T SHL(T in, N n) noexcept {
+    using UT = std::make_unsigned_t<iec_underlying_type_t<T>>;
+    return T(static_cast<iec_underlying_type_t<T>>(
+        static_cast<UT>(iec_unwrap(in)) << static_cast<int>(iec_unwrap(n))));
+}
+
+template<typename T, typename N,
+    std::enable_if_t<is_any_int_v<T> && !is_any_bit_v<T>, int> = 0>
 inline T SHR(T in, N n) noexcept {
     return T(iec_unwrap(in) >> static_cast<int>(iec_unwrap(n)));
 }
