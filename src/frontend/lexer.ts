@@ -395,6 +395,12 @@ export const ASSERT_NEAR = createToken({
   pattern: /ASSERT_NEAR/i,
 });
 
+// ADVANCE_TIME for test time simulation
+export const ADVANCE_TIME = createToken({
+  name: "ADVANCE_TIME",
+  pattern: /ADVANCE_TIME/i,
+});
+
 // SETUP/TEARDOWN for test organization
 export const SETUP = createToken({ name: "SETUP", pattern: /SETUP/i });
 export const END_SETUP = createToken({
@@ -602,6 +608,7 @@ const testKeywordTokens = [
   SETUP,
   END_TEARDOWN,
   TEARDOWN,
+  ADVANCE_TIME,
   ASSERT_EQ,
   ASSERT_NEQ,
   ASSERT_TRUE,

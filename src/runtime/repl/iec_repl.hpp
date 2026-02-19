@@ -65,6 +65,7 @@ struct ProgramDescriptor {
     ProgramBase* instance;
     VarDescriptor* vars;
     size_t var_count;
+    int64_t interval_ns;  // Task interval in nanoseconds (0 = default 20ms)
 };
 
 struct STLineMap {
@@ -505,6 +506,15 @@ static void repl_highlighter(ic_highlight_env_t* henv, const char* input, void* 
 }
 
 // =============================================================================
+// GCD Helper for Common Tick Time
+// =============================================================================
+
+inline int64_t repl_gcd(int64_t a, int64_t b) {
+    while (b) { a %= b; std::swap(a, b); }
+    return a;
+}
+
+// =============================================================================
 // REPL Entry Point
 // =============================================================================
 
@@ -513,6 +523,18 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
                      const char* cpp_source = nullptr,
                      const STLineMap* line_map = nullptr,
                      size_t line_map_count = 0) {
+    // Resolve default intervals and calculate common tick time
+    constexpr int64_t DEFAULT_INTERVAL_NS = 20000000LL; // 20ms
+    for (size_t i = 0; i < program_count; ++i) {
+        if (programs[i].interval_ns <= 0)
+            programs[i].interval_ns = DEFAULT_INTERVAL_NS;
+    }
+
+    int64_t common_ticktime = programs[0].interval_ns;
+    for (size_t i = 1; i < program_count; ++i) {
+        common_ticktime = repl_gcd(common_ticktime, programs[i].interval_ns);
+    }
+
     // Set up isocline
     ic_set_history(".strucpp_history", 200);
     ic_enable_auto_tab(true);
@@ -557,6 +579,20 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
         ic_printf(" [b]%s[/][gray](%zu vars)[/]", programs[i].name, programs[i].var_count);
     }
     ic_println("");
+    // Show cycle time info
+    {
+        double tick_ms = static_cast<double>(common_ticktime) / 1000000.0;
+        ic_printf("[gray]Cycle:[/] %.3gms", tick_ms);
+        if (program_count > 1) {
+            ic_print(" [gray](tasks:[/]");
+            for (size_t i = 0; i < program_count; ++i) {
+                double int_ms = static_cast<double>(programs[i].interval_ns) / 1000000.0;
+                ic_printf(" %.3gms", int_ms);
+            }
+            ic_print("[gray])[/]");
+        }
+        ic_println("");
+    }
     if (!source_lines.empty()) {
         ic_printf("[gray]Source:[/] %zu lines loaded\n", source_lines.size());
     }
@@ -642,8 +678,12 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
                 if (n < 1) n = 1;
             }
             for (int c = 0; c < n; ++c) {
+                __CURRENT_TIME_NS += common_ticktime;
                 for (size_t i = 0; i < program_count; ++i) {
-                    programs[i].instance->run();
+                    int64_t divisor = programs[i].interval_ns / common_ticktime;
+                    if (divisor <= 0 || (cycle_count % static_cast<unsigned long long>(divisor)) == 0) {
+                        programs[i].instance->run();
+                    }
                 }
                 cycle_count++;
             }

@@ -3047,6 +3047,10 @@ export class ASTBuilder {
     if (assertNode) {
       return this.buildAssertCall(assertNode);
     }
+    const advanceTimeNode = getFirstNode(children.advanceTimeStatement);
+    if (advanceTimeNode) {
+      return this.buildAdvanceTimeStatement(advanceTimeNode);
+    }
     const mockNode = getFirstNode(children.mockStatement);
     if (mockNode) {
       return this.buildMockStatement(mockNode);
@@ -3061,6 +3065,24 @@ export class ASTBuilder {
       if (stmt) return stmt;
     }
     throw new Error("Empty test statement");
+  }
+
+  /**
+   * Build an AdvanceTimeStatement from an advanceTimeStatement CST node.
+   */
+  buildAdvanceTimeStatement(
+    cst: CstNode,
+  ): import("./ast.js").AdvanceTimeStatement {
+    const children = cst.children as CstChildren;
+    const exprNode = getFirstNode(children.expression);
+    const duration = exprNode
+      ? (this.buildExpression(exprNode) ?? this.createDummyLiteral(cst))
+      : this.createDummyLiteral(cst);
+    return {
+      kind: "AdvanceTimeStatement",
+      duration,
+      sourceSpan: nodeToSourceSpan(cst),
+    };
   }
 
   /**

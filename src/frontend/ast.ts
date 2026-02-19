@@ -829,9 +829,19 @@ export interface MockVerifyCallCountStatement extends ASTNode {
 /**
  * A statement within a test block (either a regular statement, assert call, or mock statement).
  */
+/**
+ * ADVANCE_TIME(duration) - Advance scan-cycle time in tests.
+ */
+export interface AdvanceTimeStatement extends ASTNode {
+  kind: "AdvanceTimeStatement";
+  duration: Expression;
+  sourceSpan: SourceSpan;
+}
+
 export type TestStatement =
   | Statement
   | AssertCall
+  | AdvanceTimeStatement
   | MockFBStatement
   | MockFunctionStatement
   | MockVerifyCalledStatement

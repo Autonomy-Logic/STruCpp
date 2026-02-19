@@ -13,6 +13,7 @@ export type {
   TeardownBlock,
   TestCase,
   AssertCall,
+  AdvanceTimeStatement,
   MockFBStatement,
   MockFunctionStatement,
   MockVerifyCalledStatement,

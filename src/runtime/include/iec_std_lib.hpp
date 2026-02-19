@@ -21,7 +21,6 @@
 #include "iec_retain.hpp"
 #include <cmath>
 #include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
@@ -803,19 +802,27 @@ inline IEC_BOOL LT_CHAIN(T first, T second, Args... rest) noexcept {
 }
 
 // =============================================================================
-// TIME() - Absolute Runtime Time (CODESYS-compatible)
+// Scan-Cycle Time (CODESYS/MatIEC-compatible)
 // =============================================================================
 
 /**
- * Returns the absolute runtime time (elapsed since runtime start).
- * CODESYS-compatible: TIME() returns monotonic elapsed time.
- * Uses std::chrono::steady_clock for monotonic timing.
+ * Global scan-cycle time in nanoseconds.
+ * Advanced by the runtime before each scan cycle.
+ * - REPL advances by common_ticktime each cycle.
+ * - OpenPLC runtime advances before each task execution.
+ * - Test runner resets to 0 before each test case.
+ *
+ * All calls to TIME() within the same cycle return the same value,
+ * matching CODESYS behavior.
+ */
+inline int64_t __CURRENT_TIME_NS = 0;
+
+/**
+ * Returns the current scan-cycle time.
+ * CODESYS-compatible: TIME() returns the same value for the entire cycle.
  */
 inline IEC_TIME TIME() {
-    static auto start = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
-    return IEC_TIME(static_cast<TIME_t>(ns));
+    return IEC_TIME(static_cast<TIME_t>(__CURRENT_TIME_NS));
 }
 
 // =============================================================================

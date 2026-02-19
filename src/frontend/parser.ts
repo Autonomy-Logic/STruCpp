@@ -1620,6 +1620,10 @@ export class STParser extends CstParser {
           GATE: () => this.isAssertAhead(),
         },
         {
+          ALT: () => this.SUBRULE(this.advanceTimeStatement),
+          GATE: () => this.LA(1).tokenType === tokens.ADVANCE_TIME,
+        },
+        {
           ALT: () => this.SUBRULE(this.mockVerifyStatement),
           GATE: () => this.isMockVerifyAhead(),
         },
@@ -1631,6 +1635,17 @@ export class STParser extends CstParser {
       ],
       IGNORE_AMBIGUITIES: true,
     });
+  });
+
+  /**
+   * ADVANCE_TIME(expression) ; - Advance scan-cycle time in tests
+   */
+  public advanceTimeStatement = this.RULE("advanceTimeStatement", () => {
+    this.CONSUME(tokens.ADVANCE_TIME);
+    this.CONSUME(tokens.LParen);
+    this.SUBRULE(this.expression);
+    this.CONSUME(tokens.RParen);
+    this.CONSUME(tokens.Semicolon);
   });
 
   /**

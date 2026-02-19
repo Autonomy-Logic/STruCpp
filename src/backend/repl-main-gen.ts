@@ -230,6 +230,8 @@ interface ProgramInfo {
   varsDescName: string;
   /** Variables to expose in the REPL */
   vars: Array<{ name: string; typeName: string }>;
+  /** Task interval in nanoseconds (0 = REPL applies 20ms default) */
+  intervalNs: number;
 }
 
 /**
@@ -263,7 +265,7 @@ function emitProgramDescriptorsAndMain(
   lines.push(`static ProgramDescriptor programs[] = {`);
   for (const prog of programs) {
     lines.push(
-      `    {"${prog.displayName}", &${prog.instanceExpr}, ${prog.varsDescName}, ${prog.vars.length}},`,
+      `    {"${prog.displayName}", &${prog.instanceExpr}, ${prog.varsDescName}, ${prog.vars.length}, ${prog.intervalNs}LL},`,
     );
   }
   lines.push("};");
@@ -293,6 +295,7 @@ function generateStandalone(
       instanceExpr: instanceVar,
       varsDescName: `${instanceVar}_vars`,
       vars: collectVarsFromBlocks(prog.varBlocks),
+      intervalNs: 0,
     };
   });
 
@@ -328,6 +331,7 @@ function generateWithConfiguration(
   const programs: ProgramInfo[] = [];
   for (const resource of config.resources) {
     for (const task of resource.tasks) {
+      const intervalNs = task.interval?.nanoseconds ?? 0;
       for (const inst of task.programInstances) {
         const astProg = ast.programs.find(
           (p) => p.name.toUpperCase() === inst.programType.toUpperCase(),
@@ -337,6 +341,7 @@ function generateWithConfiguration(
           instanceExpr: `${configInstanceVar}.${inst.instanceName}`,
           varsDescName: `vars_${inst.instanceName}`,
           vars: astProg ? collectVarsFromBlocks(astProg.varBlocks) : [],
+          intervalNs,
         });
       }
     }

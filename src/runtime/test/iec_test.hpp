@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cmath>
+#include <cstdint>
 #include <exception>
 #include <vector>
 #include <functional>
@@ -18,6 +19,9 @@
 #include <sstream>
 
 namespace strucpp {
+
+// Forward declaration of scan-cycle time global (defined in iec_std_lib.hpp)
+extern int64_t __CURRENT_TIME_NS;
 
 // ============================================================================
 // Value formatting
@@ -250,6 +254,7 @@ public:
         for (auto& tc : tests_) {
             TestContext ctx;
             ctx.test_file = test_file_;
+            __CURRENT_TIME_NS = 0;  // Reset scan-cycle time for each test
             try {
                 bool result = tc.func(ctx);
                 if (result && ctx.failures == 0) {

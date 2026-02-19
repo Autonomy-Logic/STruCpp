@@ -156,7 +156,7 @@ describe('Phase 3.6 - REPL Main Generator', () => {
 
       expect(mainCpp).toContain('Program_EMPTY');
       expect(mainCpp).toContain('prog_EMPTY_vars = nullptr');
-      expect(mainCpp).toContain('"EMPTY", &prog_EMPTY, prog_EMPTY_vars, 0');
+      expect(mainCpp).toContain('"EMPTY", &prog_EMPTY, prog_EMPTY_vars, 0, 0LL');
     });
 
     it('should include VAR_INPUT and VAR_OUTPUT but skip VAR_EXTERNAL', () => {
