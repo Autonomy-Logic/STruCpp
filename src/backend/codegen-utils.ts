@@ -3,6 +3,19 @@
  */
 
 /**
+ * Convert an IEC 61131-3 based numeric string to a C++ literal string.
+ * Handles 16#FF → 0xFF, 8#77 → 077, 2#1010 → 0b1010, and plain decimals.
+ * Strips IEC underscore separators.
+ */
+export function iecBaseToCppLiteral(raw: string): string {
+  const upper = raw.toUpperCase().replace(/_/g, "");
+  if (upper.startsWith("16#")) return "0x" + upper.slice(3);
+  if (upper.startsWith("8#")) return "0" + upper.slice(2);
+  if (upper.startsWith("2#")) return "0b" + upper.slice(2);
+  return raw.replace(/_/g, "");
+}
+
+/**
  * Format an array type string from element type and dimension bounds.
  *
  * - 1D → `Array1D<E, start, end>`

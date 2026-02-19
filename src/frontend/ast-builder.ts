@@ -204,6 +204,17 @@ function parseIECInteger(raw: string): number {
   return parseInt(upper, 10);
 }
 
+/**
+ * Parse an IEC 61131-3 numeric literal (integer or real) that may use based notation.
+ * Handles 16#FF, 8#77, 2#1010, plain integers, and real literals (1.5, 1.5E10).
+ */
+function parseIECNumeric(raw: string): number {
+  if (raw.includes(".") || /[eE]/.test(raw)) {
+    return parseFloat(raw.replace(/_/g, ""));
+  }
+  return parseIECInteger(raw);
+}
+
 // =============================================================================
 // AST Builder Class
 // =============================================================================
@@ -2342,20 +2353,7 @@ export class ASTBuilder {
       const hashIdx = raw.indexOf("#");
       const typePrefix = raw.substring(0, hashIdx).toUpperCase();
       const valuePart = raw.substring(hashIdx + 1);
-      // Parse the numeric value
-      let numValue: number;
-      if (valuePart.startsWith("16#")) {
-        numValue = parseInt(valuePart.substring(3).replace(/_/g, ""), 16);
-      } else if (valuePart.startsWith("8#")) {
-        numValue = parseInt(valuePart.substring(2).replace(/_/g, ""), 8);
-      } else if (valuePart.startsWith("2#")) {
-        numValue = parseInt(valuePart.substring(2).replace(/_/g, ""), 2);
-      } else {
-        numValue =
-          valuePart.includes(".") || /[eE]/.test(valuePart)
-            ? parseFloat(valuePart.replace(/_/g, ""))
-            : parseInt(valuePart.replace(/_/g, ""), 10);
-      }
+      const numValue = parseIECNumeric(valuePart);
       const litType =
         typePrefix === "REAL" || typePrefix === "LREAL" ? "REAL" : "INT";
       return {

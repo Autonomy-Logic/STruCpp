@@ -40,7 +40,7 @@ import type {
 import { getProjectNamespace, parseTimeLiteral } from "../project-model.js";
 import { TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator } from "./type-codegen.js";
-import { formatArrayType } from "./codegen-utils.js";
+import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
 
 // =============================================================================
 // Located Variable Support
@@ -2340,20 +2340,9 @@ export class CodeGenerator {
     // Handle typed literals: BYTE#255 → static_cast<IEC_BYTE>(255)
     if (expr.typePrefix) {
       const cppType = `IEC_${expr.typePrefix}`;
-      // For hex/oct/bin bases, preserve the base notation
-      const rawVal = expr.rawValue;
-      const hashIdx = rawVal.indexOf("#");
-      const valuePart = rawVal.substring(hashIdx + 1);
-      let cppValue: string;
-      if (valuePart.startsWith("16#")) {
-        cppValue = `0x${valuePart.substring(3).replace(/_/g, "")}`;
-      } else if (valuePart.startsWith("8#")) {
-        cppValue = `0${valuePart.substring(2).replace(/_/g, "")}`;
-      } else if (valuePart.startsWith("2#")) {
-        cppValue = `0b${valuePart.substring(2).replace(/_/g, "")}`;
-      } else {
-        cppValue = valuePart.replace(/_/g, "");
-      }
+      const hashIdx = expr.rawValue.indexOf("#");
+      const valuePart = expr.rawValue.substring(hashIdx + 1);
+      const cppValue = iecBaseToCppLiteral(valuePart);
       return `static_cast<${cppType}>(${cppValue})`;
     }
 
@@ -2406,10 +2395,15 @@ export class CodeGenerator {
    */
 
   private formatIntegerLiteral(rawValue: string, value: number): string {
+    // Based literals (16#FF, 8#77, 2#1010) → C++ notation; plain decimals use numeric value
     const upper = rawValue.toUpperCase().replace(/_/g, "");
-    if (upper.startsWith("16#")) return "0x" + upper.slice(3);
-    if (upper.startsWith("8#")) return "0" + upper.slice(2);
-    if (upper.startsWith("2#")) return "0b" + upper.slice(2);
+    if (
+      upper.startsWith("16#") ||
+      upper.startsWith("8#") ||
+      upper.startsWith("2#")
+    ) {
+      return iecBaseToCppLiteral(rawValue);
+    }
     return String(value);
   }
 
