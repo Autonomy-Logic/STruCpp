@@ -217,10 +217,11 @@ export class TypeCodeGenerator {
       }
       for (const fieldName of field.names) {
         // Mangle field name if it matches its user-defined type name
-        // to avoid GCC -Wchanges-meaning error
+        // to avoid GCC -Wchanges-meaning error. Compare against the ST
+        // type name, not cppType (which may include pointer '*' suffix).
         const emitName =
           !isElementaryType(field.type.name.toUpperCase()) &&
-          fieldName.toUpperCase() === cppType.toUpperCase()
+          fieldName.toUpperCase() === field.type.name.toUpperCase()
             ? `${fieldName}_`
             : fieldName;
         if (field.initialValue) {
@@ -360,7 +361,17 @@ export class TypeCodeGenerator {
    *   using MyInt = INT_t;
    */
   private generateTypeAlias(name: string, def: TypeReference): void {
-    const cppType = this.mapTypeToCpp(def.name);
+    let cppType: string;
+    if (def.arrayDimensions && def.elementTypeName) {
+      // POINTER TO ARRAY[...] OF T — use array template
+      const elemCpp = this.mapTypeToCpp(def.elementTypeName);
+      cppType = formatArrayType(elemCpp, def.arrayDimensions);
+    } else {
+      cppType = this.mapTypeToCpp(def.name);
+    }
+    if (def.referenceKind === "pointer_to") {
+      cppType += "*";
+    }
     this.emit(`using ${name} = ${cppType};`);
     this.emit("");
   }

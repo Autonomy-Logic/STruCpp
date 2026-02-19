@@ -1324,7 +1324,6 @@ export class SemanticAnalyzer {
   private isLValue(expr: Expression): boolean {
     return (
       expr.kind === "VariableExpression" ||
-      expr.kind === "MethodCallExpression" ||
       (expr.kind === "ParenthesizedExpression" &&
         this.isLValue(expr.expression))
     );

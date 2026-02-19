@@ -698,9 +698,13 @@ export class ASTBuilder {
       return this.buildSimpleEnumDefinition(simpleEnumNode);
     }
 
-    // Check for array type
+    // Check for array type (may include POINTER TO prefix from singleTypeDeclaration)
     const arrayNode = getFirstNode(children.arrayType);
     if (arrayNode) {
+      // If POINTER TO prefix present, represent as TypeReference with arrayDimensions
+      if (children.POINTER) {
+        return this.buildPointerToArrayTypeReference(arrayNode);
+      }
       return this.buildArrayDefinition(arrayNode);
     }
 
@@ -822,6 +826,54 @@ export class ASTBuilder {
       dimensions,
       elementType,
     };
+  }
+
+  /**
+   * Build a TypeReference for POINTER TO ARRAY[...] OF T in TYPE declarations.
+   * Represents the pointer-to-array as a TypeReference with arrayDimensions,
+   * matching the representation used by varDeclaration for inline array types.
+   */
+  buildPointerToArrayTypeReference(arrayNode: CstNode): TypeReference {
+    const arrayChildren = arrayNode.children as CstChildren;
+
+    // Get element type from nested dataType
+    const elementTypeNode = getFirstNode(arrayChildren.dataType);
+    let elementTypeName = "INT";
+    if (elementTypeNode) {
+      const elemChildren = elementTypeNode.children as CstChildren;
+      const elemNameToken = getFirstToken(elemChildren.Identifier);
+      if (elemNameToken) {
+        elementTypeName = elemNameToken.image;
+      }
+    }
+
+    // Extract integer bounds from dimensions
+    const dimNodes = getAllNodes(arrayChildren.arrayDimension);
+    const arrayDimensions: Array<{ start: number; end: number }> = [];
+    for (const dimNode of dimNodes) {
+      const dimChildren = dimNode.children as CstChildren;
+      const exprNodes = getAllNodes(dimChildren.expression);
+      if (exprNodes.length >= 2) {
+        const startVal = this.extractIntegerFromExpression(exprNodes[0]!);
+        const endVal = this.extractIntegerFromExpression(exprNodes[1]!);
+        if (startVal !== undefined && endVal !== undefined) {
+          arrayDimensions.push({ start: startVal, end: endVal });
+        }
+      }
+    }
+
+    const result: TypeReference = {
+      kind: "TypeReference",
+      sourceSpan: nodeToSourceSpan(arrayNode),
+      name: elementTypeName,
+      isReference: true,
+      referenceKind: "pointer_to",
+    };
+    if (arrayDimensions.length > 0) {
+      result.arrayDimensions = arrayDimensions;
+      result.elementTypeName = elementTypeName;
+    }
+    return result;
   }
 
   /**
@@ -2467,8 +2519,11 @@ export class ASTBuilder {
       };
     }
 
-    const identifiers = getAllTokens(children.Identifier);
-    const memberName = identifiers[0]?.image ?? "";
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const memberName =
+      idOrKwNodes.length > 0
+        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
+        : "";
 
     // If there's a LParen, it's a method call
     if (children.LParen) {
@@ -2506,8 +2561,11 @@ export class ASTBuilder {
    */
   buildSuperAccessExpression(node: CstNode): Expression {
     const children = node.children as CstChildren;
-    const identifiers = getAllTokens(children.Identifier);
-    const memberName = identifiers[0]?.image ?? "";
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const memberName =
+      idOrKwNodes.length > 0
+        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
+        : "";
 
     // If there's a LParen, it's a method call
     if (children.LParen) {
@@ -2747,8 +2805,11 @@ export class ASTBuilder {
    */
   buildThisStatement(node: CstNode): Statement {
     const children = node.children as CstChildren;
-    const identifiers = getAllTokens(children.Identifier);
-    const memberName = identifiers[0]?.image ?? "";
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const memberName =
+      idOrKwNodes.length > 0
+        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
+        : "";
 
     // Check if it's an assignment (has Assign token)
     if (children.Assign) {
@@ -2802,8 +2863,11 @@ export class ASTBuilder {
    */
   buildSuperCallStatement(node: CstNode): FunctionCallStatement {
     const children = node.children as CstChildren;
-    const identifiers = getAllTokens(children.Identifier);
-    const methodName = identifiers[0]?.image ?? "";
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const methodName =
+      idOrKwNodes.length > 0
+        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
+        : "";
 
     const args: Argument[] = [];
     const argListNode = getFirstNode(children.argumentList);

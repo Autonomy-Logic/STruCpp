@@ -380,6 +380,8 @@ export class CodeGenerator {
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
   }): string {
+    let baseType: string;
+
     // Handle inline array types with dimension info
     // Use raw C++ types (INT_t, BOOL_t) for array elements, not IEC_* (IECVar<>)
     // because Array1D internally wraps elements in IECVar<T> already
@@ -387,12 +389,14 @@ export class CodeGenerator {
       const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
         ? typeRef.elementTypeName
         : this.typeCodeGen.mapTypeToCpp(typeRef.elementTypeName);
-      return formatArrayType(elemCpp, typeRef.arrayDimensions);
+      baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
+    } else {
+      baseType = this.mapVarTypeToCpp(
+        typeRef.name,
+        typeof typeRef.maxLength === "number" ? typeRef.maxLength : undefined,
+      );
     }
-    const baseType = this.mapVarTypeToCpp(
-      typeRef.name,
-      typeof typeRef.maxLength === "number" ? typeRef.maxLength : undefined,
-    );
+
     if (typeRef.referenceKind === "pointer_to") {
       return `${baseType}*`;
     }
@@ -2884,16 +2888,30 @@ export class CodeGenerator {
       }
     }
 
-    if (varTypes.length === 0) return; // All literals, no coercion needed
-
-    // Find dominant type: if all var types agree, use that; otherwise pick widest
-    let dominant = varTypes[0]!;
-    for (let i = 1; i < varTypes.length; i++) {
-      if (varTypes[i] !== dominant) {
-        // Pick wider type
+    // Find dominant type from variable types, or from literal types if all args are literals
+    let dominant: string;
+    if (varTypes.length === 0) {
+      // All literals — pick the widest literal type as dominant
+      const litTypes = literalIndices
+        .map((i) => argTypes[i])
+        .filter((t): t is string => !!t);
+      if (litTypes.length === 0) return;
+      dominant = litTypes[0]!;
+      for (let i = 1; i < litTypes.length; i++) {
         const bits1 = CodeGenerator.IEC_TYPE_BITS[dominant] ?? 0;
-        const bits2 = CodeGenerator.IEC_TYPE_BITS[varTypes[i]!] ?? 0;
-        if (bits2 > bits1) dominant = varTypes[i]!;
+        const bits2 = CodeGenerator.IEC_TYPE_BITS[litTypes[i]!] ?? 0;
+        if (bits2 > bits1) dominant = litTypes[i]!;
+      }
+    } else {
+      // Find dominant type: if all var types agree, use that; otherwise pick widest
+      dominant = varTypes[0]!;
+      for (let i = 1; i < varTypes.length; i++) {
+        if (varTypes[i] !== dominant) {
+          // Pick wider type
+          const bits1 = CodeGenerator.IEC_TYPE_BITS[dominant] ?? 0;
+          const bits2 = CodeGenerator.IEC_TYPE_BITS[varTypes[i]!] ?? 0;
+          if (bits2 > bits1) dominant = varTypes[i]!;
+        }
       }
     }
 
@@ -3575,12 +3593,13 @@ export class CodeGenerator {
    */
   private mangleMemberIfNeeded(
     name: string,
-    cppType: string,
+    _cppType: string,
     stTypeName: string,
   ): string {
     // Only FB/struct/interface instances can collide (IEC_ prefixed types can't)
+    // Compare against the ST type name, not cppType (which may include pointer '*' suffix).
     if (!this.isUserDefinedType(stTypeName)) return name;
-    if (name.toUpperCase() !== cppType.toUpperCase()) return name;
+    if (name.toUpperCase() !== stTypeName.toUpperCase()) return name;
     const mangled = `${name}_`;
     this.memberMangledNames.set(name.toUpperCase(), mangled);
     return mangled;

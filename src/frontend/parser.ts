@@ -471,6 +471,18 @@ export class STParser extends CstParser {
         { ALT: () => this.SUBRULE(this.structType) },
         { ALT: () => this.SUBRULE(this.simpleEnumType) },
         {
+          // POINTER TO ARRAY[...] OF T (must come before bare arrayType)
+          ALT: () => {
+            this.CONSUME(tokens.POINTER);
+            this.CONSUME(tokens.TO);
+            this.SUBRULE2(this.arrayType);
+          },
+          GATE: () =>
+            this.LA(1).tokenType === tokens.POINTER &&
+            this.LA(2).tokenType === tokens.TO &&
+            this.LA(3).tokenType === tokens.ARRAY,
+        },
+        {
           ALT: () => this.SUBRULE(this.arrayType),
           GATE: () => this.LA(1).tokenType === tokens.ARRAY,
         },
@@ -842,7 +854,7 @@ export class STParser extends CstParser {
   public thisStatement = this.RULE("thisStatement", () => {
     this.CONSUME(tokens.THIS);
     this.CONSUME(tokens.Dot);
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     // Determine if this is an assignment or method call
     this.OR([
       {
@@ -890,17 +902,26 @@ export class STParser extends CstParser {
   }
 
   /**
-   * Lookahead helper to detect if we're parsing a method call: Ident.Ident(
+   * Contextual keyword tokens that can also be used as identifiers.
+   * Keep in sync with the identifierOrKeyword rule alternatives.
+   */
+  private static readonly CONTEXTUAL_KEYWORDS: TokenType[] = [
+    tokens.SET,
+    tokens.GET,
+    tokens.ON,
+    tokens.OVERRIDE,
+    tokens.ABSTRACT,
+    tokens.FINAL,
+  ];
+
+  /**
+   * Lookahead helper to detect if a token type is an identifier or contextual keyword.
+   * Used by isMethodCallAhead() for lookahead decisions.
    */
   private isIdentifierOrKeywordToken(tokenType: TokenType): boolean {
     return (
       tokenType === tokens.Identifier ||
-      tokenType === tokens.SET ||
-      tokenType === tokens.GET ||
-      tokenType === tokens.ON ||
-      tokenType === tokens.OVERRIDE ||
-      tokenType === tokens.ABSTRACT ||
-      tokenType === tokens.FINAL
+      STParser.CONTEXTUAL_KEYWORDS.includes(tokenType)
     );
   }
 
@@ -938,7 +959,7 @@ export class STParser extends CstParser {
   public superCallStatement = this.RULE("superCallStatement", () => {
     this.CONSUME(tokens.SUPER);
     this.CONSUME(tokens.Dot);
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     this.OPTION(() => {
       this.CONSUME(tokens.LParen);
       this.OPTION2(() => {
@@ -1366,7 +1387,7 @@ export class STParser extends CstParser {
         // THIS.member or THIS.method(args)
         ALT: () => {
           this.CONSUME(tokens.Dot);
-          this.CONSUME(tokens.Identifier);
+          this.SUBRULE(this.identifierOrKeyword);
           // Optional function call: THIS.Method(args)
           this.OPTION(() => {
             this.CONSUME(tokens.LParen);
@@ -1386,7 +1407,7 @@ export class STParser extends CstParser {
   public superAccess = this.RULE("superAccess", () => {
     this.CONSUME(tokens.SUPER);
     this.CONSUME(tokens.Dot);
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     // Optional function call: SUPER.Method(args)
     this.OPTION(() => {
       this.CONSUME(tokens.LParen);
