@@ -39,7 +39,7 @@ import type {
   ProgramDecl,
 } from "../project-model.js";
 import { getProjectNamespace, parseTimeLiteral } from "../project-model.js";
-import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
+import { TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator } from "./type-codegen.js";
 import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
 
@@ -242,9 +242,6 @@ export class CodeGenerator {
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
 
-  /** Set of external/missing type names that need stub class declarations */
-  private externTypeStubs: Set<string> = new Set();
-
   /** Map of variable name (upper case) → type name (original case) for current scope */
   protected currentScopeVarTypes: Map<string, string> = new Map();
 
@@ -372,12 +369,6 @@ export class CodeGenerator {
       if (this.knownProgramTypes.has(typeName.toUpperCase())) {
         return `Program_${typeName}`;
       }
-      return typeName;
-    }
-    // Non-elementary, non-UDT types are likely external/missing FBs or programs
-    // (e.g., CLK_PRG in OSCAT). Emit bare name and track for stub generation.
-    if (!isElementaryType(typeName.toUpperCase())) {
-      this.externTypeStubs.add(typeName);
       return typeName;
     }
     return `IEC_${typeName}`;
@@ -679,25 +670,6 @@ export class CodeGenerator {
     // Generate interface declarations (before FBs since FBs may implement interfaces)
     for (const iface of ast.interfaces) {
       this.generateInterfaceHeaderDeclaration(iface);
-    }
-
-    // Pre-scan for external/undefined types referenced in FB/program variable declarations
-    // These are types not defined in the AST and not IEC elementary types (e.g., CLK_PRG in OSCAT)
-    this.prescanExternTypes(ast);
-    if (this.externTypeStubs.size > 0) {
-      this.emitHeader(
-        "// External type stubs (referenced but not defined in source)",
-      );
-      for (const stubName of this.externTypeStubs) {
-        const members = this.collectExternTypeMembers(ast, stubName);
-        const memberDecls = members
-          .map((m) => `IEC_${m.type} ${m.name};`)
-          .join(" ");
-        this.emitHeader(
-          `class ${stubName} { public: ${memberDecls} ${stubName}() = default; template<typename... A> void operator()(A...) {} };`,
-        );
-      }
-      this.emitHeader("");
     }
 
     // Generate function block class declarations (topologically sorted by dependency)
@@ -3624,106 +3596,6 @@ export class CodeGenerator {
   }
 
   /**
-   * Pre-scan AST for types referenced in variable declarations that are not
-   * defined anywhere (not elementary, not UDT, not FB, not program).
-   * These get empty class stubs so the C++ compiles.
-   */
-  private prescanExternTypes(ast: CompilationUnit): void {
-    const checkType = (typeName: string) => {
-      const upper = typeName.toUpperCase();
-      if (isElementaryType(upper)) return;
-      if (this.isUserDefinedType(typeName)) return;
-      if (upper === "STRING" || upper === "WSTRING") return;
-      // Skip internal array fallback types and VLA types
-      if (upper.startsWith("__INLINE_ARRAY_") || upper.startsWith("__VLA_"))
-        return;
-      this.externTypeStubs.add(typeName);
-    };
-    const scanVarBlocks = (
-      varBlocks: CompilationUnit["programs"][0]["varBlocks"],
-    ) => {
-      for (const block of varBlocks) {
-        for (const decl of block.declarations) {
-          checkType(decl.type.name);
-        }
-      }
-    };
-    for (const fb of ast.functionBlocks) {
-      scanVarBlocks(fb.varBlocks);
-    }
-    for (const prog of ast.programs) {
-      scanVarBlocks(prog.varBlocks);
-    }
-  }
-
-  /**
-   * Collect members accessed on variables of an extern stub type.
-   * Recursively scans the entire AST for field access on variables of the given type.
-   */
-  private collectExternTypeMembers(
-    ast: CompilationUnit,
-    typeName: string,
-  ): Array<{ name: string; type: string }> {
-    const members = new Map<string, string>();
-    const upperType = typeName.toUpperCase();
-
-    // Collect all variable names of this type across all POUs
-    const varsOfType = new Set<string>();
-    const scanVarBlocks = (
-      varBlocks: CompilationUnit["programs"][0]["varBlocks"],
-    ) => {
-      for (const block of varBlocks) {
-        for (const decl of block.declarations) {
-          if (decl.type.name.toUpperCase() === upperType) {
-            for (const name of decl.names) {
-              varsOfType.add(name.toUpperCase());
-            }
-          }
-        }
-      }
-    };
-    for (const fb of ast.functionBlocks) scanVarBlocks(fb.varBlocks);
-    for (const prog of ast.programs) scanVarBlocks(prog.varBlocks);
-
-    if (varsOfType.size === 0) return [];
-
-    // Deep scan: walk the entire AST object tree looking for VariableExpression
-    // nodes that reference one of the variables of this type
-    const scanObj = (obj: unknown): void => {
-      if (obj === null || obj === undefined || typeof obj !== "object") return;
-      if (Array.isArray(obj)) {
-        for (const item of obj) scanObj(item);
-        return;
-      }
-      const record = obj as Record<string, unknown>;
-      if (
-        record.kind === "VariableExpression" &&
-        typeof record.name === "string" &&
-        varsOfType.has(record.name.toUpperCase()) &&
-        Array.isArray(record.accessChain)
-      ) {
-        for (const step of record.accessChain as AccessStep[]) {
-          if (step.kind === "field" && !members.has(step.name)) {
-            members.set(step.name, "BOOL");
-          }
-        }
-      }
-      // Recurse into all properties (skip sourceSpan to avoid circular refs)
-      for (const [key, value] of Object.entries(record)) {
-        if (key !== "sourceSpan") scanObj(value);
-      }
-    };
-
-    for (const fb of ast.functionBlocks) scanObj(fb.body);
-    for (const prog of ast.programs) scanObj(prog.body);
-
-    return Array.from(members.entries()).map(([name, type]) => ({
-      name,
-      type,
-    }));
-  }
-
-  /**
    * Remove the last field step from an access chain (for bit access / property trim).
    * Returns undefined if the chain becomes empty.
    */
@@ -3765,11 +3637,9 @@ export class CodeGenerator {
     this.memberMangledNames.clear();
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
-        const cppType =
-          this.isUserDefinedType(decl.type.name) ||
-          this.externTypeStubs.has(decl.type.name)
-            ? decl.type.name
-            : `IEC_${decl.type.name}`;
+        const cppType = this.isUserDefinedType(decl.type.name)
+          ? decl.type.name
+          : `IEC_${decl.type.name}`;
         for (const name of decl.names) {
           this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
           // Detect member name collisions with type name (GCC -Wchanges-meaning)
