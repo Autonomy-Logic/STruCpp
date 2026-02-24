@@ -21,7 +21,7 @@ import type {
 } from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
-import { SymbolTables } from "./symbol-table.js";
+import { Scope, SymbolTables } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 
 // =============================================================================
@@ -133,6 +133,17 @@ interface LocatedVarInfo {
   scopeType: "program" | "function" | "functionBlock";
   scopeName: string;
   declaration: VarDeclaration;
+}
+
+/**
+ * Context for undeclared variable checking within a POU scope.
+ */
+interface UndeclaredVarContext {
+  functionName?: string;
+  fbName?: string;
+  methodName?: string;
+  propertyName?: string;
+  methodLocalVars?: Map<string, string>;
 }
 
 export class SemanticAnalyzer {
@@ -342,6 +353,51 @@ export class SemanticAnalyzer {
         }
       }
     }
+
+    // Register global variable declarations
+    for (const block of ast.globalVarBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          try {
+            const varType: ElementaryType = {
+              typeKind: "elementary",
+              name: decl.type.name,
+              sizeBits: 0,
+            };
+            if (block.isConstant) {
+              this.symbolTables.globalScope.define({
+                name,
+                kind: "constant",
+                declaration: decl,
+                type: varType,
+              });
+            } else {
+              this.symbolTables.globalScope.define({
+                name,
+                kind: "variable",
+                declaration: decl,
+                type: varType,
+                isInput: false,
+                isOutput: false,
+                isInOut: false,
+                isExternal: false,
+                isGlobal: true,
+                isRetain: block.isRetain,
+                address: decl.address,
+              });
+            }
+          } catch (err) {
+            if (err instanceof Error) {
+              this.addError(
+                err.message,
+                decl.sourceSpan.startLine,
+                decl.sourceSpan.startCol,
+              );
+            }
+          }
+        }
+      }
+    }
   }
 
   /**
@@ -430,6 +486,9 @@ export class SemanticAnalyzer {
     // Validate type references (must come first — other validations assume types exist)
     this.validateTypeReferences(ast);
 
+    // Validate undeclared variable usage
+    this.validateUndeclaredVariables(ast);
+
     // Validate located variables
     this.validateLocatedVariables();
 
@@ -454,8 +513,7 @@ export class SemanticAnalyzer {
     // Validate bit access bounds and ADR l-value targets
     this.validateExpressions(ast);
 
-    // TODO: Implement additional semantic validation in Phase 3+
-    // - Check that variables are declared before use
+    // TODO: Implement additional semantic validation
     // - Validate array bounds
     // - Check CASE statement coverage
     // - Validate reference operations
@@ -2183,6 +2241,258 @@ export class SemanticAnalyzer {
         this.validateSingleTypeReference(def, `type alias '${typeName}'`);
         break;
     }
+  }
+
+  // =============================================================================
+  // Undeclared Variable Validation
+  // =============================================================================
+
+  /**
+   * Validate that all variable references in POU bodies refer to declared variables.
+   */
+  private validateUndeclaredVariables(ast: CompilationUnit): void {
+    // Programs
+    for (const prog of ast.programs) {
+      const scope = this.symbolTables.getProgramScope(prog.name);
+      if (scope) {
+        this.walkStatementsForUndeclaredVars(prog.body, scope, {});
+      }
+    }
+
+    // Functions
+    for (const func of ast.functions) {
+      const scope = this.symbolTables.getFunctionScope(func.name);
+      if (scope) {
+        this.walkStatementsForUndeclaredVars(func.body, scope, {
+          functionName: func.name,
+        });
+      }
+    }
+
+    // Function blocks
+    for (const fb of ast.functionBlocks) {
+      const scope = this.symbolTables.getFBScope(fb.name);
+      if (scope) {
+        this.walkStatementsForUndeclaredVars(fb.body, scope, {
+          fbName: fb.name,
+        });
+        for (const method of fb.methods) {
+          const methodVars = this.buildVarTypeMap(method.varBlocks);
+          this.walkStatementsForUndeclaredVars(method.body, scope, {
+            fbName: fb.name,
+            methodName: method.name,
+            methodLocalVars: methodVars,
+          });
+        }
+        for (const prop of fb.properties) {
+          if (prop.getter) {
+            this.walkStatementsForUndeclaredVars(prop.getter, scope, {
+              fbName: fb.name,
+              propertyName: prop.name,
+            });
+          }
+          if (prop.setter) {
+            this.walkStatementsForUndeclaredVars(prop.setter, scope, {
+              fbName: fb.name,
+              propertyName: prop.name,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Walk statements checking for undeclared variable usage.
+   */
+  private walkStatementsForUndeclaredVars(
+    stmts: Statement[],
+    scope: Scope,
+    ctx: UndeclaredVarContext,
+  ): void {
+    for (const stmt of stmts) {
+      switch (stmt.kind) {
+        case "AssignmentStatement":
+          this.checkExpressionForUndeclaredVars(stmt.target, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.value, scope, ctx);
+          break;
+        case "RefAssignStatement":
+          this.checkExpressionForUndeclaredVars(stmt.target, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.source, scope, ctx);
+          break;
+        case "FunctionCallStatement":
+          this.checkExpressionForUndeclaredVars(stmt.call, scope, ctx);
+          break;
+        case "DeleteStatement":
+          this.checkExpressionForUndeclaredVars(stmt.pointer, scope, ctx);
+          break;
+        case "ForStatement":
+          this.checkNameDeclared(
+            stmt.controlVariable,
+            scope,
+            ctx,
+            stmt.sourceSpan,
+          );
+          this.checkExpressionForUndeclaredVars(stmt.start, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.end, scope, ctx);
+          if (stmt.step) {
+            this.checkExpressionForUndeclaredVars(stmt.step, scope, ctx);
+          }
+          this.walkStatementsForUndeclaredVars(stmt.body, scope, ctx);
+          break;
+        case "IfStatement":
+          this.checkExpressionForUndeclaredVars(stmt.condition, scope, ctx);
+          this.walkStatementsForUndeclaredVars(stmt.thenStatements, scope, ctx);
+          for (const clause of stmt.elsifClauses) {
+            this.checkExpressionForUndeclaredVars(clause.condition, scope, ctx);
+            this.walkStatementsForUndeclaredVars(clause.statements, scope, ctx);
+          }
+          this.walkStatementsForUndeclaredVars(stmt.elseStatements, scope, ctx);
+          break;
+        case "WhileStatement":
+          this.checkExpressionForUndeclaredVars(stmt.condition, scope, ctx);
+          this.walkStatementsForUndeclaredVars(stmt.body, scope, ctx);
+          break;
+        case "RepeatStatement":
+          this.walkStatementsForUndeclaredVars(stmt.body, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.condition, scope, ctx);
+          break;
+        case "CaseStatement":
+          this.checkExpressionForUndeclaredVars(stmt.selector, scope, ctx);
+          for (const c of stmt.cases) {
+            for (const label of c.labels) {
+              this.checkExpressionForUndeclaredVars(label.start, scope, ctx);
+              if (label.end) {
+                this.checkExpressionForUndeclaredVars(label.end, scope, ctx);
+              }
+            }
+            this.walkStatementsForUndeclaredVars(c.statements, scope, ctx);
+          }
+          this.walkStatementsForUndeclaredVars(stmt.elseStatements, scope, ctx);
+          break;
+      }
+    }
+  }
+
+  /**
+   * Recursively check an expression for undeclared variable usage.
+   */
+  private checkExpressionForUndeclaredVars(
+    expr: Expression,
+    scope: Scope,
+    ctx: UndeclaredVarContext,
+  ): void {
+    switch (expr.kind) {
+      case "VariableExpression":
+        this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan);
+        for (const sub of expr.subscripts) {
+          this.checkExpressionForUndeclaredVars(sub, scope, ctx);
+        }
+        break;
+      case "FunctionCallExpression":
+        // For dotted names (fb.method), check only the object part
+        if (expr.functionName.includes(".")) {
+          const objName = expr.functionName.substring(
+            0,
+            expr.functionName.indexOf("."),
+          );
+          this.checkNameDeclared(objName, scope, ctx, expr.sourceSpan);
+        }
+        // Don't check non-dotted function names — they're function/FB symbols
+        for (const arg of expr.arguments) {
+          this.checkExpressionForUndeclaredVars(arg.value, scope, ctx);
+        }
+        break;
+      case "MethodCallExpression":
+        this.checkExpressionForUndeclaredVars(expr.object, scope, ctx);
+        for (const arg of expr.arguments) {
+          this.checkExpressionForUndeclaredVars(arg.value, scope, ctx);
+        }
+        break;
+      case "BinaryExpression":
+        this.checkExpressionForUndeclaredVars(expr.left, scope, ctx);
+        this.checkExpressionForUndeclaredVars(expr.right, scope, ctx);
+        break;
+      case "UnaryExpression":
+        this.checkExpressionForUndeclaredVars(expr.operand, scope, ctx);
+        break;
+      case "ParenthesizedExpression":
+        this.checkExpressionForUndeclaredVars(expr.expression, scope, ctx);
+        break;
+      case "RefExpression":
+        this.checkExpressionForUndeclaredVars(expr.operand, scope, ctx);
+        break;
+      case "DrefExpression":
+        this.checkExpressionForUndeclaredVars(expr.operand, scope, ctx);
+        break;
+      case "ArrayLiteralExpression":
+        for (const elem of expr.elements) {
+          this.checkExpressionForUndeclaredVars(elem, scope, ctx);
+        }
+        break;
+      case "NewExpression":
+        if (expr.arraySize) {
+          this.checkExpressionForUndeclaredVars(expr.arraySize, scope, ctx);
+        }
+        break;
+    }
+  }
+
+  /**
+   * Check whether a name is declared in the current scope chain or context.
+   */
+  private checkNameDeclared(
+    name: string,
+    scope: Scope,
+    ctx: UndeclaredVarContext,
+    sourceSpan: { startLine: number; startCol: number },
+  ): void {
+    const upper = name.toUpperCase();
+
+    // 1. Scope chain lookup (local → parent → globalScope)
+    if (scope.lookup(upper)) return;
+
+    // 1b. Inherited FB member variables (walk EXTENDS chain)
+    if (ctx.fbName) {
+      const fbSym = this.symbolTables.globalScope.lookup(ctx.fbName);
+      if (fbSym?.kind === "functionBlock") {
+        let parentName = fbSym.declaration.extends;
+        const visited = new Set<string>();
+        while (parentName) {
+          const parentUpper = parentName.toUpperCase();
+          if (visited.has(parentUpper)) break;
+          visited.add(parentUpper);
+          const parentScope = this.symbolTables.getFBScope(parentName);
+          if (parentScope?.lookupLocal(upper)) return;
+          const parentSym = this.symbolTables.globalScope.lookup(parentUpper);
+          if (parentSym?.kind !== "functionBlock") break;
+          parentName = parentSym.declaration.extends;
+        }
+      }
+    }
+
+    // 2. Method-local variables
+    if (ctx.methodLocalVars?.has(upper)) return;
+
+    // 3. Function return variable (FuncName := value)
+    if (ctx.functionName && upper === ctx.functionName.toUpperCase()) return;
+
+    // 4. Method/property return variable
+    if (ctx.methodName && upper === ctx.methodName.toUpperCase()) return;
+    if (ctx.propertyName && upper === ctx.propertyName.toUpperCase()) return;
+
+    // 5. THIS / SUPER keywords (valid in FB/method/property context)
+    if ((upper === "THIS" || upper === "SUPER") && ctx.fbName) return;
+
+    // 6. Standard functions (safety net)
+    if (this.stdRegistry.isStandardFunction(name)) return;
+
+    // 7. Not found
+    this.addError(
+      `Undeclared variable '${name}'`,
+      sourceSpan.startLine,
+      sourceSpan.startCol,
+    );
   }
 
   /**
