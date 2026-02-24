@@ -2072,15 +2072,11 @@ export class CodeGenerator {
       };
       // Also trim the accessChain if present
       if (stmt.target.accessChain) {
-        const trimmedChain = [...stmt.target.accessChain];
-        for (let i = trimmedChain.length - 1; i >= 0; i--) {
-          if (trimmedChain[i]!.kind === "field") {
-            trimmedChain.splice(i, 1);
-            break;
-          }
-        }
-        if (trimmedChain.length > 0) {
-          baseVar.accessChain = trimmedChain;
+        const trimmed = this.trimLastFieldFromAccessChain(
+          stmt.target.accessChain,
+        );
+        if (trimmed) {
+          baseVar.accessChain = trimmed;
         } else {
           delete baseVar.accessChain;
         }
@@ -3614,16 +3610,9 @@ export class CodeGenerator {
         fieldAccess: expr.fieldAccess.slice(0, -1),
       };
       if (expr.accessChain) {
-        // Remove the last field step from the access chain
-        const trimmedChain = [...expr.accessChain];
-        for (let i = trimmedChain.length - 1; i >= 0; i--) {
-          if (trimmedChain[i]!.kind === "field") {
-            trimmedChain.splice(i, 1);
-            break;
-          }
-        }
-        if (trimmedChain.length > 0) {
-          baseExpr.accessChain = trimmedChain;
+        const trimmed = this.trimLastFieldFromAccessChain(expr.accessChain);
+        if (trimmed) {
+          baseExpr.accessChain = trimmed;
         } else {
           delete baseExpr.accessChain;
         }
@@ -3732,6 +3721,23 @@ export class CodeGenerator {
       name,
       type,
     }));
+  }
+
+  /**
+   * Remove the last field step from an access chain (for bit access / property trim).
+   * Returns undefined if the chain becomes empty.
+   */
+  private trimLastFieldFromAccessChain(
+    chain: AccessStep[],
+  ): AccessStep[] | undefined {
+    const trimmed = [...chain];
+    for (let i = trimmed.length - 1; i >= 0; i--) {
+      if (trimmed[i]!.kind === "field") {
+        trimmed.splice(i, 1);
+        break;
+      }
+    }
+    return trimmed.length > 0 ? trimmed : undefined;
   }
 
   /**

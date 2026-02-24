@@ -494,6 +494,7 @@ inline T ROL(T in, IEC_INT n) noexcept {
     constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
     auto v = iec_unwrap(in);
     auto shift = iec_unwrap(n) % bits;
+    if (shift < 0) shift += bits; // IEC 61131-3: negative N reverses direction
     return T((v << shift) | (v >> (bits - shift)));
 }
 
@@ -505,6 +506,7 @@ inline T ROL(T in, N n) noexcept {
     constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
     auto v = iec_unwrap(in);
     auto shift = static_cast<int>(iec_unwrap(n)) % bits;
+    if (shift < 0) shift += bits; // IEC 61131-3: negative N reverses direction
     return T((v << shift) | (v >> (bits - shift)));
 }
 
@@ -517,6 +519,7 @@ inline T ROR(T in, IEC_INT n) noexcept {
     constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
     auto v = iec_unwrap(in);
     auto shift = iec_unwrap(n) % bits;
+    if (shift < 0) shift += bits; // IEC 61131-3: negative N reverses direction
     return T((v >> shift) | (v << (bits - shift)));
 }
 
@@ -528,6 +531,7 @@ inline T ROR(T in, N n) noexcept {
     constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
     auto v = iec_unwrap(in);
     auto shift = static_cast<int>(iec_unwrap(n)) % bits;
+    if (shift < 0) shift += bits; // IEC 61131-3: negative N reverses direction
     return T((v >> shift) | (v << (bits - shift)));
 }
 

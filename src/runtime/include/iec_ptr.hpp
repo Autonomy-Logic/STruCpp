@@ -163,6 +163,10 @@ public:
     bool operator<(IEC_Ptr<U> other) const noexcept { return ptr_ < other.get_void(); }
     template<typename U>
     bool operator>(IEC_Ptr<U> other) const noexcept { return ptr_ > other.get_void(); }
+    template<typename U>
+    bool operator<=(IEC_Ptr<U> other) const noexcept { return ptr_ <= other.get_void(); }
+    template<typename U>
+    bool operator>=(IEC_Ptr<U> other) const noexcept { return ptr_ >= other.get_void(); }
 
     // Comparison with nullptr
     bool operator==(std::nullptr_t) const noexcept { return ptr_ == nullptr; }
