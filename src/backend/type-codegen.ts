@@ -73,11 +73,47 @@ const IEC_TO_CPP_TYPE: Record<string, string> = {
 };
 
 /**
+ * Map IEC elementary type names to their IECVar-wrapped C++ type names.
+ * Used for struct fields and array elements that need per-element forcing.
+ */
+const IEC_TO_CPP_VAR_TYPE: Record<string, string> = {
+  BOOL: "IEC_BOOL",
+  BYTE: "IEC_BYTE",
+  WORD: "IEC_WORD",
+  DWORD: "IEC_DWORD",
+  LWORD: "IEC_LWORD",
+  SINT: "IEC_SINT",
+  INT: "IEC_INT",
+  DINT: "IEC_DINT",
+  LINT: "IEC_LINT",
+  USINT: "IEC_USINT",
+  UINT: "IEC_UINT",
+  UDINT: "IEC_UDINT",
+  ULINT: "IEC_ULINT",
+  REAL: "IEC_REAL",
+  LREAL: "IEC_LREAL",
+  TIME: "IEC_TIME",
+  DATE: "IEC_DATE",
+  TIME_OF_DAY: "IEC_TOD",
+  TOD: "IEC_TOD",
+  DATE_AND_TIME: "IEC_DT",
+  DT: "IEC_DT",
+  LTIME: "IEC_LTIME",
+  LDATE: "IEC_LDATE",
+  LTOD: "IEC_LTOD",
+  LDT: "IEC_LDT",
+  CHAR: "IEC_CHAR",
+  WCHAR: "IEC_WCHAR",
+};
+
+/**
  * Type Code Generator for user-defined types
  */
 export class TypeCodeGenerator {
   private options: TypeCodeGenOptions;
   private output: string[] = [];
+  /** Track known enum type names (uppercase) so struct fields can use IEC_ wrapper */
+  private knownEnumNames: Set<string> = new Set();
 
   constructor(options: Partial<TypeCodeGenOptions> = {}) {
     this.options = { ...defaultTypeCodeGenOptions, ...options };
@@ -99,6 +135,7 @@ export class TypeCodeGenerator {
    */
   generateTypes(types: TypeDeclaration[]): string {
     this.output = [];
+    this.knownEnumNames = new Set();
 
     if (types.length === 0) {
       return "";
@@ -123,11 +160,12 @@ export class TypeCodeGenerator {
     switch (def.kind) {
       case "StructDefinition":
         this.generateStructType(type.name, def);
-        // Generate IEC_ wrapper for struct variables
-        this.emit(`using IEC_${type.name} = IECVar<${type.name}>;`);
+        // Struct fields already contain IECVar leaves — identity alias
+        this.emit(`using IEC_${type.name} = ${type.name};`);
         this.emit("");
         break;
       case "EnumDefinition":
+        this.knownEnumNames.add(type.name.toUpperCase());
         this.generateEnumType(type.name, def);
         // Generate IEC_ wrapper for enum variables using IEC_ENUM
         this.emit(`using IEC_${type.name} = IEC_ENUM<${type.name}>;`);
@@ -135,8 +173,8 @@ export class TypeCodeGenerator {
         break;
       case "ArrayDefinition":
         this.generateArrayType(type.name, def);
-        // Generate IEC_ wrapper for array variables
-        this.emit(`using IEC_${type.name} = IECVar<${type.name}>;`);
+        // Array elements already contain IECVar leaves — identity alias
+        this.emit(`using IEC_${type.name} = ${type.name};`);
         this.emit("");
         break;
       case "SubrangeDefinition":
@@ -206,11 +244,16 @@ export class TypeCodeGenerator {
     for (const field of def.fields) {
       let cppType: string;
       if (field.type.arrayDimensions && field.type.elementTypeName) {
-        // Inline array type: emit Array1D/2D/3D<ElementType, bounds...>
-        const elemCpp = this.mapTypeToCpp(field.type.elementTypeName);
+        // Inline array type: emit Array1D/2D/3D<WrappedElementType, bounds...>
+        const elemCpp = this.mapStructFieldTypeToCpp(
+          field.type.elementTypeName,
+        );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
-        cppType = this.mapTypeToCpp(field.type.name);
+        cppType = this.mapStructFieldTypeToCpp(
+          field.type.name,
+          field.type.maxLength,
+        );
       }
       if (field.type.referenceKind === "pointer_to") {
         cppType += "*";
@@ -298,7 +341,7 @@ export class TypeCodeGenerator {
    * IEC 61131-3 array semantics (arrays can have arbitrary start indices).
    */
   private generateArrayType(name: string, def: ArrayDefinition): void {
-    const elementType = this.mapTypeToCpp(def.elementType.name);
+    const elementType = this.mapStructFieldTypeToCpp(def.elementType.name);
     const numDims = def.dimensions.length;
 
     // Collect bounds for all dimensions (skip variable-length dimensions)
@@ -383,7 +426,7 @@ export class TypeCodeGenerator {
   }
 
   /**
-   * Map an IEC type name to its C++ equivalent
+   * Map an IEC type name to its C++ equivalent (raw/unwrapped)
    */
   mapTypeToCpp(typeName: string): string {
     const upperName = typeName.toUpperCase();
@@ -392,6 +435,42 @@ export class TypeCodeGenerator {
       return IEC_TO_CPP_TYPE[upperName] ?? `${upperName}_t`;
     }
 
+    return typeName;
+  }
+
+  /**
+   * Map a type name to its IECVar-wrapped C++ equivalent for struct fields
+   * and array elements. Wraps elementary types with IECVar for per-field forcing.
+   * Composites (structs, arrays, FBs) use bare names since their fields
+   * already contain IECVar leaves.
+   */
+  mapStructFieldTypeToCpp(
+    typeName: string,
+    maxLength?: number | string,
+  ): string {
+    const upperName = typeName.toUpperCase();
+
+    // STRING/WSTRING with optional length → IECStringVar/IECWStringVar (forceable)
+    if (upperName === "STRING") {
+      const len = maxLength ?? 254;
+      return `IECStringVar<${len}>`;
+    }
+    if (upperName === "WSTRING") {
+      const len = maxLength ?? 254;
+      return `IECWStringVar<${len}>`;
+    }
+
+    // Elementary types → IEC_<TYPE> (IECVar-wrapped)
+    if (isElementaryType(upperName)) {
+      return IEC_TO_CPP_VAR_TYPE[upperName] ?? `IEC_${upperName}`;
+    }
+
+    // Enum types → IEC_<Name> (resolves to IEC_ENUM<Name> via alias)
+    if (this.knownEnumNames.has(upperName)) {
+      return `IEC_${typeName}`;
+    }
+
+    // Composite types (struct, array, FB) → bare name
     return typeName;
   }
 

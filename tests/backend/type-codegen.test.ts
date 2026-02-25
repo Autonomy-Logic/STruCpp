@@ -127,8 +127,8 @@ describe('TypeCodeGenerator', () => {
 
       const result = generator.generateTypes([type]);
       expect(result).toContain('struct Point {');
-      expect(result).toContain('INT_t x');
-      expect(result).toContain('REAL_t y');
+      expect(result).toContain('IEC_INT x');
+      expect(result).toContain('IEC_REAL y');
       expect(result).toContain('};');
     });
 
@@ -199,8 +199,8 @@ describe('TypeCodeGenerator', () => {
       };
 
       const result = generator.generateTypes([type]);
-      // Uses Array1D with preserved bounds (0..9)
-      expect(result).toContain('using IntArray = Array1D<INT_t, 0, 9>;');
+      // Uses Array1D with preserved bounds (0..9), element type is IECVar-wrapped
+      expect(result).toContain('using IntArray = Array1D<IEC_INT, 0, 9>;');
     });
 
     it('should generate multi-dimensional array type', () => {
@@ -219,8 +219,8 @@ describe('TypeCodeGenerator', () => {
       };
 
       const result = generator.generateTypes([type]);
-      // Uses Array2D with preserved bounds for both dimensions
-      expect(result).toContain('using Matrix = Array2D<REAL_t, 0, 2, 0, 2>;');
+      // Uses Array2D with preserved bounds for both dimensions, element type is IECVar-wrapped
+      expect(result).toContain('using Matrix = Array2D<IEC_REAL, 0, 2, 0, 2>;');
     });
 
     it('should generate non-zero-based array type', () => {
@@ -239,8 +239,8 @@ describe('TypeCodeGenerator', () => {
       };
 
       const result = generator.generateTypes([type]);
-      // Uses Array1D with preserved non-zero bounds (3..7)
-      expect(result).toContain('using OffsetArray = Array1D<INT_t, 3, 7>;');
+      // Uses Array1D with preserved non-zero bounds (3..7), element type is IECVar-wrapped
+      expect(result).toContain('using OffsetArray = Array1D<IEC_INT, 3, 7>;');
     });
 
     it('should generate subrange type', () => {

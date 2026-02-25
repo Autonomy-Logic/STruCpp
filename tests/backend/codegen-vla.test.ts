@@ -197,7 +197,7 @@ describe("Phase 3.4: Fixed Array Type Declarations Still Work", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.headerCode).toContain("Array1D<INT_t, 0, 4>");
+    expect(result.headerCode).toContain("Array1D<IEC_INT, 0, 4>");
     expect(result.cppCode).toContain("ARR[0] = 1;");
   });
 
@@ -214,7 +214,7 @@ describe("Phase 3.4: Fixed Array Type Declarations Still Work", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.headerCode).toContain("Array2D<REAL_t, 1, 3, 1, 3>");
+    expect(result.headerCode).toContain("Array2D<IEC_REAL, 1, 3, 1, 3>");
   });
 });
 

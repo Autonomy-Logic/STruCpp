@@ -50,6 +50,15 @@ public:
     /** Construct with initial value (non-explicit to allow IEC_INT val = 10 syntax) */
     IECVar(T v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
 
+    /** Cross-type converting constructor: IECVar<SINT_t> → IECVar<INT_t> etc.
+     *  Enables implicit widening when struct fields (now IECVar-wrapped) are passed
+     *  to functions expecting a wider IECVar type. Without this, C++ would need
+     *  two user-defined conversions (IECVar<U>→U→T→IECVar<T>) which is disallowed. */
+    template<typename U, std::enable_if_t<
+        std::is_convertible_v<U, T> && !std::is_same_v<U, T>, int> = 0>
+    IECVar(const IECVar<U>& other) noexcept
+        : value_{static_cast<T>(other.get())}, forced_{false}, forced_value_{} {}
+
     /** Copy constructor */
     IECVar(const IECVar&) = default;
 
@@ -160,6 +169,17 @@ public:
     /** Assignment from raw value */
     IECVar& operator=(T v) noexcept {
         set(v);
+        return *this;
+    }
+
+    /** Cross-type assignment: IECVar<SINT_t> → IECVar<INT_t> etc.
+     *  Resolves ambiguity when assigning between different IECVar specializations
+     *  by providing a direct match (template is preferred over two indirect paths
+     *  that each require one user-defined conversion). */
+    template<typename U, std::enable_if_t<
+        std::is_convertible_v<U, T> && !std::is_same_v<U, T>, int> = 0>
+    IECVar& operator=(const IECVar<U>& other) noexcept {
+        set(static_cast<T>(other.get()));
         return *this;
     }
 

@@ -248,8 +248,8 @@ describe("Phase 3.3: Combined Array/Struct Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("POINTS[1]->X = 100;");
-    expect(result.cppCode).toContain("POINTS[I]->Y = 200;");
+    expect(result.cppCode).toContain("POINTS[1].X = 100;");
+    expect(result.cppCode).toContain("POINTS[I].Y = 200;");
   });
 
   it("should generate array of struct access in loop", () => {
@@ -273,8 +273,8 @@ describe("Phase 3.3: Combined Array/Struct Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("POINTS[I]->X = I;");
-    expect(result.cppCode).toContain("POINTS[I]->Y = I * 2;");
+    expect(result.cppCode).toContain("POINTS[I].X = I;");
+    expect(result.cppCode).toContain("POINTS[I].Y = I * 2;");
   });
 });
 
@@ -357,7 +357,7 @@ describe("Phase 3.3: Validation Examples", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("POINTS[I]->X = I;");
-    expect(result.cppCode).toContain("POINTS[I]->Y = I * 2;");
+    expect(result.cppCode).toContain("POINTS[I].X = I;");
+    expect(result.cppCode).toContain("POINTS[I].Y = I * 2;");
   });
 });

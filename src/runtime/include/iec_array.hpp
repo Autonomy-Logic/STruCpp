@@ -28,17 +28,18 @@ struct ArrayBounds {
 };
 
 // Single-dimensional array
-// Elements are IECVar<T> to support individual element forcing
+// T is stored directly — caller controls wrapping (IECVar<INT_t> for elementary,
+// bare StructName for composites whose fields already contain IECVar leaves).
 template<typename T, typename Bounds>
 class IEC_ARRAY_1D {
 public:
     using element_type = T;
     using bounds_type = Bounds;
-    using var_type = IECVar<T>;
+    using var_type = T;
     static constexpr size_t size = Bounds::size;
-    
+
 private:
-    std::array<var_type, size> data_;
+    std::array<T, size> data_;
     
     // Convert IEC 1-based index to 0-based internal index
     static constexpr size_t to_internal_index(int64_t index) noexcept {
@@ -50,11 +51,12 @@ public:
     IEC_ARRAY_1D() noexcept : data_{} {}
     
     // Initializer list constructor
-    IEC_ARRAY_1D(std::initializer_list<T> init) noexcept : data_{} {
+    template<typename U>
+    IEC_ARRAY_1D(std::initializer_list<U> init) noexcept : data_{} {
         size_t i = 0;
         for (const auto& val : init) {
             if (i >= size) break;
-            data_[i].set(val);
+            data_[i] = val;
             ++i;
         }
     }
@@ -106,13 +108,13 @@ template<typename T, typename Bounds1, typename Bounds2>
 class IEC_ARRAY_2D {
 public:
     using element_type = T;
-    using var_type = IECVar<T>;
+    using var_type = T;
     static constexpr size_t rows = Bounds1::size;
     static constexpr size_t cols = Bounds2::size;
     static constexpr size_t total_size = rows * cols;
-    
+
 private:
-    std::array<var_type, total_size> data_;
+    std::array<T, total_size> data_;
     
     // Convert 2D IEC indices to linear internal index
     static constexpr size_t to_linear_index(int64_t i, int64_t j) noexcept {
@@ -170,14 +172,14 @@ template<typename T, typename Bounds1, typename Bounds2, typename Bounds3>
 class IEC_ARRAY_3D {
 public:
     using element_type = T;
-    using var_type = IECVar<T>;
+    using var_type = T;
     static constexpr size_t dim1 = Bounds1::size;
     static constexpr size_t dim2 = Bounds2::size;
     static constexpr size_t dim3 = Bounds3::size;
     static constexpr size_t total_size = dim1 * dim2 * dim3;
-    
+
 private:
-    std::array<var_type, total_size> data_;
+    std::array<T, total_size> data_;
     
     static constexpr size_t to_linear_index(int64_t i, int64_t j, int64_t k) noexcept {
         return static_cast<size_t>(
@@ -227,7 +229,7 @@ using Array3D = IEC_ARRAY_3D<T, ArrayBounds<L1, U1>, ArrayBounds<L2, U2>, ArrayB
 // 1D ArrayView - type-erased wrapper for ARRAY[*] OF T
 template<typename T>
 class ArrayView1D {
-    IECVar<T>* data_;
+    T* data_;
     int64_t lower_;
     int64_t upper_;
 
@@ -239,11 +241,11 @@ public:
         , lower_(Bounds::lower)
         , upper_(Bounds::upper) {}
 
-    IECVar<T>& operator[](int64_t index) noexcept {
+    T& operator[](int64_t index) noexcept {
         return data_[index - lower_];
     }
 
-    const IECVar<T>& operator[](int64_t index) const noexcept {
+    const T& operator[](int64_t index) const noexcept {
         return data_[index - lower_];
     }
 
@@ -255,7 +257,7 @@ public:
 // 2D ArrayView - type-erased wrapper for ARRAY[*, *] OF T
 template<typename T>
 class ArrayView2D {
-    IECVar<T>* data_;
+    T* data_;
     int64_t lower1_, upper1_;
     int64_t lower2_, upper2_;
     int64_t dim2_;
@@ -268,11 +270,11 @@ public:
         , lower2_(Bounds2::lower), upper2_(Bounds2::upper)
         , dim2_(Bounds2::upper - Bounds2::lower + 1) {}
 
-    IECVar<T>& operator()(int64_t i, int64_t j) noexcept {
+    T& operator()(int64_t i, int64_t j) noexcept {
         return data_[(i - lower1_) * dim2_ + (j - lower2_)];
     }
 
-    const IECVar<T>& operator()(int64_t i, int64_t j) const noexcept {
+    const T& operator()(int64_t i, int64_t j) const noexcept {
         return data_[(i - lower1_) * dim2_ + (j - lower2_)];
     }
 
