@@ -136,7 +136,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // Verify the generated code uses Array1D with correct bounds
-    expect(result.headerCode).toContain('Array1D<INT_t, 3, 7>');
+    expect(result.headerCode).toContain('Array1D<IEC_INT, 3, 7>');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'offset_array');
     expect(cppResult.success).toBe(true);
@@ -156,7 +156,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // Verify the generated code uses Array1D with 1-based bounds
-    expect(result.headerCode).toContain('Array1D<REAL_t, 1, 10>');
+    expect(result.headerCode).toContain('Array1D<IEC_REAL, 1, 10>');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'one_based_array');
     expect(cppResult.success).toBe(true);
@@ -176,7 +176,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // Verify the generated code uses Array2D with correct bounds
-    expect(result.headerCode).toContain('Array2D<DINT_t, 1, 3, 5, 8>');
+    expect(result.headerCode).toContain('Array2D<IEC_DINT, 1, 3, 5, 8>');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'offset_matrix');
     expect(cppResult.success).toBe(true);
@@ -196,7 +196,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // Verify the generated code uses Array3D with correct bounds
-    expect(result.headerCode).toContain('Array3D<SINT_t, 1, 2, 3, 5, 10, 12>');
+    expect(result.headerCode).toContain('Array3D<IEC_SINT, 1, 2, 3, 5, 10, 12>');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'cube_3d');
     expect(cppResult.success).toBe(true);

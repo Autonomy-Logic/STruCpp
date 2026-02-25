@@ -388,12 +388,12 @@ export class CodeGenerator {
     let baseType: string;
 
     // Handle inline array types with dimension info
-    // Use raw C++ types (INT_t, BOOL_t) for array elements, not IEC_* (IECVar<>)
-    // because Array1D internally wraps elements in IECVar<T> already
+    // Array1D stores T directly — use IECVar-wrapped types for elementary elements
+    // and bare names for composites (whose fields already contain IECVar leaves)
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
       const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
         ? typeRef.elementTypeName
-        : this.typeCodeGen.mapTypeToCpp(typeRef.elementTypeName);
+        : this.mapVarTypeToCpp(typeRef.elementTypeName);
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
     } else {
       baseType = this.mapVarTypeToCpp(
@@ -2679,7 +2679,6 @@ export class CodeGenerator {
     baseNameUpper: string,
   ): string {
     let result = base;
-    let prevKind: "field" | "subscript" | "dereference" | "base" = "base";
     let currentType = this.currentScopeVarTypes.get(baseNameUpper);
 
     for (let i = 0; i < chain.length; i++) {
@@ -2691,18 +2690,13 @@ export class CodeGenerator {
           // Bit access: numeric field like .0, .15, .31
           if (/^\d+$/.test(step.name)) {
             result = `((static_cast<uint64_t>(${result}) >> ${step.name}) & 1)`;
-            prevKind = "field";
             continue;
           }
           // Property access on the last step
           if (isLast) {
             const propName = this.resolvePropertyName(currentType, step.name);
             if (propName) {
-              const accessor =
-                prevKind === "subscript"
-                  ? `->${`get_${propName}`}()`
-                  : `.get_${propName}()`;
-              result += accessor;
+              result += `.get_${propName}()`;
               return result;
             }
           }
@@ -2710,14 +2704,9 @@ export class CodeGenerator {
           const fieldCppName = this.needsFieldMangling(step.name, fieldType)
             ? `${step.name}_`
             : step.name;
-          // After subscript, use -> to access members of IECVar<struct>
-          if (prevKind === "subscript") {
-            result += `->${fieldCppName}`;
-          } else {
-            result += `.${fieldCppName}`;
-          }
+          // Array elements store T directly — always use . for field access
+          result += `.${fieldCppName}`;
           currentType = fieldType;
-          prevKind = "field";
           break;
         }
         case "subscript": {
@@ -2729,12 +2718,10 @@ export class CodeGenerator {
           } else if (step.indices.length === 1) {
             result += `[${this.generateExpression(step.indices[0]!)}]`;
           }
-          prevKind = "subscript";
           break;
         }
         case "dereference": {
           result = `(*${result})`;
-          prevKind = "dereference";
           break;
         }
       }
