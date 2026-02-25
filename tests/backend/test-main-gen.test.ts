@@ -222,8 +222,8 @@ describe("Test Main Generator", () => {
         pous: [],
       });
 
-      expect(code).toContain("ctx.assert_eq");
-      expect(code).toContain("static_cast<decltype(");
+      expect(code).toContain("ctx.assert_eq(");
+      expect(code).not.toContain("static_cast<decltype(");
     });
 
     it("should generate ASSERT_TRUE with static_cast<bool>", () => {

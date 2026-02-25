@@ -17,6 +17,7 @@
 #include <functional>
 #include <string>
 #include <sstream>
+#include <type_traits>
 
 namespace strucpp {
 
@@ -43,6 +44,23 @@ inline std::string to_display_string(const bool& value) {
     return value ? "TRUE" : "FALSE";
 }
 
+// const char* specialization
+inline std::string to_display_string(const char* value) {
+    return value ? std::string("'") + value + "'" : "(null)";
+}
+
+// Overload for IECString (has .c_str() directly)
+template<size_t N>
+inline std::string to_display_string(const strucpp::IECString<N>& value) {
+    return std::string("'") + value.c_str() + "'";
+}
+
+// Overload for IECStringVar (has .get().c_str())
+template<size_t N>
+inline std::string to_display_string(const strucpp::IECStringVar<N>& value) {
+    return std::string("'") + value.get().c_str() + "'";
+}
+
 // ============================================================================
 // TestContext
 // ============================================================================
@@ -65,7 +83,7 @@ struct TestContext {
     }
 
     /**
-     * ASSERT_EQ: check actual == expected
+     * ASSERT_EQ: check actual == expected (same type)
      */
     template<typename T>
     bool assert_eq(T actual, T expected,
@@ -83,10 +101,47 @@ struct TestContext {
     }
 
     /**
-     * ASSERT_NEQ: check actual != expected
+     * ASSERT_EQ: check actual == expected (mixed types, e.g. IECStringVar vs const char*)
+     */
+    template<typename T, typename U,
+        std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+    bool assert_eq(T actual, U expected,
+                   const char* actual_expr, const char* expected_expr,
+                   int line, const char* msg = "") {
+        if (actual == expected) return true;
+        std::string actual_str = to_display_string(actual);
+        std::string expected_str = to_display_string(expected);
+        printf("         ASSERT_EQ failed: %s expected %s, got %s\n",
+               actual_expr, expected_str.c_str(), actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_NEQ: check actual != expected (same type)
      */
     template<typename T>
     bool assert_neq(T actual, T expected,
+                    const char* actual_expr, const char* expected_expr,
+                    int line, const char* msg = "") {
+        if (actual != expected) return true;
+        std::string actual_str = to_display_string(actual);
+        printf("         ASSERT_NEQ failed: %s should not equal %s\n",
+               actual_expr, actual_str.c_str());
+        printf("         at %s:%d\n", test_file, line);
+        print_message(msg);
+        failures++;
+        return false;
+    }
+
+    /**
+     * ASSERT_NEQ: check actual != expected (mixed types)
+     */
+    template<typename T, typename U,
+        std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+    bool assert_neq(T actual, U expected,
                     const char* actual_expr, const char* expected_expr,
                     int line, const char* msg = "") {
         if (actual != expected) return true;
@@ -128,8 +183,8 @@ struct TestContext {
     /**
      * ASSERT_GT: check actual > threshold
      */
-    template<typename T>
-    bool assert_gt(T actual, T threshold,
+    template<typename T, typename U = T>
+    bool assert_gt(T actual, U threshold,
                    const char* actual_expr, const char* threshold_expr,
                    int line, const char* msg = "") {
         if (actual > threshold) return true;
@@ -146,8 +201,8 @@ struct TestContext {
     /**
      * ASSERT_LT: check actual < threshold
      */
-    template<typename T>
-    bool assert_lt(T actual, T threshold,
+    template<typename T, typename U = T>
+    bool assert_lt(T actual, U threshold,
                    const char* actual_expr, const char* threshold_expr,
                    int line, const char* msg = "") {
         if (actual < threshold) return true;
@@ -164,8 +219,8 @@ struct TestContext {
     /**
      * ASSERT_GE: check actual >= threshold
      */
-    template<typename T>
-    bool assert_ge(T actual, T threshold,
+    template<typename T, typename U = T>
+    bool assert_ge(T actual, U threshold,
                    const char* actual_expr, const char* threshold_expr,
                    int line, const char* msg = "") {
         if (actual >= threshold) return true;
@@ -182,8 +237,8 @@ struct TestContext {
     /**
      * ASSERT_LE: check actual <= threshold
      */
-    template<typename T>
-    bool assert_le(T actual, T threshold,
+    template<typename T, typename U = T>
+    bool assert_le(T actual, U threshold,
                    const char* actual_expr, const char* threshold_expr,
                    int line, const char* msg = "") {
         if (actual <= threshold) return true;
@@ -200,8 +255,8 @@ struct TestContext {
     /**
      * ASSERT_NEAR: check |actual - expected| <= tolerance
      */
-    template<typename T>
-    bool assert_near(T actual, T expected, T tolerance,
+    template<typename T, typename U = T, typename V = T>
+    bool assert_near(T actual, U expected, V tolerance,
                      const char* actual_expr, const char* expected_expr,
                      const char* tolerance_expr,
                      int line, const char* msg = "") {

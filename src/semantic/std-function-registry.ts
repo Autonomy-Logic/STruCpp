@@ -526,6 +526,15 @@ export class StdFunctionRegistry {
       "ULINT",
       "REAL",
       "LREAL",
+      "TIME",
+      "DATE",
+      "TOD",
+      "DT",
+      "STRING",
+      "BYTE",
+      "WORD",
+      "DWORD",
+      "LWORD",
     ];
 
     for (const target of convTargets) {
@@ -732,6 +741,11 @@ export class StdFunctionRegistry {
       isConversion: false,
       category: "string",
     });
+
+    // Note: CODE, CHR, TRIM, LOWERCASE, UPPERCASE are OSCAT-defined functions
+    // (not IEC standard). They are transpiled from OSCAT ST sources, not registered here.
+    // C++ runtime provides template implementations in iec_string.hpp for use by
+    // the transpiled OSCAT code.
   }
 
   // ---------------------------------------------------------------------------

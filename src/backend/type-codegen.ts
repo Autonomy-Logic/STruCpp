@@ -226,9 +226,15 @@ export class TypeCodeGenerator {
             : fieldName;
         if (field.initialValue) {
           const initVal = this.expressionToCpp(field.initialValue);
-          this.emit(
-            `${this.options.indent}${cppType} ${emitName} = ${initVal};`,
-          );
+          // Array types can't be initialized with = 0; use {} instead
+          const isArrayType = /^Array[123]D</.test(cppType);
+          if (isArrayType && initVal === "0") {
+            this.emit(`${this.options.indent}${cppType} ${emitName}{};`);
+          } else {
+            this.emit(
+              `${this.options.indent}${cppType} ${emitName} = ${initVal};`,
+            );
+          }
         } else {
           if (field.type.referenceKind === "pointer_to") {
             this.emit(

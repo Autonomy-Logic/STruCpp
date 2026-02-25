@@ -130,6 +130,9 @@ export interface CompileResult {
 
   /** Project model (only populated on successful compilation) */
   projectModel?: import("./project-model.js").ProjectModel;
+
+  /** Symbol tables from semantic analysis (only populated on successful compilation) */
+  symbolTables?: import("./semantic/symbol-table.js").SymbolTables;
 }
 
 /**

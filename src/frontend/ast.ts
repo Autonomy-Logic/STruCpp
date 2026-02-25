@@ -644,6 +644,15 @@ export interface Argument extends ASTNode {
 }
 
 /**
+ * An ordered access step in a variable access chain.
+ * Preserves the interleaving of field accesses, subscripts, and dereferences.
+ */
+export type AccessStep =
+  | { kind: "field"; name: string }
+  | { kind: "subscript"; indices: Expression[] }
+  | { kind: "dereference" };
+
+/**
  * Variable reference expression
  */
 export interface VariableExpression extends TypedNode {
@@ -652,6 +661,8 @@ export interface VariableExpression extends TypedNode {
   subscripts: Expression[];
   fieldAccess: string[];
   isDereference: boolean;
+  /** Ordered access chain preserving interleaving of fields, subscripts, deref */
+  accessChain?: AccessStep[];
 }
 
 /**

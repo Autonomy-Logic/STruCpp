@@ -13,6 +13,7 @@ import { compile } from '../../src/index.js';
 import { parseTestFile } from '../../src/testing/test-parser.js';
 import { generateTestMain, buildPOUInfoFromAST } from '../../src/backend/test-main-gen.js';
 import { uppercaseSource } from '../../src/frontend/lexer.js';
+import { analyzeTestFile } from '../../src/semantic/analyzer.js';
 
 /** Resolved path to the C++ runtime headers */
 export const RUNTIME_INCLUDE_PATH = path.resolve(__dirname, '../../src/runtime/include');
@@ -263,6 +264,16 @@ export function runE2ETestPipeline(
     throw new Error(
       `Test parse failed: ${parseResult.errors.map((e) => e.message).join(', ')}`,
     );
+  }
+
+  // 3b. Semantic analysis of test file
+  if (parseResult.testFile && result.symbolTables) {
+    const analysisResult = analyzeTestFile(parseResult.testFile, result.symbolTables);
+    if (analysisResult.errors.length > 0) {
+      throw new Error(
+        `Test semantic analysis failed: ${analysisResult.errors.map((e) => e.message).join(', ')}`,
+      );
+    }
   }
 
   // 4. Generate test_main.cpp

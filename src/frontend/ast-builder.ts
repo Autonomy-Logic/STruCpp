@@ -36,6 +36,7 @@ import type {
   Expression,
   LiteralExpression,
   VariableExpression,
+  AccessStep,
   AssignmentStatement,
   RefAssignStatement,
   RefExpression,
@@ -111,6 +112,17 @@ function nodeToSourceSpan(node: CstNode): SourceSpan {
           endLine = child.endLine;
           endCol = child.endColumn ?? 0;
         }
+      } else {
+        // It's a CstNode — recurse to find nested tokens
+        const subSpan = nodeToSourceSpan(child);
+        if (subSpan.startLine > 0 && subSpan.startLine < startLine) {
+          startLine = subSpan.startLine;
+          startCol = subSpan.startCol;
+        }
+        if (subSpan.endLine > endLine) {
+          endLine = subSpan.endLine;
+          endCol = subSpan.endCol;
+        }
       }
     }
   }
@@ -162,6 +174,29 @@ function getAllNodes(items: (CstNode | IToken)[] | undefined): CstNode[] {
 function getAllTokens(items: (CstNode | IToken)[] | undefined): IToken[] {
   if (!items) return [];
   return items.filter((item): item is IToken => "image" in item);
+}
+
+/**
+ * Get the start offset of a CST node by finding its earliest token.
+ */
+function getNodeStartOffset(node: CstNode): number {
+  const children = node.children as CstChildren;
+  let minOffset = Number.MAX_SAFE_INTEGER;
+  for (const key of Object.keys(children)) {
+    const childArray = children[key];
+    if (!childArray) continue;
+    for (const child of childArray) {
+      if ("image" in child) {
+        // It's a token
+        if (child.startOffset < minOffset) minOffset = child.startOffset;
+      } else if ("children" in child) {
+        // It's a CST node — recurse
+        const childOffset = getNodeStartOffset(child);
+        if (childOffset < minOffset) minOffset = childOffset;
+      }
+    }
+  }
+  return minOffset;
 }
 
 /**
@@ -223,6 +258,72 @@ function parseIECNumeric(raw: string): number {
  * Builds an AST from a Chevrotain CST.
  */
 export class ASTBuilder {
+  /**
+   * Map of constant names to their integer values, populated per POU.
+   * Used by extractIntegerFromExpression to resolve array dimension bounds
+   * that reference VAR CONSTANT declarations (e.g., ARRAY[0..n] where n is a constant).
+   * Global constants (from compile options) are seeded first and persist across POUs.
+   */
+  private currentConstantMap: Map<string, number> = new Map();
+
+  /** Global constants that persist across POU scans (never cleared). */
+  private globalConstantMap: Map<string, number> = new Map();
+
+  /** Seed a global constant for dimension resolution. */
+  setGlobalConstant(name: string, value: number): void {
+    this.globalConstantMap.set(name.toUpperCase(), value);
+  }
+
+  /**
+   * Scan raw CST varBlock nodes for CONSTANT declarations and populate
+   * currentConstantMap with their integer values.
+   */
+  private scanVarBlocksForConstants(varBlockNodes: CstNode[]): void {
+    this.currentConstantMap.clear();
+    // Seed with global constants so they're always available
+    for (const [name, value] of this.globalConstantMap) {
+      this.currentConstantMap.set(name, value);
+    }
+    for (const vbNode of varBlockNodes) {
+      const vbChildren = vbNode.children as CstChildren;
+      if (!vbChildren.CONSTANT) continue;
+      for (const declNode of getAllNodes(vbChildren.varDeclaration)) {
+        const declChildren = declNode.children as CstChildren;
+        const names = getAllIdentifierOrKeywordImages(
+          declChildren.identifierOrKeyword,
+        );
+        const initExprNode = getFirstNode(declChildren.initializerExpression);
+        if (!initExprNode || names.length === 0) continue;
+        const initChildren = initExprNode.children as CstChildren;
+        const exprNodes = getAllNodes(initChildren.expression);
+        if (exprNodes.length !== 1) continue;
+        try {
+          const expr = this.buildExpression(exprNodes[0]!);
+          if (!expr) continue;
+          let val: number | undefined;
+          if (expr.kind === "LiteralExpression") {
+            const n = Number(expr.value);
+            if (!isNaN(n) && Number.isInteger(n)) val = n;
+          } else if (
+            expr.kind === "UnaryExpression" &&
+            expr.operator === "-" &&
+            expr.operand.kind === "LiteralExpression"
+          ) {
+            const n = -Number(expr.operand.value);
+            if (!isNaN(n) && Number.isInteger(n)) val = n;
+          }
+          if (val !== undefined) {
+            for (const name of names) {
+              this.currentConstantMap.set(name.toUpperCase(), val);
+            }
+          }
+        } catch {
+          // Skip unparseable initializers
+        }
+      }
+    }
+  }
+
   /**
    * Build a CompilationUnit from the root CST node.
    */
@@ -292,6 +393,9 @@ export class ASTBuilder {
     const nameToken = getAllTokens(children.Identifier)[0];
     const name = nameToken?.image ?? "";
 
+    // Scan for constants before building var blocks (for array dimension resolution)
+    this.scanVarBlocksForConstants(getAllNodes(children.varBlock));
+
     const varBlocks: VarBlock[] = [];
     for (const varBlockNode of getAllNodes(children.varBlock)) {
       varBlocks.push(this.buildVarBlock(varBlockNode));
@@ -343,6 +447,9 @@ export class ASTBuilder {
         referenceKind: "none",
       };
     }
+
+    // Scan for constants before building var blocks (for array dimension resolution)
+    this.scanVarBlocksForConstants(getAllNodes(children.varBlock));
 
     const varBlocks: VarBlock[] = [];
     for (const varBlockNode of getAllNodes(children.varBlock)) {
@@ -406,6 +513,9 @@ export class ASTBuilder {
         implementsList = implNames;
       }
     }
+
+    // Scan for constants before building var blocks (for array dimension resolution)
+    this.scanVarBlocksForConstants(getAllNodes(children.varBlock));
 
     const varBlocks: VarBlock[] = [];
     for (const varBlockNode of getAllNodes(children.varBlock)) {
@@ -2487,7 +2597,11 @@ export class ASTBuilder {
       if (expr) subscripts.push(expr);
     }
 
-    return {
+    // Build ordered access chain by sorting markers by source position.
+    // This preserves the interleaving of field accesses, subscripts, and dereferences.
+    const accessChain = this.buildAccessChain(children);
+
+    const varExpr: VariableExpression = {
       kind: "VariableExpression",
       sourceSpan: nodeToSourceSpan(node),
       name,
@@ -2495,6 +2609,115 @@ export class ASTBuilder {
       fieldAccess,
       isDereference,
     };
+    if (accessChain.length > 0) {
+      varExpr.accessChain = accessChain;
+    }
+    return varExpr;
+  }
+
+  /**
+   * Build an ordered access chain from variable CST children.
+   * Sorts Dot tokens, LBracket tokens, and Caret tokens by source offset
+   * to reconstruct the correct interleaving order.
+   */
+  private buildAccessChain(children: CstChildren): AccessStep[] {
+    type Marker =
+      | { kind: "field"; offset: number; name: string }
+      | { kind: "subscript"; offset: number; indices: Expression[] }
+      | { kind: "dereference"; offset: number };
+
+    const markers: Marker[] = [];
+
+    // Collect field access markers (Dot tokens followed by identifierOrKeyword or IntegerLiteral)
+    const dotTokens = getAllTokens(children.Dot);
+    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
+    const intLiteralTokens = getAllTokens(children.IntegerLiteral);
+
+    // Build a list of field targets sorted by offset: identifier and integer literal tokens after dots
+    const fieldTargets: Array<{ offset: number; name: string }> = [];
+    for (let i = 1; i < idOrKwNodes.length; i++) {
+      const n = idOrKwNodes[i]!;
+      fieldTargets.push({
+        offset: getNodeStartOffset(n),
+        name: getIdentifierOrKeywordImage(n),
+      });
+    }
+    for (const t of intLiteralTokens) {
+      fieldTargets.push({ offset: t.startOffset, name: t.image });
+    }
+    fieldTargets.sort((a, b) => a.offset - b.offset);
+
+    // Each dot token corresponds to one field target (in order)
+    const sortedDots = [...dotTokens].sort(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+    for (let i = 0; i < sortedDots.length && i < fieldTargets.length; i++) {
+      markers.push({
+        kind: "field",
+        offset: sortedDots[i]!.startOffset,
+        name: fieldTargets[i]!.name,
+      });
+    }
+
+    // Collect subscript markers (LBracket tokens with their associated expressions)
+    const lBracketTokens = getAllTokens(children.LBracket);
+    const rBracketTokens = getAllTokens(children.RBracket);
+    const exprNodes = getAllNodes(children.expression);
+    const sortedLBrackets = [...lBracketTokens].sort(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+    const sortedRBrackets = [...rBracketTokens].sort(
+      (a, b) => a.startOffset - b.startOffset,
+    );
+
+    // Build subscript groups: each [..] pair contains the expressions between them
+    let exprIdx = 0;
+    for (
+      let bracketIdx = 0;
+      bracketIdx < sortedLBrackets.length;
+      bracketIdx++
+    ) {
+      const lb = sortedLBrackets[bracketIdx]!;
+      const rb = sortedRBrackets[bracketIdx];
+      const rbOffset = rb ? rb.startOffset : Infinity;
+
+      const indices: Expression[] = [];
+      while (exprIdx < exprNodes.length) {
+        const exprOffset = getNodeStartOffset(exprNodes[exprIdx]!);
+        if (exprOffset > rbOffset) break;
+        if (exprOffset > lb.startOffset) {
+          const expr = this.buildExpression(exprNodes[exprIdx]!);
+          if (expr) indices.push(expr);
+        }
+        exprIdx++;
+      }
+      markers.push({
+        kind: "subscript",
+        offset: lb.startOffset,
+        indices,
+      });
+    }
+
+    // Collect dereference markers (Caret tokens)
+    const caretTokens = getAllTokens(children.Caret);
+    for (const c of caretTokens) {
+      markers.push({ kind: "dereference", offset: c.startOffset });
+    }
+
+    // Sort all markers by source offset
+    markers.sort((a, b) => a.offset - b.offset);
+
+    // Convert to AccessStep array
+    return markers.map((m): AccessStep => {
+      switch (m.kind) {
+        case "field":
+          return { kind: "field", name: m.name };
+        case "subscript":
+          return { kind: "subscript", indices: m.indices };
+        case "dereference":
+          return { kind: "dereference" };
+      }
+    });
   }
 
   /**
@@ -2924,8 +3147,61 @@ export class ASTBuilder {
         const val = -Number(expr.operand.value);
         if (!isNaN(val) && Number.isInteger(val)) return val;
       }
+      // Resolve constant references (e.g., ARRAY[0..n] where n is VAR CONSTANT)
+      if (
+        expr.kind === "VariableExpression" &&
+        expr.fieldAccess.length === 0 &&
+        expr.subscripts.length === 0
+      ) {
+        const constVal = this.currentConstantMap.get(expr.name.toUpperCase());
+        if (constVal !== undefined) return constVal;
+      }
+      // Handle expressions like "constant - 1" (e.g., ARRAY[0..n-1])
+      if (expr.kind === "BinaryExpression") {
+        const leftVal = this.evaluateConstantExpr(expr);
+        if (leftVal !== undefined) return leftVal;
+      }
     } catch {
       // Fall through
+    }
+    return undefined;
+  }
+
+  /**
+   * Evaluate a constant expression that may reference VAR CONSTANT values.
+   * Supports basic integer arithmetic (+, -, *).
+   */
+  private evaluateConstantExpr(expr: Expression): number | undefined {
+    if (expr.kind === "LiteralExpression") {
+      const val = Number(expr.value);
+      if (!isNaN(val) && Number.isInteger(val)) return val;
+      return undefined;
+    }
+    if (
+      expr.kind === "VariableExpression" &&
+      expr.fieldAccess.length === 0 &&
+      expr.subscripts.length === 0
+    ) {
+      return this.currentConstantMap.get(expr.name.toUpperCase());
+    }
+    if (expr.kind === "UnaryExpression" && expr.operator === "-") {
+      const val = this.evaluateConstantExpr(expr.operand);
+      return val !== undefined ? -val : undefined;
+    }
+    if (expr.kind === "BinaryExpression") {
+      const left = this.evaluateConstantExpr(expr.left);
+      const right = this.evaluateConstantExpr(expr.right);
+      if (left === undefined || right === undefined) return undefined;
+      switch (expr.operator) {
+        case "+":
+          return left + right;
+        case "-":
+          return left - right;
+        case "*":
+          return left * right;
+        default:
+          return undefined;
+      }
     }
     return undefined;
   }
@@ -3257,8 +3533,19 @@ export class ASTBuilder {
  * @param cst - The Chevrotain CST root node
  * @param fileName - Optional source file name to set on all sourceSpan.file fields
  */
-export function buildAST(cst: CstNode, fileName?: string): CompilationUnit {
+export function buildAST(
+  cst: CstNode,
+  fileName?: string,
+  globalConstants?: Record<string, number>,
+): CompilationUnit {
   const builder = new ASTBuilder();
+  // Seed the constant map with global constants (e.g., STRING_LENGTH, LIST_LENGTH)
+  // so inline array dimensions like ARRAY[0..STRING_LENGTH] resolve correctly.
+  if (globalConstants) {
+    for (const [name, value] of Object.entries(globalConstants)) {
+      builder.setGlobalConstant(name, value);
+    }
+  }
   const ast = builder.buildCompilationUnit(cst);
   if (fileName) {
     setFileOnSpans(ast, fileName);

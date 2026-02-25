@@ -105,6 +105,19 @@ using LTOD_t = int64_t;
 using LDT_t = int64_t;
 
 // =============================================================================
+// Platform Pointer-Width Integer
+// =============================================================================
+
+/** Platform-width integer for pointer-to-integer conversions (CODESYS compat).
+ *  On 64-bit platforms this is uint64_t; on 32-bit platforms uint32_t.
+ *  Use this instead of DWORD for storing pointer addresses portably. */
+#if UINTPTR_MAX > UINT32_MAX
+using PTR_INT_t = uint64_t;
+#else
+using PTR_INT_t = uint32_t;
+#endif
+
+// =============================================================================
 // Elementary Types - Characters
 // =============================================================================
 

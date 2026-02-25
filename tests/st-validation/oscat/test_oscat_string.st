@@ -75,8 +75,8 @@ END_TEST
 TEST 'FINDB: empty search string'
   VAR result : INT; END_VAR
   result := FINDB(STR1 := 'hello', STR2 := '');
-  (* Empty substring: loop runs from LEN+1 down to 1, MID of length 0 *)
-  ASSERT_EQ(result, 5);
+  (* Empty substring: loop runs from LEN+1 down to 1, MID of length 0 = '' = str2 at pos LEN+1 *)
+  ASSERT_EQ(result, 6);
 END_TEST
 
 (* === REPLACE_CHARS: character-by-character replacement === *)

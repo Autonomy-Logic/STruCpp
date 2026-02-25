@@ -23,6 +23,7 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  AccessStep,
   ExternalCodePragma,
   MethodDeclaration,
   InterfaceDeclaration,
@@ -364,6 +365,10 @@ export class CodeGenerator {
     }
     // User-defined types (FBs, interfaces, structs) use bare name - no IEC_ prefix
     if (this.isUserDefinedType(typeName)) {
+      // Programs use Program_NAME class naming convention
+      if (this.knownProgramTypes.has(typeName.toUpperCase())) {
+        return `Program_${typeName}`;
+      }
       return typeName;
     }
     return `IEC_${typeName}`;
@@ -398,7 +403,23 @@ export class CodeGenerator {
     }
 
     if (typeRef.referenceKind === "pointer_to") {
-      return `${baseType}*`;
+      // Use IEC_Ptr<T> for pointer types — handles cross-type assignment,
+      // pointer arithmetic, and pointer-to-integer conversion seamlessly.
+      // IEC_Ptr needs the raw element type (not IECVar-wrapped).
+      let elemType: string;
+      if (typeRef.arrayDimensions && typeRef.elementTypeName) {
+        // Array pointer: baseType is already raw (Array1D<...>)
+        elemType = baseType;
+      } else if (this.isUserDefinedType(typeRef.name)) {
+        // UDT: use raw struct/FB/program name
+        elemType = this.knownProgramTypes.has(typeRef.name.toUpperCase())
+          ? `Program_${typeRef.name}`
+          : typeRef.name;
+      } else {
+        // Primitive type: use raw type mapping (BYTE_t, INT_t, etc.)
+        elemType = this.typeCodeGen.mapTypeToCpp(typeRef.name);
+      }
+      return `IEC_Ptr<${elemType}>`;
     }
     // For STRING(CONSTANT_NAME), emit template with the constant name
     if (typeof typeRef.maxLength === "string") {
@@ -490,6 +511,11 @@ export class CodeGenerator {
     // Build set of known struct/UDT types
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
+    }
+
+    // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
+    for (const prog of ast.programs) {
+      this.knownProgramTypes.add(prog.name.toUpperCase());
     }
 
     // Topologically sort FBs once (used in both header and implementation)
@@ -2016,6 +2042,17 @@ export class CodeGenerator {
         ...stmt.target,
         fieldAccess: stmt.target.fieldAccess.slice(0, -1),
       };
+      // Also trim the accessChain if present
+      if (stmt.target.accessChain) {
+        const trimmed = this.trimLastFieldFromAccessChain(
+          stmt.target.accessChain,
+        );
+        if (trimmed) {
+          baseVar.accessChain = trimmed;
+        } else {
+          delete baseVar.accessChain;
+        }
+      }
       const baseCode = this.generateExpression(baseVar);
       const value = this.generateExpression(stmt.value);
       this.emit(
@@ -2176,7 +2213,14 @@ export class CodeGenerator {
    * ST: FOR i := start TO end BY step DO → C++: for (i = start; i <= end; i += step)
    */
   private generateForStatement(stmt: ForStatement, indent: string): void {
-    const varName = stmt.controlVariable;
+    // In function bodies, the control variable may be the function name (IEC ST return variable)
+    let varName = stmt.controlVariable;
+    if (
+      this.currentFunctionName &&
+      varName.toUpperCase() === this.currentFunctionName.toUpperCase()
+    ) {
+      varName = `${this.currentFunctionName}_result`;
+    }
     const start = this.generateExpression(stmt.start);
     const end = this.generateExpression(stmt.end);
 
@@ -2358,8 +2402,8 @@ export class CodeGenerator {
       }
       case "REAL": {
         const str = String(expr.value);
-        // Ensure real literals have a decimal point
-        return str.includes(".") ? str : str + ".0";
+        // Ensure real literals have a decimal point (but not for scientific notation)
+        return str.includes(".") || /[eE]/.test(str) ? str : str + ".0";
       }
       case "STRING": {
         // rawValue includes surrounding single quotes: 'hello' → strip them
@@ -2562,6 +2606,12 @@ export class CodeGenerator {
       }
     }
 
+    // Use ordered access chain when available (preserves interleaving)
+    if (expr.accessChain && expr.accessChain.length > 0) {
+      return this.generateAccessChain(result, expr.accessChain, nameUpper);
+    }
+
+    // Legacy path: flat subscripts/fieldAccess/dereference (no interleaving)
     // Subscripts (array access)
     // 2D+ arrays use operator() syntax: arr(i, j) — 1D uses operator[]: arr[i]
     if (expr.subscripts.length > 1) {
@@ -2612,6 +2662,88 @@ export class CodeGenerator {
   }
 
   /**
+   * Generate C++ code from an ordered access chain.
+   * Handles correct interleaving of field accesses, subscripts, and dereferences.
+   *
+   * Key rules:
+   * - field after subscript: use -> (because Array operator[] returns IECVar<T>&)
+   * - field after field: use .
+   * - field after dereference: use .
+   * - subscript of 1 index: use [idx]
+   * - subscript of 2+ indices: use (idx1, idx2) (multidim Array)
+   * - dereference: wrap in (*...)
+   */
+  private generateAccessChain(
+    base: string,
+    chain: AccessStep[],
+    baseNameUpper: string,
+  ): string {
+    let result = base;
+    let prevKind: "field" | "subscript" | "dereference" | "base" = "base";
+    let currentType = this.currentScopeVarTypes.get(baseNameUpper);
+
+    for (let i = 0; i < chain.length; i++) {
+      const step = chain[i]!;
+      const isLast = i === chain.length - 1;
+
+      switch (step.kind) {
+        case "field": {
+          // Bit access: numeric field like .0, .15, .31
+          if (/^\d+$/.test(step.name)) {
+            result = `((static_cast<uint64_t>(${result}) >> ${step.name}) & 1)`;
+            prevKind = "field";
+            continue;
+          }
+          // Property access on the last step
+          if (isLast) {
+            const propName = this.resolvePropertyName(currentType, step.name);
+            if (propName) {
+              const accessor =
+                prevKind === "subscript"
+                  ? `->${`get_${propName}`}()`
+                  : `.get_${propName}()`;
+              result += accessor;
+              return result;
+            }
+          }
+          const fieldType = this.resolveMemberType(currentType, step.name);
+          const fieldCppName = this.needsFieldMangling(step.name, fieldType)
+            ? `${step.name}_`
+            : step.name;
+          // After subscript, use -> to access members of IECVar<struct>
+          if (prevKind === "subscript") {
+            result += `->${fieldCppName}`;
+          } else {
+            result += `.${fieldCppName}`;
+          }
+          currentType = fieldType;
+          prevKind = "field";
+          break;
+        }
+        case "subscript": {
+          if (step.indices.length > 1) {
+            const args = step.indices.map((idx) =>
+              this.generateExpression(idx),
+            );
+            result += `(${args.join(", ")})`;
+          } else if (step.indices.length === 1) {
+            result += `[${this.generateExpression(step.indices[0]!)}]`;
+          }
+          prevKind = "subscript";
+          break;
+        }
+        case "dereference": {
+          result = `(*${result})`;
+          prevKind = "dereference";
+          break;
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
    * Operator mapping from ST to C++.
    */
   private static readonly BINARY_OP_MAP: Record<string, string> = {
@@ -2643,6 +2775,22 @@ export class CodeGenerator {
       return `std::pow(static_cast<double>(${left}), static_cast<double>(${right}))`;
     }
 
+    // AND/OR on non-BOOL ANY_BIT types must use bitwise operators (& |)
+    // not logical operators (&& ||). Infer from either operand.
+    if (expr.operator === "AND" || expr.operator === "OR") {
+      const leftType = this.inferExprType(expr.left);
+      const rightType = this.inferExprType(expr.right);
+      const isBitwise = [leftType, rightType].some((t) => {
+        if (!t) return false;
+        const cat = CodeGenerator.IEC_TYPE_CAT[t.toUpperCase()];
+        return cat === "BIT" && t.toUpperCase() !== "BOOL";
+      });
+      if (isBitwise) {
+        const op = expr.operator === "AND" ? "&" : "|";
+        return `${left} ${op} ${right}`;
+      }
+    }
+
     const cppOp = CodeGenerator.BINARY_OP_MAP[expr.operator] ?? expr.operator;
     return `${left} ${cppOp} ${right}`;
   }
@@ -2654,8 +2802,17 @@ export class CodeGenerator {
     const operand = this.generateExpression(expr.operand);
 
     switch (expr.operator) {
-      case "NOT":
+      case "NOT": {
+        // NOT on non-BOOL ANY_BIT types must use bitwise complement (~)
+        const opType = this.inferExprType(expr.operand);
+        if (opType) {
+          const cat = CodeGenerator.IEC_TYPE_CAT[opType.toUpperCase()];
+          if (cat === "BIT" && opType.toUpperCase() !== "BOOL") {
+            return `~${operand}`;
+          }
+        }
         return `!${operand}`;
+      }
       case "-":
         return `-${operand}`;
       case "+":
@@ -2753,6 +2910,18 @@ export class CodeGenerator {
       }
       case "UnaryExpression":
         return this.inferExprType(expr.operand);
+      case "BinaryExpression": {
+        // For bitwise/arithmetic ops, infer from operands
+        const lt = this.inferExprType(expr.left);
+        const rt = this.inferExprType(expr.right);
+        // Prefer variable types over literal types
+        if (lt && rt) {
+          const lBits = CodeGenerator.IEC_TYPE_BITS[lt] ?? 0;
+          const rBits = CodeGenerator.IEC_TYPE_BITS[rt] ?? 0;
+          return rBits > lBits ? rt : lt;
+        }
+        return lt ?? rt;
+      }
       case "FunctionCallExpression": {
         const fnUpper = expr.functionName.toUpperCase();
         // Check user-defined functions
@@ -2769,6 +2938,32 @@ export class CodeGenerator {
         const std = this.stdRegistry.lookup(fnUpper);
         if (std?.specificReturnType)
           return std.specificReturnType.toUpperCase();
+        // For generic functions returning same type as first param, infer from first arg
+        if (std?.returnMatchesFirstParam && expr.arguments.length > 0) {
+          return this.inferExprType(expr.arguments[0]!.value);
+        }
+        return undefined;
+      }
+      case "MethodCallExpression": {
+        // Resolve object type → find FB declaration → find method → return type
+        if (expr.object.kind === "VariableExpression") {
+          const objType = this.currentScopeVarTypes.get(
+            expr.object.name.toUpperCase(),
+          );
+          if (objType && this.ast) {
+            const fb = this.ast.functionBlocks.find(
+              (f) => f.name.toUpperCase() === objType.toUpperCase(),
+            );
+            if (fb) {
+              const method = fb.methods.find(
+                (m) => m.name.toUpperCase() === expr.methodName.toUpperCase(),
+              );
+              if (method?.returnType) {
+                return method.returnType.name.toUpperCase();
+              }
+            }
+          }
+        }
         return undefined;
       }
       case "ParenthesizedExpression":
@@ -2910,11 +3105,18 @@ export class CodeGenerator {
     }
 
     // Cast literals to dominant type.
-    // Bare literals (no typePrefix) are untyped — always castable to dominant.
+    // Bare literals (no typePrefix) are untyped — castable to dominant unless
+    // this would narrow a REAL/LREAL literal to an integer type (losing precision).
     for (const i of literalIndices) {
       const litType = argTypes[i];
       if (!litType || litType === dominant) continue;
       const expr = argExprs[i]!.value;
+      const litCat = CodeGenerator.IEC_TYPE_CAT[litType];
+      const domCat = CodeGenerator.IEC_TYPE_CAT[dominant];
+      // Never narrow a REAL literal to integer — that truncates (e.g. 1.5 → 1)
+      if (litCat === "REAL" && domCat !== "REAL" && this.isBareLiteral(expr)) {
+        continue;
+      }
       if (
         this.isBareLiteral(expr) ||
         this.canImplicitWiden(litType, dominant)
@@ -3396,11 +3598,40 @@ export class CodeGenerator {
       }
     } else {
       // Generate a VariableExpression with fieldAccess trimmed to all-but-last
-      const baseExpr = { ...expr, fieldAccess: expr.fieldAccess.slice(0, -1) };
+      // Also trim the accessChain if present
+      const baseExpr: VariableExpression = {
+        ...expr,
+        fieldAccess: expr.fieldAccess.slice(0, -1),
+      };
+      if (expr.accessChain) {
+        const trimmed = this.trimLastFieldFromAccessChain(expr.accessChain);
+        if (trimmed) {
+          baseExpr.accessChain = trimmed;
+        } else {
+          delete baseExpr.accessChain;
+        }
+      }
       objectCode = this.generateVariableExpression(baseExpr) + ".";
     }
 
     return { objectCode, propertyName: propName };
+  }
+
+  /**
+   * Remove the last field step from an access chain (for bit access / property trim).
+   * Returns undefined if the chain becomes empty.
+   */
+  private trimLastFieldFromAccessChain(
+    chain: AccessStep[],
+  ): AccessStep[] | undefined {
+    const trimmed = [...chain];
+    for (let i = trimmed.length - 1; i >= 0; i--) {
+      if (trimmed[i]!.kind === "field") {
+        trimmed.splice(i, 1);
+        break;
+      }
+    }
+    return trimmed.length > 0 ? trimmed : undefined;
   }
 
   /**
@@ -3412,7 +3643,8 @@ export class CodeGenerator {
     return (
       this.knownFBTypes.has(upper) ||
       this.knownInterfaceTypes.has(upper) ||
-      this.knownStructTypes.has(upper)
+      this.knownStructTypes.has(upper) ||
+      this.knownProgramTypes.has(upper)
     );
   }
 

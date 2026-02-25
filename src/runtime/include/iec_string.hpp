@@ -9,11 +9,18 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <cstdlib>
 #include <algorithm>
+#include <type_traits>
 #include "iec_types.hpp"
+#include "iec_var.hpp"
 
 namespace strucpp {
+
+// Forward declaration for cross-type assignment
+template<size_t MaxLen> class IECStringVar;
 
 template<size_t MaxLen = 254>
 class IECString {
@@ -72,6 +79,10 @@ public:
         data_[length_] = '\0';
         return *this;
     }
+
+    // Cross-type assignment from IECStringVar (defined after IECStringVar class)
+    template<size_t OtherLen>
+    inline IECString& operator=(const IECStringVar<OtherLen>& other) noexcept;
 
     constexpr size_t length() const noexcept { return length_; }
     constexpr size_t size() const noexcept { return length_; }
@@ -313,10 +324,39 @@ public:
     IECStringVar& operator=(const IECStringVar&) = default;
     IECStringVar& operator=(IECStringVar&&) = default;
 
+    // Cross-size converting constructor (IEC 61131-3: STRING types are interoperable)
+    template<size_t OtherLen, std::enable_if_t<OtherLen != MaxLen, int> = 0>
+    IECStringVar(const IECStringVar<OtherLen>& other) noexcept
+        : value_(other.get().c_str()), forced_{false}, forced_value_{} {}
+
+    // Converting constructor from IECString of any size
+    template<size_t OtherLen, std::enable_if_t<OtherLen != MaxLen, int> = 0>
+    IECStringVar(const IECString<OtherLen>& other) noexcept
+        : value_(other.c_str()), forced_{false}, forced_value_{} {}
+
+    // Converting constructor from IECVar<IECString<N>> (struct field access returns this type)
+    template<size_t OtherLen>
+    IECStringVar(const IECVar<IECString<OtherLen>>& other) noexcept
+        : value_(static_cast<IECString<OtherLen>>(other).c_str()), forced_{false}, forced_value_{} {}
+
     // Cross-size assignment (IEC 61131-3: STRING types are interoperable, truncation on overflow)
     template<size_t OtherLen>
     IECStringVar& operator=(const IECStringVar<OtherLen>& other) noexcept {
         value_ = IECString<MaxLen>(other.get().c_str());
+        return *this;
+    }
+
+    // Assignment from IECVar<IECString<N>> (struct field access)
+    template<size_t OtherLen>
+    IECStringVar& operator=(const IECVar<IECString<OtherLen>>& other) noexcept {
+        value_ = IECString<MaxLen>(static_cast<IECString<OtherLen>>(other).c_str());
+        return *this;
+    }
+
+    // Assignment from IECString of different size
+    template<size_t OtherLen, std::enable_if_t<OtherLen != MaxLen, int> = 0>
+    IECStringVar& operator=(const IECString<OtherLen>& other) noexcept {
+        value_ = IECString<MaxLen>(other.c_str());
         return *this;
     }
 
@@ -380,6 +420,19 @@ private:
 
 using STRING_VAR = IECStringVar<254>;
 
+// Deferred definition: IECString::operator=(const IECStringVar<OtherLen>&)
+// Template deduction doesn't consider user-defined conversions, so we need
+// this explicit assignment to handle: rawStringField = stringVar
+template<size_t MaxLen>
+template<size_t OtherLen>
+inline IECString<MaxLen>& IECString<MaxLen>::operator=(const IECStringVar<OtherLen>& other) noexcept {
+    auto val = other.get();
+    length_ = static_cast<uint16_t>(val.length() < MaxLen ? val.length() : MaxLen);
+    std::memcpy(data_, val.c_str(), length_);
+    data_[length_] = '\0';
+    return *this;
+}
+
 // Comparison operators between IECString and IECStringVar
 // (template deduction doesn't use implicit conversions)
 template<size_t Len1, size_t Len2>
@@ -409,6 +462,25 @@ inline bool operator!=(const IECStringVar<Len1>& a, const IECString<Len2>& b) no
 
 template<size_t Len1, size_t Len2>
 inline bool operator!=(const IECStringVar<Len1>& a, const IECStringVar<Len2>& b) noexcept {
+    return !(a == b);
+}
+
+// Comparison operators for IECVar<IECString<N>> (struct field access returns this type)
+// Template deduction won't chain through IECVar::operator T() + IECString comparison
+template<size_t Len1, size_t Len2>
+inline bool operator==(const IECVar<IECString<Len1>>& a, const IECStringVar<Len2>& b) noexcept {
+    return static_cast<IECString<Len1>>(a) == b.get();
+}
+template<size_t Len1, size_t Len2>
+inline bool operator==(const IECStringVar<Len1>& a, const IECVar<IECString<Len2>>& b) noexcept {
+    return a.get() == static_cast<IECString<Len2>>(b);
+}
+template<size_t Len1, size_t Len2>
+inline bool operator!=(const IECVar<IECString<Len1>>& a, const IECStringVar<Len2>& b) noexcept {
+    return !(a == b);
+}
+template<size_t Len1, size_t Len2>
+inline bool operator!=(const IECStringVar<Len1>& a, const IECVar<IECString<Len2>>& b) noexcept {
     return !(a == b);
 }
 
@@ -491,7 +563,7 @@ inline IECString<MaxLen> RIGHT(const IECString<MaxLen>& s, size_t len) noexcept 
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> MID(const IECString<MaxLen>& s, size_t pos, size_t len) noexcept {
+inline IECString<MaxLen> MID(const IECString<MaxLen>& s, size_t len, size_t pos) noexcept {
     if (pos == 0) return IECString<MaxLen>();
     return s.substr(pos - 1, len);
 }
@@ -589,8 +661,8 @@ inline IECString<MaxLen> RIGHT(const IECStringVar<MaxLen>& s, size_t len) noexce
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> MID(const IECStringVar<MaxLen>& s, size_t pos, size_t len) noexcept {
-    return MID(s.get(), pos, len);
+inline IECString<MaxLen> MID(const IECStringVar<MaxLen>& s, size_t len, size_t pos) noexcept {
+    return MID(s.get(), len, pos);
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
@@ -661,6 +733,97 @@ inline size_t FIND(const IECString<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2
     return FIND(s1, s2.get());
 }
 
+// =============================================================================
+// IECVar<IECString<N>> overloads — struct field access returns this type.
+// Template deduction won't chain through operator T().
+// =============================================================================
+
+template<size_t MaxLen>
+inline size_t LEN(const IECVar<IECString<MaxLen>>& s) noexcept {
+    return static_cast<IECString<MaxLen>>(s).length();
+}
+
+template<size_t MaxLen>
+inline IECString<MaxLen> LEFT(const IECVar<IECString<MaxLen>>& s, size_t len) noexcept {
+    return LEFT(static_cast<IECString<MaxLen>>(s), len);
+}
+
+template<size_t MaxLen>
+inline IECString<MaxLen> RIGHT(const IECVar<IECString<MaxLen>>& s, size_t len) noexcept {
+    return RIGHT(static_cast<IECString<MaxLen>>(s), len);
+}
+
+template<size_t MaxLen>
+inline IECString<MaxLen> MID(const IECVar<IECString<MaxLen>>& s, size_t len, size_t pos) noexcept {
+    return MID(static_cast<IECString<MaxLen>>(s), len, pos);
+}
+
+template<size_t MaxLen>
+inline IECString<MaxLen> DELETE_STR(const IECVar<IECString<MaxLen>>& s, size_t len, size_t pos) noexcept {
+    return DELETE_STR(static_cast<IECString<MaxLen>>(s), len, pos);
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline size_t FIND(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2) noexcept {
+    return FIND(static_cast<IECString<MaxLen1>>(s1), s2.get());
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline size_t FIND(const IECVar<IECString<MaxLen1>>& s1, const IECString<MaxLen2>& s2) noexcept {
+    return FIND(static_cast<IECString<MaxLen1>>(s1), s2);
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline size_t FIND(const IECStringVar<MaxLen1>& s1, const IECVar<IECString<MaxLen2>>& s2) noexcept {
+    return FIND(s1.get(), static_cast<IECString<MaxLen2>>(s2));
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline IECString<MaxLen1> REPLACE(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2, size_t len, size_t pos) noexcept {
+    return REPLACE(static_cast<IECString<MaxLen1>>(s1), IECString<MaxLen1>(s2.get().c_str()), len, pos);
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline IECString<MaxLen1> INSERT(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2, size_t pos) noexcept {
+    return INSERT(static_cast<IECString<MaxLen1>>(s1), IECString<MaxLen1>(s2.get().c_str()), pos);
+}
+
+// Cross-size REPLACE/INSERT: arguments may have different string sizes
+template<size_t MaxLen1, size_t MaxLen2, std::enable_if_t<MaxLen1 != MaxLen2, int> = 0>
+inline IECString<MaxLen1> REPLACE(const IECStringVar<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2, size_t len, size_t pos) noexcept {
+    return REPLACE(s1.get(), IECString<MaxLen1>(s2.get().c_str()), len, pos);
+}
+
+template<size_t MaxLen1, size_t MaxLen2, std::enable_if_t<MaxLen1 != MaxLen2, int> = 0>
+inline IECString<MaxLen1> INSERT(const IECStringVar<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2, size_t pos) noexcept {
+    return INSERT(s1.get(), IECString<MaxLen1>(s2.get().c_str()), pos);
+}
+
+// CONCAT overloads for IECVar<IECString<N>>
+template<size_t MaxLen1, size_t MaxLen2>
+inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+CONCAT(const IECVar<IECString<MaxLen1>>& s1, const IECString<MaxLen2>& s2) noexcept {
+    return CONCAT(static_cast<IECString<MaxLen1>>(s1), s2);
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+CONCAT(const IECString<MaxLen1>& s1, const IECVar<IECString<MaxLen2>>& s2) noexcept {
+    return CONCAT(s1, static_cast<IECString<MaxLen2>>(s2));
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+CONCAT(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2) noexcept {
+    return CONCAT(static_cast<IECString<MaxLen1>>(s1), s2.get());
+}
+
+template<size_t MaxLen1, size_t MaxLen2>
+inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+CONCAT(const IECStringVar<MaxLen1>& s1, const IECVar<IECString<MaxLen2>>& s2) noexcept {
+    return CONCAT(s1.get(), static_cast<IECString<MaxLen2>>(s2));
+}
+
 template<size_t MaxLen1, size_t MaxLen2>
 inline bool GT_STRING(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2) noexcept {
     return s1 > s2;
@@ -689,6 +852,279 @@ inline bool LT_STRING(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2
 template<size_t MaxLen1, size_t MaxLen2>
 inline bool NE_STRING(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2) noexcept {
     return s1 != s2;
+}
+
+// =============================================================================
+// TO_STRING Conversions
+// =============================================================================
+
+// Numeric → STRING (uses snprintf for real-time safety, no std::to_string)
+template<typename T,
+    std::enable_if_t<std::is_integral_v<decltype(iec_unwrap(std::declval<T>()))>, int> = 0>
+inline IECString<254> TO_STRING(T v) noexcept {
+    char buf[32];
+    auto raw = iec_unwrap(v);
+    if constexpr (std::is_unsigned_v<decltype(raw)>) {
+        std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(raw));
+    } else {
+        std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(raw));
+    }
+    return IECString<254>(buf);
+}
+
+template<typename T,
+    std::enable_if_t<std::is_floating_point_v<decltype(iec_unwrap(std::declval<T>()))>, int> = 0>
+inline IECString<254> TO_STRING(T v) noexcept {
+    char buf[64];
+    std::snprintf(buf, sizeof(buf), "%g", static_cast<double>(iec_unwrap(v)));
+    return IECString<254>(buf);
+}
+
+// BOOL → STRING
+inline IECString<254> TO_STRING(IECVar<bool> v) noexcept {
+    return IECString<254>(iec_unwrap(v) ? "TRUE" : "FALSE");
+}
+
+// IECString → STRING (identity / cross-size copy)
+template<size_t N>
+inline IECString<254> TO_STRING(const IECString<N>& v) noexcept {
+    return IECString<254>(v.c_str());
+}
+
+template<size_t N>
+inline IECString<254> TO_STRING(const IECStringVar<N>& v) noexcept {
+    return IECString<254>(v.get().c_str());
+}
+
+// =============================================================================
+// OSCAT-Compatible String Functions
+// =============================================================================
+
+// CODE - Return ASCII code of first character
+template<size_t N>
+inline int32_t CODE(const IECString<N>& s) noexcept {
+    return s.length() > 0 ? static_cast<int32_t>(static_cast<unsigned char>(s[0])) : 0;
+}
+
+template<size_t N>
+inline int32_t CODE(const IECStringVar<N>& s) noexcept {
+    return CODE(s.get());
+}
+
+// CHR - Return string from ASCII code
+inline IECString<254> CHR(int32_t code) noexcept {
+    char buf[2] = { static_cast<char>(code), '\0' };
+    return IECString<254>(buf);
+}
+
+// TRIM - Remove leading and trailing whitespace
+template<size_t N>
+inline IECString<N> TRIM(const IECString<N>& s) noexcept {
+    const char* start = s.c_str();
+    const char* end = start + s.length();
+    while (start < end && (*start == ' ' || *start == '\t' || *start == '\r' || *start == '\n')) ++start;
+    while (end > start && (*(end-1) == ' ' || *(end-1) == '\t' || *(end-1) == '\r' || *(end-1) == '\n')) --end;
+    return IECString<N>(start, static_cast<size_t>(end - start));
+}
+
+template<size_t N>
+inline IECString<N> TRIM(const IECStringVar<N>& s) noexcept {
+    return TRIM(s.get());
+}
+
+// LOWERCASE / TOUPPER - Case conversion (OSCAT uses these names)
+template<size_t N>
+inline IECString<N> LOWERCASE(const IECString<N>& s) noexcept {
+    IECString<N> result(s);
+    for (size_t i = 0; i < result.length(); ++i) {
+        char c = result[i];
+        if (c >= 'A' && c <= 'Z') result[i] = c + ('a' - 'A');
+    }
+    return result;
+}
+
+template<size_t N>
+inline IECString<N> LOWERCASE(const IECStringVar<N>& s) noexcept {
+    return LOWERCASE(s.get());
+}
+
+template<size_t N>
+inline IECString<N> UPPERCASE(const IECString<N>& s) noexcept {
+    IECString<N> result(s);
+    for (size_t i = 0; i < result.length(); ++i) {
+        char c = result[i];
+        if (c >= 'a' && c <= 'z') result[i] = c - ('a' - 'A');
+    }
+    return result;
+}
+
+template<size_t N>
+inline IECString<N> UPPERCASE(const IECStringVar<N>& s) noexcept {
+    return UPPERCASE(s.get());
+}
+
+// CONCAT with const char* overloads (codegen may mix string literals with IECString)
+template<size_t MaxLen>
+inline IECString<MaxLen> CONCAT(const IECString<MaxLen>& s1, const char* s2) noexcept {
+    IECString<MaxLen> result(s1);
+    result.append(s2);
+    return result;
+}
+
+template<size_t MaxLen>
+inline IECString<MaxLen> CONCAT(const char* s1, const IECString<MaxLen>& s2) noexcept {
+    IECString<MaxLen> result(s1);
+    result.append(s2);
+    return result;
+}
+
+template<size_t MaxLen>
+inline IECString<MaxLen> CONCAT(const IECStringVar<MaxLen>& s1, const char* s2) noexcept {
+    return CONCAT(s1.get(), s2);
+}
+
+template<size_t MaxLen>
+inline IECString<MaxLen> CONCAT(const char* s1, const IECStringVar<MaxLen>& s2) noexcept {
+    return CONCAT(s1, s2.get());
+}
+
+// =============================================================================
+// String-to-Numeric Conversions
+// IEC 61131-3: STRING_TO_INT, STRING_TO_REAL, etc.
+// Placed here because they need both IECString and IEC_INT/IEC_REAL types.
+// =============================================================================
+
+template<size_t N>
+inline IEC_INT TO_INT(const IECString<N>& s) noexcept {
+    return IEC_INT(static_cast<INT_t>(std::strtol(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_INT TO_INT(const IECStringVar<N>& s) noexcept {
+    return TO_INT(s.get());
+}
+template<size_t N>
+inline IEC_REAL TO_REAL(const IECString<N>& s) noexcept {
+    return IEC_REAL(static_cast<REAL_t>(std::strtod(s.c_str(), nullptr)));
+}
+template<size_t N>
+inline IEC_REAL TO_REAL(const IECStringVar<N>& s) noexcept {
+    return TO_REAL(s.get());
+}
+template<size_t N>
+inline IEC_LREAL TO_LREAL(const IECString<N>& s) noexcept {
+    return IEC_LREAL(static_cast<LREAL_t>(std::strtod(s.c_str(), nullptr)));
+}
+template<size_t N>
+inline IEC_LREAL TO_LREAL(const IECStringVar<N>& s) noexcept {
+    return TO_LREAL(s.get());
+}
+template<size_t N>
+inline IEC_DINT TO_DINT(const IECString<N>& s) noexcept {
+    return IEC_DINT(static_cast<DINT_t>(std::strtol(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_DINT TO_DINT(const IECStringVar<N>& s) noexcept {
+    return TO_DINT(s.get());
+}
+
+template<size_t N>
+inline IEC_SINT TO_SINT(const IECString<N>& s) noexcept {
+    return IEC_SINT(static_cast<SINT_t>(std::strtol(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_SINT TO_SINT(const IECStringVar<N>& s) noexcept {
+    return TO_SINT(s.get());
+}
+
+template<size_t N>
+inline IEC_LINT TO_LINT(const IECString<N>& s) noexcept {
+    return IEC_LINT(static_cast<LINT_t>(std::strtoll(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_LINT TO_LINT(const IECStringVar<N>& s) noexcept {
+    return TO_LINT(s.get());
+}
+
+template<size_t N>
+inline IEC_USINT TO_USINT(const IECString<N>& s) noexcept {
+    return IEC_USINT(static_cast<USINT_t>(std::strtoul(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_USINT TO_USINT(const IECStringVar<N>& s) noexcept {
+    return TO_USINT(s.get());
+}
+
+template<size_t N>
+inline IEC_UINT TO_UINT(const IECString<N>& s) noexcept {
+    return IEC_UINT(static_cast<UINT_t>(std::strtoul(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_UINT TO_UINT(const IECStringVar<N>& s) noexcept {
+    return TO_UINT(s.get());
+}
+
+template<size_t N>
+inline IEC_UDINT TO_UDINT(const IECString<N>& s) noexcept {
+    return IEC_UDINT(static_cast<UDINT_t>(std::strtoul(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_UDINT TO_UDINT(const IECStringVar<N>& s) noexcept {
+    return TO_UDINT(s.get());
+}
+
+template<size_t N>
+inline IEC_ULINT TO_ULINT(const IECString<N>& s) noexcept {
+    return IEC_ULINT(static_cast<ULINT_t>(std::strtoull(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_ULINT TO_ULINT(const IECStringVar<N>& s) noexcept {
+    return TO_ULINT(s.get());
+}
+
+template<size_t N>
+inline IEC_BYTE TO_BYTE(const IECString<N>& s) noexcept {
+    return IEC_BYTE(static_cast<BYTE_t>(std::strtoul(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_BYTE TO_BYTE(const IECStringVar<N>& s) noexcept {
+    return TO_BYTE(s.get());
+}
+
+template<size_t N>
+inline IEC_WORD TO_WORD(const IECString<N>& s) noexcept {
+    return IEC_WORD(static_cast<WORD_t>(std::strtoul(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_WORD TO_WORD(const IECStringVar<N>& s) noexcept {
+    return TO_WORD(s.get());
+}
+
+template<size_t N>
+inline IEC_DWORD TO_DWORD(const IECString<N>& s) noexcept {
+    return IEC_DWORD(static_cast<DWORD_t>(std::strtoul(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_DWORD TO_DWORD(const IECStringVar<N>& s) noexcept {
+    return TO_DWORD(s.get());
+}
+
+template<size_t N>
+inline IEC_LWORD TO_LWORD(const IECString<N>& s) noexcept {
+    return IEC_LWORD(static_cast<LWORD_t>(std::strtoull(s.c_str(), nullptr, 10)));
+}
+template<size_t N>
+inline IEC_LWORD TO_LWORD(const IECStringVar<N>& s) noexcept {
+    return TO_LWORD(s.get());
+}
+
+template<size_t N>
+inline IEC_BOOL TO_BOOL(const IECString<N>& s) noexcept {
+    // "TRUE" or "1" → true, everything else → false
+    return IEC_BOOL(s.length() > 0 && (s[0] == 'T' || s[0] == 't' || s[0] == '1'));
+}
+template<size_t N>
+inline IEC_BOOL TO_BOOL(const IECStringVar<N>& s) noexcept {
+    return TO_BOOL(s.get());
 }
 
 } // namespace strucpp

@@ -673,7 +673,7 @@ class TestFunctionGenerator {
         const method =
           assert.assertType === "ASSERT_EQ" ? "assert_eq" : "assert_neq";
         lines.push(
-          `${this.indent}if (!ctx.${method}(static_cast<decltype(${expectedExpr})>(${actualExpr}), ${expectedExpr}, "${escapeString(actualStr)}", "${escapeString(expectedStr)}", ${line}${msgArg})) return false;`,
+          `${this.indent}if (!ctx.${method}(${actualExpr}, ${expectedExpr}, "${escapeString(actualStr)}", "${escapeString(expectedStr)}", ${line}${msgArg})) return false;`,
         );
         break;
       }
@@ -724,7 +724,7 @@ class TestFunctionGenerator {
         };
         const method = methodMap[assert.assertType]!;
         lines.push(
-          `${this.indent}if (!ctx.${method}(static_cast<decltype(${thresholdExpr})>(${actualExpr}), ${thresholdExpr}, "${escapeString(actualStr)}", "${escapeString(thresholdStr)}", ${line}${msgArg})) return false;`,
+          `${this.indent}if (!ctx.${method}(${actualExpr}, ${thresholdExpr}, "${escapeString(actualStr)}", "${escapeString(thresholdStr)}", ${line}${msgArg})) return false;`,
         );
         break;
       }
@@ -741,7 +741,7 @@ class TestFunctionGenerator {
         const expectedStr = this.expressionToString(assert.args[1]!);
         const toleranceStr = this.expressionToString(assert.args[2]!);
         lines.push(
-          `${this.indent}if (!ctx.assert_near(static_cast<decltype(${expectedExpr})>(${actualExpr}), ${expectedExpr}, ${toleranceExpr}, "${escapeString(actualStr)}", "${escapeString(expectedStr)}", "${escapeString(toleranceStr)}", ${line}${msgArg})) return false;`,
+          `${this.indent}if (!ctx.assert_near(${actualExpr}, ${expectedExpr}, ${toleranceExpr}, "${escapeString(actualStr)}", "${escapeString(expectedStr)}", "${escapeString(toleranceStr)}", ${line}${msgArg})) return false;`,
         );
         break;
       }
