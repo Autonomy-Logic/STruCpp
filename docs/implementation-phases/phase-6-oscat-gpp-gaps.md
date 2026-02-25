@@ -2,13 +2,13 @@
 
 ## Status: Pending (Next PR after transpilation pass)
 
-This document captures the full analysis of g++ compilation failures when compiling the OSCAT Basic 335 library's transpiled C++ output. The STruC++ transpiler successfully converts all 551 ST files to C++, but the generated code has **504 g++ errors** across **20 distinct categories** when compiled with `g++ -std=c++17 -fsyntax-only`.
+This document captures the full analysis of g++ compilation failures when compiling the OSCAT Basic 335 library's transpiled C++ output. The STruC++ transpiler successfully converts all 554 ST files to C++, but the generated code has **502 g++ errors** across **20 distinct categories** when compiled with `g++ -std=c++17 -fsyntax-only`. (Originally 504 errors across 551 files; 2 errors from RC-8b resolved by recovering the missing `CLK_PRG.st` from the extraction parser fix.)
 
 This analysis was performed on branch `feat/oscat-basic-compatibility` after the transpilation pass was complete.
 
 ---
 
-## Error Summary (504 total)
+## Error Summary (502 total)
 
 | # | Category | Count | % | Root Cause |
 |---|----------|-------|---|------------|
@@ -19,7 +19,7 @@ This analysis was performed on branch `feat/oscat-basic-compatibility` after the
 | 5 | `incompatible pointer types assigning` | 46 | 9.1% | ADR() type mismatches (BYTE* from STRING*, DWORD* from REAL*) |
 | 6 | `type X does not provide a subscript operator` | 29 | 5.8% | GVL struct access `SETUP.CHARNAMES[i]` on bare struct |
 | 7 | `type X does not provide a call operator` | 24 | 4.8% | Array access `arr(i, j)` using `()` instead of `[]` + member access on array elements |
-| 8 | `unknown type name X` | 17 | 3.4% | `IEC___INLINE_ARRAY_*` fallback + `IEC_CLK_PRG` program-as-type |
+| 8 | `unknown type name X` | 15 | 3.0% | `IEC___INLINE_ARRAY_*` fallback (CLK_PRG resolved — was missing from extraction) |
 | 9 | `no viable conversion from int to Array*` | 10 | 2.0% | Struct fields with array type initialized to `= 0` |
 | 10 | `no viable overloaded '='` | 10 | 2.0% | Assignment type mismatches |
 | 11 | `invalid operands to binary expression` | 6 | 1.2% | Pointer arithmetic on IECVar pointers |
@@ -317,15 +317,13 @@ LIST_NEXT: PT/PO : POINTER TO ARRAY OF BYTE → IEC___INLINE_ARRAY_BYTE (3 error
 
 The bounds ARE integer literals in these cases (0..15, 0..31), so the issue is likely that `extractIntegerFromExpression()` isn't being called for FB member variable declarations, only for function parameter declarations. **Needs investigation**: check whether the `arrayDimensions`/`elementTypeName` fields are populated for FB `VAR` block inline arrays.
 
-**8b. `IEC_CLK_PRG` — Program used as type (2 errors)**:
+**8b. ~~`IEC_CLK_PRG` — Program used as type (2 errors)~~ RESOLVED**:
 
-`CLK_PRG` is defined as a `PROGRAM` in OSCAT, but two FBs reference it as a local variable type (`VAR CLK : CLK_PRG; END_VAR`). The codegen emits `IEC_CLK_PRG` which doesn't exist as a type alias. Programs aren't types in standard IEC 61131-3 but CODESYS allows instantiating them. This requires either:
-- Generating program classes (like FB classes) that can be instantiated
-- Or treating programs-as-types in the type mapper
+`CLK_PRG` was never a `PROGRAM` — it is a standard `FUNCTION_BLOCK` that was missing from the extracted OSCAT library due to a bug in the CODESYS V2.3 `.lib` parser. The parser skipped POUs whose declaration text had leading whitespace (tab/space) before the `FUNCTION_BLOCK` keyword, causing the 4-byte length prefix to be read at the wrong binary offset. This was fixed by correcting the extraction parser, and `CLK_PRG.st` has been added to the bundled library. The 2 errors (in `PWM_DC` and `PWM_PW`) are now resolved. Two other POUs (`FLOW_CONTROL` and `ROUND`) were also recovered by the same fix.
 
-**Fix location**: `src/frontend/ast-builder.ts` (8a), `src/backend/codegen.ts` + `src/backend/type-codegen.ts` (8a + 8b)
+**Fix location**: `src/frontend/ast-builder.ts` (8a only — 8b is no longer needed)
 
-**Complexity**: 8a is Low (fix dimension extraction for FB members), 8b is Medium (programs-as-types).
+**Complexity**: 8a is Low (fix dimension extraction for FB members).
 
 ---
 
@@ -409,10 +407,10 @@ I = (IN + IN_LAST) * 5e-7 * KI * TC + I;
 
 ## Recommended Implementation Order
 
-### Phase 6.A — Quick Wins (14 errors, ~1 hour)
+### Phase 6.A — Quick Wins (12 errors, ~1 hour)
 1. **RC-9**: Array field init `= 0` → `= {}` (10 errors)
 2. **RC-12**: Float literal `5e-7.0` fix (2 errors)
-3. **RC-8b**: Forward-declare `CLK_PRG` program class (2 errors)
+3. ~~**RC-8b**: Forward-declare `CLK_PRG` program class (2 errors)~~ — RESOLVED (missing extraction, not a compiler issue)
 
 ### Phase 6.B — Runtime Function Overloads (191 errors, ~4 hours)
 1. **RC-1**: Implement `TO_TIME`, `TO_DATE`, `TO_DT`, `TO_TOD`, `TO_STRING` (93 errors)
