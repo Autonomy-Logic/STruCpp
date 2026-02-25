@@ -299,6 +299,30 @@ export function compile(
       registerLibrarySymbols(manifest, semanticSymbolTables);
     }
   }
+  // Register global constants (e.g., STRING_LENGTH, LIST_LENGTH) in symbol tables
+  if (mergedOptions.globalConstants) {
+    if (!semanticSymbolTables) {
+      semanticSymbolTables = new SymbolTables();
+    }
+    for (const name of Object.keys(mergedOptions.globalConstants)) {
+      try {
+        semanticSymbolTables.globalScope.define({
+          name,
+          kind: "constant",
+          declaration:
+            undefined as unknown as import("./frontend/ast.js").VarDeclaration,
+          type: {
+            typeKind: "elementary",
+            name: "ULINT",
+            sizeBits: 64,
+          } as import("./frontend/ast.js").ElementaryType,
+        });
+      } catch {
+        // Ignore duplicate
+      }
+    }
+  }
+
   const analyzer = new SemanticAnalyzer();
   const semanticResult = analyzer.analyze(ast, semanticSymbolTables);
   for (const err of semanticResult.errors) {
@@ -419,6 +443,7 @@ export function compile(
     warnings,
     ast,
     projectModel: projectModelResult.model,
+    symbolTables: semanticResult.symbolTables,
   };
 }
 

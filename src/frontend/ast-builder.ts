@@ -112,6 +112,17 @@ function nodeToSourceSpan(node: CstNode): SourceSpan {
           endLine = child.endLine;
           endCol = child.endColumn ?? 0;
         }
+      } else {
+        // It's a CstNode — recurse to find nested tokens
+        const subSpan = nodeToSourceSpan(child);
+        if (subSpan.startLine > 0 && subSpan.startLine < startLine) {
+          startLine = subSpan.startLine;
+          startCol = subSpan.startCol;
+        }
+        if (subSpan.endLine > endLine) {
+          endLine = subSpan.endLine;
+          endCol = subSpan.endCol;
+        }
       }
     }
   }

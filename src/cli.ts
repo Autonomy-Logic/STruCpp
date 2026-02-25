@@ -44,6 +44,7 @@ import {
   generateTestMain,
   buildPOUInfoFromAST,
 } from "./backend/test-main-gen.js";
+import { analyzeTestFile } from "./semantic/analyzer.js";
 import type { CompileOptions } from "./types.js";
 
 interface CLIOptions {
@@ -490,6 +491,24 @@ function runTestMode(options: CLIOptions): void {
   if (testFiles.length === 0) {
     console.error("Error: No test cases found in test files");
     process.exit(1);
+  }
+
+  // 3b. Semantic analysis of test files
+  if (result.symbolTables) {
+    let hasTestErrors = false;
+    for (const tf of testFiles) {
+      const analysisResult = analyzeTestFile(tf, result.symbolTables);
+      if (analysisResult.errors.length > 0) {
+        hasTestErrors = true;
+        console.error(`Error in test file '${tf.fileName}':`);
+        for (const err of analysisResult.errors) {
+          console.error(`  ${err.line}:${err.column}: ${err.message}`);
+        }
+      }
+    }
+    if (hasTestErrors) {
+      process.exit(1);
+    }
   }
 
   // 4. Generate test_main.cpp

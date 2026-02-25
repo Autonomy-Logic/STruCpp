@@ -12,14 +12,18 @@ import type {
   FunctionBlockDeclaration,
   FunctionCallExpression,
   MethodDeclaration,
+  TypeDefinition,
+  TypeReference,
   VarBlock,
   VarDeclaration,
   Statement,
+  TestFile,
+  TestStatement,
   Visibility,
 } from "../frontend/ast.js";
 import type { CompileError } from "../types.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
-import { SymbolTables } from "./symbol-table.js";
+import { Scope, SymbolTables } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 
 // =============================================================================
@@ -131,6 +135,17 @@ interface LocatedVarInfo {
   scopeType: "program" | "function" | "functionBlock";
   scopeName: string;
   declaration: VarDeclaration;
+}
+
+/**
+ * Context for undeclared variable checking within a POU scope.
+ */
+interface UndeclaredVarContext {
+  functionName?: string;
+  fbName?: string;
+  methodName?: string;
+  propertyName?: string;
+  methodLocalVars?: Map<string, string>;
 }
 
 export class SemanticAnalyzer {
@@ -286,6 +301,32 @@ export class SemanticAnalyzer {
       }
     }
 
+    // Register interface declarations as types (so they can be used in IMPLEMENTS and var types)
+    for (const ifaceDecl of ast.interfaces) {
+      try {
+        const resolvedType: ElementaryType = {
+          typeKind: "elementary",
+          name: ifaceDecl.name,
+          sizeBits: 0,
+        };
+        this.symbolTables.globalScope.define({
+          name: ifaceDecl.name,
+          kind: "type",
+          declaration:
+            undefined as unknown as import("../frontend/ast.js").TypeDeclaration,
+          resolvedType,
+        });
+      } catch (err) {
+        if (err instanceof Error) {
+          this.addError(
+            err.message,
+            ifaceDecl.sourceSpan.startLine,
+            ifaceDecl.sourceSpan.startCol,
+          );
+        }
+      }
+    }
+
     // Register program declarations
     for (const progDecl of ast.programs) {
       try {
@@ -311,6 +352,51 @@ export class SemanticAnalyzer {
             progDecl.sourceSpan.startLine,
             progDecl.sourceSpan.startCol,
           );
+        }
+      }
+    }
+
+    // Register global variable declarations
+    for (const block of ast.globalVarBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          try {
+            const varType: ElementaryType = {
+              typeKind: "elementary",
+              name: decl.type.name,
+              sizeBits: 0,
+            };
+            if (block.isConstant) {
+              this.symbolTables.globalScope.define({
+                name,
+                kind: "constant",
+                declaration: decl,
+                type: varType,
+              });
+            } else {
+              this.symbolTables.globalScope.define({
+                name,
+                kind: "variable",
+                declaration: decl,
+                type: varType,
+                isInput: false,
+                isOutput: false,
+                isInOut: false,
+                isExternal: false,
+                isGlobal: true,
+                isRetain: block.isRetain,
+                address: decl.address,
+              });
+            }
+          } catch (err) {
+            if (err instanceof Error) {
+              this.addError(
+                err.message,
+                decl.sourceSpan.startLine,
+                decl.sourceSpan.startCol,
+              );
+            }
+          }
         }
       }
     }
@@ -399,6 +485,12 @@ export class SemanticAnalyzer {
    * Validate IEC 61131-3 semantic rules.
    */
   private validateSemantics(ast: CompilationUnit): void {
+    // Validate type references (must come first — other validations assume types exist)
+    this.validateTypeReferences(ast);
+
+    // Validate undeclared variable usage
+    this.validateUndeclaredVariables(ast);
+
     // Validate located variables
     this.validateLocatedVariables();
 
@@ -423,8 +515,7 @@ export class SemanticAnalyzer {
     // Validate bit access bounds and ADR l-value targets
     this.validateExpressions(ast);
 
-    // TODO: Implement additional semantic validation in Phase 3+
-    // - Check that variables are declared before use
+    // TODO: Implement additional semantic validation
     // - Validate array bounds
     // - Check CASE statement coverage
     // - Validate reference operations
@@ -1953,6 +2044,601 @@ export class SemanticAnalyzer {
     }
   }
 
+  // =============================================================================
+  // Undefined Type Validation
+  // =============================================================================
+
+  /**
+   * Check if a type name is known (registered in symbol tables or a synthetic internal type).
+   */
+  private isKnownType(name: string): boolean {
+    const upper = name.toUpperCase();
+    // Whitelist synthetic internal types
+    if (upper.startsWith("__VLA_") || upper.startsWith("__INLINE_ARRAY_")) {
+      return true;
+    }
+    const sym = this.symbolTables.globalScope.lookup(upper);
+    if (!sym) return false;
+    return (
+      sym.kind === "type" ||
+      sym.kind === "functionBlock" ||
+      sym.kind === "program"
+    );
+  }
+
+  /**
+   * Validate a single TypeReference node. Reports an error if the referenced type is unknown.
+   */
+  private validateSingleTypeReference(
+    typeRef: TypeReference,
+    context: string,
+  ): void {
+    // Skip empty or VOID type names
+    if (!typeRef.name || typeRef.name.toUpperCase() === "VOID") return;
+
+    // For inline arrays, validate the element type instead
+    const nameToCheck = typeRef.elementTypeName ?? typeRef.name;
+
+    if (!this.isKnownType(nameToCheck)) {
+      this.addError(
+        `Undefined type '${nameToCheck}'${context ? " in " + context : ""}`,
+        typeRef.sourceSpan.startLine,
+        typeRef.sourceSpan.startCol,
+      );
+    }
+  }
+
+  /**
+   * Validate all type references in the AST.
+   * Walks variable declarations, return types, EXTENDS/IMPLEMENTS clauses,
+   * method parameters, properties, global var blocks, and type definitions.
+   */
+  private validateTypeReferences(ast: CompilationUnit): void {
+    // Helper to validate var blocks
+    const validateVarBlocks = (varBlocks: VarBlock[], context: string) => {
+      for (const block of varBlocks) {
+        for (const decl of block.declarations) {
+          this.validateSingleTypeReference(decl.type, context);
+        }
+      }
+    };
+
+    // Programs
+    for (const prog of ast.programs) {
+      validateVarBlocks(prog.varBlocks, `PROGRAM '${prog.name}'`);
+    }
+
+    // Functions — var blocks + return type
+    for (const func of ast.functions) {
+      validateVarBlocks(func.varBlocks, `FUNCTION '${func.name}'`);
+      this.validateSingleTypeReference(
+        func.returnType,
+        `FUNCTION '${func.name}' return type`,
+      );
+    }
+
+    // Function blocks — var blocks, methods, properties, EXTENDS, IMPLEMENTS
+    for (const fb of ast.functionBlocks) {
+      validateVarBlocks(fb.varBlocks, `FUNCTION_BLOCK '${fb.name}'`);
+
+      // EXTENDS clause
+      if (fb.extends) {
+        if (!this.isKnownType(fb.extends)) {
+          this.addError(
+            `Undefined type '${fb.extends}' in EXTENDS clause of FUNCTION_BLOCK '${fb.name}'`,
+            fb.sourceSpan.startLine,
+            fb.sourceSpan.startCol,
+          );
+        }
+      }
+
+      // IMPLEMENTS clause
+      if (fb.implements) {
+        for (const ifaceName of fb.implements) {
+          if (!this.isKnownType(ifaceName)) {
+            this.addError(
+              `Undefined type '${ifaceName}' in IMPLEMENTS clause of FUNCTION_BLOCK '${fb.name}'`,
+              fb.sourceSpan.startLine,
+              fb.sourceSpan.startCol,
+            );
+          }
+        }
+      }
+
+      // Methods — return type + var blocks (parameters)
+      for (const method of fb.methods) {
+        if (method.returnType) {
+          this.validateSingleTypeReference(
+            method.returnType,
+            `METHOD '${method.name}' of '${fb.name}' return type`,
+          );
+        }
+        validateVarBlocks(
+          method.varBlocks,
+          `METHOD '${method.name}' of '${fb.name}'`,
+        );
+      }
+
+      // Properties
+      for (const prop of fb.properties) {
+        this.validateSingleTypeReference(
+          prop.type,
+          `PROPERTY '${prop.name}' of '${fb.name}'`,
+        );
+      }
+    }
+
+    // Interfaces — methods (return type + parameters), EXTENDS
+    for (const iface of ast.interfaces) {
+      if (iface.extends) {
+        for (const baseName of iface.extends) {
+          if (!this.isKnownType(baseName)) {
+            this.addError(
+              `Undefined type '${baseName}' in EXTENDS clause of INTERFACE '${iface.name}'`,
+              iface.sourceSpan.startLine,
+              iface.sourceSpan.startCol,
+            );
+          }
+        }
+      }
+      for (const method of iface.methods) {
+        if (method.returnType) {
+          this.validateSingleTypeReference(
+            method.returnType,
+            `METHOD '${method.name}' of INTERFACE '${iface.name}' return type`,
+          );
+        }
+        validateVarBlocks(
+          method.varBlocks,
+          `METHOD '${method.name}' of INTERFACE '${iface.name}'`,
+        );
+      }
+    }
+
+    // Global var blocks
+    for (const block of ast.globalVarBlocks) {
+      for (const decl of block.declarations) {
+        this.validateSingleTypeReference(decl.type, "VAR_GLOBAL");
+      }
+    }
+
+    // Type definitions (struct fields, array element types, subrange base types, etc.)
+    for (const typeDecl of ast.types) {
+      this.validateTypeDefinitionReferences(typeDecl.name, typeDecl.definition);
+    }
+  }
+
+  /**
+   * Validate type references within a type definition (struct fields, array elements, etc.).
+   */
+  private validateTypeDefinitionReferences(
+    typeName: string,
+    def: TypeDefinition,
+  ): void {
+    switch (def.kind) {
+      case "StructDefinition":
+        for (const field of def.fields) {
+          this.validateSingleTypeReference(field.type, `STRUCT '${typeName}'`);
+        }
+        break;
+      case "ArrayDefinition":
+        this.validateSingleTypeReference(
+          def.elementType,
+          `ARRAY type '${typeName}'`,
+        );
+        break;
+      case "SubrangeDefinition":
+        this.validateSingleTypeReference(
+          def.baseType,
+          `subrange type '${typeName}'`,
+        );
+        break;
+      case "EnumDefinition":
+        if (def.baseType) {
+          this.validateSingleTypeReference(def.baseType, `ENUM '${typeName}'`);
+        }
+        break;
+      case "TypeReference":
+        // Type alias — validate the target type
+        this.validateSingleTypeReference(def, `type alias '${typeName}'`);
+        break;
+    }
+  }
+
+  // =============================================================================
+  // Undeclared Variable Validation
+  // =============================================================================
+
+  /**
+   * Validate that all variable references in POU bodies refer to declared variables.
+   */
+  private validateUndeclaredVariables(ast: CompilationUnit): void {
+    // Programs
+    for (const prog of ast.programs) {
+      const scope = this.symbolTables.getProgramScope(prog.name);
+      if (scope) {
+        this.walkStatementsForUndeclaredVars(prog.body, scope, {});
+      }
+    }
+
+    // Functions
+    for (const func of ast.functions) {
+      const scope = this.symbolTables.getFunctionScope(func.name);
+      if (scope) {
+        this.walkStatementsForUndeclaredVars(func.body, scope, {
+          functionName: func.name,
+        });
+      }
+    }
+
+    // Function blocks
+    for (const fb of ast.functionBlocks) {
+      const scope = this.symbolTables.getFBScope(fb.name);
+      if (scope) {
+        this.walkStatementsForUndeclaredVars(fb.body, scope, {
+          fbName: fb.name,
+        });
+        for (const method of fb.methods) {
+          const methodVars = this.buildVarTypeMap(method.varBlocks);
+          this.walkStatementsForUndeclaredVars(method.body, scope, {
+            fbName: fb.name,
+            methodName: method.name,
+            methodLocalVars: methodVars,
+          });
+        }
+        for (const prop of fb.properties) {
+          if (prop.getter) {
+            this.walkStatementsForUndeclaredVars(prop.getter, scope, {
+              fbName: fb.name,
+              propertyName: prop.name,
+            });
+          }
+          if (prop.setter) {
+            this.walkStatementsForUndeclaredVars(prop.setter, scope, {
+              fbName: fb.name,
+              propertyName: prop.name,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Walk statements checking for undeclared variable usage.
+   */
+  private walkStatementsForUndeclaredVars(
+    stmts: Statement[],
+    scope: Scope,
+    ctx: UndeclaredVarContext,
+  ): void {
+    for (const stmt of stmts) {
+      switch (stmt.kind) {
+        case "AssignmentStatement":
+          this.checkExpressionForUndeclaredVars(stmt.target, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.value, scope, ctx);
+          break;
+        case "RefAssignStatement":
+          this.checkExpressionForUndeclaredVars(stmt.target, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.source, scope, ctx);
+          break;
+        case "FunctionCallStatement":
+          this.checkExpressionForUndeclaredVars(stmt.call, scope, ctx);
+          break;
+        case "DeleteStatement":
+          this.checkExpressionForUndeclaredVars(stmt.pointer, scope, ctx);
+          break;
+        case "ForStatement":
+          this.checkNameDeclared(
+            stmt.controlVariable,
+            scope,
+            ctx,
+            stmt.sourceSpan,
+          );
+          this.checkExpressionForUndeclaredVars(stmt.start, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.end, scope, ctx);
+          if (stmt.step) {
+            this.checkExpressionForUndeclaredVars(stmt.step, scope, ctx);
+          }
+          this.walkStatementsForUndeclaredVars(stmt.body, scope, ctx);
+          break;
+        case "IfStatement":
+          this.checkExpressionForUndeclaredVars(stmt.condition, scope, ctx);
+          this.walkStatementsForUndeclaredVars(stmt.thenStatements, scope, ctx);
+          for (const clause of stmt.elsifClauses) {
+            this.checkExpressionForUndeclaredVars(clause.condition, scope, ctx);
+            this.walkStatementsForUndeclaredVars(clause.statements, scope, ctx);
+          }
+          this.walkStatementsForUndeclaredVars(stmt.elseStatements, scope, ctx);
+          break;
+        case "WhileStatement":
+          this.checkExpressionForUndeclaredVars(stmt.condition, scope, ctx);
+          this.walkStatementsForUndeclaredVars(stmt.body, scope, ctx);
+          break;
+        case "RepeatStatement":
+          this.walkStatementsForUndeclaredVars(stmt.body, scope, ctx);
+          this.checkExpressionForUndeclaredVars(stmt.condition, scope, ctx);
+          break;
+        case "CaseStatement":
+          this.checkExpressionForUndeclaredVars(stmt.selector, scope, ctx);
+          for (const c of stmt.cases) {
+            for (const label of c.labels) {
+              this.checkExpressionForUndeclaredVars(label.start, scope, ctx);
+              if (label.end) {
+                this.checkExpressionForUndeclaredVars(label.end, scope, ctx);
+              }
+            }
+            this.walkStatementsForUndeclaredVars(c.statements, scope, ctx);
+          }
+          this.walkStatementsForUndeclaredVars(stmt.elseStatements, scope, ctx);
+          break;
+      }
+    }
+  }
+
+  /**
+   * Recursively check an expression for undeclared variable usage.
+   */
+  private checkExpressionForUndeclaredVars(
+    expr: Expression,
+    scope: Scope,
+    ctx: UndeclaredVarContext,
+  ): void {
+    switch (expr.kind) {
+      case "VariableExpression":
+        this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan);
+        if (expr.accessChain) {
+          // accessChain is the authoritative ordered chain — walk its subscripts
+          for (const step of expr.accessChain) {
+            if (step.kind === "subscript") {
+              for (const idx of step.indices) {
+                this.checkExpressionForUndeclaredVars(idx, scope, ctx);
+              }
+            }
+          }
+        } else {
+          // Legacy path: no accessChain, use subscripts directly
+          for (const sub of expr.subscripts) {
+            this.checkExpressionForUndeclaredVars(sub, scope, ctx);
+          }
+        }
+        break;
+      case "FunctionCallExpression":
+        // For dotted names (fb.method), check only the object part
+        if (expr.functionName.includes(".")) {
+          const objName = expr.functionName.substring(
+            0,
+            expr.functionName.indexOf("."),
+          );
+          this.checkNameDeclared(objName, scope, ctx, expr.sourceSpan);
+        }
+        // Don't check non-dotted function names — they're function/FB symbols
+        for (const arg of expr.arguments) {
+          this.checkExpressionForUndeclaredVars(arg.value, scope, ctx);
+        }
+        break;
+      case "MethodCallExpression":
+        this.checkExpressionForUndeclaredVars(expr.object, scope, ctx);
+        for (const arg of expr.arguments) {
+          this.checkExpressionForUndeclaredVars(arg.value, scope, ctx);
+        }
+        break;
+      case "BinaryExpression":
+        this.checkExpressionForUndeclaredVars(expr.left, scope, ctx);
+        this.checkExpressionForUndeclaredVars(expr.right, scope, ctx);
+        break;
+      case "UnaryExpression":
+        this.checkExpressionForUndeclaredVars(expr.operand, scope, ctx);
+        break;
+      case "ParenthesizedExpression":
+        this.checkExpressionForUndeclaredVars(expr.expression, scope, ctx);
+        break;
+      case "RefExpression":
+        this.checkExpressionForUndeclaredVars(expr.operand, scope, ctx);
+        break;
+      case "DrefExpression":
+        this.checkExpressionForUndeclaredVars(expr.operand, scope, ctx);
+        break;
+      case "ArrayLiteralExpression":
+        for (const elem of expr.elements) {
+          this.checkExpressionForUndeclaredVars(elem, scope, ctx);
+        }
+        break;
+      case "NewExpression":
+        if (expr.arraySize) {
+          this.checkExpressionForUndeclaredVars(expr.arraySize, scope, ctx);
+        }
+        break;
+    }
+  }
+
+  /**
+   * Check whether a name is declared in the current scope chain or context.
+   */
+  private checkNameDeclared(
+    name: string,
+    scope: Scope,
+    ctx: UndeclaredVarContext,
+    sourceSpan: { startLine: number; startCol: number },
+  ): void {
+    const upper = name.toUpperCase();
+
+    // 1. Scope chain lookup (local → parent → globalScope)
+    if (scope.lookup(upper)) return;
+
+    // 1b. Inherited FB member variables (walk EXTENDS chain)
+    if (ctx.fbName) {
+      const fbSym = this.symbolTables.globalScope.lookup(ctx.fbName);
+      if (fbSym?.kind === "functionBlock") {
+        let parentName = fbSym.declaration.extends;
+        const visited = new Set<string>();
+        while (parentName) {
+          const parentUpper = parentName.toUpperCase();
+          if (visited.has(parentUpper)) break;
+          visited.add(parentUpper);
+          const parentScope = this.symbolTables.getFBScope(parentName);
+          if (parentScope?.lookupLocal(upper)) return;
+          const parentSym = this.symbolTables.globalScope.lookup(parentUpper);
+          if (parentSym?.kind !== "functionBlock") break;
+          parentName = parentSym.declaration.extends;
+        }
+      }
+    }
+
+    // 2. Method-local variables
+    if (ctx.methodLocalVars?.has(upper)) return;
+
+    // 3. Function return variable (FuncName := value)
+    if (ctx.functionName && upper === ctx.functionName.toUpperCase()) return;
+
+    // 4. Method/property return variable
+    if (ctx.methodName && upper === ctx.methodName.toUpperCase()) return;
+    if (ctx.propertyName && upper === ctx.propertyName.toUpperCase()) return;
+
+    // 5. THIS / SUPER keywords (valid in FB/method/property context)
+    if ((upper === "THIS" || upper === "SUPER") && ctx.fbName) return;
+
+    // 6. Standard functions (safety net)
+    if (this.stdRegistry.isStandardFunction(name)) return;
+
+    // 7. Not found
+    this.addError(
+      `Undeclared variable '${name}'`,
+      sourceSpan.startLine,
+      sourceSpan.startCol,
+    );
+  }
+
+  // =============================================================================
+  // Test File Analysis
+  // =============================================================================
+
+  /**
+   * Analyze a parsed test file against source symbol tables.
+   * Validates type references in var blocks and undeclared variable usage
+   * in SETUP, TEARDOWN, and TEST bodies.
+   */
+  analyzeTestFile(
+    testFile: TestFile,
+    sourceSymbolTables: SymbolTables,
+  ): { errors: CompileError[]; warnings: CompileError[] } {
+    this.errors = [];
+    this.warnings = [];
+    this.symbolTables = sourceSymbolTables;
+
+    // Validate type references in SETUP and TEST var blocks
+    if (testFile.setup) {
+      this.validateTestVarBlocks(testFile.setup.varBlocks, "SETUP");
+    }
+    for (const tc of testFile.testCases) {
+      this.validateTestVarBlocks(tc.varBlocks, `TEST '${tc.name}'`);
+    }
+
+    // Build SETUP scope (parented to globalScope)
+    const setupScope = this.buildTestScope(
+      testFile.setup?.varBlocks ?? [],
+      this.symbolTables.globalScope,
+    );
+
+    // Walk SETUP body
+    if (testFile.setup) {
+      this.walkTestStatementsForUndeclaredVars(testFile.setup.body, setupScope);
+    }
+
+    // Walk TEARDOWN body (runs in setup context)
+    if (testFile.teardown) {
+      this.walkTestStatementsForUndeclaredVars(
+        testFile.teardown.body,
+        setupScope,
+      );
+    }
+
+    // Walk each TEST body with scope = SETUP vars + TEST-local vars
+    for (const tc of testFile.testCases) {
+      const testScope = this.buildTestScope(tc.varBlocks, setupScope);
+      this.walkTestStatementsForUndeclaredVars(tc.body, testScope);
+    }
+
+    return { errors: [...this.errors], warnings: [...this.warnings] };
+  }
+
+  /**
+   * Validate type references in test var blocks.
+   */
+  private validateTestVarBlocks(varBlocks: VarBlock[], context: string): void {
+    for (const block of varBlocks) {
+      for (const decl of block.declarations) {
+        this.validateSingleTypeReference(decl.type, context);
+      }
+    }
+  }
+
+  /**
+   * Build a Scope from test var blocks, parented to the given parent scope.
+   */
+  private buildTestScope(varBlocks: VarBlock[], parent: Scope): Scope {
+    const scope = new Scope("test", parent);
+    for (const block of varBlocks) {
+      for (const decl of block.declarations) {
+        for (const varName of decl.names) {
+          try {
+            scope.define({
+              name: varName,
+              kind: "variable",
+              declaration: decl,
+              isInput: false,
+              isOutput: false,
+              isInOut: false,
+              isExternal: false,
+              isGlobal: false,
+              isRetain: false,
+            });
+          } catch {
+            // Ignore duplicates within test blocks
+          }
+        }
+      }
+    }
+    return scope;
+  }
+
+  /**
+   * Walk test statements checking for undeclared variable usage.
+   * Handles test-specific statement kinds (AssertCall, AdvanceTime, Mock*).
+   */
+  private walkTestStatementsForUndeclaredVars(
+    stmts: TestStatement[],
+    scope: Scope,
+  ): void {
+    const ctx: UndeclaredVarContext = {};
+    for (const stmt of stmts) {
+      switch (stmt.kind) {
+        case "AssertCall":
+          for (const arg of stmt.args) {
+            this.checkExpressionForUndeclaredVars(arg, scope, ctx);
+          }
+          break;
+        case "AdvanceTimeStatement":
+          this.checkExpressionForUndeclaredVars(stmt.duration, scope, ctx);
+          break;
+        case "MockFunctionStatement":
+          this.checkExpressionForUndeclaredVars(stmt.returnValue, scope, ctx);
+          break;
+        case "MockVerifyCallCountStatement":
+          this.checkExpressionForUndeclaredVars(stmt.expectedCount, scope, ctx);
+          break;
+        case "MockFBStatement":
+        case "MockVerifyCalledStatement":
+          // instancePath is string[], not expressions — nothing to check
+          break;
+        default:
+          // Regular Statement — delegate to existing walker
+          this.walkStatementsForUndeclaredVars([stmt as Statement], scope, ctx);
+          break;
+      }
+    }
+  }
+
   /**
    * Add a warning message.
    * Used in Phase 3+ for semantic validation warnings.
@@ -1977,4 +2663,16 @@ export function analyze(
 ): SemanticAnalysisResult {
   const analyzer = new SemanticAnalyzer();
   return analyzer.analyze(ast, existingSymbolTables);
+}
+
+/**
+ * Analyze a test file against source symbol tables.
+ * Convenience function that creates an analyzer and runs test file analysis.
+ */
+export function analyzeTestFile(
+  testFile: TestFile,
+  sourceSymbolTables: SymbolTables,
+): { errors: CompileError[]; warnings: CompileError[] } {
+  const analyzer = new SemanticAnalyzer();
+  return analyzer.analyzeTestFile(testFile, sourceSymbolTables);
 }
