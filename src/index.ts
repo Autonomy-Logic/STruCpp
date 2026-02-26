@@ -16,13 +16,11 @@ import type { CompilationUnit } from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
 import {
   registerLibrarySymbols,
-  discoverLibraries,
+  discoverStlibs,
   LibraryManifestError,
 } from "./library/library-loader.js";
-import {
-  getStdFBLibraryManifest,
-  getStdFBSources,
-} from "./library/builtin-stdlib.js";
+import type { StlibArchive } from "./library/library-manifest.js";
+import { getStdFBLibrary } from "./library/builtin-stdlib.js";
 
 /**
  * Default compilation options
@@ -32,51 +30,6 @@ export const defaultOptions: CompileOptions = {
   lineMapping: true,
   optimizationLevel: 0,
 };
-
-/** Cached compiled C++ output from standard FB library */
-let cachedStdFBCode: { headerCode: string; cppCode: string } | undefined;
-
-/**
- * Reset the cached compiled standard FB C++ code.
- * Useful for tests that modify the FB library sources.
- */
-export function resetStdFBCodeCache(): void {
-  cachedStdFBCode = undefined;
-}
-
-/**
- * Extract the body inside `namespace ... { ... }` from generated C++ code.
- * Strips includes, pragma once, and the namespace wrapper.
- */
-function extractNamespaceBody(code: string): string {
-  const lines = code.split("\n");
-  let inNamespace = false;
-  let braceDepth = 0;
-  const bodyLines: string[] = [];
-
-  for (const line of lines) {
-    if (!inNamespace) {
-      if (/^namespace\s+\w+\s*\{/.test(line)) {
-        inNamespace = true;
-        braceDepth = 1;
-        continue;
-      }
-      continue;
-    }
-
-    for (const ch of line) {
-      if (ch === "{") braceDepth++;
-      else if (ch === "}") braceDepth--;
-    }
-
-    if (braceDepth <= 0) break;
-    if (/^\s*using namespace strucpp;/.test(line)) continue;
-
-    bodyLines.push(line);
-  }
-
-  return bodyLines.join("\n");
-}
 
 /**
  * Compile IEC 61131-3 Structured Text source code to C++.
@@ -255,12 +208,12 @@ export function compile(
   }
 
   // Phase 3.5: Library loading & Semantic analysis
-  // Discover libraries from libraryPaths and combine with explicit libraries
-  const allLibraries = [...(mergedOptions.libraries ?? [])];
+  // Collect all library archives (stdlib + user libraries from paths + explicit)
+  const allArchives: StlibArchive[] = [...(mergedOptions.libraries ?? [])];
   if (mergedOptions.libraryPaths) {
     for (const libPath of mergedOptions.libraryPaths) {
       try {
-        allLibraries.push(...discoverLibraries(libPath));
+        allArchives.push(...discoverStlibs(libPath));
       } catch (e) {
         errors.push({
           message:
@@ -287,16 +240,21 @@ export function compile(
     };
   }
 
+  // Load stdlib archive (pre-compiled .stlib with C++ code)
+  let stdFBArchive: StlibArchive | undefined;
+  if (!mergedOptions.noStdFBLibrary) {
+    stdFBArchive = getStdFBLibrary();
+  }
+
   // Pre-populate symbol tables with built-in standard FB library and any user libraries
   let semanticSymbolTables: SymbolTables | undefined;
-  if (allLibraries.length > 0 || !mergedOptions.noStdFBLibrary) {
+  if (allArchives.length > 0 || stdFBArchive) {
     semanticSymbolTables = new SymbolTables();
-    // Always register standard FB library (TON, CTU, R_TRIG, etc.) unless opted out
-    if (!mergedOptions.noStdFBLibrary) {
-      registerLibrarySymbols(getStdFBLibraryManifest(), semanticSymbolTables);
+    if (stdFBArchive) {
+      registerLibrarySymbols(stdFBArchive.manifest, semanticSymbolTables);
     }
-    for (const manifest of allLibraries) {
-      registerLibrarySymbols(manifest, semanticSymbolTables);
+    for (const archive of allArchives) {
+      registerLibrarySymbols(archive.manifest, semanticSymbolTables);
     }
   }
   // Register global constants (e.g., STRING_LENGTH, LIST_LENGTH) in symbol tables
@@ -357,8 +315,8 @@ export function compile(
   // Phase 4: Generate C++ code
   // Collect library headers for #include directives
   const libraryHeaders: string[] = [];
-  for (const manifest of allLibraries) {
-    for (const header of manifest.headers) {
+  for (const archive of allArchives) {
+    for (const header of archive.manifest.headers) {
       if (!libraryHeaders.includes(header)) {
         libraryHeaders.push(header);
       }
@@ -376,45 +334,30 @@ export function compile(
   });
   codegen.setProjectModel(projectModelResult.model);
 
-  // Register library FB type names so codegen can distinguish FB invocations
-  // from regular function calls (library FBs are not in the user AST)
-  if (!mergedOptions.noStdFBLibrary) {
-    const stdFBManifest = getStdFBLibraryManifest();
+  // Register library FB type names and inject pre-compiled C++ code
+  if (stdFBArchive) {
     codegen.registerLibraryFBTypes(
-      stdFBManifest.functionBlocks.map((fb) => fb.name),
+      stdFBArchive.manifest.functionBlocks.map((fb) => fb.name),
     );
-    // Inject compiled standard FB C++ code (class declarations + implementations)
-    if (!cachedStdFBCode) {
-      const sources = getStdFBSources();
-      if (sources.length > 0) {
-        const fbResult = compile(sources[0]!.source, {
-          additionalSources: sources.slice(1),
-          noStdFBLibrary: true,
-          headerFileName: "__stdlib_fb.hpp",
-        });
-        if (fbResult.success) {
-          cachedStdFBCode = {
-            headerCode: extractNamespaceBody(fbResult.headerCode),
-            cppCode: extractNamespaceBody(fbResult.cppCode),
-          };
-        } else {
-          cachedStdFBCode = { headerCode: "", cppCode: "" };
-        }
-      } else {
-        cachedStdFBCode = { headerCode: "", cppCode: "" };
-      }
-    }
-    if (cachedStdFBCode.headerCode) {
-      codegen.setLibraryPreamble(
-        cachedStdFBCode.headerCode,
-        cachedStdFBCode.cppCode,
+    if (stdFBArchive.headerCode) {
+      codegen.addLibraryPreamble(
+        stdFBArchive.manifest.name,
+        stdFBArchive.headerCode,
+        stdFBArchive.cppCode,
       );
     }
   }
-  for (const manifest of allLibraries) {
+  for (const archive of allArchives) {
     codegen.registerLibraryFBTypes(
-      manifest.functionBlocks.map((fb) => fb.name),
+      archive.manifest.functionBlocks.map((fb) => fb.name),
     );
+    if (archive.headerCode) {
+      codegen.addLibraryPreamble(
+        archive.manifest.name,
+        archive.headerCode,
+        archive.cppCode,
+      );
+    }
   }
 
   const codeResult = codegen.generate(ast);
@@ -514,19 +457,23 @@ export function getVersion(): string {
 export type { CompileOptions, CompileResult, CompileError } from "./types.js";
 
 // Re-export library system
-export { compileLibrary } from "./library/library-compiler.js";
+export { compileLibrary, compileStlib } from "./library/library-compiler.js";
 export {
   loadLibraryManifest,
-  loadLibraryFromFile,
-  discoverLibraries,
+  loadStlibArchive,
+  loadStlibFromFile,
+  discoverStlibs,
   registerLibrarySymbols,
   LibraryManifestError,
 } from "./library/library-loader.js";
 export {
   getBuiltinStdlibManifest,
-  getStdFBLibraryManifest,
+  getStdFBLibrary,
 } from "./library/builtin-stdlib.js";
+export { extractNamespaceBody } from "./library/library-utils.js";
 export type {
   LibraryManifest,
   LibraryCompileResult,
+  StlibArchive,
+  StlibCompileResult,
 } from "./library/library-manifest.js";

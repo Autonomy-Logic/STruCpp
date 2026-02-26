@@ -33,11 +33,13 @@ import {
   mkdtempSync,
   rmSync,
   existsSync,
+  statSync,
 } from "fs";
 import { resolve, basename, dirname, join } from "path";
 import { tmpdir } from "os";
 import { execFileSync } from "child_process";
-import { compile, getVersion, compileLibrary } from "./index.js";
+import { compile, getVersion, compileStlib } from "./index.js";
+import { discoverSTFiles } from "./library/library-utils.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
 import { parseTestFile } from "./testing/test-parser.js";
 import {
@@ -66,6 +68,7 @@ interface CLIOptions {
   libName?: string;
   libVersion: string;
   libNamespace?: string;
+  noSource: boolean;
   test: string[];
 }
 
@@ -86,6 +89,7 @@ function parseArgs(args: string[]): CLIOptions {
     libraryPaths: [],
     compileLib: false,
     libVersion: "1.0.0",
+    noSource: false,
     test: [],
   };
 
@@ -163,6 +167,8 @@ function parseArgs(args: string[]): CLIOptions {
       if (nextArg !== undefined) {
         options.libNamespace = nextArg;
       }
+    } else if (arg === "--no-source") {
+      options.noSource = true;
     } else if (arg === "--test") {
       // Collect all following arguments that don't start with '-' as test files
       i++;
@@ -192,7 +198,7 @@ STruC++ - IEC 61131-3 Structured Text to C++ Compiler
 
 Usage:
   strucpp <input.st> [input2.st ...] -o <output.cpp> [options]
-  strucpp --compile-lib <input.st> [...] -o <dir> --lib-name <name> [options]
+  strucpp --compile-lib <input.st|dir> [...] -o <dir> --lib-name <name> [options]
 
 Options:
   -o, --output <file>       Output file path (default: <input>.cpp)
@@ -210,10 +216,11 @@ Options:
   -h, --help                Show this help
 
 Library compilation:
-  --compile-lib             Compile sources into a library
+  --compile-lib             Compile sources into a .stlib library archive
   --lib-name <name>         Library name (required with --compile-lib)
   --lib-version <version>   Library version (default: "1.0.0")
   --lib-namespace <ns>      C++ namespace (default: derived from lib-name)
+  --no-source               Omit ST source from .stlib archive (closed-source)
 
 Testing:
   --test <file> [file2...]   Run tests from test file(s) against source files
@@ -226,6 +233,7 @@ Examples:
   strucpp program.st -o program.cpp --debug --line-directives
   strucpp program.st -o program.cpp --build
   strucpp --compile-lib math.st -o mathlib/ --lib-name math-lib
+  strucpp --compile-lib src/mylib/ -o out/ --lib-name my-lib
   strucpp counter.st --test test_counter.st
 
 For more information, visit: https://github.com/Autonomy-Logic/STruCpp
@@ -319,7 +327,7 @@ function findRuntimeIncludeDir(cxxFlags: string): string | null {
 }
 
 /**
- * Library compilation mode: compile ST sources into a library manifest + C++ output.
+ * Library compilation mode: compile ST sources into a single .stlib archive.
  */
 function compileLibraryMode(options: CLIOptions): void {
   if (!options.libName) {
@@ -340,29 +348,56 @@ function compileLibraryMode(options: CLIOptions): void {
   const libNamespace =
     options.libNamespace ?? options.libName.replace(/[^a-zA-Z0-9_]/g, "_");
 
-  // Read all input files
-  const sources: Array<{ source: string; fileName: string }> = [];
+  // Collect input files — if an input is a directory, discover .st files recursively
+  const filePaths: string[] = [];
   for (const input of options.inputs) {
     const inputPath = resolve(input);
     try {
-      sources.push({
-        source: readFileSync(inputPath, "utf-8"),
-        fileName: basename(inputPath),
-      });
+      const stat = statSync(inputPath);
+      if (stat.isDirectory()) {
+        const discovered = discoverSTFiles(inputPath);
+        if (discovered.length === 0) {
+          console.error(`Error: No .st files found in directory: ${inputPath}`);
+          process.exit(1);
+        }
+        filePaths.push(...discovered);
+      } else {
+        filePaths.push(inputPath);
+      }
     } catch {
-      console.error(`Error: Cannot read input file: ${inputPath}`);
+      console.error(`Error: Cannot read input: ${inputPath}`);
       process.exit(1);
     }
+  }
+
+  // Read all source files
+  const sources: Array<{ source: string; fileName: string }> = [];
+  for (const filePath of filePaths) {
+    try {
+      sources.push({
+        source: readFileSync(filePath, "utf-8"),
+        fileName: basename(filePath),
+      });
+    } catch {
+      console.error(`Error: Cannot read input file: ${filePath}`);
+      process.exit(1);
+    }
+  }
+
+  if (sources.length === 0) {
+    console.error("Error: No input files specified");
+    process.exit(1);
   }
 
   console.log(
     `Compiling library "${options.libName}" from ${sources.length} source file(s)...`,
   );
 
-  const result = compileLibrary(sources, {
+  const result = compileStlib(sources, {
     name: options.libName,
     version: options.libVersion,
     namespace: libNamespace,
+    noSource: options.noSource,
   });
 
   if (!result.success) {
@@ -376,28 +411,10 @@ function compileLibraryMode(options: CLIOptions): void {
     process.exit(1);
   }
 
-  // Write manifest
-  const manifestPath = resolve(outputDir, `${options.libName}.stlib.json`);
-  writeFileSync(
-    manifestPath,
-    JSON.stringify(result.manifest, null, 2),
-    "utf-8",
-  );
-  console.log(`Manifest written to ${manifestPath}`);
-
-  // Write C++ files
-  if (result.headerCode) {
-    const headerPath = resolve(outputDir, `${options.libName}.hpp`);
-    writeFileSync(headerPath, result.headerCode, "utf-8");
-    console.log(`Header written to ${headerPath}`);
-  }
-
-  if (result.cppCode) {
-    const cppPath = resolve(outputDir, `${options.libName}.cpp`);
-    writeFileSync(cppPath, result.cppCode, "utf-8");
-    console.log(`Source written to ${cppPath}`);
-  }
-
+  // Write single .stlib archive
+  const stlibPath = resolve(outputDir, `${options.libName}.stlib`);
+  writeFileSync(stlibPath, JSON.stringify(result.archive, null, 2), "utf-8");
+  console.log(`Library archive written to ${stlibPath}`);
   console.log("Library compilation successful!");
 }
 

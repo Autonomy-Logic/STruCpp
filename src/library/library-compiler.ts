@@ -5,8 +5,12 @@
  * Libraries expose their functions, FBs, and types for use by other compilations.
  */
 
-import type { LibraryCompileResult } from "./library-manifest.js";
+import type {
+  LibraryCompileResult,
+  StlibCompileResult,
+} from "./library-manifest.js";
 import { compile } from "../index.js";
+import { extractNamespaceBody } from "./library-utils.js";
 
 /**
  * Compile ST source files into a library.
@@ -145,6 +149,65 @@ export function compileLibrary(
     },
     headerCode: result.headerCode,
     cppCode: result.cppCode,
+    errors: [],
+  };
+}
+
+/**
+ * Compile ST source files into a single `.stlib` archive.
+ *
+ * Wraps `compileLibrary()` and packages the result into a `StlibArchive`
+ * with extracted namespace bodies for the C++ code.
+ *
+ * @param sources - Array of ST source files
+ * @param options - Library metadata and compilation options
+ * @returns The compiled `.stlib` archive result
+ */
+export function compileStlib(
+  sources: Array<{ source: string; fileName: string }>,
+  options: {
+    name: string;
+    version: string;
+    namespace: string;
+    noSource?: boolean;
+  },
+): StlibCompileResult {
+  const libResult = compileLibrary(sources, options);
+
+  if (!libResult.success) {
+    return {
+      success: false,
+      archive: {
+        formatVersion: 1,
+        manifest: libResult.manifest,
+        headerCode: "",
+        cppCode: "",
+        dependencies: [],
+      },
+      errors: libResult.errors,
+    };
+  }
+
+  const headerBody = extractNamespaceBody(libResult.headerCode);
+  const cppBody = extractNamespaceBody(libResult.cppCode);
+
+  const archive: StlibCompileResult["archive"] = {
+    formatVersion: 1,
+    manifest: libResult.manifest,
+    headerCode: headerBody,
+    cppCode: cppBody,
+    dependencies: [],
+  };
+  if (!options.noSource) {
+    archive.sources = sources.map((s) => ({
+      fileName: s.fileName,
+      source: s.source,
+    }));
+  }
+
+  return {
+    success: true,
+    archive,
     errors: [],
   };
 }

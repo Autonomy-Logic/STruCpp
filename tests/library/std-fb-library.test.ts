@@ -2,7 +2,7 @@
  * STruC++ Standard Function Block Library Tests
  *
  * Tests for Phase 5.3: Standard FB Library.
- * Covers compilation of ST source files, hardcoded manifest,
+ * Covers compilation of ST source files, pre-compiled .stlib archive,
  * auto-loading into symbol tables, and integration with user programs.
  */
 
@@ -11,7 +11,7 @@ import { readFileSync } from "fs";
 import { resolve } from "path";
 import { compileLibrary } from "../../src/library/library-compiler.js";
 import { registerLibrarySymbols } from "../../src/library/library-loader.js";
-import { getStdFBLibraryManifest } from "../../src/library/builtin-stdlib.js";
+import { getStdFBLibrary } from "../../src/library/builtin-stdlib.js";
 import { SymbolTables } from "../../src/semantic/symbol-table.js";
 import { compile } from "../../src/index.js";
 
@@ -336,37 +336,44 @@ describe("Standard FB Library", () => {
     });
   });
 
-  // ─── Generated Manifest Tests ─────────────────────────────────────
+  // ─── Pre-compiled .stlib Archive Tests ─────────────────────────────
 
-  describe("getStdFBLibraryManifest()", () => {
-    it("should return a valid manifest with name 'iec-standard-fb'", () => {
-      const manifest = getStdFBLibraryManifest();
-      expect(manifest.name).toBe("iec-standard-fb");
-      expect(manifest.version).toBe("1.0.0");
-      expect(manifest.namespace).toBe("strucpp");
+  describe("getStdFBLibrary()", () => {
+    it("should return a valid StlibArchive", () => {
+      const archive = getStdFBLibrary();
+      expect(archive.formatVersion).toBe(1);
+      expect(archive.manifest.name).toBe("iec-standard-fb");
+      expect(archive.manifest.version).toBe("1.0.0");
+      expect(archive.manifest.namespace).toBe("strucpp");
     });
 
-    it("should have isBuiltin=true", () => {
-      const manifest = getStdFBLibraryManifest();
-      expect(manifest.isBuiltin).toBe(true);
+    it("should have isBuiltin=true on the manifest", () => {
+      const archive = getStdFBLibrary();
+      expect(archive.manifest.isBuiltin).toBe(true);
     });
 
     it("should contain all 22 standard FBs", () => {
-      const manifest = getStdFBLibraryManifest();
-      expect(manifest.functionBlocks).toHaveLength(22);
+      const archive = getStdFBLibrary();
+      expect(archive.manifest.functionBlocks).toHaveLength(22);
+    });
+
+    it("should have non-empty headerCode and cppCode", () => {
+      const archive = getStdFBLibrary();
+      expect(archive.headerCode).toBeTruthy();
+      expect(archive.cppCode).toBeTruthy();
     });
 
     it("should have no functions (only FBs)", () => {
-      const manifest = getStdFBLibraryManifest();
-      expect(manifest.functions).toHaveLength(0);
+      const archive = getStdFBLibrary();
+      expect(archive.manifest.functions).toHaveLength(0);
     });
 
     it("should have correct edge detection FB entries", () => {
-      const manifest = getStdFBLibraryManifest();
-      const rTrig = manifest.functionBlocks.find(
+      const archive = getStdFBLibrary();
+      const rTrig = archive.manifest.functionBlocks.find(
         (fb) => fb.name === "R_TRIG",
       );
-      const fTrig = manifest.functionBlocks.find(
+      const fTrig = archive.manifest.functionBlocks.find(
         (fb) => fb.name === "F_TRIG",
       );
       expect(rTrig).toBeDefined();
@@ -379,9 +386,9 @@ describe("Standard FB Library", () => {
     });
 
     it("should have correct bistable FB entries", () => {
-      const manifest = getStdFBLibraryManifest();
-      const sr = manifest.functionBlocks.find((fb) => fb.name === "SR");
-      const rs = manifest.functionBlocks.find((fb) => fb.name === "RS");
+      const archive = getStdFBLibrary();
+      const sr = archive.manifest.functionBlocks.find((fb) => fb.name === "SR");
+      const rs = archive.manifest.functionBlocks.find((fb) => fb.name === "RS");
       expect(sr).toBeDefined();
       expect(sr!.inputs).toEqual([
         { name: "S1", type: "BOOL" },
@@ -397,8 +404,8 @@ describe("Standard FB Library", () => {
     });
 
     it("should have correct counter FB entries", () => {
-      const manifest = getStdFBLibraryManifest();
-      const ctu = manifest.functionBlocks.find((fb) => fb.name === "CTU");
+      const archive = getStdFBLibrary();
+      const ctu = archive.manifest.functionBlocks.find((fb) => fb.name === "CTU");
       expect(ctu).toBeDefined();
       expect(ctu!.inputs).toEqual([
         { name: "CU", type: "BOOL" },
@@ -410,30 +417,30 @@ describe("Standard FB Library", () => {
         { name: "CV", type: "INT" },
       ]);
 
-      const ctud = manifest.functionBlocks.find((fb) => fb.name === "CTUD");
+      const ctud = archive.manifest.functionBlocks.find((fb) => fb.name === "CTUD");
       expect(ctud).toBeDefined();
       expect(ctud!.inputs).toHaveLength(5);
       expect(ctud!.outputs).toHaveLength(3);
     });
 
     it("should have correct counter variant types", () => {
-      const manifest = getStdFBLibraryManifest();
+      const archive = getStdFBLibrary();
       for (const suffix of ["DINT", "LINT", "UDINT", "ULINT"]) {
-        const ctu = manifest.functionBlocks.find(
+        const ctu = archive.manifest.functionBlocks.find(
           (fb) => fb.name === `CTU_${suffix}`,
         );
         expect(ctu).toBeDefined();
         expect(ctu!.inputs.find((i) => i.name === "PV")!.type).toBe(suffix);
         expect(ctu!.outputs.find((o) => o.name === "CV")!.type).toBe(suffix);
 
-        const ctd = manifest.functionBlocks.find(
+        const ctd = archive.manifest.functionBlocks.find(
           (fb) => fb.name === `CTD_${suffix}`,
         );
         expect(ctd).toBeDefined();
         expect(ctd!.inputs.find((i) => i.name === "PV")!.type).toBe(suffix);
         expect(ctd!.outputs.find((o) => o.name === "CV")!.type).toBe(suffix);
 
-        const ctud = manifest.functionBlocks.find(
+        const ctud = archive.manifest.functionBlocks.find(
           (fb) => fb.name === `CTUD_${suffix}`,
         );
         expect(ctud).toBeDefined();
@@ -443,9 +450,9 @@ describe("Standard FB Library", () => {
     });
 
     it("should have correct timer FB entries", () => {
-      const manifest = getStdFBLibraryManifest();
+      const archive = getStdFBLibrary();
       for (const name of ["TON", "TOF", "TP"]) {
-        const timer = manifest.functionBlocks.find((fb) => fb.name === name);
+        const timer = archive.manifest.functionBlocks.find((fb) => fb.name === name);
         expect(timer).toBeDefined();
         expect(timer!.inputs).toEqual([
           { name: "IN", type: "BOOL" },
@@ -463,10 +470,10 @@ describe("Standard FB Library", () => {
   // ─── Auto-Loading Tests ────────────────────────────────────────────
 
   describe("auto-loading into symbol tables", () => {
-    it("should register all standard FBs in SymbolTables via manifest", () => {
+    it("should register all standard FBs in SymbolTables via archive manifest", () => {
       const symbolTables = new SymbolTables();
-      const manifest = getStdFBLibraryManifest();
-      registerLibrarySymbols(manifest, symbolTables);
+      const archive = getStdFBLibrary();
+      registerLibrarySymbols(archive.manifest, symbolTables);
 
       // Verify key FBs are resolvable
       expect(symbolTables.lookupFunctionBlock("R_TRIG")).toBeDefined();
@@ -483,7 +490,7 @@ describe("Standard FB Library", () => {
 
     it("should register counter type variants", () => {
       const symbolTables = new SymbolTables();
-      registerLibrarySymbols(getStdFBLibraryManifest(), symbolTables);
+      registerLibrarySymbols(getStdFBLibrary().manifest, symbolTables);
 
       for (const suffix of ["DINT", "LINT", "UDINT", "ULINT"]) {
         expect(
@@ -500,7 +507,7 @@ describe("Standard FB Library", () => {
 
     it("should have correct IO on registered FB symbols", () => {
       const symbolTables = new SymbolTables();
-      registerLibrarySymbols(getStdFBLibraryManifest(), symbolTables);
+      registerLibrarySymbols(getStdFBLibrary().manifest, symbolTables);
 
       const ton = symbolTables.lookupFunctionBlock("TON");
       expect(ton).toBeDefined();
@@ -532,9 +539,6 @@ describe("Standard FB Library", () => {
     });
 
     it("should not register standard FBs in symbol tables when noStdFBLibrary is true", () => {
-      // When noStdFBLibrary is set, the standard FB manifest should not be
-      // loaded. We verify this by checking that the FBs are not resolvable
-      // in a fresh SymbolTables (simulating what compile() does internally).
       const symbolTables = new SymbolTables();
       // Do NOT register the manifest - simulating noStdFBLibrary: true
       expect(symbolTables.lookupFunctionBlock("TON")).toBeUndefined();
@@ -649,11 +653,32 @@ describe("Standard FB Library", () => {
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
     });
+
+    it("should use pre-compiled stdlib (no runtime recompilation)", () => {
+      // Verify that the stdlib archive has pre-compiled C++ code
+      const archive = getStdFBLibrary();
+      expect(archive.headerCode.length).toBeGreaterThan(100);
+      expect(archive.cppCode.length).toBeGreaterThan(100);
+
+      // Compile a simple program that uses stdlib FBs
+      const source = `
+        PROGRAM Main
+          VAR timer1 : TON; END_VAR
+          timer1(IN := TRUE, PT := T#1s);
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+
+      // Verify the stdlib C++ code is injected in the output
+      expect(result.headerCode).toContain("Library: iec-standard-fb");
+      expect(result.cppCode).toContain("Library: iec-standard-fb");
+    });
   });
 
-  // ─── Manifest Cross-Validation ──────────────────────────────────────
+  // ─── Archive Cross-Validation ──────────────────────────────────────
 
-  describe("manifest cross-validation against ST sources", () => {
+  describe("archive cross-validation against ST sources", () => {
     it("should match compiled library output for all standard FBs", () => {
       // Compile all ST source files into a library
       const compiledResult = compileLibrary(
@@ -671,22 +696,22 @@ describe("Standard FB Library", () => {
       );
       expect(compiledResult.success).toBe(true);
 
-      // Get the generated manifest loaded at runtime
-      const loadedManifest = getStdFBLibraryManifest();
+      // Get the pre-compiled archive
+      const archive = getStdFBLibrary();
 
       // Compare FB count
-      expect(loadedManifest.functionBlocks).toHaveLength(
+      expect(archive.manifest.functionBlocks).toHaveLength(
         compiledResult.manifest.functionBlocks.length,
       );
 
       // Compare each FB's signature
       for (const compiledFB of compiledResult.manifest.functionBlocks) {
-        const loadedFB = loadedManifest.functionBlocks.find(
+        const loadedFB = archive.manifest.functionBlocks.find(
           (fb) => fb.name === compiledFB.name,
         );
         expect(
           loadedFB,
-          `FB '${compiledFB.name}' missing from generated manifest`,
+          `FB '${compiledFB.name}' missing from archive manifest`,
         ).toBeDefined();
         expect(loadedFB!.inputs).toEqual(compiledFB.inputs);
         expect(loadedFB!.outputs).toEqual(compiledFB.outputs);

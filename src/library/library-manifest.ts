@@ -88,3 +88,33 @@ export interface LibraryCompileResult {
   /** Compilation errors */
   errors: Array<{ message: string; file?: string; line?: number }>;
 }
+
+/**
+ * Single-file `.stlib` archive format containing metadata + compiled C++ code.
+ */
+export interface StlibArchive {
+  /** Format version for forward compatibility */
+  formatVersion: 1;
+  /** Library metadata (function/FB/type signatures for symbol registration) */
+  manifest: LibraryManifest;
+  /** Compiled C++ declarations (namespace body only — no includes/pragma/wrapper) */
+  headerCode: string;
+  /** Compiled C++ implementations (namespace body only) */
+  cppCode: string;
+  /** Original ST source files (omitted for closed-source distribution) */
+  sources?: Array<{ fileName: string; source: string }>;
+  /** Reserved for future library-to-library dependency resolution */
+  dependencies: Array<{ name: string; version: string }>;
+}
+
+/**
+ * Result of compiling an ST library into a `.stlib` archive.
+ */
+export interface StlibCompileResult {
+  /** Whether compilation succeeded */
+  success: boolean;
+  /** The compiled archive */
+  archive: StlibArchive;
+  /** Compilation errors */
+  errors: Array<{ message: string; file?: string; line?: number }>;
+}

@@ -1,0 +1,660 @@
+{
+  "formatVersion": 1,
+  "manifest": {
+    "name": "iec-standard-fb",
+    "version": "1.0.0",
+    "description": "IEC 61131-3 Standard Function Blocks (auto-generated from ST sources)",
+    "namespace": "strucpp",
+    "functions": [],
+    "functionBlocks": [
+      {
+        "name": "R_TRIG",
+        "inputs": [
+          {
+            "name": "CLK",
+            "type": "BOOL"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "F_TRIG",
+        "inputs": [
+          {
+            "name": "CLK",
+            "type": "BOOL"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "SR",
+        "inputs": [
+          {
+            "name": "S1",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q1",
+            "type": "BOOL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "RS",
+        "inputs": [
+          {
+            "name": "S",
+            "type": "BOOL"
+          },
+          {
+            "name": "R1",
+            "type": "BOOL"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q1",
+            "type": "BOOL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTU",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "INT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "INT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTD",
+        "inputs": [
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "INT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "INT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTUD",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "INT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "QU",
+            "type": "BOOL"
+          },
+          {
+            "name": "QD",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "INT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTU_DINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "DINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "DINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTU_LINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "LINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "LINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTU_UDINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "UDINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "UDINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTU_ULINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "ULINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "ULINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTD_DINT",
+        "inputs": [
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "DINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "DINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTD_LINT",
+        "inputs": [
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "LINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "LINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTD_UDINT",
+        "inputs": [
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "UDINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "UDINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTD_ULINT",
+        "inputs": [
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "ULINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "ULINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTUD_DINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "DINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "QU",
+            "type": "BOOL"
+          },
+          {
+            "name": "QD",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "DINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTUD_LINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "LINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "QU",
+            "type": "BOOL"
+          },
+          {
+            "name": "QD",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "LINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTUD_UDINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "UDINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "QU",
+            "type": "BOOL"
+          },
+          {
+            "name": "QD",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "UDINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "CTUD_ULINT",
+        "inputs": [
+          {
+            "name": "CU",
+            "type": "BOOL"
+          },
+          {
+            "name": "CD",
+            "type": "BOOL"
+          },
+          {
+            "name": "R",
+            "type": "BOOL"
+          },
+          {
+            "name": "LD",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "ULINT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "QU",
+            "type": "BOOL"
+          },
+          {
+            "name": "QD",
+            "type": "BOOL"
+          },
+          {
+            "name": "CV",
+            "type": "ULINT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "TON",
+        "inputs": [
+          {
+            "name": "IN",
+            "type": "BOOL"
+          },
+          {
+            "name": "PT",
+            "type": "TIME"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "ET",
+            "type": "TIME"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "TOF",
+        "inputs": [
+          {
+            "name": "IN",
+            "type": "BOOL"
+          },
+          {
+            "name": "PT",
+            "type": "TIME"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "ET",
+            "type": "TIME"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "TP",
+        "inputs": [
+          {
+            "name": "IN",
+            "type": "BOOL"
+          },
+          {
+            "name": "PT",
+            "type": "TIME"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "ET",
+            "type": "TIME"
+          }
+        ],
+        "inouts": []
+      }
+    ],
+    "types": [],
+    "headers": [],
+    "isBuiltin": true
+  },
+  "headerCode": "\nclass R_TRIG;\nclass F_TRIG;\nclass SR;\nclass RS;\nclass CTU;\nclass CTD;\nclass CTUD;\nclass CTU_DINT;\nclass CTU_LINT;\nclass CTU_UDINT;\nclass CTU_ULINT;\nclass CTD_DINT;\nclass CTD_LINT;\nclass CTD_UDINT;\nclass CTD_ULINT;\nclass CTUD_DINT;\nclass CTUD_LINT;\nclass CTUD_UDINT;\nclass CTUD_ULINT;\nclass TON;\nclass TOF;\nclass TP;\n\nclass R_TRIG {\npublic:\n    // Inputs\n    IEC_BOOL CLK;\n    // Outputs\n    IEC_BOOL Q;\n    // Local variables\n    IEC_BOOL M;\n\n    // Constructor\n    R_TRIG();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~R_TRIG() = default;\n};\n\nclass F_TRIG {\npublic:\n    // Inputs\n    IEC_BOOL CLK;\n    // Outputs\n    IEC_BOOL Q;\n    // Local variables\n    IEC_BOOL M;\n\n    // Constructor\n    F_TRIG();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~F_TRIG() = default;\n};\n\nclass SR {\npublic:\n    // Inputs\n    IEC_BOOL S1;\n    IEC_BOOL R;\n    // Outputs\n    IEC_BOOL Q1;\n\n    // Constructor\n    SR();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~SR() = default;\n};\n\nclass RS {\npublic:\n    // Inputs\n    IEC_BOOL S;\n    IEC_BOOL R1;\n    // Outputs\n    IEC_BOOL Q1;\n\n    // Constructor\n    RS();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~RS() = default;\n};\n\nclass TON {\npublic:\n    // Inputs\n    IEC_BOOL IN;\n    IEC_TIME PT;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_TIME ET;\n    // Local variables\n    IEC_SINT STATE;\n    IEC_BOOL PREV_IN;\n    IEC_TIME CURRENT_TIME;\n    IEC_TIME START_TIME;\n\n    // Constructor\n    TON();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~TON() = default;\n};\n\nclass TOF {\npublic:\n    // Inputs\n    IEC_BOOL IN;\n    IEC_TIME PT;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_TIME ET;\n    // Local variables\n    IEC_SINT STATE;\n    IEC_BOOL PREV_IN;\n    IEC_TIME CURRENT_TIME;\n    IEC_TIME START_TIME;\n\n    // Constructor\n    TOF();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~TOF() = default;\n};\n\nclass TP {\npublic:\n    // Inputs\n    IEC_BOOL IN;\n    IEC_TIME PT;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_TIME ET;\n    // Local variables\n    IEC_SINT STATE;\n    IEC_BOOL PREV_IN;\n    IEC_TIME CURRENT_TIME;\n    IEC_TIME START_TIME;\n\n    // Constructor\n    TP();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~TP() = default;\n};\n\nclass CTU {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL R;\n    IEC_INT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_INT CV;\n    // Local variables\n    R_TRIG CU_T;\n\n    // Constructor\n    CTU();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTU() = default;\n};\n\nclass CTU_DINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL R;\n    IEC_DINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_DINT CV;\n    // Local variables\n    R_TRIG CU_T;\n\n    // Constructor\n    CTU_DINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTU_DINT() = default;\n};\n\nclass CTU_LINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL R;\n    IEC_LINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_LINT CV;\n    // Local variables\n    R_TRIG CU_T;\n\n    // Constructor\n    CTU_LINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTU_LINT() = default;\n};\n\nclass CTU_UDINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL R;\n    IEC_UDINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_UDINT CV;\n    // Local variables\n    R_TRIG CU_T;\n\n    // Constructor\n    CTU_UDINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTU_UDINT() = default;\n};\n\nclass CTU_ULINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL R;\n    IEC_ULINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_ULINT CV;\n    // Local variables\n    R_TRIG CU_T;\n\n    // Constructor\n    CTU_ULINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTU_ULINT() = default;\n};\n\nclass CTD {\npublic:\n    // Inputs\n    IEC_BOOL CD;\n    IEC_BOOL LD;\n    IEC_INT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_INT CV;\n    // Local variables\n    F_TRIG CD_T;\n\n    // Constructor\n    CTD();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTD() = default;\n};\n\nclass CTUD {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL CD;\n    IEC_BOOL R;\n    IEC_BOOL LD;\n    IEC_INT PV;\n    // Outputs\n    IEC_BOOL QU;\n    IEC_BOOL QD;\n    IEC_INT CV;\n    // Local variables\n    R_TRIG CU_T;\n    F_TRIG CD_T;\n\n    // Constructor\n    CTUD();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTUD() = default;\n};\n\nclass CTD_DINT {\npublic:\n    // Inputs\n    IEC_BOOL CD;\n    IEC_BOOL LD;\n    IEC_DINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_DINT CV;\n    // Local variables\n    F_TRIG CD_T;\n\n    // Constructor\n    CTD_DINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTD_DINT() = default;\n};\n\nclass CTD_LINT {\npublic:\n    // Inputs\n    IEC_BOOL CD;\n    IEC_BOOL LD;\n    IEC_LINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_LINT CV;\n    // Local variables\n    F_TRIG CD_T;\n\n    // Constructor\n    CTD_LINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTD_LINT() = default;\n};\n\nclass CTD_UDINT {\npublic:\n    // Inputs\n    IEC_BOOL CD;\n    IEC_BOOL LD;\n    IEC_UDINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_UDINT CV;\n    // Local variables\n    F_TRIG CD_T;\n\n    // Constructor\n    CTD_UDINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTD_UDINT() = default;\n};\n\nclass CTD_ULINT {\npublic:\n    // Inputs\n    IEC_BOOL CD;\n    IEC_BOOL LD;\n    IEC_ULINT PV;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_ULINT CV;\n    // Local variables\n    F_TRIG CD_T;\n\n    // Constructor\n    CTD_ULINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTD_ULINT() = default;\n};\n\nclass CTUD_DINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL CD;\n    IEC_BOOL R;\n    IEC_BOOL LD;\n    IEC_DINT PV;\n    // Outputs\n    IEC_BOOL QU;\n    IEC_BOOL QD;\n    IEC_DINT CV;\n    // Local variables\n    R_TRIG CU_T;\n    F_TRIG CD_T;\n\n    // Constructor\n    CTUD_DINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTUD_DINT() = default;\n};\n\nclass CTUD_LINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL CD;\n    IEC_BOOL R;\n    IEC_BOOL LD;\n    IEC_LINT PV;\n    // Outputs\n    IEC_BOOL QU;\n    IEC_BOOL QD;\n    IEC_LINT CV;\n    // Local variables\n    R_TRIG CU_T;\n    F_TRIG CD_T;\n\n    // Constructor\n    CTUD_LINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTUD_LINT() = default;\n};\n\nclass CTUD_UDINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL CD;\n    IEC_BOOL R;\n    IEC_BOOL LD;\n    IEC_UDINT PV;\n    // Outputs\n    IEC_BOOL QU;\n    IEC_BOOL QD;\n    IEC_UDINT CV;\n    // Local variables\n    R_TRIG CU_T;\n    F_TRIG CD_T;\n\n    // Constructor\n    CTUD_UDINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTUD_UDINT() = default;\n};\n\nclass CTUD_ULINT {\npublic:\n    // Inputs\n    IEC_BOOL CU;\n    IEC_BOOL CD;\n    IEC_BOOL R;\n    IEC_BOOL LD;\n    IEC_ULINT PV;\n    // Outputs\n    IEC_BOOL QU;\n    IEC_BOOL QD;\n    IEC_ULINT CV;\n    // Local variables\n    R_TRIG CU_T;\n    F_TRIG CD_T;\n\n    // Constructor\n    CTUD_ULINT();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~CTUD_ULINT() = default;\n};\n",
+  "cppCode": "\nR_TRIG::R_TRIG() {\n    // Initialize variables\n}\n\nvoid R_TRIG::operator()() {\n    Q = CLK && !M;\n    M = CLK;\n}\n\nF_TRIG::F_TRIG() {\n    // Initialize variables\n}\n\nvoid F_TRIG::operator()() {\n    Q = !CLK && !M;\n    M = !CLK;\n}\n\nSR::SR() {\n    // Initialize variables\n}\n\nvoid SR::operator()() {\n    Q1 = S1 || ((!R) && Q1);\n}\n\nRS::RS() {\n    // Initialize variables\n}\n\nvoid RS::operator()() {\n    Q1 = (!R1) && (S || Q1);\n}\n\nTON::TON() {\n    // Initialize variables\n}\n\nvoid TON::operator()() {\n    CURRENT_TIME = TIME();\n    if (((STATE == 0) && !(PREV_IN) && IN)) {\n        STATE = 1;\n        Q = false;\n        START_TIME = CURRENT_TIME;\n    } else {\n        if ((!(IN))) {\n            ET = 0LL;\n            Q = false;\n            STATE = 0;\n        } else if ((STATE == 1)) {\n            if (((START_TIME + PT) <= CURRENT_TIME)) {\n                STATE = 2;\n                Q = true;\n                ET = PT;\n            } else {\n                ET = CURRENT_TIME - START_TIME;\n            }\n        }\n    }\n    PREV_IN = IN;\n}\n\nTOF::TOF() {\n    // Initialize variables\n}\n\nvoid TOF::operator()() {\n    CURRENT_TIME = TIME();\n    if (((STATE == 0) && PREV_IN && !(IN))) {\n        STATE = 1;\n        START_TIME = CURRENT_TIME;\n    } else {\n        if ((IN)) {\n            ET = 0LL;\n            Q = true;\n            STATE = 0;\n        } else if ((STATE == 1)) {\n            if (((START_TIME + PT) <= CURRENT_TIME)) {\n                STATE = 2;\n                Q = false;\n                ET = PT;\n            } else {\n                Q = true;\n                ET = CURRENT_TIME - START_TIME;\n            }\n        }\n    }\n    PREV_IN = IN;\n}\n\nTP::TP() {\n    // Initialize variables\n}\n\nvoid TP::operator()() {\n    CURRENT_TIME = TIME();\n    if (((STATE == 0) && !(PREV_IN) && IN)) {\n        STATE = 1;\n        Q = true;\n        START_TIME = CURRENT_TIME;\n    } else if ((STATE == 1)) {\n        if (((START_TIME + PT) <= CURRENT_TIME)) {\n            STATE = 2;\n            Q = false;\n            ET = PT;\n        } else {\n            ET = CURRENT_TIME - START_TIME;\n        }\n    }\n    if ((!(IN) && (STATE == 2))) {\n        STATE = 0;\n        ET = 0LL;\n    }\n    PREV_IN = IN;\n}\n\nCTU::CTU() {\n    // Initialize variables\n}\n\nvoid CTU::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    if (R) {\n        CV = 0;\n    } else if (CU_T.Q && (CV < PV)) {\n        CV = CV + 1;\n    }\n    Q = (CV >= PV);\n}\n\nCTU_DINT::CTU_DINT() {\n    // Initialize variables\n}\n\nvoid CTU_DINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    if (R) {\n        CV = 0;\n    } else if (CU_T.Q && (CV < PV)) {\n        CV = CV + 1;\n    }\n    Q = (CV >= PV);\n}\n\nCTU_LINT::CTU_LINT() {\n    // Initialize variables\n}\n\nvoid CTU_LINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    if (R) {\n        CV = 0;\n    } else if (CU_T.Q && (CV < PV)) {\n        CV = CV + 1;\n    }\n    Q = (CV >= PV);\n}\n\nCTU_UDINT::CTU_UDINT() {\n    // Initialize variables\n}\n\nvoid CTU_UDINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    if (R) {\n        CV = 0;\n    } else if (CU_T.Q && (CV < PV)) {\n        CV = CV + 1;\n    }\n    Q = (CV >= PV);\n}\n\nCTU_ULINT::CTU_ULINT() {\n    // Initialize variables\n}\n\nvoid CTU_ULINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    if (R) {\n        CV = 0;\n    } else if (CU_T.Q && (CV < PV)) {\n        CV = CV + 1;\n    }\n    Q = (CV >= PV);\n}\n\nCTD::CTD() {\n    // Initialize variables\n}\n\nvoid CTD::operator()() {\n    CD_T.CLK = CD;\n    CD_T();\n    if (LD) {\n        CV = PV;\n    } else if (CD_T.Q && (CV > 0)) {\n        CV = CV - 1;\n    }\n    Q = (CV <= 0);\n}\n\nCTUD::CTUD() {\n    // Initialize variables\n}\n\nvoid CTUD::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    CD_T.CLK = CD;\n    CD_T();\n    if (R) {\n        CV = 0;\n    } else if (LD) {\n        CV = PV;\n    } else {\n        if (CU_T.Q && (CV < PV)) {\n            CV = CV + 1;\n        }\n        if (CD_T.Q && (CV > 0)) {\n            CV = CV - 1;\n        }\n    }\n    QU = (CV >= PV);\n    QD = (CV <= 0);\n}\n\nCTD_DINT::CTD_DINT() {\n    // Initialize variables\n}\n\nvoid CTD_DINT::operator()() {\n    CD_T.CLK = CD;\n    CD_T();\n    if (LD) {\n        CV = PV;\n    } else if (CD_T.Q && (CV > 0)) {\n        CV = CV - 1;\n    }\n    Q = (CV <= 0);\n}\n\nCTD_LINT::CTD_LINT() {\n    // Initialize variables\n}\n\nvoid CTD_LINT::operator()() {\n    CD_T.CLK = CD;\n    CD_T();\n    if (LD) {\n        CV = PV;\n    } else if (CD_T.Q && (CV > 0)) {\n        CV = CV - 1;\n    }\n    Q = (CV <= 0);\n}\n\nCTD_UDINT::CTD_UDINT() {\n    // Initialize variables\n}\n\nvoid CTD_UDINT::operator()() {\n    CD_T.CLK = CD;\n    CD_T();\n    if (LD) {\n        CV = PV;\n    } else if (CD_T.Q && (CV > 0)) {\n        CV = CV - 1;\n    }\n    Q = (CV <= 0);\n}\n\nCTD_ULINT::CTD_ULINT() {\n    // Initialize variables\n}\n\nvoid CTD_ULINT::operator()() {\n    CD_T.CLK = CD;\n    CD_T();\n    if (LD) {\n        CV = PV;\n    } else if (CD_T.Q && (CV > 0)) {\n        CV = CV - 1;\n    }\n    Q = (CV <= 0);\n}\n\nCTUD_DINT::CTUD_DINT() {\n    // Initialize variables\n}\n\nvoid CTUD_DINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    CD_T.CLK = CD;\n    CD_T();\n    if (R) {\n        CV = 0;\n    } else if (LD) {\n        CV = PV;\n    } else {\n        if (CU_T.Q && (CV < PV)) {\n            CV = CV + 1;\n        }\n        if (CD_T.Q && (CV > 0)) {\n            CV = CV - 1;\n        }\n    }\n    QU = (CV >= PV);\n    QD = (CV <= 0);\n}\n\nCTUD_LINT::CTUD_LINT() {\n    // Initialize variables\n}\n\nvoid CTUD_LINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    CD_T.CLK = CD;\n    CD_T();\n    if (R) {\n        CV = 0;\n    } else if (LD) {\n        CV = PV;\n    } else {\n        if (CU_T.Q && (CV < PV)) {\n            CV = CV + 1;\n        }\n        if (CD_T.Q && (CV > 0)) {\n            CV = CV - 1;\n        }\n    }\n    QU = (CV >= PV);\n    QD = (CV <= 0);\n}\n\nCTUD_UDINT::CTUD_UDINT() {\n    // Initialize variables\n}\n\nvoid CTUD_UDINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    CD_T.CLK = CD;\n    CD_T();\n    if (R) {\n        CV = 0;\n    } else if (LD) {\n        CV = PV;\n    } else {\n        if (CU_T.Q && (CV < PV)) {\n            CV = CV + 1;\n        }\n        if (CD_T.Q && (CV > 0)) {\n            CV = CV - 1;\n        }\n    }\n    QU = (CV >= PV);\n    QD = (CV <= 0);\n}\n\nCTUD_ULINT::CTUD_ULINT() {\n    // Initialize variables\n}\n\nvoid CTUD_ULINT::operator()() {\n    CU_T.CLK = CU;\n    CU_T();\n    CD_T.CLK = CD;\n    CD_T();\n    if (R) {\n        CV = 0;\n    } else if (LD) {\n        CV = PV;\n    } else {\n        if (CU_T.Q && (CV < PV)) {\n            CV = CV + 1;\n        }\n        if (CD_T.Q && (CV > 0)) {\n            CV = CV - 1;\n        }\n    }\n    QU = (CV >= PV);\n    QD = (CV <= 0);\n}\n",
+  "sources": [
+    {
+      "fileName": "edge_detection.st",
+      "source": "(* IEC 61131-3 Standard Function Blocks: Edge Detection *)\n\nFUNCTION_BLOCK R_TRIG\n  VAR_INPUT CLK : BOOL; END_VAR\n  VAR_OUTPUT Q : BOOL; END_VAR\n  VAR RETAIN M : BOOL; END_VAR\n  Q := CLK AND NOT M;\n  M := CLK;\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK F_TRIG\n  VAR_INPUT CLK : BOOL; END_VAR\n  VAR_OUTPUT Q : BOOL; END_VAR\n  VAR RETAIN M : BOOL := TRUE; END_VAR\n  Q := NOT CLK AND NOT M;\n  M := NOT CLK;\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "bistable.st",
+      "source": "(* IEC 61131-3 Standard Function Blocks: Bistable Latches *)\n\nFUNCTION_BLOCK SR\n  VAR_INPUT S1, R : BOOL; END_VAR\n  VAR_OUTPUT Q1 : BOOL; END_VAR\n  Q1 := S1 OR ((NOT R) AND Q1);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK RS\n  VAR_INPUT S, R1 : BOOL; END_VAR\n  VAR_OUTPUT Q1 : BOOL; END_VAR\n  Q1 := (NOT R1) AND (S OR Q1);\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "counter.st",
+      "source": "(* IEC 61131-3 Standard Function Blocks: Counters *)\n\nFUNCTION_BLOCK CTU\n  VAR_INPUT\n    CU : BOOL;\n    R : BOOL;\n    PV : INT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : INT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  IF R THEN\n    CV := 0;\n  ELSIF CU_T.Q AND (CV < PV) THEN\n    CV := CV + 1;\n  END_IF;\n  Q := (CV >= PV);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTD\n  VAR_INPUT\n    CD : BOOL;\n    LD : BOOL;\n    PV : INT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : INT;\n  END_VAR\n  VAR\n    CD_T : F_TRIG;\n  END_VAR\n  CD_T(CLK := CD);\n  IF LD THEN\n    CV := PV;\n  ELSIF CD_T.Q AND (CV > 0) THEN\n    CV := CV - 1;\n  END_IF;\n  Q := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTUD\n  VAR_INPUT\n    CU : BOOL;\n    CD : BOOL;\n    R : BOOL;\n    LD : BOOL;\n    PV : INT;\n  END_VAR\n  VAR_OUTPUT\n    QU : BOOL;\n    QD : BOOL;\n    CV : INT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n    CD_T : F_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  CD_T(CLK := CD);\n  IF R THEN\n    CV := 0;\n  ELSIF LD THEN\n    CV := PV;\n  ELSE\n    IF CU_T.Q AND (CV < PV) THEN\n      CV := CV + 1;\n    END_IF;\n    IF CD_T.Q AND (CV > 0) THEN\n      CV := CV - 1;\n    END_IF;\n  END_IF;\n  QU := (CV >= PV);\n  QD := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTU_DINT\n  VAR_INPUT\n    CU : BOOL;\n    R : BOOL;\n    PV : DINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : DINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  IF R THEN\n    CV := 0;\n  ELSIF CU_T.Q AND (CV < PV) THEN\n    CV := CV + 1;\n  END_IF;\n  Q := (CV >= PV);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTU_LINT\n  VAR_INPUT\n    CU : BOOL;\n    R : BOOL;\n    PV : LINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : LINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  IF R THEN\n    CV := 0;\n  ELSIF CU_T.Q AND (CV < PV) THEN\n    CV := CV + 1;\n  END_IF;\n  Q := (CV >= PV);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTU_UDINT\n  VAR_INPUT\n    CU : BOOL;\n    R : BOOL;\n    PV : UDINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : UDINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  IF R THEN\n    CV := 0;\n  ELSIF CU_T.Q AND (CV < PV) THEN\n    CV := CV + 1;\n  END_IF;\n  Q := (CV >= PV);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTU_ULINT\n  VAR_INPUT\n    CU : BOOL;\n    R : BOOL;\n    PV : ULINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : ULINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  IF R THEN\n    CV := 0;\n  ELSIF CU_T.Q AND (CV < PV) THEN\n    CV := CV + 1;\n  END_IF;\n  Q := (CV >= PV);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTD_DINT\n  VAR_INPUT\n    CD : BOOL;\n    LD : BOOL;\n    PV : DINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : DINT;\n  END_VAR\n  VAR\n    CD_T : F_TRIG;\n  END_VAR\n  CD_T(CLK := CD);\n  IF LD THEN\n    CV := PV;\n  ELSIF CD_T.Q AND (CV > 0) THEN\n    CV := CV - 1;\n  END_IF;\n  Q := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTD_LINT\n  VAR_INPUT\n    CD : BOOL;\n    LD : BOOL;\n    PV : LINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : LINT;\n  END_VAR\n  VAR\n    CD_T : F_TRIG;\n  END_VAR\n  CD_T(CLK := CD);\n  IF LD THEN\n    CV := PV;\n  ELSIF CD_T.Q AND (CV > 0) THEN\n    CV := CV - 1;\n  END_IF;\n  Q := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTD_UDINT\n  VAR_INPUT\n    CD : BOOL;\n    LD : BOOL;\n    PV : UDINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : UDINT;\n  END_VAR\n  VAR\n    CD_T : F_TRIG;\n  END_VAR\n  CD_T(CLK := CD);\n  IF LD THEN\n    CV := PV;\n  ELSIF CD_T.Q AND (CV > 0) THEN\n    CV := CV - 1;\n  END_IF;\n  Q := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTD_ULINT\n  VAR_INPUT\n    CD : BOOL;\n    LD : BOOL;\n    PV : ULINT;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    CV : ULINT;\n  END_VAR\n  VAR\n    CD_T : F_TRIG;\n  END_VAR\n  CD_T(CLK := CD);\n  IF LD THEN\n    CV := PV;\n  ELSIF CD_T.Q AND (CV > 0) THEN\n    CV := CV - 1;\n  END_IF;\n  Q := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTUD_DINT\n  VAR_INPUT\n    CU : BOOL;\n    CD : BOOL;\n    R : BOOL;\n    LD : BOOL;\n    PV : DINT;\n  END_VAR\n  VAR_OUTPUT\n    QU : BOOL;\n    QD : BOOL;\n    CV : DINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n    CD_T : F_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  CD_T(CLK := CD);\n  IF R THEN\n    CV := 0;\n  ELSIF LD THEN\n    CV := PV;\n  ELSE\n    IF CU_T.Q AND (CV < PV) THEN\n      CV := CV + 1;\n    END_IF;\n    IF CD_T.Q AND (CV > 0) THEN\n      CV := CV - 1;\n    END_IF;\n  END_IF;\n  QU := (CV >= PV);\n  QD := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTUD_LINT\n  VAR_INPUT\n    CU : BOOL;\n    CD : BOOL;\n    R : BOOL;\n    LD : BOOL;\n    PV : LINT;\n  END_VAR\n  VAR_OUTPUT\n    QU : BOOL;\n    QD : BOOL;\n    CV : LINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n    CD_T : F_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  CD_T(CLK := CD);\n  IF R THEN\n    CV := 0;\n  ELSIF LD THEN\n    CV := PV;\n  ELSE\n    IF CU_T.Q AND (CV < PV) THEN\n      CV := CV + 1;\n    END_IF;\n    IF CD_T.Q AND (CV > 0) THEN\n      CV := CV - 1;\n    END_IF;\n  END_IF;\n  QU := (CV >= PV);\n  QD := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTUD_UDINT\n  VAR_INPUT\n    CU : BOOL;\n    CD : BOOL;\n    R : BOOL;\n    LD : BOOL;\n    PV : UDINT;\n  END_VAR\n  VAR_OUTPUT\n    QU : BOOL;\n    QD : BOOL;\n    CV : UDINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n    CD_T : F_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  CD_T(CLK := CD);\n  IF R THEN\n    CV := 0;\n  ELSIF LD THEN\n    CV := PV;\n  ELSE\n    IF CU_T.Q AND (CV < PV) THEN\n      CV := CV + 1;\n    END_IF;\n    IF CD_T.Q AND (CV > 0) THEN\n      CV := CV - 1;\n    END_IF;\n  END_IF;\n  QU := (CV >= PV);\n  QD := (CV <= 0);\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK CTUD_ULINT\n  VAR_INPUT\n    CU : BOOL;\n    CD : BOOL;\n    R : BOOL;\n    LD : BOOL;\n    PV : ULINT;\n  END_VAR\n  VAR_OUTPUT\n    QU : BOOL;\n    QD : BOOL;\n    CV : ULINT;\n  END_VAR\n  VAR\n    CU_T : R_TRIG;\n    CD_T : F_TRIG;\n  END_VAR\n  CU_T(CLK := CU);\n  CD_T(CLK := CD);\n  IF R THEN\n    CV := 0;\n  ELSIF LD THEN\n    CV := PV;\n  ELSE\n    IF CU_T.Q AND (CV < PV) THEN\n      CV := CV + 1;\n    END_IF;\n    IF CD_T.Q AND (CV > 0) THEN\n      CV := CV - 1;\n    END_IF;\n  END_IF;\n  QU := (CV >= PV);\n  QD := (CV <= 0);\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "timer.st",
+      "source": "(* IEC 61131-3 Standard Function Blocks: Timers *)\n(* Uses TIME() built-in function for current time (CODESYS-compatible) *)\n\nFUNCTION_BLOCK TON\n  VAR_INPUT\n    IN : BOOL;\n    PT : TIME;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    ET : TIME;\n  END_VAR\n  VAR\n    STATE : SINT;\n    PREV_IN : BOOL;\n    CURRENT_TIME, START_TIME : TIME;\n  END_VAR\n\n  CURRENT_TIME := TIME();\n\n  IF ((STATE = 0) AND NOT(PREV_IN) AND IN) THEN\n    STATE := 1;\n    Q := FALSE;\n    START_TIME := CURRENT_TIME;\n  ELSE\n    IF (NOT(IN)) THEN\n      ET := T#0s;\n      Q := FALSE;\n      STATE := 0;\n    ELSIF (STATE = 1) THEN\n      IF ((START_TIME + PT) <= CURRENT_TIME) THEN\n        STATE := 2;\n        Q := TRUE;\n        ET := PT;\n      ELSE\n        ET := CURRENT_TIME - START_TIME;\n      END_IF;\n    END_IF;\n  END_IF;\n\n  PREV_IN := IN;\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK TOF\n  VAR_INPUT\n    IN : BOOL;\n    PT : TIME;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    ET : TIME;\n  END_VAR\n  VAR\n    STATE : SINT;\n    PREV_IN : BOOL;\n    CURRENT_TIME, START_TIME : TIME;\n  END_VAR\n\n  CURRENT_TIME := TIME();\n\n  IF ((STATE = 0) AND PREV_IN AND NOT(IN)) THEN\n    STATE := 1;\n    START_TIME := CURRENT_TIME;\n  ELSE\n    IF (IN) THEN\n      ET := T#0s;\n      Q := TRUE;\n      STATE := 0;\n    ELSIF (STATE = 1) THEN\n      IF ((START_TIME + PT) <= CURRENT_TIME) THEN\n        STATE := 2;\n        Q := FALSE;\n        ET := PT;\n      ELSE\n        Q := TRUE;\n        ET := CURRENT_TIME - START_TIME;\n      END_IF;\n    END_IF;\n  END_IF;\n\n  PREV_IN := IN;\nEND_FUNCTION_BLOCK\n\nFUNCTION_BLOCK TP\n  VAR_INPUT\n    IN : BOOL;\n    PT : TIME;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL;\n    ET : TIME;\n  END_VAR\n  VAR\n    STATE : SINT;\n    PREV_IN : BOOL;\n    CURRENT_TIME, START_TIME : TIME;\n  END_VAR\n\n  CURRENT_TIME := TIME();\n\n  IF ((STATE = 0) AND NOT(PREV_IN) AND IN) THEN\n    STATE := 1;\n    Q := TRUE;\n    START_TIME := CURRENT_TIME;\n  ELSIF (STATE = 1) THEN\n    IF ((START_TIME + PT) <= CURRENT_TIME) THEN\n      STATE := 2;\n      Q := FALSE;\n      ET := PT;\n    ELSE\n      ET := CURRENT_TIME - START_TIME;\n    END_IF;\n  END_IF;\n\n  IF (NOT(IN) AND (STATE = 2)) THEN\n    STATE := 0;\n    ET := T#0s;\n  END_IF;\n\n  PREV_IN := IN;\nEND_FUNCTION_BLOCK\n"
+    }
+  ],
+  "dependencies": []
+}

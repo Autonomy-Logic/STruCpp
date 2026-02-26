@@ -38,14 +38,17 @@ export interface CompileOptions {
     fileName: string;
   }>;
 
-  /** Library search paths (like -I in gcc) - reserved for future file-based loading */
+  /** Library search paths — discovers *.stlib files */
   libraryPaths?: string[];
 
-  /** Pre-loaded library manifests to make available during compilation */
-  libraries?: import("./library/library-manifest.js").LibraryManifest[];
+  /** Pre-loaded .stlib library archives */
+  libraries?: import("./library/library-manifest.js").StlibArchive[];
 
   /** Disable auto-loading of IEC standard function block library (TON, CTU, R_TRIG, etc.) */
   noStdFBLibrary?: boolean;
+
+  /** Skip source inclusion when compiling libraries (closed-source) */
+  noSource?: boolean;
 
   /** Whether this is a test build (adds mock infrastructure to generated code) */
   isTestBuild?: boolean;

@@ -281,11 +281,12 @@ export class CodeGenerator {
   /** Topologically sorted function blocks (computed once in generate(), used by header + impl) */
   private sortedFBs: CompilationUnit["functionBlocks"] = [];
 
-  /** Library preamble code (e.g. compiled stdlib FB class declarations) injected into the header */
-  private libraryPreambleCode: string | undefined;
-
-  /** Library implementation code (e.g. compiled stdlib FB method bodies) injected into the .cpp */
-  private libraryImplCode: string | undefined;
+  /** Library preamble code blocks injected into header and implementation */
+  private libraryPreambles: Array<{
+    name: string;
+    headerCode: string;
+    cppCode: string;
+  }> = [];
 
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
 
@@ -423,12 +424,11 @@ export class CodeGenerator {
   }
 
   /**
-   * Set library preamble code to inject into the generated header and implementation.
-   * Used for compiled standard FB library class definitions.
+   * Add library preamble code to inject into the generated header and implementation.
+   * Supports multiple libraries — each is injected in order.
    */
-  setLibraryPreamble(headerCode: string, implCode: string): void {
-    this.libraryPreambleCode = headerCode;
-    this.libraryImplCode = implCode;
+  addLibraryPreamble(name: string, headerCode: string, cppCode: string): void {
+    this.libraryPreambles.push({ name, headerCode, cppCode });
   }
 
   /**
@@ -607,10 +607,10 @@ export class CodeGenerator {
       this.emitHeader("");
     }
 
-    // Inject library preamble (e.g. standard FB class declarations from compiled ST)
-    if (this.libraryPreambleCode) {
-      this.emitHeader("// Standard library function block declarations");
-      for (const line of this.libraryPreambleCode.split("\n")) {
+    // Inject library preambles (stdlib + user libraries)
+    for (const lib of this.libraryPreambles) {
+      this.emitHeader(`// Library: ${lib.name}`);
+      for (const line of lib.headerCode.split("\n")) {
         this.emitHeader(line);
       }
       this.emitHeader("");
@@ -702,10 +702,10 @@ export class CodeGenerator {
     this.emit(`namespace ${ns} {`);
     this.emit("");
 
-    // Inject library implementation code (e.g. standard FB method bodies)
-    if (this.libraryImplCode) {
-      this.emit("// Standard library function block implementations");
-      for (const line of this.libraryImplCode.split("\n")) {
+    // Inject library implementation code (stdlib + user libraries)
+    for (const lib of this.libraryPreambles) {
+      this.emit(`// Library: ${lib.name}`);
+      for (const line of lib.cppCode.split("\n")) {
         this.emit(line);
       }
       this.emit("");

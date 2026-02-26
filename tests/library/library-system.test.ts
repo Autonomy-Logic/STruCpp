@@ -2,7 +2,7 @@
  * STruC++ Library System Tests
  *
  * Tests for library compilation, manifest loading, and symbol registration.
- * Covers Phase 4.5: Library System.
+ * Covers Phase 4.5: Library System and the .stlib archive format.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -15,10 +15,14 @@ import {
 import { join } from "path";
 import { tmpdir } from "os";
 import { compileLibrary } from "../../src/library/library-compiler.js";
+import { compileStlib } from "../../src/library/library-compiler.js";
 import {
   loadLibraryManifest,
   loadLibraryFromFile,
   discoverLibraries,
+  loadStlibArchive,
+  loadStlibFromFile,
+  discoverStlibs,
   registerLibrarySymbols,
   LibraryManifestError,
 } from "../../src/library/library-loader.js";
@@ -98,6 +102,114 @@ describe("Library System", () => {
 
       expect(result.success).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("compileStlib", () => {
+    it("should produce a valid StlibArchive with headerCode/cppCode populated", () => {
+      const result = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION MathAdd : INT
+                VAR_INPUT a : INT; b : INT; END_VAR
+                MathAdd := a + b;
+              END_FUNCTION
+            `,
+            fileName: "math.st",
+          },
+        ],
+        { name: "math-lib", version: "1.0.0", namespace: "math" },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.archive.formatVersion).toBe(1);
+      expect(result.archive.manifest.name).toBe("math-lib");
+      expect(result.archive.headerCode).toBeTruthy();
+      expect(result.archive.cppCode).toBeTruthy();
+      expect(result.archive.dependencies).toEqual([]);
+    });
+
+    it("should include sources when noSource is false", () => {
+      const result = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION F : INT
+                VAR_INPUT x : INT; END_VAR
+                F := x;
+              END_FUNCTION
+            `,
+            fileName: "f.st",
+          },
+        ],
+        { name: "src-lib", version: "1.0.0", namespace: "src", noSource: false },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.archive.sources).toBeDefined();
+      expect(result.archive.sources).toHaveLength(1);
+      expect(result.archive.sources![0]!.fileName).toBe("f.st");
+    });
+
+    it("should omit sources when noSource is true", () => {
+      const result = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION F : INT
+                VAR_INPUT x : INT; END_VAR
+                F := x;
+              END_FUNCTION
+            `,
+            fileName: "f.st",
+          },
+        ],
+        { name: "nosrc-lib", version: "1.0.0", namespace: "nosrc", noSource: true },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.archive.sources).toBeUndefined();
+    });
+
+    it("should return errors on compilation failure", () => {
+      const result = compileStlib(
+        [
+          {
+            source: `INVALID SYNTAX !!!`,
+            fileName: "bad.st",
+          },
+        ],
+        { name: "bad-lib", version: "1.0.0", namespace: "bad" },
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it("should produce namespace-body-only C++ code (no includes/pragma/namespace wrapper)", () => {
+      const result = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION MathAdd : INT
+                VAR_INPUT a : INT; b : INT; END_VAR
+                MathAdd := a + b;
+              END_FUNCTION
+            `,
+            fileName: "math.st",
+          },
+        ],
+        { name: "math-lib", version: "1.0.0", namespace: "math" },
+      );
+
+      expect(result.success).toBe(true);
+      // Should NOT contain namespace wrapper or includes
+      expect(result.archive.headerCode).not.toContain("#pragma once");
+      expect(result.archive.headerCode).not.toContain("#include");
+      expect(result.archive.headerCode).not.toMatch(/^namespace\s/m);
+      // Should contain actual code
+      expect(result.archive.headerCode).toContain("MATHADD");
     });
   });
 
@@ -245,6 +357,150 @@ describe("Library System", () => {
     });
   });
 
+  describe("loadStlibArchive", () => {
+    it("should load a valid StlibArchive from JSON", () => {
+      const json = {
+        formatVersion: 1,
+        manifest: {
+          name: "test-lib",
+          version: "1.0.0",
+          namespace: "test",
+          functions: [],
+          functionBlocks: [],
+          types: [],
+          headers: [],
+          isBuiltin: false,
+        },
+        headerCode: "// header",
+        cppCode: "// cpp",
+        dependencies: [],
+      };
+
+      const archive = loadStlibArchive(json);
+      expect(archive.formatVersion).toBe(1);
+      expect(archive.manifest.name).toBe("test-lib");
+      expect(archive.headerCode).toBe("// header");
+      expect(archive.cppCode).toBe("// cpp");
+      expect(archive.dependencies).toEqual([]);
+    });
+
+    it("should reject missing formatVersion", () => {
+      expect(() =>
+        loadStlibArchive({
+          manifest: {
+            name: "lib",
+            version: "1.0.0",
+            namespace: "ns",
+            functions: [],
+            functionBlocks: [],
+            types: [],
+            headers: [],
+            isBuiltin: false,
+          },
+          headerCode: "",
+          cppCode: "",
+          dependencies: [],
+        }),
+      ).toThrow("'formatVersion' must be 1");
+    });
+
+    it("should reject invalid formatVersion", () => {
+      expect(() =>
+        loadStlibArchive({
+          formatVersion: 2,
+          manifest: {
+            name: "lib",
+            version: "1.0.0",
+            namespace: "ns",
+            functions: [],
+            functionBlocks: [],
+            types: [],
+            headers: [],
+            isBuiltin: false,
+          },
+          headerCode: "",
+          cppCode: "",
+          dependencies: [],
+        }),
+      ).toThrow("'formatVersion' must be 1");
+    });
+
+    it("should reject missing manifest", () => {
+      expect(() =>
+        loadStlibArchive({
+          formatVersion: 1,
+          headerCode: "",
+          cppCode: "",
+          dependencies: [],
+        }),
+      ).toThrow("'manifest' must be an object");
+    });
+
+    it("should reject missing headerCode", () => {
+      expect(() =>
+        loadStlibArchive({
+          formatVersion: 1,
+          manifest: {
+            name: "lib",
+            version: "1.0.0",
+            namespace: "ns",
+            functions: [],
+            functionBlocks: [],
+            types: [],
+            headers: [],
+            isBuiltin: false,
+          },
+          cppCode: "",
+          dependencies: [],
+        }),
+      ).toThrow("'headerCode' must be a string");
+    });
+
+    it("should reject missing cppCode", () => {
+      expect(() =>
+        loadStlibArchive({
+          formatVersion: 1,
+          manifest: {
+            name: "lib",
+            version: "1.0.0",
+            namespace: "ns",
+            functions: [],
+            functionBlocks: [],
+            types: [],
+            headers: [],
+            isBuiltin: false,
+          },
+          headerCode: "",
+          dependencies: [],
+        }),
+      ).toThrow("'cppCode' must be a string");
+    });
+
+    it("should reject missing dependencies", () => {
+      expect(() =>
+        loadStlibArchive({
+          formatVersion: 1,
+          manifest: {
+            name: "lib",
+            version: "1.0.0",
+            namespace: "ns",
+            functions: [],
+            functionBlocks: [],
+            types: [],
+            headers: [],
+            isBuiltin: false,
+          },
+          headerCode: "",
+          cppCode: "",
+        }),
+      ).toThrow("'dependencies' must be an array");
+    });
+
+    it("should reject null input", () => {
+      expect(() => loadStlibArchive(null)).toThrow(LibraryManifestError);
+    });
+  });
+
   describe("registerLibrarySymbols", () => {
     it("should register function symbols", () => {
       const symbolTables = new SymbolTables();
@@ -369,8 +625,8 @@ describe("Library System", () => {
 
   describe("end-to-end library workflow", () => {
     it("should compile a library and use its function in a program", () => {
-      // Step 1: Compile the library
-      const libResult = compileLibrary(
+      // Step 1: Compile the library into a StlibArchive
+      const libResult = compileStlib(
         [
           {
             source: `
@@ -394,7 +650,7 @@ describe("Library System", () => {
         END_PROGRAM
       `;
       const result = compile(mainSource, {
-        libraries: [libResult.manifest],
+        libraries: [libResult.archive],
       });
 
       expect(result.success).toBe(true);
@@ -402,8 +658,7 @@ describe("Library System", () => {
     });
 
     it("should compile a library and use its type in a program", () => {
-      // Step 1: Compile a library with a type
-      const libResult = compileLibrary(
+      const libResult = compileStlib(
         [
           {
             source: `
@@ -421,7 +676,6 @@ describe("Library System", () => {
       );
       expect(libResult.success).toBe(true);
 
-      // Step 2: Compile a program that uses the library type
       const mainSource = `
         PROGRAM Main
           VAR p : Point; END_VAR
@@ -429,46 +683,62 @@ describe("Library System", () => {
         END_PROGRAM
       `;
       const result = compile(mainSource, {
-        libraries: [libResult.manifest],
+        libraries: [libResult.archive],
       });
 
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain("P.X = 10");
     });
 
-    it("should include library headers in generated code", () => {
-      const libResult = compileLibrary(
+    it("should inject library C++ code into output when using StlibArchive", () => {
+      const libResult = compileStlib(
         [
           {
             source: `
-              FUNCTION LibHelper : INT
-                VAR_INPUT x : INT; END_VAR
-                LibHelper := x;
-              END_FUNCTION
+              FUNCTION_BLOCK MyCounter
+                VAR_INPUT
+                  increment : BOOL;
+                END_VAR
+                VAR_OUTPUT
+                  count : INT;
+                END_VAR
+                VAR
+                  internal_count : INT;
+                END_VAR
+                IF increment THEN
+                  internal_count := internal_count + 1;
+                END_IF;
+                count := internal_count;
+              END_FUNCTION_BLOCK
             `,
-            fileName: "helper.st",
+            fileName: "counter.st",
           },
         ],
-        { name: "helper-lib", version: "1.0.0", namespace: "helper" },
+        { name: "counter-lib", version: "1.0.0", namespace: "counter" },
       );
       expect(libResult.success).toBe(true);
-      // The manifest should have the library header
-      expect(libResult.manifest.headers).toContain("helper-lib.hpp");
+      expect(libResult.archive.headerCode).toBeTruthy();
+      expect(libResult.archive.cppCode).toBeTruthy();
 
-      // Step 2: Compile using the library
+      // Compile user program that uses the library FB
       const mainSource = `
         PROGRAM Main
-          VAR x : INT; END_VAR
-          x := LibHelper(x := 5);
+          VAR
+            ctr : MyCounter;
+            done : BOOL;
+          END_VAR
+          ctr(increment := TRUE);
+          done := ctr.count > 10;
         END_PROGRAM
       `;
       const result = compile(mainSource, {
-        libraries: [libResult.manifest],
+        libraries: [libResult.archive],
       });
 
       expect(result.success).toBe(true);
-      // The generated header should include the library header
-      expect(result.headerCode).toContain('#include "helper-lib.hpp"');
+      // Verify library C++ code is injected in the output
+      expect(result.headerCode).toContain("Library: counter-lib");
+      expect(result.cppCode).toContain("Library: counter-lib");
     });
 
     it("should compile without libraries (backward compatible)", () => {
@@ -481,6 +751,63 @@ describe("Library System", () => {
       const result = compile(source);
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain("X = 42");
+    });
+
+    it("should inject multiple library preambles", () => {
+      // Compile two separate libraries
+      const lib1 = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION_BLOCK FB_A
+                VAR_INPUT x : BOOL; END_VAR
+                VAR_OUTPUT q : BOOL; END_VAR
+                q := x;
+              END_FUNCTION_BLOCK
+            `,
+            fileName: "a.st",
+          },
+        ],
+        { name: "lib-a", version: "1.0.0", namespace: "a" },
+      );
+      const lib2 = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION_BLOCK FB_B
+                VAR_INPUT y : INT; END_VAR
+                VAR_OUTPUT r : INT; END_VAR
+                r := y + 1;
+              END_FUNCTION_BLOCK
+            `,
+            fileName: "b.st",
+          },
+        ],
+        { name: "lib-b", version: "1.0.0", namespace: "b" },
+      );
+      expect(lib1.success).toBe(true);
+      expect(lib2.success).toBe(true);
+
+      // Use both in one compilation
+      const mainSource = `
+        PROGRAM Main
+          VAR
+            a : FB_A;
+            b : FB_B;
+          END_VAR
+          a(x := TRUE);
+          b(y := 42);
+        END_PROGRAM
+      `;
+      const result = compile(mainSource, {
+        libraries: [lib1.archive, lib2.archive],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain("Library: lib-a");
+      expect(result.headerCode).toContain("Library: lib-b");
+      expect(result.cppCode).toContain("Library: lib-a");
+      expect(result.cppCode).toContain("Library: lib-b");
     });
   });
 
@@ -549,6 +876,61 @@ describe("Library System", () => {
 
       expect(() => loadLibraryFromFile(manifestPath)).toThrow(
         LibraryManifestError,
+      );
+    });
+  });
+
+  describe("loadStlibFromFile", () => {
+    beforeAll(() => {
+      mkdirSync(TMP_BASE, { recursive: true });
+    });
+
+    it("should load a valid .stlib archive from file", () => {
+      const dir = freshDir("stlib-load-valid");
+      const stlibPath = join(dir, "test.stlib");
+      writeFileSync(
+        stlibPath,
+        JSON.stringify({
+          formatVersion: 1,
+          manifest: {
+            name: "file-lib",
+            version: "1.0.0",
+            namespace: "filelib",
+            functions: [],
+            functionBlocks: [],
+            types: [],
+            headers: [],
+            isBuiltin: false,
+          },
+          headerCode: "// header code",
+          cppCode: "// cpp code",
+          dependencies: [],
+        }),
+      );
+
+      const archive = loadStlibFromFile(stlibPath);
+      expect(archive.formatVersion).toBe(1);
+      expect(archive.manifest.name).toBe("file-lib");
+      expect(archive.headerCode).toBe("// header code");
+      expect(archive.cppCode).toBe("// cpp code");
+    });
+
+    it("should throw for nonexistent file", () => {
+      expect(() => loadStlibFromFile("/nonexistent/path.stlib")).toThrow(
+        LibraryManifestError,
+      );
+      expect(() => loadStlibFromFile("/nonexistent/path.stlib")).toThrow(
+        "Cannot read stlib archive",
+      );
+    });
+
+    it("should throw for invalid JSON", () => {
+      const dir = freshDir("stlib-bad-json");
+      const stlibPath = join(dir, "bad.stlib");
+      writeFileSync(stlibPath, "not valid json");
+
+      expect(() => loadStlibFromFile(stlibPath)).toThrow(
+        "Invalid JSON in stlib archive",
       );
     });
   });
@@ -623,35 +1005,103 @@ describe("Library System", () => {
     });
   });
 
-  describe("compile() with libraryPaths option", () => {
+  describe("discoverStlibs", () => {
+    beforeAll(() => {
+      mkdirSync(TMP_BASE, { recursive: true });
+    });
+
+    it("should discover all .stlib files in a directory", () => {
+      const dir = freshDir("discover-stlibs");
+      const archive1 = {
+        formatVersion: 1,
+        manifest: {
+          name: "stlib-a",
+          version: "1.0.0",
+          namespace: "a",
+          functions: [],
+          functionBlocks: [],
+          types: [],
+          headers: [],
+          isBuiltin: false,
+        },
+        headerCode: "",
+        cppCode: "",
+        dependencies: [],
+      };
+      const archive2 = {
+        formatVersion: 1,
+        manifest: {
+          name: "stlib-b",
+          version: "2.0.0",
+          namespace: "b",
+          functions: [],
+          functionBlocks: [],
+          types: [],
+          headers: [],
+          isBuiltin: false,
+        },
+        headerCode: "",
+        cppCode: "",
+        dependencies: [],
+      };
+      writeFileSync(join(dir, "lib-a.stlib"), JSON.stringify(archive1));
+      writeFileSync(join(dir, "lib-b.stlib"), JSON.stringify(archive2));
+      writeFileSync(join(dir, "readme.txt"), "not a library");
+
+      const result = discoverStlibs(dir);
+      expect(result).toHaveLength(2);
+      const names = result.map((a) => a.manifest.name).sort();
+      expect(names).toEqual(["stlib-a", "stlib-b"]);
+    });
+
+    it("should return empty for directory with no .stlib files", () => {
+      const dir = freshDir("discover-stlibs-empty");
+      writeFileSync(join(dir, "other.txt"), "hello");
+
+      const result = discoverStlibs(dir);
+      expect(result).toEqual([]);
+    });
+
+    it("should throw for nonexistent directory", () => {
+      expect(() =>
+        discoverStlibs(join(TMP_BASE, "nonexistent-stlib-dir")),
+      ).toThrow(LibraryManifestError);
+    });
+  });
+
+  describe("compile() with libraryPaths option (.stlib)", () => {
     beforeAll(() => {
       if (existsSync(TMP_BASE)) rmSync(TMP_BASE, { recursive: true });
       mkdirSync(TMP_BASE, { recursive: true });
     });
 
-    it("should load libraries from libraryPaths and resolve symbols", () => {
-      const dir = freshDir("compile-libpaths");
-      const manifest = {
-        name: "ext-lib",
-        version: "1.0.0",
-        namespace: "ext",
-        functions: [
+    it("should load .stlib archives from libraryPaths and inject C++ code", () => {
+      const dir = freshDir("compile-stlib-libpaths");
+
+      // Compile a library to get a .stlib archive
+      const libResult = compileStlib(
+        [
           {
-            name: "ExtFunc",
-            returnType: "INT",
-            parameters: [{ name: "x", type: "INT", direction: "input" }],
+            source: `
+              FUNCTION ExtFunc : INT
+                VAR_INPUT x : INT; END_VAR
+                ExtFunc := x * 2;
+              END_FUNCTION
+            `,
+            fileName: "ext.st",
           },
         ],
-        functionBlocks: [],
-        types: [],
-        headers: ["ext-lib.hpp"],
-        isBuiltin: false,
-      };
+        { name: "ext-lib", version: "1.0.0", namespace: "ext" },
+      );
+      expect(libResult.success).toBe(true);
+
+      // Write the .stlib file to disk
       writeFileSync(
-        join(dir, "ext-lib.stlib.json"),
-        JSON.stringify(manifest),
+        join(dir, "ext-lib.stlib"),
+        JSON.stringify(libResult.archive),
       );
 
+      // Compile a program using the library via -L path
       const source = `
         PROGRAM Main
           VAR result : INT; END_VAR
@@ -662,7 +1112,9 @@ describe("Library System", () => {
 
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain("EXTFUNC");
-      expect(result.headerCode).toContain('#include "ext-lib.hpp"');
+      // The library C++ code should be injected
+      expect(result.headerCode).toContain("Library: ext-lib");
+      expect(result.cppCode).toContain("Library: ext-lib");
     });
 
     it("should return compile error for invalid libraryPaths", () => {
@@ -684,44 +1136,45 @@ describe("Library System", () => {
     });
 
     it("should combine libraryPaths with explicit libraries", () => {
-      const dir = freshDir("compile-combined");
-      const diskManifest = {
-        name: "disk-lib",
-        version: "1.0.0",
-        namespace: "disk",
-        functions: [
+      const dir = freshDir("compile-stlib-combined");
+
+      // Library on disk as .stlib
+      const diskLib = compileStlib(
+        [
           {
-            name: "DiskFunc",
-            returnType: "INT",
-            parameters: [{ name: "x", type: "INT", direction: "input" }],
+            source: `
+              FUNCTION DiskFunc : INT
+                VAR_INPUT x : INT; END_VAR
+                DiskFunc := x;
+              END_FUNCTION
+            `,
+            fileName: "disk.st",
           },
         ],
-        functionBlocks: [],
-        types: [],
-        headers: ["disk-lib.hpp"],
-        isBuiltin: false,
-      };
+        { name: "disk-lib", version: "1.0.0", namespace: "disk" },
+      );
+      expect(diskLib.success).toBe(true);
       writeFileSync(
-        join(dir, "disk-lib.stlib.json"),
-        JSON.stringify(diskManifest),
+        join(dir, "disk-lib.stlib"),
+        JSON.stringify(diskLib.archive),
       );
 
-      const inlineManifest = loadLibraryManifest({
-        name: "inline-lib",
-        version: "1.0.0",
-        namespace: "inline",
-        functions: [
+      // Inline library archive
+      const inlineLib = compileStlib(
+        [
           {
-            name: "InlineFunc",
-            returnType: "INT",
-            parameters: [{ name: "y", type: "INT", direction: "input" }],
+            source: `
+              FUNCTION InlineFunc : INT
+                VAR_INPUT y : INT; END_VAR
+                InlineFunc := y;
+              END_FUNCTION
+            `,
+            fileName: "inline.st",
           },
         ],
-        functionBlocks: [],
-        types: [],
-        headers: ["inline-lib.hpp"],
-        isBuiltin: false,
-      });
+        { name: "inline-lib", version: "1.0.0", namespace: "inline" },
+      );
+      expect(inlineLib.success).toBe(true);
 
       const source = `
         PROGRAM Main
@@ -732,14 +1185,12 @@ describe("Library System", () => {
       `;
       const result = compile(source, {
         libraryPaths: [dir],
-        libraries: [inlineManifest],
+        libraries: [inlineLib.archive],
       });
 
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain("DISKFUNC");
       expect(result.cppCode).toContain("INLINEFUNC");
-      expect(result.headerCode).toContain('#include "disk-lib.hpp"');
-      expect(result.headerCode).toContain('#include "inline-lib.hpp"');
     });
   });
 });

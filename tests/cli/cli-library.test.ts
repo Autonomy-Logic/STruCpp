@@ -1,7 +1,8 @@
 /**
  * CLI Library Feature Tests
  *
- * Tests for --compile-lib mode, -L library paths, and multiple .st file inputs.
+ * Tests for --compile-lib mode (single .stlib output), -L library paths,
+ * folder input, --no-source flag, and multiple .st file inputs.
  * These tests invoke the CLI via the compiled dist/cli.js.
  */
 
@@ -64,7 +65,7 @@ describe("CLI Library Features", () => {
   });
 
   describe("--compile-lib", () => {
-    it("should compile ST source into a library with manifest and C++ files", () => {
+    it("should compile ST source into a single .stlib archive", () => {
       const workDir = freshDir("compile-lib-basic");
       const stFile = join(workDir, "math.st");
       writeFileSync(
@@ -89,18 +90,24 @@ describe("CLI Library Features", () => {
 
       expect(stdout).toContain("Library compilation successful!");
 
-      // Check manifest
-      const manifestPath = join(outDir, "math-lib.stlib.json");
-      expect(existsSync(manifestPath)).toBe(true);
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-      expect(manifest.name).toBe("math-lib");
-      expect(manifest.version).toBe("1.0.0");
-      expect(manifest.functions).toHaveLength(1);
-      expect(manifest.functions[0].name).toBe("MATHADD");
+      // Check .stlib archive exists
+      const stlibPath = join(outDir, "math-lib.stlib");
+      expect(existsSync(stlibPath)).toBe(true);
 
-      // Check C++ files
-      expect(existsSync(join(outDir, "math-lib.hpp"))).toBe(true);
-      expect(existsSync(join(outDir, "math-lib.cpp"))).toBe(true);
+      // Validate the .stlib archive structure
+      const archive = JSON.parse(readFileSync(stlibPath, "utf-8"));
+      expect(archive.formatVersion).toBe(1);
+      expect(archive.manifest.name).toBe("math-lib");
+      expect(archive.manifest.version).toBe("1.0.0");
+      expect(archive.manifest.functions).toHaveLength(1);
+      expect(archive.manifest.functions[0].name).toBe("MATHADD");
+      expect(archive.headerCode).toBeTruthy();
+      expect(archive.cppCode).toBeTruthy();
+      expect(archive.dependencies).toEqual([]);
+
+      // Should NOT produce separate .hpp/.cpp files
+      expect(existsSync(join(outDir, "math-lib.hpp"))).toBe(false);
+      expect(existsSync(join(outDir, "math-lib.cpp"))).toBe(false);
     });
 
     it("should use custom version and namespace", () => {
@@ -130,11 +137,11 @@ describe("CLI Library Features", () => {
         "myns",
       ]);
 
-      const manifest = JSON.parse(
-        readFileSync(join(outDir, "my-lib.stlib.json"), "utf-8"),
+      const archive = JSON.parse(
+        readFileSync(join(outDir, "my-lib.stlib"), "utf-8"),
       );
-      expect(manifest.version).toBe("2.5.0");
-      expect(manifest.namespace).toBe("myns");
+      expect(archive.manifest.version).toBe("2.5.0");
+      expect(archive.manifest.namespace).toBe("myns");
     });
 
     it("should fail when --lib-name is missing", () => {
@@ -167,35 +174,151 @@ describe("CLI Library Features", () => {
     });
   });
 
-  describe("-L / --lib-path", () => {
-    it("should load library manifests from a directory and compile successfully", () => {
-      const workDir = freshDir("lib-path-basic");
-      const libDir = join(workDir, "libs");
-      mkdirSync(libDir, { recursive: true });
+  describe("--compile-lib with folder input", () => {
+    it("should discover .st files recursively from a directory", () => {
+      const workDir = freshDir("compile-lib-folder");
+      const srcDir = join(workDir, "src");
+      const subDir = join(srcDir, "sub");
+      mkdirSync(subDir, { recursive: true });
 
-      // Create a library manifest
-      const manifest = {
-        name: "ext-lib",
-        version: "1.0.0",
-        namespace: "ext",
-        functions: [
-          {
-            name: "ExtFunc",
-            returnType: "INT",
-            parameters: [{ name: "x", type: "INT", direction: "input" }],
-          },
-        ],
-        functionBlocks: [],
-        types: [],
-        headers: ["ext-lib.hpp"],
-        isBuiltin: false,
-      };
       writeFileSync(
-        join(libDir, "ext-lib.stlib.json"),
-        JSON.stringify(manifest),
+        join(srcDir, "add.st"),
+        `
+        FUNCTION LibAdd : INT
+          VAR_INPUT a : INT; b : INT; END_VAR
+          LibAdd := a + b;
+        END_FUNCTION
+      `,
       );
 
-      // Write a program that uses the library function
+      writeFileSync(
+        join(subDir, "sub.st"),
+        `
+        FUNCTION LibSub : INT
+          VAR_INPUT a : INT; b : INT; END_VAR
+          LibSub := a - b;
+        END_FUNCTION
+      `,
+      );
+
+      const outDir = join(workDir, "out");
+      const stdout = runCLI([
+        "--compile-lib",
+        srcDir,
+        "-o",
+        outDir,
+        "--lib-name",
+        "arith-lib",
+      ]);
+
+      expect(stdout).toContain("2 source file(s)");
+      expect(stdout).toContain("Library compilation successful!");
+
+      const archive = JSON.parse(
+        readFileSync(join(outDir, "arith-lib.stlib"), "utf-8"),
+      );
+      expect(archive.manifest.functions).toHaveLength(2);
+      const names = archive.manifest.functions.map(
+        (f: { name: string }) => f.name,
+      );
+      expect(names).toContain("LIBADD");
+      expect(names).toContain("LIBSUB");
+    });
+  });
+
+  describe("--no-source", () => {
+    it("should omit sources from .stlib when --no-source is used", () => {
+      const workDir = freshDir("compile-lib-nosource");
+      const stFile = join(workDir, "func.st");
+      writeFileSync(
+        stFile,
+        `
+        FUNCTION F : INT
+          VAR_INPUT x : INT; END_VAR
+          F := x;
+        END_FUNCTION
+      `,
+      );
+
+      const outDir = join(workDir, "out");
+      runCLI([
+        "--compile-lib",
+        stFile,
+        "-o",
+        outDir,
+        "--lib-name",
+        "nosrc-lib",
+        "--no-source",
+      ]);
+
+      const archive = JSON.parse(
+        readFileSync(join(outDir, "nosrc-lib.stlib"), "utf-8"),
+      );
+      expect(archive.sources).toBeUndefined();
+    });
+
+    it("should include sources by default (without --no-source)", () => {
+      const workDir = freshDir("compile-lib-withsource");
+      const stFile = join(workDir, "func.st");
+      writeFileSync(
+        stFile,
+        `
+        FUNCTION F : INT
+          VAR_INPUT x : INT; END_VAR
+          F := x;
+        END_FUNCTION
+      `,
+      );
+
+      const outDir = join(workDir, "out");
+      runCLI([
+        "--compile-lib",
+        stFile,
+        "-o",
+        outDir,
+        "--lib-name",
+        "src-lib",
+      ]);
+
+      const archive = JSON.parse(
+        readFileSync(join(outDir, "src-lib.stlib"), "utf-8"),
+      );
+      expect(archive.sources).toBeDefined();
+      expect(archive.sources.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("-L / --lib-path with .stlib files", () => {
+    it("should discover .stlib files and compile with injected C++ code", () => {
+      const workDir = freshDir("lib-path-stlib");
+
+      // Step 1: Create a library .stlib via CLI
+      const libSrcDir = join(workDir, "libsrc");
+      mkdirSync(libSrcDir, { recursive: true });
+      writeFileSync(
+        join(libSrcDir, "ext.st"),
+        `
+        FUNCTION ExtFunc : INT
+          VAR_INPUT x : INT; END_VAR
+          ExtFunc := x * 2;
+        END_FUNCTION
+      `,
+      );
+
+      const libDir = join(workDir, "libs");
+      runCLI([
+        "--compile-lib",
+        join(libSrcDir, "ext.st"),
+        "-o",
+        libDir,
+        "--lib-name",
+        "ext-lib",
+      ]);
+
+      // Verify .stlib was created
+      expect(existsSync(join(libDir, "ext-lib.stlib"))).toBe(true);
+
+      // Step 2: Compile a program using the library
       const stFile = join(workDir, "main.st");
       writeFileSync(
         stFile,
@@ -211,15 +334,16 @@ describe("CLI Library Features", () => {
       const stdout = runCLI([stFile, "-o", outFile, "-L", libDir]);
       expect(stdout).toContain("Compilation successful!");
 
+      // Verify the library C++ code is in the output
       const cppCode = readFileSync(outFile, "utf-8");
       expect(cppCode).toContain("EXTFUNC");
+      expect(cppCode).toContain("Library: ext-lib");
 
-      // The header should include the library header
       const hppCode = readFileSync(
         outFile.replace(".cpp", ".hpp"),
         "utf-8",
       );
-      expect(hppCode).toContain('#include "ext-lib.hpp"');
+      expect(hppCode).toContain("Library: ext-lib");
     });
 
     it("should fail gracefully with invalid library path", () => {
@@ -283,7 +407,7 @@ describe("CLI Library Features", () => {
   });
 
   describe("--compile-lib with multiple source files", () => {
-    it("should compile multiple ST files into a single library", () => {
+    it("should compile multiple ST files into a single .stlib archive", () => {
       const workDir = freshDir("compile-lib-multi");
       const file1 = join(workDir, "add.st");
       const file2 = join(workDir, "sub.st");
@@ -319,11 +443,12 @@ describe("CLI Library Features", () => {
         "arith-lib",
       ]);
 
-      const manifest = JSON.parse(
-        readFileSync(join(outDir, "arith-lib.stlib.json"), "utf-8"),
+      const archive = JSON.parse(
+        readFileSync(join(outDir, "arith-lib.stlib"), "utf-8"),
       );
-      expect(manifest.functions).toHaveLength(2);
-      const names = manifest.functions.map(
+      expect(archive.formatVersion).toBe(1);
+      expect(archive.manifest.functions).toHaveLength(2);
+      const names = archive.manifest.functions.map(
         (f: { name: string }) => f.name,
       );
       expect(names).toContain("LIBADD");

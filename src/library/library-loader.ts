@@ -7,7 +7,7 @@
 
 import { readFileSync, readdirSync } from "fs";
 import { resolve, join } from "path";
-import type { LibraryManifest } from "./library-manifest.js";
+import type { LibraryManifest, StlibArchive } from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type { ElementaryType, VarDeclaration } from "../frontend/ast.js";
@@ -356,4 +356,135 @@ export function registerLibrarySymbols(
       if (!(e instanceof DuplicateSymbolError)) throw e;
     }
   }
+}
+
+/**
+ * Load a `.stlib` archive from a parsed JSON object.
+ * Validates the archive structure including formatVersion, manifest, headerCode,
+ * cppCode, and dependencies.
+ *
+ * @throws {LibraryManifestError} if required fields are missing or invalid
+ */
+export function loadStlibArchive(json: unknown): StlibArchive {
+  if (json === null || json === undefined || typeof json !== "object") {
+    throw new LibraryManifestError(
+      "Invalid stlib archive: expected a JSON object",
+    );
+  }
+
+  const obj = json as Record<string, unknown>;
+
+  // Validate formatVersion
+  if (obj.formatVersion !== 1) {
+    throw new LibraryManifestError(
+      "Invalid stlib archive: 'formatVersion' must be 1",
+    );
+  }
+
+  // Validate manifest
+  if (
+    obj.manifest === null ||
+    obj.manifest === undefined ||
+    typeof obj.manifest !== "object"
+  ) {
+    throw new LibraryManifestError(
+      "Invalid stlib archive: 'manifest' must be an object",
+    );
+  }
+  const manifest = loadLibraryManifest(obj.manifest);
+
+  // Validate headerCode
+  if (typeof obj.headerCode !== "string") {
+    throw new LibraryManifestError(
+      "Invalid stlib archive: 'headerCode' must be a string",
+    );
+  }
+
+  // Validate cppCode
+  if (typeof obj.cppCode !== "string") {
+    throw new LibraryManifestError(
+      "Invalid stlib archive: 'cppCode' must be a string",
+    );
+  }
+
+  // Validate dependencies
+  if (!Array.isArray(obj.dependencies)) {
+    throw new LibraryManifestError(
+      "Invalid stlib archive: 'dependencies' must be an array",
+    );
+  }
+
+  const archive: StlibArchive = {
+    formatVersion: 1,
+    manifest,
+    headerCode: obj.headerCode,
+    cppCode: obj.cppCode,
+    dependencies: obj.dependencies as Array<{ name: string; version: string }>,
+  };
+
+  // Optional sources
+  if (Array.isArray(obj.sources)) {
+    archive.sources = obj.sources as Array<{
+      fileName: string;
+      source: string;
+    }>;
+  }
+
+  return archive;
+}
+
+/**
+ * Load a `.stlib` archive from a file on disk.
+ *
+ * @param path - Path to the `.stlib` file
+ * @returns The validated archive
+ * @throws {LibraryManifestError} if the file cannot be read or is invalid
+ */
+export function loadStlibFromFile(path: string): StlibArchive {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf-8");
+  } catch (e) {
+    throw new LibraryManifestError(
+      `Cannot read stlib archive: ${path}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (e) {
+    throw new LibraryManifestError(
+      `Invalid JSON in stlib archive: ${path}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  return loadStlibArchive(json);
+}
+
+/**
+ * Discover and load all `.stlib` archives in a directory (non-recursive).
+ *
+ * @param dirPath - Directory to scan for `.stlib` files
+ * @returns Array of loaded archives
+ * @throws {LibraryManifestError} if any archive fails validation
+ */
+export function discoverStlibs(dirPath: string): StlibArchive[] {
+  const resolvedDir = resolve(dirPath);
+  let entries: string[];
+  try {
+    entries = readdirSync(resolvedDir);
+  } catch (e) {
+    throw new LibraryManifestError(
+      `Cannot read library directory: ${resolvedDir}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+
+  const archives: StlibArchive[] = [];
+  for (const entry of entries) {
+    if (entry.endsWith(".stlib")) {
+      archives.push(loadStlibFromFile(join(resolvedDir, entry)));
+    }
+  }
+  return archives;
 }

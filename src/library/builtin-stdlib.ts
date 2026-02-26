@@ -1,35 +1,37 @@
 /**
  * STruC++ Built-in Standard Library
  *
- * Provides LibraryManifest objects for the built-in IEC 61131-3 standard
- * functions and standard function blocks.
+ * Provides the pre-compiled IEC 61131-3 standard function block library
+ * (as a StlibArchive) and a LibraryManifest for the built-in C++ runtime
+ * standard functions.
  */
 
 import { readFileSync, existsSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 import type { LibraryManifest } from "./library-manifest.js";
+import type { StlibArchive } from "./library-manifest.js";
+import { loadStlibArchive } from "./library-loader.js";
 import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
 
 /**
- * Find the generated manifest file. It lives in src/stdlib/iec-standard-fb/
+ * Find the generated `.stlib` file. It lives in src/stdlib/iec-standard-fb/
  * and is reachable from both src/ (test imports), dist/ (production),
  * and pkg-bundled binaries.
  */
-function findManifestPath(): string {
+function findStlibPath(): string {
+  const target = "iec-standard-fb.stlib";
   const candidates: string[] = [];
 
   // From import.meta.url (ESM / ts-node / vitest)
   try {
     if (typeof import.meta?.url === "string") {
       const metaDir = dirname(fileURLToPath(import.meta.url));
-      // src/library/ → ../stdlib/iec-standard-fb/manifest.json
+      // src/library/ → ../stdlib/iec-standard-fb/
+      candidates.push(resolve(metaDir, "../stdlib/iec-standard-fb", target));
+      // dist/library/ → ../../src/stdlib/iec-standard-fb/
       candidates.push(
-        resolve(metaDir, "../stdlib/iec-standard-fb/manifest.json"),
-      );
-      // dist/library/ → ../../src/stdlib/iec-standard-fb/manifest.json
-      candidates.push(
-        resolve(metaDir, "../../src/stdlib/iec-standard-fb/manifest.json"),
+        resolve(metaDir, "../../src/stdlib/iec-standard-fb", target),
       );
     }
   } catch {
@@ -38,15 +40,11 @@ function findManifestPath(): string {
 
   // From __dirname (CJS bundle via esbuild)
   if (typeof __dirname === "string") {
+    candidates.push(resolve(__dirname, "../stdlib/iec-standard-fb", target));
     candidates.push(
-      resolve(__dirname, "../stdlib/iec-standard-fb/manifest.json"),
+      resolve(__dirname, "../../src/stdlib/iec-standard-fb", target),
     );
-    candidates.push(
-      resolve(__dirname, "../../src/stdlib/iec-standard-fb/manifest.json"),
-    );
-    candidates.push(
-      resolve(__dirname, "src/stdlib/iec-standard-fb/manifest.json"),
-    );
+    candidates.push(resolve(__dirname, "src/stdlib/iec-standard-fb", target));
   }
 
   // Relative to binary (pkg binary in dist/bin/)
@@ -56,79 +54,46 @@ function findManifestPath(): string {
     resolve(execDir, ".."),
     resolve(execDir, "..", ".."),
   ]) {
-    candidates.push(resolve(base, "src/stdlib/iec-standard-fb/manifest.json"));
+    candidates.push(resolve(base, "src/stdlib/iec-standard-fb", target));
   }
 
   // CWD fallback
-  candidates.push(
-    resolve(process.cwd(), "src/stdlib/iec-standard-fb/manifest.json"),
-  );
+  candidates.push(resolve(process.cwd(), "src/stdlib/iec-standard-fb", target));
 
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }
 
   throw new Error(
-    `Standard FB library manifest not found. Run 'npm run build' to generate it.\n` +
+    `Standard FB library archive not found. Run 'npm run build' to generate it.\n` +
       `  Searched:\n${candidates.map((c) => `    ${c}`).join("\n")}`,
   );
 }
 
-/** Cached manifest loaded from the generated JSON file */
-let cachedStdFBManifest: LibraryManifest | undefined;
+/** Cached archive loaded from the generated `.stlib` file */
+let cachedStdFBArchive: StlibArchive | undefined;
 
 /**
- * Load the IEC 61131-3 standard function block library manifest.
+ * Load the IEC 61131-3 standard function block library as a StlibArchive.
  *
- * The manifest is generated at build time from the ST source files in
- * src/stdlib/iec-standard-fb/ by scripts/generate-stdlib-manifest.mjs.
- * This ensures the manifest always matches the actual ST source signatures.
- *
- * Users can reference TON, CTU, R_TRIG, etc. without any import directive.
+ * The archive is generated at build time from the ST source files in
+ * src/stdlib/iec-standard-fb/ by scripts/generate-stdlib.mjs.
+ * It contains the manifest, pre-compiled C++ code, and original ST sources.
  */
-export function getStdFBLibraryManifest(): LibraryManifest {
-  if (cachedStdFBManifest) return cachedStdFBManifest;
+export function getStdFBLibrary(): StlibArchive {
+  if (cachedStdFBArchive) return cachedStdFBArchive;
 
-  const manifestPath = findManifestPath();
-  const json = readFileSync(manifestPath, "utf-8");
-  cachedStdFBManifest = JSON.parse(json) as LibraryManifest;
-  return cachedStdFBManifest;
+  const stlibPath = findStlibPath();
+  const json: unknown = JSON.parse(readFileSync(stlibPath, "utf-8"));
+  cachedStdFBArchive = loadStlibArchive(json);
+  return cachedStdFBArchive;
 }
 
 /**
- * Reset the cached manifest (used by tests after regeneration).
+ * Reset the cached archive (used by tests after regeneration).
  */
-export function resetStdFBManifestCache(): void {
-  cachedStdFBManifest = undefined;
-}
-
-/**
- * Get the ST source files for the standard FB library.
- * Returns an array of { source, fileName } objects.
- */
-export function getStdFBSources(): Array<{ source: string; fileName: string }> {
-  const manifestPath = findManifestPath();
-  const manifestDir = dirname(manifestPath);
-
-  const stFiles = [
-    "edge_detection.st",
-    "bistable.st",
-    "counter.st",
-    "timer.st",
-  ];
-  const sources: Array<{ source: string; fileName: string }> = [];
-
-  for (const file of stFiles) {
-    const filePath = resolve(manifestDir, file);
-    if (existsSync(filePath)) {
-      sources.push({
-        source: readFileSync(filePath, "utf-8"),
-        fileName: file,
-      });
-    }
-  }
-
-  return sources;
+export function resetStdFBCache(): void {
+  cachedStdFBArchive = undefined;
 }
 
 /**
