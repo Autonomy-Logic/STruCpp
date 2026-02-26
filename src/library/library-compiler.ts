@@ -201,9 +201,14 @@ export function compileStlib(
   const headerBody = extractNamespaceBody(libResult.headerCode);
   const cppBody = extractNamespaceBody(libResult.cppCode);
 
+  // Clear manifest.headers — the .stlib archive inlines its C++ code
+  // directly into the consumer's output via addLibraryPreamble(), so
+  // there are no external .hpp files to #include.
+  const manifest = { ...libResult.manifest, headers: [] as string[] };
+
   const archive: StlibCompileResult["archive"] = {
     formatVersion: 1,
-    manifest: libResult.manifest,
+    manifest,
     headerCode: headerBody,
     cppCode: cppBody,
     dependencies: [],

@@ -292,15 +292,6 @@ export function runE2ETestPipeline(
     fs.writeFileSync(path.join(tempDir, 'generated.cpp'), result.cppCode);
     fs.writeFileSync(path.join(tempDir, 'test_main.cpp'), testMainCpp);
 
-    // Write stub headers for library #include directives (the actual code is inlined)
-    if (result.resolvedLibraries) {
-      for (const archive of result.resolvedLibraries) {
-        for (const header of archive.manifest.headers) {
-          fs.writeFileSync(path.join(tempDir, header), '#pragma once\n');
-        }
-      }
-    }
-
     const binaryPath = path.join(tempDir, 'test_runner');
 
     const gppCommand = [

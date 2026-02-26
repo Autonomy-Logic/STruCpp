@@ -11,7 +11,6 @@ import * as path from "path";
 import * as os from "os";
 import { compileStlib } from "../../src/library/library-compiler.js";
 import { compile } from "../../src/index.js";
-import type { CompileResult } from "../../src/types.js";
 import {
   hasGpp,
   createPCH,
@@ -20,25 +19,6 @@ import {
 } from "./test-helpers.js";
 
 const LIBS_DIR = path.resolve(__dirname, "../../libs");
-
-/**
- * Write stub header files for library #include directives.
- *
- * The codegen emits `#include "lib-name.hpp"` for each library's manifest headers,
- * but the actual code is inlined in the generated output. We write empty stubs so g++
- * doesn't fail on the missing includes.
- */
-function writeLibraryHeaderStubs(dir: string, result: CompileResult): void {
-  if (!result.resolvedLibraries) return;
-  for (const archive of result.resolvedLibraries) {
-    for (const header of archive.manifest.headers) {
-      const headerPath = path.join(dir, header);
-      if (!fs.existsSync(headerPath)) {
-        fs.writeFileSync(headerPath, "#pragma once\n");
-      }
-    }
-  }
-}
 
 describe.skipIf(!hasGpp)("Library E2E Pipeline", () => {
   let tempDir: string;
@@ -101,9 +81,7 @@ describe.skipIf(!hasGpp)("Library E2E Pipeline", () => {
     expect(result.headerCode).toBeTruthy();
     expect(result.cppCode).toBeTruthy();
 
-    // 4. Write stub headers for library #include directives, then compile+run
-    writeLibraryHeaderStubs(tempDir, result);
-
+    // 4. Compile+run — no stub headers needed since .stlib inlines C++ code
     const mainCode = `
 #include "generated.hpp"
 #include <iostream>
@@ -275,9 +253,7 @@ END_TEST
     });
     expect(result.success).toBe(true);
 
-    // 5. Write stub headers for library #include directives, then compile+run
-    writeLibraryHeaderStubs(tempDir, result);
-
+    // 5. Compile+run — no stub headers needed since .stlib inlines C++ code
     const mainCode = `
 #include "generated.hpp"
 #include <iostream>
