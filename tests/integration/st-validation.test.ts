@@ -32,17 +32,21 @@ function findTestFiles(dir: string): string[] {
   return results;
 }
 
+/** Path to the bundled libs directory containing .stlib files */
+const LIBS_DIR = path.resolve(__dirname, "../../libs");
+
 /**
  * Load standard FB ST sources for tests that need them.
+ * Extracts sources from the pre-compiled .stlib archive.
  * Returns additionalSources array for the compile() options.
  */
 function loadStdFBSources(): Array<{ source: string; fileName: string }> {
-  const stDir = path.resolve(__dirname, "../../src/stdlib/iec-standard-fb");
-  const fbFiles = ["edge_detection.st", "bistable.st", "counter.st", "timer.st"];
-  return fbFiles.map((fileName) => ({
-    source: fs.readFileSync(path.join(stDir, fileName), "utf-8"),
-    fileName,
-  }));
+  const stlibPath = path.resolve(LIBS_DIR, "iec-standard-fb.stlib");
+  const archive = JSON.parse(fs.readFileSync(stlibPath, "utf-8"));
+  if (!archive.sources || archive.sources.length === 0) {
+    throw new Error("Stdlib .stlib has no embedded sources");
+  }
+  return archive.sources;
 }
 
 /**
@@ -59,8 +63,10 @@ function runValidation(
   // Standard FB tests need the standard FB library compiled as additional sources
   const compileOptions: Record<string, unknown> = {};
   if (category === "standard_fbs") {
-    compileOptions.noStdFBLibrary = true;
     compileOptions.additionalSources = loadStdFBSources();
+  } else {
+    // Non-stdlib tests may still use standard FBs via the library path
+    compileOptions.libraryPaths = [LIBS_DIR];
   }
 
   return runE2ETestPipeline({

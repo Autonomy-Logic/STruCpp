@@ -32,7 +32,7 @@ import type {
   Expression,
 } from "../frontend/ast.js";
 import { TestCodeGenerator } from "./test-codegen.js";
-import { getStdFBLibrary } from "../library/builtin-stdlib.js";
+import type { StlibArchive } from "../library/library-manifest.js";
 
 /**
  * Information about a POU (Program Organization Unit) from compilation.
@@ -68,6 +68,8 @@ export interface TestMainGenOptions {
   isTestBuild?: boolean;
   /** Source AST — primary way to pass type and function info (preferred over `functions`) */
   ast?: CompilationUnit;
+  /** Resolved library archives (stdlib + user) — used to register FB types */
+  libraryArchives?: StlibArchive[];
   /**
    * Known functions for mock dispatch generation.
    * @deprecated Use `ast` instead for correct type resolution.
@@ -149,17 +151,14 @@ export function generateTestMain(
     testCodegen.initFromAST(options.ast);
   }
 
-  // Register standard FB library types (TON, CTU, R_TRIG, etc.) so they
+  // Register library FB types (TON, CTU, R_TRIG, etc.) so they
   // are recognized as user-defined types, not given the IEC_ prefix
-  try {
-    const stdFBArchive = getStdFBLibrary();
-    testCodegen.registerLibraryFBTypes(
-      stdFBArchive.manifest.functionBlocks.map(
-        (fb: { name: string }) => fb.name,
-      ),
-    );
-  } catch {
-    // Standard FB manifest may not exist in minimal test setups
+  if (options.libraryArchives) {
+    for (const archive of options.libraryArchives) {
+      testCodegen.registerLibraryFBTypes(
+        archive.manifest.functionBlocks.map((fb: { name: string }) => fb.name),
+      );
+    }
   }
 
   // Includes

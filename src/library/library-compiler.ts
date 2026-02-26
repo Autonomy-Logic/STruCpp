@@ -8,6 +8,7 @@
 import type {
   LibraryCompileResult,
   StlibCompileResult,
+  StlibArchive,
 } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { extractNamespaceBody } from "./library-utils.js";
@@ -21,7 +22,13 @@ import { extractNamespaceBody } from "./library-utils.js";
  */
 export function compileLibrary(
   sources: Array<{ source: string; fileName: string }>,
-  options: { name: string; version: string; namespace: string },
+  options: {
+    name: string;
+    version: string;
+    namespace: string;
+    /** Library archives this library depends on */
+    dependencies?: StlibArchive[];
+  },
 ): LibraryCompileResult {
   if (sources.length === 0) {
     return {
@@ -46,12 +53,13 @@ export function compileLibrary(
   const primarySource = sources[0]!;
   const additionalSources = sources.slice(1);
 
-  const result = compile(primarySource.source, {
+  const compileOpts: Partial<import("../types.js").CompileOptions> = {
     additionalSources,
-    // Disable auto-loading of standard FB library when compiling a library,
-    // since the library itself may be defining those same FBs.
-    noStdFBLibrary: true,
-  });
+  };
+  if (options.dependencies) {
+    compileOpts.libraries = options.dependencies;
+  }
+  const result = compile(primarySource.source, compileOpts);
 
   if (!result.success) {
     return {
@@ -170,6 +178,8 @@ export function compileStlib(
     version: string;
     namespace: string;
     noSource?: boolean;
+    /** Library archives this library depends on */
+    dependencies?: StlibArchive[];
   },
 ): StlibCompileResult {
   const libResult = compileLibrary(sources, options);

@@ -20,7 +20,6 @@ import {
   LibraryManifestError,
 } from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
-import { getStdFBLibrary } from "./library/builtin-stdlib.js";
 
 /**
  * Default compilation options
@@ -208,23 +207,21 @@ export function compile(
   }
 
   // Phase 3.5: Library loading & Semantic analysis
-  // Collect all library archives (stdlib + user libraries from paths + explicit)
+  // Collect all library archives: explicit archives + discovered from paths
   const allArchives: StlibArchive[] = [...(mergedOptions.libraries ?? [])];
-  if (mergedOptions.libraryPaths) {
-    for (const libPath of mergedOptions.libraryPaths) {
-      try {
-        allArchives.push(...discoverStlibs(libPath));
-      } catch (e) {
-        errors.push({
-          message:
-            e instanceof LibraryManifestError
-              ? e.message
-              : `Library loading failed: ${e instanceof Error ? e.message : String(e)}`,
-          line: 0,
-          column: 0,
-          severity: "error",
-        });
-      }
+  for (const libPath of mergedOptions.libraryPaths ?? []) {
+    try {
+      allArchives.push(...discoverStlibs(libPath));
+    } catch (e) {
+      errors.push({
+        message:
+          e instanceof LibraryManifestError
+            ? e.message
+            : `Library loading failed: ${e instanceof Error ? e.message : String(e)}`,
+        line: 0,
+        column: 0,
+        severity: "error",
+      });
     }
   }
 
@@ -240,19 +237,10 @@ export function compile(
     };
   }
 
-  // Load stdlib archive (pre-compiled .stlib with C++ code)
-  let stdFBArchive: StlibArchive | undefined;
-  if (!mergedOptions.noStdFBLibrary) {
-    stdFBArchive = getStdFBLibrary();
-  }
-
-  // Pre-populate symbol tables with built-in standard FB library and any user libraries
+  // Single registration loop for all libraries (stdlib + user)
   let semanticSymbolTables: SymbolTables | undefined;
-  if (allArchives.length > 0 || stdFBArchive) {
+  if (allArchives.length > 0) {
     semanticSymbolTables = new SymbolTables();
-    if (stdFBArchive) {
-      registerLibrarySymbols(stdFBArchive.manifest, semanticSymbolTables);
-    }
     for (const archive of allArchives) {
       registerLibrarySymbols(archive.manifest, semanticSymbolTables);
     }
@@ -334,19 +322,7 @@ export function compile(
   });
   codegen.setProjectModel(projectModelResult.model);
 
-  // Register library FB type names and inject pre-compiled C++ code
-  if (stdFBArchive) {
-    codegen.registerLibraryFBTypes(
-      stdFBArchive.manifest.functionBlocks.map((fb) => fb.name),
-    );
-    if (stdFBArchive.headerCode) {
-      codegen.addLibraryPreamble(
-        stdFBArchive.manifest.name,
-        stdFBArchive.headerCode,
-        stdFBArchive.cppCode,
-      );
-    }
-  }
+  // Single codegen injection loop for all libraries (stdlib + user)
   for (const archive of allArchives) {
     codegen.registerLibraryFBTypes(
       archive.manifest.functionBlocks.map((fb) => fb.name),
@@ -387,6 +363,7 @@ export function compile(
     ast,
     projectModel: projectModelResult.model,
     symbolTables: semanticResult.symbolTables,
+    ...(allArchives.length > 0 ? { resolvedLibraries: allArchives } : {}),
   };
 }
 
@@ -466,10 +443,7 @@ export {
   registerLibrarySymbols,
   LibraryManifestError,
 } from "./library/library-loader.js";
-export {
-  getBuiltinStdlibManifest,
-  getStdFBLibrary,
-} from "./library/builtin-stdlib.js";
+export { getBuiltinStdlibManifest } from "./library/builtin-stdlib.js";
 export { extractNamespaceBody } from "./library/library-utils.js";
 export type {
   LibraryManifest,

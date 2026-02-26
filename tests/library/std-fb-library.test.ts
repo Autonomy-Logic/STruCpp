@@ -3,27 +3,39 @@
  *
  * Tests for Phase 5.3: Standard FB Library.
  * Covers compilation of ST source files, pre-compiled .stlib archive,
- * auto-loading into symbol tables, and integration with user programs.
+ * loading into symbol tables, and integration with user programs.
  */
 
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "fs";
 import { resolve } from "path";
 import { compileLibrary } from "../../src/library/library-compiler.js";
 import { registerLibrarySymbols } from "../../src/library/library-loader.js";
-import { getStdFBLibrary } from "../../src/library/builtin-stdlib.js";
+import { loadStlibFromFile } from "../../src/library/library-loader.js";
 import { SymbolTables } from "../../src/semantic/symbol-table.js";
 import { compile } from "../../src/index.js";
 
-// Read all ST source files for standard FBs
-const stDir = resolve(__dirname, "../../src/stdlib/iec-standard-fb");
-const edgeDetST = readFileSync(resolve(stDir, "edge_detection.st"), "utf-8");
-const bistableST = readFileSync(resolve(stDir, "bistable.st"), "utf-8");
-const counterST = readFileSync(resolve(stDir, "counter.st"), "utf-8");
-const timerST = readFileSync(resolve(stDir, "timer.st"), "utf-8");
+// Path to the bundled .stlib archive
+const LIBS_DIR = resolve(__dirname, "../../libs");
+const STLIB_PATH = resolve(LIBS_DIR, "iec-standard-fb.stlib");
+
+// Load the .stlib archive and extract ST sources from it
+const stlibArchive = loadStlibFromFile(STLIB_PATH);
+const archiveSources = stlibArchive.sources!;
+
+// Extract individual source files by name
+function getSource(fileName: string): string {
+  const entry = archiveSources.find((s) => s.fileName === fileName);
+  if (!entry) throw new Error(`Source ${fileName} not found in archive`);
+  return entry.source;
+}
+
+const edgeDetST = getSource("edge_detection.st");
+const bistableST = getSource("bistable.st");
+const counterST = getSource("counter.st");
+const timerST = getSource("timer.st");
 
 describe("Standard FB Library", () => {
-  // ─── Library Compilation Tests ─────────────────────────────────────
+  // --- Library Compilation Tests ---
 
   describe("library compilation", () => {
     it("should compile edge detection FBs (R_TRIG, F_TRIG)", () => {
@@ -155,7 +167,7 @@ describe("Standard FB Library", () => {
     });
   });
 
-  // ─── Manifest IO Signature Tests ───────────────────────────────────
+  // --- Manifest IO Signature Tests ---
 
   describe("compiled manifest IO signatures", () => {
     // Compile all FBs once for IO signature checks
@@ -336,44 +348,38 @@ describe("Standard FB Library", () => {
     });
   });
 
-  // ─── Pre-compiled .stlib Archive Tests ─────────────────────────────
+  // --- Pre-compiled .stlib Archive Tests ---
 
-  describe("getStdFBLibrary()", () => {
+  describe("pre-compiled .stlib archive", () => {
     it("should return a valid StlibArchive", () => {
-      const archive = getStdFBLibrary();
-      expect(archive.formatVersion).toBe(1);
-      expect(archive.manifest.name).toBe("iec-standard-fb");
-      expect(archive.manifest.version).toBe("1.0.0");
-      expect(archive.manifest.namespace).toBe("strucpp");
+      expect(stlibArchive.formatVersion).toBe(1);
+      expect(stlibArchive.manifest.name).toBe("iec-standard-fb");
+      expect(stlibArchive.manifest.version).toBe("1.0.0");
+      expect(stlibArchive.manifest.namespace).toBe("strucpp");
     });
 
     it("should have isBuiltin=true on the manifest", () => {
-      const archive = getStdFBLibrary();
-      expect(archive.manifest.isBuiltin).toBe(true);
+      expect(stlibArchive.manifest.isBuiltin).toBe(true);
     });
 
     it("should contain all 22 standard FBs", () => {
-      const archive = getStdFBLibrary();
-      expect(archive.manifest.functionBlocks).toHaveLength(22);
+      expect(stlibArchive.manifest.functionBlocks).toHaveLength(22);
     });
 
     it("should have non-empty headerCode and cppCode", () => {
-      const archive = getStdFBLibrary();
-      expect(archive.headerCode).toBeTruthy();
-      expect(archive.cppCode).toBeTruthy();
+      expect(stlibArchive.headerCode).toBeTruthy();
+      expect(stlibArchive.cppCode).toBeTruthy();
     });
 
     it("should have no functions (only FBs)", () => {
-      const archive = getStdFBLibrary();
-      expect(archive.manifest.functions).toHaveLength(0);
+      expect(stlibArchive.manifest.functions).toHaveLength(0);
     });
 
     it("should have correct edge detection FB entries", () => {
-      const archive = getStdFBLibrary();
-      const rTrig = archive.manifest.functionBlocks.find(
+      const rTrig = stlibArchive.manifest.functionBlocks.find(
         (fb) => fb.name === "R_TRIG",
       );
-      const fTrig = archive.manifest.functionBlocks.find(
+      const fTrig = stlibArchive.manifest.functionBlocks.find(
         (fb) => fb.name === "F_TRIG",
       );
       expect(rTrig).toBeDefined();
@@ -386,9 +392,8 @@ describe("Standard FB Library", () => {
     });
 
     it("should have correct bistable FB entries", () => {
-      const archive = getStdFBLibrary();
-      const sr = archive.manifest.functionBlocks.find((fb) => fb.name === "SR");
-      const rs = archive.manifest.functionBlocks.find((fb) => fb.name === "RS");
+      const sr = stlibArchive.manifest.functionBlocks.find((fb) => fb.name === "SR");
+      const rs = stlibArchive.manifest.functionBlocks.find((fb) => fb.name === "RS");
       expect(sr).toBeDefined();
       expect(sr!.inputs).toEqual([
         { name: "S1", type: "BOOL" },
@@ -404,8 +409,7 @@ describe("Standard FB Library", () => {
     });
 
     it("should have correct counter FB entries", () => {
-      const archive = getStdFBLibrary();
-      const ctu = archive.manifest.functionBlocks.find((fb) => fb.name === "CTU");
+      const ctu = stlibArchive.manifest.functionBlocks.find((fb) => fb.name === "CTU");
       expect(ctu).toBeDefined();
       expect(ctu!.inputs).toEqual([
         { name: "CU", type: "BOOL" },
@@ -417,30 +421,29 @@ describe("Standard FB Library", () => {
         { name: "CV", type: "INT" },
       ]);
 
-      const ctud = archive.manifest.functionBlocks.find((fb) => fb.name === "CTUD");
+      const ctud = stlibArchive.manifest.functionBlocks.find((fb) => fb.name === "CTUD");
       expect(ctud).toBeDefined();
       expect(ctud!.inputs).toHaveLength(5);
       expect(ctud!.outputs).toHaveLength(3);
     });
 
     it("should have correct counter variant types", () => {
-      const archive = getStdFBLibrary();
       for (const suffix of ["DINT", "LINT", "UDINT", "ULINT"]) {
-        const ctu = archive.manifest.functionBlocks.find(
+        const ctu = stlibArchive.manifest.functionBlocks.find(
           (fb) => fb.name === `CTU_${suffix}`,
         );
         expect(ctu).toBeDefined();
         expect(ctu!.inputs.find((i) => i.name === "PV")!.type).toBe(suffix);
         expect(ctu!.outputs.find((o) => o.name === "CV")!.type).toBe(suffix);
 
-        const ctd = archive.manifest.functionBlocks.find(
+        const ctd = stlibArchive.manifest.functionBlocks.find(
           (fb) => fb.name === `CTD_${suffix}`,
         );
         expect(ctd).toBeDefined();
         expect(ctd!.inputs.find((i) => i.name === "PV")!.type).toBe(suffix);
         expect(ctd!.outputs.find((o) => o.name === "CV")!.type).toBe(suffix);
 
-        const ctud = archive.manifest.functionBlocks.find(
+        const ctud = stlibArchive.manifest.functionBlocks.find(
           (fb) => fb.name === `CTUD_${suffix}`,
         );
         expect(ctud).toBeDefined();
@@ -450,9 +453,8 @@ describe("Standard FB Library", () => {
     });
 
     it("should have correct timer FB entries", () => {
-      const archive = getStdFBLibrary();
       for (const name of ["TON", "TOF", "TP"]) {
-        const timer = archive.manifest.functionBlocks.find((fb) => fb.name === name);
+        const timer = stlibArchive.manifest.functionBlocks.find((fb) => fb.name === name);
         expect(timer).toBeDefined();
         expect(timer!.inputs).toEqual([
           { name: "IN", type: "BOOL" },
@@ -467,13 +469,12 @@ describe("Standard FB Library", () => {
     });
   });
 
-  // ─── Auto-Loading Tests ────────────────────────────────────────────
+  // --- Symbol Registration Tests ---
 
-  describe("auto-loading into symbol tables", () => {
+  describe("symbol table registration", () => {
     it("should register all standard FBs in SymbolTables via archive manifest", () => {
       const symbolTables = new SymbolTables();
-      const archive = getStdFBLibrary();
-      registerLibrarySymbols(archive.manifest, symbolTables);
+      registerLibrarySymbols(stlibArchive.manifest, symbolTables);
 
       // Verify key FBs are resolvable
       expect(symbolTables.lookupFunctionBlock("R_TRIG")).toBeDefined();
@@ -490,7 +491,7 @@ describe("Standard FB Library", () => {
 
     it("should register counter type variants", () => {
       const symbolTables = new SymbolTables();
-      registerLibrarySymbols(getStdFBLibrary().manifest, symbolTables);
+      registerLibrarySymbols(stlibArchive.manifest, symbolTables);
 
       for (const suffix of ["DINT", "LINT", "UDINT", "ULINT"]) {
         expect(
@@ -507,7 +508,7 @@ describe("Standard FB Library", () => {
 
     it("should have correct IO on registered FB symbols", () => {
       const symbolTables = new SymbolTables();
-      registerLibrarySymbols(getStdFBLibrary().manifest, symbolTables);
+      registerLibrarySymbols(stlibArchive.manifest, symbolTables);
 
       const ton = symbolTables.lookupFunctionBlock("TON");
       expect(ton).toBeDefined();
@@ -519,38 +520,18 @@ describe("Standard FB Library", () => {
       expect(ton!.outputs[1]!.name).toBe("ET");
     });
 
-    it("should auto-load standard FBs when compiling a program (no explicit library)", () => {
-      const source = `
-        PROGRAM Main
-          VAR
-            timer1 : TON;
-            rising : R_TRIG;
-            counter1 : CTU;
-          END_VAR
-          rising(CLK := TRUE);
-          timer1(IN := TRUE, PT := T#1s);
-          counter1(CU := TRUE, R := FALSE, PV := 10);
-        END_PROGRAM
-      `;
-      const result = compile(source);
-
-      expect(result.success).toBe(true);
-      expect(result.errors).toHaveLength(0);
-    });
-
-    it("should not register standard FBs in symbol tables when noStdFBLibrary is true", () => {
+    it("should not have standard FBs in empty symbol tables", () => {
       const symbolTables = new SymbolTables();
-      // Do NOT register the manifest - simulating noStdFBLibrary: true
       expect(symbolTables.lookupFunctionBlock("TON")).toBeUndefined();
       expect(symbolTables.lookupFunctionBlock("R_TRIG")).toBeUndefined();
       expect(symbolTables.lookupFunctionBlock("CTU")).toBeUndefined();
     });
   });
 
-  // ─── Integration Tests ─────────────────────────────────────────────
+  // --- Integration Tests ---
 
   describe("integration: user programs referencing standard FBs", () => {
-    it("should compile a program using R_TRIG", () => {
+    it("should compile a program using R_TRIG with explicit library path", () => {
       const source = `
         PROGRAM Main
           VAR
@@ -562,7 +543,7 @@ describe("Standard FB Library", () => {
           edgeDetected := rising.Q;
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -581,7 +562,7 @@ describe("Standard FB Library", () => {
           timerDone := delayTimer.Q;
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -601,7 +582,7 @@ describe("Standard FB Library", () => {
           batchComplete := partCounter.Q;
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -630,7 +611,7 @@ describe("Standard FB Library", () => {
           latch(S1 := rising.Q, R := falling.Q);
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -648,7 +629,7 @@ describe("Standard FB Library", () => {
           done := bigCounter.Q;
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -656,9 +637,8 @@ describe("Standard FB Library", () => {
 
     it("should use pre-compiled stdlib (no runtime recompilation)", () => {
       // Verify that the stdlib archive has pre-compiled C++ code
-      const archive = getStdFBLibrary();
-      expect(archive.headerCode.length).toBeGreaterThan(100);
-      expect(archive.cppCode.length).toBeGreaterThan(100);
+      expect(stlibArchive.headerCode.length).toBeGreaterThan(100);
+      expect(stlibArchive.cppCode.length).toBeGreaterThan(100);
 
       // Compile a simple program that uses stdlib FBs
       const source = `
@@ -667,16 +647,58 @@ describe("Standard FB Library", () => {
           timer1(IN := TRUE, PT := T#1s);
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
       expect(result.success).toBe(true);
 
       // Verify the stdlib C++ code is injected in the output
       expect(result.headerCode).toContain("Library: iec-standard-fb");
       expect(result.cppCode).toContain("Library: iec-standard-fb");
     });
+
+    it("should return resolvedLibraries in CompileResult", () => {
+      const source = `
+        PROGRAM Main
+          VAR timer1 : TON; END_VAR
+          timer1(IN := TRUE, PT := T#1s);
+        END_PROGRAM
+      `;
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      expect(result.success).toBe(true);
+      expect(result.resolvedLibraries).toBeDefined();
+      expect(result.resolvedLibraries!.length).toBeGreaterThan(0);
+      expect(
+        result.resolvedLibraries!.some(
+          (a) => a.manifest.name === "iec-standard-fb",
+        ),
+      ).toBe(true);
+    });
+
+    it("should not include resolvedLibraries when no libraries are provided", () => {
+      const source = `
+        PROGRAM Main
+          VAR x : INT; END_VAR
+          x := 42;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.resolvedLibraries).toBeUndefined();
+    });
+
+    it("should fail to compile program using stdlib FBs without library path", () => {
+      const source = `
+        PROGRAM Main
+          VAR timer1 : TON; END_VAR
+          timer1(IN := TRUE, PT := T#1s);
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+    });
   });
 
-  // ─── Archive Cross-Validation ──────────────────────────────────────
+  // --- Archive Cross-Validation ---
 
   describe("archive cross-validation against ST sources", () => {
     it("should match compiled library output for all standard FBs", () => {
@@ -696,17 +718,14 @@ describe("Standard FB Library", () => {
       );
       expect(compiledResult.success).toBe(true);
 
-      // Get the pre-compiled archive
-      const archive = getStdFBLibrary();
-
       // Compare FB count
-      expect(archive.manifest.functionBlocks).toHaveLength(
+      expect(stlibArchive.manifest.functionBlocks).toHaveLength(
         compiledResult.manifest.functionBlocks.length,
       );
 
       // Compare each FB's signature
       for (const compiledFB of compiledResult.manifest.functionBlocks) {
-        const loadedFB = archive.manifest.functionBlocks.find(
+        const loadedFB = stlibArchive.manifest.functionBlocks.find(
           (fb) => fb.name === compiledFB.name,
         );
         expect(

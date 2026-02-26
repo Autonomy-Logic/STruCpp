@@ -2,49 +2,70 @@
 /**
  * Generate the standard FB library `.stlib` archive from ST source files.
  *
- * This script compiles the IEC standard FB .st files using the STruC++
- * library compiler and writes the resulting `.stlib` archive (manifest +
- * compiled C++ code). This ensures the archive always matches the actual
- * ST source signatures and eliminates runtime recompilation.
+ * Uses the STruC++ `compileStlib()` API to produce the archive. Sources are
+ * read from the existing `.stlib` archive (its embedded `sources` field), so
+ * this script works even after the standalone `.st` files have been removed.
+ *
+ * If the archive does not yet exist (bootstrap), pass .st file paths as args:
+ *   node scripts/generate-stdlib.mjs edge_detection.st bistable.st counter.st timer.st
  *
  * Run: node scripts/generate-stdlib.mjs
- * Called automatically by: npm run build
+ * Called by: npm run build:stdlib
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
-import { resolve, dirname } from "path";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { resolve, dirname, basename } from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, "..");
 
-// Import the compiled library compiler and utilities from dist/
-const { compileLibrary } = await import(
+// Import the compiled library compiler from dist/
+const { compileStlib } = await import(
   resolve(projectRoot, "dist/library/library-compiler.js")
 );
-const { extractNamespaceBody } = await import(
-  resolve(projectRoot, "dist/library/library-utils.js")
-);
 
-const stDir = resolve(projectRoot, "src/stdlib/iec-standard-fb");
+const libsDir = resolve(projectRoot, "libs");
+const outPath = resolve(libsDir, "iec-standard-fb.stlib");
 
-const sourceFiles = [
-  "edge_detection.st",
-  "bistable.st",
-  "counter.st",
-  "timer.st",
-];
+// Determine sources: from existing archive, or from CLI args / default files
+let sources;
+const cliFiles = process.argv.slice(2);
 
-const sources = sourceFiles.map((file) => ({
-  source: readFileSync(resolve(stDir, file), "utf-8"),
-  fileName: file,
-}));
+if (cliFiles.length > 0) {
+  // Bootstrap mode: read .st files from provided paths
+  sources = cliFiles.map((file) => {
+    const filePath = resolve(file);
+    return {
+      source: readFileSync(filePath, "utf-8"),
+      fileName: basename(filePath),
+    };
+  });
+} else if (existsSync(outPath)) {
+  // Normal mode: read sources from the existing archive
+  const existingArchive = JSON.parse(readFileSync(outPath, "utf-8"));
+  if (!existingArchive.sources || existingArchive.sources.length === 0) {
+    console.error(
+      "Error: Existing .stlib archive has no embedded sources. " +
+      "Provide .st files as arguments to bootstrap."
+    );
+    process.exit(1);
+  }
+  sources = existingArchive.sources;
+} else {
+  console.error(
+    "Error: No existing .stlib archive found and no .st files provided.\n" +
+    "Usage: node scripts/generate-stdlib.mjs [edge_detection.st bistable.st counter.st timer.st]"
+  );
+  process.exit(1);
+}
 
-const result = compileLibrary(sources, {
+const result = compileStlib(sources, {
   name: "iec-standard-fb",
   version: "1.0.0",
   namespace: "strucpp",
+  noSource: false,
 });
 
 if (!result.success) {
@@ -55,35 +76,15 @@ if (!result.success) {
   process.exit(1);
 }
 
-// Build the StlibArchive JSON
-const archive = {
-  formatVersion: 1,
-  manifest: {
-    name: result.manifest.name,
-    version: result.manifest.version,
-    description: "IEC 61131-3 Standard Function Blocks (auto-generated from ST sources)",
-    namespace: result.manifest.namespace,
-    functions: result.manifest.functions,
-    functionBlocks: result.manifest.functionBlocks,
-    types: result.manifest.types,
-    headers: [],
-    isBuiltin: true,
-  },
-  headerCode: extractNamespaceBody(result.headerCode),
-  cppCode: extractNamespaceBody(result.cppCode),
-  sources: sources.map((s) => ({ fileName: s.fileName, source: s.source })),
-  dependencies: [],
-};
+// Override manifest flags for the stdlib
+result.archive.manifest.isBuiltin = true;
+result.archive.manifest.description =
+  "IEC 61131-3 Standard Function Blocks (auto-generated from ST sources)";
 
-// Write to src/stdlib/ so it's accessible both from src/ imports (tests)
-// and from dist/ after tsc copies it.
-const outDir = resolve(projectRoot, "src/stdlib/iec-standard-fb");
-mkdirSync(outDir, { recursive: true });
-
-const outPath = resolve(outDir, "iec-standard-fb.stlib");
-writeFileSync(outPath, JSON.stringify(archive, null, 2) + "\n", "utf-8");
+mkdirSync(libsDir, { recursive: true });
+writeFileSync(outPath, JSON.stringify(result.archive, null, 2) + "\n", "utf-8");
 
 console.log(
-  `Generated ${outPath} (${archive.manifest.functionBlocks.length} function blocks, ` +
-  `${Math.round(Buffer.byteLength(JSON.stringify(archive)) / 1024)}KB)`,
+  `Generated ${outPath} (${result.archive.manifest.functionBlocks.length} function blocks, ` +
+  `${Math.round(Buffer.byteLength(JSON.stringify(result.archive)) / 1024)}KB)`,
 );

@@ -28,6 +28,7 @@ import { execSync } from "child_process";
 import type { CompilationUnit } from "../../src/frontend/ast.js";
 
 const OSCAT_LIB_DIR = path.resolve(__dirname, "../st-validation/oscat/lib");
+const LIBS_DIR = path.resolve(__dirname, "../../libs");
 
 const oscatLibAvailable = (() => {
   try {
@@ -111,7 +112,7 @@ describe.skipIf(!hasGpp || !oscatLibAvailable)(
           headerFileName: "oscat_all.hpp",
           fileName: stFiles[0],
           additionalSources,
-          noStdFBLibrary: false,
+          libraryPaths: [LIBS_DIR],
           globalConstants: { STRING_LENGTH: 254, LIST_LENGTH: 254 },
         });
 

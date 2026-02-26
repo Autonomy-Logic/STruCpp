@@ -455,4 +455,86 @@ describe("CLI Library Features", () => {
       expect(names).toContain("LIBSUB");
     });
   });
+
+  describe("--decompile-lib", () => {
+    it("should extract ST sources from a .stlib archive", () => {
+      const workDir = freshDir("decompile-basic");
+      const stFile = join(workDir, "math.st");
+      writeFileSync(
+        stFile,
+        `
+        FUNCTION MathAdd : INT
+          VAR_INPUT a : INT; b : INT; END_VAR
+          MathAdd := a + b;
+        END_FUNCTION
+      `,
+      );
+
+      // First compile into a .stlib
+      const libDir = join(workDir, "lib");
+      runCLI([
+        "--compile-lib",
+        stFile,
+        "-o",
+        libDir,
+        "--lib-name",
+        "math-lib",
+      ]);
+
+      const stlibPath = join(libDir, "math-lib.stlib");
+      expect(existsSync(stlibPath)).toBe(true);
+
+      // Then decompile
+      const outDir = join(workDir, "extracted");
+      const stdout = runCLI(["--decompile-lib", stlibPath, "-o", outDir]);
+
+      expect(stdout).toContain("Extracted 1 file(s)");
+      expect(stdout).toContain("math-lib");
+      expect(existsSync(join(outDir, "math.st"))).toBe(true);
+
+      // Verify extracted content matches original
+      const extracted = readFileSync(join(outDir, "math.st"), "utf-8");
+      const original = readFileSync(stFile, "utf-8");
+      expect(extracted).toBe(original);
+    });
+
+    it("should fail for archive compiled with --no-source", () => {
+      const workDir = freshDir("decompile-nosource");
+      const stFile = join(workDir, "func.st");
+      writeFileSync(
+        stFile,
+        `
+        FUNCTION F : INT
+          VAR_INPUT x : INT; END_VAR
+          F := x;
+        END_FUNCTION
+      `,
+      );
+
+      const libDir = join(workDir, "lib");
+      runCLI([
+        "--compile-lib",
+        stFile,
+        "-o",
+        libDir,
+        "--lib-name",
+        "nosrc-lib",
+        "--no-source",
+      ]);
+
+      const stderr = runCLIFail([
+        "--decompile-lib",
+        join(libDir, "nosrc-lib.stlib"),
+      ]);
+      expect(stderr).toContain("no embedded sources");
+    });
+
+    it("should fail for nonexistent .stlib file", () => {
+      const stderr = runCLIFail([
+        "--decompile-lib",
+        "/nonexistent/path.stlib",
+      ]);
+      expect(stderr).toContain("Cannot read stlib archive");
+    });
+  });
 });

@@ -606,6 +606,50 @@ describe("Library System", () => {
     });
   });
 
+  describe("compileStlib with dependencies", () => {
+    it("should compile a library that depends on another library", () => {
+      // Compile a base library with a helper FB
+      const baseResult = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION_BLOCK HelperFB
+                VAR_INPUT x : BOOL; END_VAR
+                VAR_OUTPUT q : BOOL; END_VAR
+                q := x;
+              END_FUNCTION_BLOCK
+            `,
+            fileName: "helper.st",
+          },
+        ],
+        { name: "base-lib", version: "1.0.0", namespace: "base" },
+      );
+      expect(baseResult.success).toBe(true);
+
+      // Compile a dependent library that uses the base library's FB
+      const depResult = compileStlib(
+        [
+          {
+            source: `
+              PROGRAM Main
+                VAR h : HelperFB; END_VAR
+                h(x := TRUE);
+              END_PROGRAM
+            `,
+            fileName: "user.st",
+          },
+        ],
+        {
+          name: "dep-lib",
+          version: "1.0.0",
+          namespace: "dep",
+          dependencies: [baseResult.archive],
+        },
+      );
+      expect(depResult.success).toBe(true);
+    });
+  });
+
   describe("builtin stdlib", () => {
     it("should generate a manifest for the built-in stdlib", () => {
       const manifest = getBuiltinStdlibManifest();

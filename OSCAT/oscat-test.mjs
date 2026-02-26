@@ -48,7 +48,11 @@ for (const file of files) {
 
   let result;
   try {
-    result = compile(source, { debug: false, lineMapping: false, noStdFBLibrary: false });
+    result = compile(source, {
+      debug: false,
+      lineMapping: false,
+      libraryPaths: [resolve(import.meta.dirname, '../libs')],
+    });
   } catch (e) {
     failedFiles.push({ name, cause: 'UNKNOWN', error: e.message });
     continue;
