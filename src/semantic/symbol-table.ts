@@ -253,6 +253,9 @@ export class SymbolTables {
   /** Map of program names to their local scopes */
   private programScopes: Map<string, Scope> = new Map();
 
+  /** Map of "FBNAME.METHODNAME" to their local scopes (parent = FB scope) */
+  private methodScopes: Map<string, Scope> = new Map();
+
   constructor() {
     this.globalScope = new Scope("global");
     this.initializeBuiltinTypes();
@@ -344,6 +347,28 @@ export class SymbolTables {
    */
   getProgramScope(name: string): Scope | undefined {
     return this.programScopes.get(name.toUpperCase());
+  }
+
+  /**
+   * Create a new scope for a method within a function block.
+   * The method scope's parent is the FB scope, giving the lookup chain:
+   * method locals → FB members → globals.
+   */
+  createMethodScope(fbName: string, methodName: string): Scope {
+    const fbScope = this.getFBScope(fbName);
+    const parent = fbScope ?? this.globalScope;
+    const key = `${fbName.toUpperCase()}.${methodName.toUpperCase()}`;
+    const scope = new Scope(`${fbName}.${methodName}`, parent);
+    this.methodScopes.set(key, scope);
+    return scope;
+  }
+
+  /**
+   * Get the scope for a method within a function block.
+   */
+  getMethodScope(fbName: string, methodName: string): Scope | undefined {
+    const key = `${fbName.toUpperCase()}.${methodName.toUpperCase()}`;
+    return this.methodScopes.get(key);
   }
 
   /**

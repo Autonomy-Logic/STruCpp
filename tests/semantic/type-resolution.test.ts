@@ -315,4 +315,84 @@ describe("Type Resolution", () => {
       expect(resolvedName(call.arguments[1]!.value)).toBe("INT");
     });
   });
+
+  describe("Method scope type resolution", () => {
+    it("should resolve method-local variable type", () => {
+      const { ast } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          VAR counter : INT; END_VAR
+          METHOD Run : BOOL
+            VAR temp : REAL; END_VAR
+            temp := 3.14;
+            Run := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      const fb = ast.functionBlocks[0]!;
+      const method = fb.methods[0]!;
+      // temp := 3.14 — target should resolve to REAL
+      const assign = method.body[0] as AssignmentStatement;
+      expect(resolvedName(assign.target)).toBe("REAL");
+      expect(resolvedName(assign.value)).toBe("REAL");
+    });
+
+    it("should resolve method return variable type", () => {
+      const { ast } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          METHOD GetValue : INT
+            GetValue := 42;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      const fb = ast.functionBlocks[0]!;
+      const method = fb.methods[0]!;
+      // GetValue := 42 — target should resolve to INT (method return var)
+      const assign = method.body[0] as AssignmentStatement;
+      expect(resolvedName(assign.target)).toBe("INT");
+    });
+
+    it("should resolve FB member variable accessed from method", () => {
+      const { ast } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          VAR_INPUT inVal : DINT; END_VAR
+          METHOD Process : BOOL
+            VAR temp : DINT; END_VAR
+            temp := inVal;
+            Process := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      const fb = ast.functionBlocks[0]!;
+      const method = fb.methods[0]!;
+      // temp := inVal — value (inVal) should resolve to DINT via FB scope
+      const assign = method.body[0] as AssignmentStatement;
+      expect(resolvedName(assign.value)).toBe("DINT");
+    });
+
+    it("should resolve method-local variable that shadows FB member", () => {
+      const { ast } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          VAR counter : INT; END_VAR
+          METHOD Run : BOOL
+            VAR counter : REAL; END_VAR
+            counter := 3.14;
+            Run := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      const fb = ast.functionBlocks[0]!;
+      const method = fb.methods[0]!;
+      // counter := 3.14 — target should resolve to REAL (method local), not INT (FB member)
+      const assign = method.body[0] as AssignmentStatement;
+      expect(resolvedName(assign.target)).toBe("REAL");
+    });
+  });
 });

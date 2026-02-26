@@ -295,6 +295,50 @@ export class SemanticAnalyzer {
           "functionBlock",
           fbDecl.name,
         );
+
+        // Create method scopes (parent = FB scope for correct lookup chain)
+        for (const method of fbDecl.methods) {
+          try {
+            const methodScope = this.symbolTables.createMethodScope(
+              fbDecl.name,
+              method.name,
+            );
+            this.buildVarBlockSymbols(
+              method.varBlocks,
+              methodScope,
+              "functionBlock",
+              fbDecl.name,
+            );
+            // Register method return variable (MethodName := value)
+            if (method.returnType) {
+              const retType: ElementaryType = {
+                typeKind: "elementary",
+                name: method.returnType.name,
+                sizeBits: 0,
+              };
+              methodScope.define({
+                name: method.name,
+                kind: "variable",
+                type: retType,
+                declaration: undefined as unknown as VarDeclaration,
+                isInput: false,
+                isOutput: false,
+                isInOut: false,
+                isExternal: false,
+                isGlobal: false,
+                isRetain: false,
+              });
+            }
+          } catch (methodErr) {
+            if (methodErr instanceof Error) {
+              this.addError(
+                methodErr.message,
+                method.sourceSpan.startLine,
+                method.sourceSpan.startCol,
+              );
+            }
+          }
+        }
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -2198,12 +2242,18 @@ export class SemanticAnalyzer {
           fbName: fb.name,
         });
         for (const method of fb.methods) {
-          const methodVars = this.buildVarTypeMap(method.varBlocks);
-          this.walkStatementsForUndeclaredVars(method.body, scope, {
-            fbName: fb.name,
-            methodName: method.name,
-            methodLocalVars: methodVars,
-          });
+          const methodScope = this.symbolTables.getMethodScope(
+            fb.name,
+            method.name,
+          );
+          this.walkStatementsForUndeclaredVars(
+            method.body,
+            methodScope ?? scope,
+            {
+              fbName: fb.name,
+              methodName: method.name,
+            },
+          );
         }
         for (const prop of fb.properties) {
           if (prop.getter) {

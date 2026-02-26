@@ -257,19 +257,17 @@ describe("Type Validation", () => {
     it("should error when CASE selector is STRING", () => {
       const { errors } = analyzeSource(`
         PROGRAM Main
-          VAR s : STRING; x : INT; END_VAR
-          CASE x OF
-            1: x := 2;
+          VAR s : STRING; END_VAR
+          CASE s OF
+            1: ;
           END_CASE;
         END_PROGRAM
       `);
-      // This test checks that a valid CASE compiles; STRING as selector
-      // would be a parse error since CASE selector must be an expression
-      // that evaluates to an ordinal type. The type checker validates post-parse.
-      const caseErrors = errors.filter(
-        (e) => e.includes("CASE") && e.includes("integer"),
-      );
-      expect(caseErrors).toHaveLength(0);
+      expect(
+        errors.some(
+          (e) => e.includes("CASE") && e.includes("integer"),
+        ),
+      ).toBe(true);
     });
 
     it("should allow INT selector", () => {
@@ -311,6 +309,114 @@ describe("Type Validation", () => {
       `);
       const typeErrors = errors.filter((e) => e.includes("Cannot assign"));
       expect(typeErrors).toHaveLength(0);
+    });
+  });
+
+  describe("Method scope type validation", () => {
+    it("should error on assigning STRING to method-local INT", () => {
+      const { errors } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          METHOD Run : BOOL
+            VAR temp : INT; END_VAR
+            temp := 'hello';
+            Run := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      expect(errors.some((e) => e.includes("Cannot assign"))).toBe(true);
+      expect(
+        errors.some((e) => e.includes("STRING") && e.includes("INT")),
+      ).toBe(true);
+    });
+
+    it("should allow valid assignment to method-local variable", () => {
+      const { errors } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          METHOD Run : BOOL
+            VAR temp : INT; END_VAR
+            temp := 42;
+            Run := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      const typeErrors = errors.filter((e) => e.includes("Cannot assign"));
+      expect(typeErrors).toHaveLength(0);
+    });
+
+    it("should allow method to access FB member variables", () => {
+      const { errors } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          VAR_INPUT inVal : INT; END_VAR
+          VAR counter : INT; END_VAR
+          METHOD Run : BOOL
+            counter := inVal;
+            Run := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      const typeErrors = errors.filter((e) => e.includes("Cannot assign"));
+      const undeclErrors = errors.filter((e) => e.includes("Undeclared"));
+      expect(typeErrors).toHaveLength(0);
+      expect(undeclErrors).toHaveLength(0);
+    });
+
+    it("should validate method return variable assignment", () => {
+      const { errors } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          METHOD GetValue : INT
+            GetValue := 'bad';
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      expect(errors.some((e) => e.includes("Cannot assign"))).toBe(true);
+    });
+
+    it("should allow method-local variable to shadow FB member", () => {
+      const { errors } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          VAR counter : INT; END_VAR
+          METHOD Run : BOOL
+            VAR counter : REAL; END_VAR
+            counter := 3.14;
+            Run := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      // counter in method is REAL, so assigning 3.14 (REAL) should be fine
+      const typeErrors = errors.filter((e) => e.includes("Cannot assign"));
+      expect(typeErrors).toHaveLength(0);
+    });
+
+    it("should warn on narrowing inside method body", () => {
+      const { warnings } = analyzeSource(`
+        FUNCTION_BLOCK Worker
+          METHOD Run : BOOL
+            VAR small : INT; big : DINT; END_VAR
+            small := big;
+            Run := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+        END_PROGRAM
+      `);
+      expect(
+        warnings.some(
+          (w) =>
+            w.includes("narrowing") &&
+            w.includes("DINT") &&
+            w.includes("INT"),
+        ),
+      ).toBe(true);
     });
   });
 });

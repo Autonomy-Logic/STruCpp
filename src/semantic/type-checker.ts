@@ -93,11 +93,13 @@ export class TypeChecker {
         // FB body
         this.checkStatements(fb.body, scope);
 
-        // Method bodies
+        // Method bodies (use method scope for local variable resolution)
         for (const method of fb.methods) {
-          // Methods share the FB scope (can access FB members)
-          // In a future enhancement we could create child scopes for method-local vars
-          this.checkStatements(method.body, scope);
+          const methodScope = this.symbolTables.getMethodScope(
+            fb.name,
+            method.name,
+          );
+          this.checkStatements(method.body, methodScope ?? scope);
         }
 
         // Property getter/setter bodies
