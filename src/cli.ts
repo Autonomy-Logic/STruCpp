@@ -187,39 +187,18 @@ function parseArgs(args: string[]): CLIOptions {
       i++;
       const nextArg = args[i];
       if (nextArg !== undefined) {
-        const eqIdx = nextArg.indexOf("=");
-        if (eqIdx > 0) {
-          const name = nextArg.substring(0, eqIdx);
-          const value = parseInt(nextArg.substring(eqIdx + 1), 10);
-          if (!isNaN(value)) {
-            options.defines[name] = value;
-          }
-        }
+        parseDefine(nextArg, options.defines);
       }
     } else if (arg !== undefined && arg.startsWith("-D")) {
       // -DNAME=VALUE (no space) or -D NAME=VALUE (with space)
       const inline = arg.substring(2);
       if (inline.length > 0) {
-        const eqIdx = inline.indexOf("=");
-        if (eqIdx > 0) {
-          const name = inline.substring(0, eqIdx);
-          const value = parseInt(inline.substring(eqIdx + 1), 10);
-          if (!isNaN(value)) {
-            options.defines[name] = value;
-          }
-        }
+        parseDefine(inline, options.defines);
       } else {
         i++;
         const nextArg = args[i];
         if (nextArg !== undefined) {
-          const eqIdx = nextArg.indexOf("=");
-          if (eqIdx > 0) {
-            const name = nextArg.substring(0, eqIdx);
-            const value = parseInt(nextArg.substring(eqIdx + 1), 10);
-            if (!isNaN(value)) {
-              options.defines[name] = value;
-            }
-          }
+          parseDefine(nextArg, options.defines);
         }
       }
     } else if (arg === "--test") {
@@ -295,6 +274,21 @@ Examples:
 
 For more information, visit: https://github.com/Autonomy-Logic/STruCpp
 `);
+}
+
+/**
+ * Parse a `NAME=VALUE` define string and add it to the defines record.
+ * Ignores malformed input (no `=`, non-numeric value).
+ */
+function parseDefine(input: string, defines: Record<string, number>): void {
+  const eqIdx = input.indexOf("=");
+  if (eqIdx > 0) {
+    const name = input.substring(0, eqIdx);
+    const value = parseInt(input.substring(eqIdx + 1), 10);
+    if (!isNaN(value)) {
+      defines[name] = value;
+    }
+  }
 }
 
 /**

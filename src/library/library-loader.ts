@@ -437,7 +437,18 @@ export function loadStlibArchive(json: unknown): StlibArchive {
     typeof obj.globalConstants === "object" &&
     !Array.isArray(obj.globalConstants)
   ) {
-    archive.globalConstants = obj.globalConstants as Record<string, number>;
+    const gc: Record<string, number> = {};
+    for (const [key, val] of Object.entries(
+      obj.globalConstants as Record<string, unknown>,
+    )) {
+      if (typeof val !== "number") {
+        throw new LibraryManifestError(
+          `Invalid stlib archive: globalConstants["${key}"] must be a number, got ${typeof val}`,
+        );
+      }
+      gc[key] = val;
+    }
+    archive.globalConstants = gc;
   }
 
   return archive;

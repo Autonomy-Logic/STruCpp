@@ -1,50 +1,13 @@
 {
-  "timestamp": "2026-02-27T14:40:18.708Z",
+  "timestamp": "2026-02-27T15:49:53.590Z",
   "source": "oscat-basic.stlib",
   "summary": {
     "totalFiles": 553,
-    "successCount": 517,
-    "failureCount": 36,
-    "successRate": "93.5%"
+    "successCount": 553,
+    "failureCount": 0,
+    "successRate": "100.0%"
   },
-  "rootCauses": [
-    {
-      "id": "BIT_ACCESS",
-      "description": "Bit access on integer types (var.0, var.15, var.31) - read & write",
-      "phase": "6.4",
-      "count": 6,
-      "percentOfFailures": "16.7%",
-      "files": [
-        "ATAN2",
-        "CAUCHYCD",
-        "GDF",
-        "GEN_SIN",
-        "RDM",
-        "SUN_POS"
-      ]
-    },
-    {
-      "id": "STRING_CONST_SIZE",
-      "description": "STRING(constant_name) where size is a named constant not a literal",
-      "phase": "parser",
-      "count": 2,
-      "percentOfFailures": "5.6%",
-      "files": [
-        "CHARNAME",
-        "DT_TO_STRF"
-      ]
-    },
-    {
-      "id": "POINTER_TO",
-      "description": "POINTER TO declarations and ^ dereference",
-      "phase": "6.1",
-      "count": 1,
-      "percentOfFailures": "2.8%",
-      "files": [
-        "FIND_CHAR"
-      ]
-    }
-  ],
+  "rootCauses": [],
   "successFiles": [
     "ACOSH",
     "ACOTH",
@@ -66,6 +29,7 @@
     "ARRAY_VAR",
     "ASINH",
     "ASTRO",
+    "ATAN2",
     "ATANH",
     "A_TRIG",
     "BAND_B",
@@ -111,6 +75,8 @@
     "CASINH",
     "CATAN",
     "CATANH",
+    "CAUCHY",
+    "CAUCHYCD",
     "CCON",
     "CCOS",
     "CCOSH",
@@ -118,6 +84,8 @@
     "CEIL",
     "CEIL2",
     "CEXP",
+    "CHARCODE",
+    "CHARNAME",
     "CHECK_PARITY",
     "CHK_REAL",
     "CHR_TO_STRING",
@@ -169,11 +137,13 @@
     "CYCLE_4",
     "CYCLE_TIME",
     "C_TO_F",
+    "C_TO_K",
     "DATE_ADD",
     "DAYS_DELTA",
     "DAYS_IN_MONTH",
     "DAYS_IN_YEAR",
     "DAY_OF_DATE",
+    "DAY_OF_MONTH",
     "DAY_OF_WEEK",
     "DAY_OF_YEAR",
     "DAY_TO_TIME",
@@ -190,10 +160,12 @@
     "DEC_TO_DWORD",
     "DEC_TO_INT",
     "DEG",
+    "DEG_TO_DIR",
     "DELAY",
     "DELAY_4",
     "DEL_CHARS",
     "DIFFER",
+    "DIR_TO_DEG",
     "DRIVER_1",
     "DRIVER_4",
     "DRIVER_4C",
@@ -201,6 +173,7 @@
     "DT2_TO_SDT",
     "DT_SIMU",
     "DT_TO_SDT",
+    "DT_TO_STRF",
     "DWORD_OF_BYTE",
     "DWORD_OF_WORD",
     "DWORD_TO_STRB",
@@ -210,6 +183,8 @@
     "D_TRIG",
     "D_TRUNC",
     "EASTER",
+    "ELLIPSE_A",
+    "ELLIPSE_C",
     "ENERGY",
     "ERF",
     "ERFC",
@@ -223,6 +198,7 @@
     "EXEC",
     "EXP10",
     "EXPN",
+    "FACT",
     "FADE",
     "FF_D2E",
     "FF_D4E",
@@ -243,6 +219,7 @@
     "FINDB_NONUM",
     "FINDB_NUM",
     "FINDP",
+    "FIND_CHAR",
     "FIND_CTRL",
     "FIND_NONUM",
     "FIND_NUM",
@@ -257,7 +234,9 @@
     "FSTRING_TO_BYTE",
     "FSTRING_TO_DT",
     "FSTRING_TO_DWORD",
+    "FSTRING_TO_MONTH",
     "FSTRING_TO_WEEK",
+    "FSTRING_TO_WEEKDAY",
     "FT_AVG",
     "FT_DERIV",
     "FT_IMP",
@@ -285,16 +264,20 @@
     "F_POWER",
     "F_QUAD",
     "F_TO_C",
+    "F_TO_OM",
     "F_TO_PT",
+    "GAMMA",
     "GAUSS",
     "GAUSSCD",
     "GCD",
+    "GDF",
     "GEN_BIT",
     "GEN_PULSE",
     "GEN_PW2",
     "GEN_RDM",
     "GEN_RDT",
     "GEN_RMP",
+    "GEN_SIN",
     "GEN_SQ",
     "GEN_SQR",
     "GEO_TO_DEG",
@@ -304,6 +287,7 @@
     "GVL_2.gvl",
     "HEX_TO_BYTE",
     "HEX_TO_DWORD",
+    "HOLIDAY",
     "HOLIDAY_DATA",
     "HOUR",
     "HOUR_OF_DT",
@@ -323,9 +307,12 @@
     "INTERLOCK_4",
     "INT_TO_BCDC",
     "INV",
+    "ISC_ALPHA",
     "ISC_CTRL",
     "ISC_HEX",
+    "ISC_LOWER",
     "ISC_NUM",
+    "ISC_UPPER",
     "IS_ALNUM",
     "IS_ALPHA",
     "IS_CC",
@@ -338,6 +325,7 @@
     "IS_UPPER",
     "JD2000",
     "KMH_TO_MS",
+    "K_TO_C",
     "LAMBERT_W",
     "LANGEVIN",
     "LEAP_DAY",
@@ -378,6 +366,7 @@
     "MONTH_BEGIN",
     "MONTH_END",
     "MONTH_OF_DATE",
+    "MONTH_TO_STRING",
     "MS_TO_BFT",
     "MS_TO_KMH",
     "MULTIME",
@@ -395,6 +384,7 @@
     "OCT_TO_DWORD",
     "OFFSET",
     "OFFSET2",
+    "OM_TO_F",
     "ONTIME",
     "OSCAT_VERSION",
     "OVERRIDE",
@@ -414,8 +404,12 @@
     "R2_ADD2",
     "R2_MUL",
     "R2_SET",
+    "RAD",
     "RANGE_TO_BYTE",
     "RANGE_TO_WORD",
+    "RDM",
+    "RDM2",
+    "RDMDW",
     "REAL2",
     "REAL_TO_DW",
     "REAL_TO_FRAC",
@@ -434,6 +428,7 @@
     "RMP_SOFT",
     "RMP_W",
     "RND",
+    "ROUND",
     "RTC_2",
     "RTC_MS",
     "SCALE",
@@ -492,6 +487,7 @@
     "STATUS_TO_ESR",
     "STORE_8",
     "SUN_MIDDAY",
+    "SUN_POS",
     "SUN_TIME",
     "SWAP_BYTE",
     "SWAP_BYTE2",
@@ -510,7 +506,9 @@
     "TIMER_EVENT",
     "TOGGLE",
     "TONOF",
+    "TO_LOWER",
     "TO_UML",
+    "TO_UPPER",
     "TP_X",
     "TREND",
     "TREND_DW",
@@ -539,6 +537,7 @@
     "V3_YANG",
     "V3_ZANG",
     "VECTOR_3",
+    "WEEKDAY_TO_STRING",
     "WINDOW",
     "WINDOW2",
     "WORD_OF_BYTE",
@@ -564,186 +563,5 @@
     "_RMP_W",
     "_STRING_TO_BUFFER"
   ],
-  "failedFiles": [
-    {
-      "name": "ATAN2",
-      "cause": "BIT_ACCESS",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "CAUCHY",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "CAUCHYCD",
-      "cause": "BIT_ACCESS",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "CHARCODE",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "CHARNAME",
-      "cause": "STRING_CONST_SIZE",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "C_TO_K",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'PHYS'"
-    },
-    {
-      "name": "DAY_OF_MONTH",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "DEG_TO_DIR",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'LANGUAGE'"
-    },
-    {
-      "name": "DIR_TO_DEG",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'LANGUAGE'"
-    },
-    {
-      "name": "DT_TO_STRF",
-      "cause": "STRING_CONST_SIZE",
-      "error": "Undeclared variable 'LANGUAGE'"
-    },
-    {
-      "name": "ELLIPSE_A",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "ELLIPSE_C",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "FACT",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "FIND_CHAR",
-      "cause": "POINTER_TO",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "FSTRING_TO_MONTH",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'LANGUAGE'"
-    },
-    {
-      "name": "FSTRING_TO_WEEKDAY",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'LANGUAGE'"
-    },
-    {
-      "name": "F_TO_OM",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "GAMMA",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "GDF",
-      "cause": "BIT_ACCESS",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "GEN_SIN",
-      "cause": "BIT_ACCESS",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "HOLIDAY",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'LANGUAGE'"
-    },
-    {
-      "name": "ISC_ALPHA",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "ISC_LOWER",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "ISC_UPPER",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "K_TO_C",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'PHYS'"
-    },
-    {
-      "name": "MONTH_TO_STRING",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'LANGUAGE'"
-    },
-    {
-      "name": "OM_TO_F",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "RAD",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "RDM",
-      "cause": "BIT_ACCESS",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "RDM2",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "RDMDW",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "ROUND",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "SUN_POS",
-      "cause": "BIT_ACCESS",
-      "error": "Undeclared variable 'MATH'"
-    },
-    {
-      "name": "TO_LOWER",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "TO_UPPER",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'SETUP'"
-    },
-    {
-      "name": "WEEKDAY_TO_STRING",
-      "cause": "UNKNOWN",
-      "error": "Undeclared variable 'LANGUAGE'"
-    }
-  ]
+  "failedFiles": []
 }
