@@ -221,7 +221,7 @@ export class SemanticAnalyzer {
           name: typeDecl.name,
           sizeBits: 0,
         };
-        this.symbolTables.globalScope.define({
+        this.symbolTables.globalScope.defineOrReplace({
           name: typeDecl.name,
           kind: "type",
           declaration: typeDecl,
@@ -246,7 +246,7 @@ export class SemanticAnalyzer {
           name: funcDecl.returnType.name,
           sizeBits: 0,
         };
-        this.symbolTables.globalScope.define({
+        this.symbolTables.globalScope.defineOrReplace({
           name: funcDecl.name,
           kind: "function",
           declaration: funcDecl,
@@ -276,7 +276,7 @@ export class SemanticAnalyzer {
     // Register function block declarations
     for (const fbDecl of ast.functionBlocks) {
       try {
-        this.symbolTables.globalScope.define({
+        this.symbolTables.globalScope.defineOrReplace({
           name: fbDecl.name,
           kind: "functionBlock",
           declaration: fbDecl,
@@ -357,7 +357,7 @@ export class SemanticAnalyzer {
           name: ifaceDecl.name,
           sizeBits: 0,
         };
-        this.symbolTables.globalScope.define({
+        this.symbolTables.globalScope.defineOrReplace({
           name: ifaceDecl.name,
           kind: "type",
           declaration:
@@ -378,7 +378,7 @@ export class SemanticAnalyzer {
     // Register program declarations
     for (const progDecl of ast.programs) {
       try {
-        this.symbolTables.globalScope.define({
+        this.symbolTables.globalScope.defineOrReplace({
           name: progDecl.name,
           kind: "program",
           declaration: progDecl,

@@ -2,19 +2,38 @@
 /**
  * OSCAT Basic 335 Compatibility Test Script
  *
- * Tests all OSCAT basic 335 .st files against the STruC++ compiler
- * and produces a detailed root-cause report.
+ * Loads the pre-compiled oscat-basic.stlib archive, extracts embedded sources,
+ * and tests each one individually against the STruC++ compiler.
+ * Produces a detailed root-cause report.
  *
  * Usage:
  *   npm run build && node OSCAT/oscat-test.mjs
  */
 
-import { readFileSync, readdirSync, writeFileSync } from 'fs';
-import { join, basename, resolve } from 'path';
+import { readFileSync, writeFileSync } from 'fs';
+import { basename, resolve } from 'path';
 import { compile } from '../dist/index.js';
+import { loadStlibFromFile } from '../dist/library/library-loader.js';
 
-const OSCAT_DIR = resolve(import.meta.dirname, '../tests/st-validation/oscat/lib');
-const files = readdirSync(OSCAT_DIR).filter(f => f.endsWith('.st')).sort();
+const OSCAT_STLIB_PATH = resolve(import.meta.dirname, '../libs/oscat-basic.stlib');
+
+// Load archive and extract sources
+let archive;
+try {
+  archive = loadStlibFromFile(OSCAT_STLIB_PATH);
+} catch (e) {
+  console.error(`Error loading OSCAT archive: ${e.message}`);
+  console.error(`Expected at: ${OSCAT_STLIB_PATH}`);
+  process.exit(1);
+}
+
+if (!archive.sources || archive.sources.length === 0) {
+  console.error('Error: OSCAT archive has no embedded sources.');
+  process.exit(1);
+}
+
+const files = archive.sources.map(s => s.fileName).sort();
+const sourceMap = new Map(archive.sources.map(s => [s.fileName, s.source]));
 
 // Root cause categories with Phase references
 const causes = {
@@ -37,13 +56,12 @@ const causes = {
 const successFiles = [];
 const failedFiles = [];
 
-console.log(`Testing ${files.length} .st files from OSCAT basic 335 library...\n`);
+console.log(`Testing ${files.length} sources from oscat-basic.stlib archive...\n`);
 
 let count = 0;
 for (const file of files) {
   count++;
-  const filePath = join(OSCAT_DIR, file);
-  const source = readFileSync(filePath, 'utf-8');
+  const source = sourceMap.get(file);
   const name = basename(file, '.st');
 
   let result;
@@ -120,7 +138,7 @@ const totalFailed = files.length - successFiles.length;
 console.log('\n' + '='.repeat(100));
 console.log('OSCAT BASIC 335 — STruC++ COMPATIBILITY REPORT');
 console.log('='.repeat(100));
-console.log(`Total .st files tested:     ${files.length}`);
+console.log(`Total sources tested:        ${files.length}`);
 console.log(`Successfully compiled:       ${successFiles.length} (${(successFiles.length/files.length*100).toFixed(1)}%)`);
 console.log(`Failed:                      ${totalFailed} (${(totalFailed/files.length*100).toFixed(1)}%)`);
 console.log('');
@@ -159,12 +177,13 @@ console.log(`  Other (array init, ELSE;, VAR_GLOBAL):+${causes.MULTI_DIM_ARRAY_I
 // Write JSON
 const report = {
   timestamp: new Date().toISOString(),
+  source: 'oscat-basic.stlib',
   summary: { totalFiles: files.length, successCount: successFiles.length, failureCount: totalFailed, successRate: `${(successFiles.length/files.length*100).toFixed(1)}%` },
   rootCauses: sorted.map(([key, val]) => ({ id: key, description: val.desc, phase: val.phase, count: val.files.length, percentOfFailures: `${(val.files.length / totalFailed * 100).toFixed(1)}%`, files: val.files })),
   successFiles,
   failedFiles,
 };
 
-const reportPath = join(import.meta.dirname, 'oscat-compatibility-report.json');
+const reportPath = resolve(import.meta.dirname, 'oscat-compatibility-report.json');
 writeFileSync(reportPath, JSON.stringify(report, null, 2));
 console.log(`\nJSON report: ${reportPath}`);

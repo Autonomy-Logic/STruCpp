@@ -430,6 +430,16 @@ export function loadStlibArchive(json: unknown): StlibArchive {
     }>;
   }
 
+  // Optional globalConstants
+  if (
+    obj.globalConstants !== null &&
+    obj.globalConstants !== undefined &&
+    typeof obj.globalConstants === "object" &&
+    !Array.isArray(obj.globalConstants)
+  ) {
+    archive.globalConstants = obj.globalConstants as Record<string, number>;
+  }
+
   return archive;
 }
 

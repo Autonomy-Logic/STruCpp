@@ -237,6 +237,21 @@ export function compile(
     };
   }
 
+  // Auto-merge library globalConstants into effective constants.
+  // Library values provide defaults; user-provided values take priority.
+  for (const archive of allArchives) {
+    if (archive.globalConstants) {
+      if (!mergedOptions.globalConstants) {
+        mergedOptions.globalConstants = {};
+      }
+      for (const [key, value] of Object.entries(archive.globalConstants)) {
+        if (!(key in mergedOptions.globalConstants)) {
+          mergedOptions.globalConstants[key] = value;
+        }
+      }
+    }
+  }
+
   // Single registration loop for all libraries (stdlib + user)
   let semanticSymbolTables: SymbolTables | undefined;
   if (allArchives.length > 0) {

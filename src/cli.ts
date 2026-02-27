@@ -39,7 +39,7 @@ import { resolve, basename, dirname, join } from "path";
 import { tmpdir } from "os";
 import { execFileSync } from "child_process";
 import { compile, getVersion, compileStlib } from "./index.js";
-import { loadStlibFromFile } from "./library/library-loader.js";
+import { loadStlibFromFile, discoverStlibs } from "./library/library-loader.js";
 import { discoverSTFiles } from "./library/library-utils.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
 import { parseTestFile } from "./testing/test-parser.js";
@@ -73,6 +73,7 @@ interface CLIOptions {
   noSource: boolean;
   decompileLib?: string;
   test: string[];
+  defines: Record<string, number>;
 }
 
 function parseArgs(args: string[]): CLIOptions {
@@ -95,6 +96,7 @@ function parseArgs(args: string[]): CLIOptions {
     libVersion: "1.0.0",
     noSource: false,
     test: [],
+    defines: {},
   };
 
   let i = 0;
@@ -181,6 +183,45 @@ function parseArgs(args: string[]): CLIOptions {
       if (nextArg !== undefined) {
         options.decompileLib = nextArg;
       }
+    } else if (arg === "--define") {
+      i++;
+      const nextArg = args[i];
+      if (nextArg !== undefined) {
+        const eqIdx = nextArg.indexOf("=");
+        if (eqIdx > 0) {
+          const name = nextArg.substring(0, eqIdx);
+          const value = parseInt(nextArg.substring(eqIdx + 1), 10);
+          if (!isNaN(value)) {
+            options.defines[name] = value;
+          }
+        }
+      }
+    } else if (arg !== undefined && arg.startsWith("-D")) {
+      // -DNAME=VALUE (no space) or -D NAME=VALUE (with space)
+      const inline = arg.substring(2);
+      if (inline.length > 0) {
+        const eqIdx = inline.indexOf("=");
+        if (eqIdx > 0) {
+          const name = inline.substring(0, eqIdx);
+          const value = parseInt(inline.substring(eqIdx + 1), 10);
+          if (!isNaN(value)) {
+            options.defines[name] = value;
+          }
+        }
+      } else {
+        i++;
+        const nextArg = args[i];
+        if (nextArg !== undefined) {
+          const eqIdx = nextArg.indexOf("=");
+          if (eqIdx > 0) {
+            const name = nextArg.substring(0, eqIdx);
+            const value = parseInt(nextArg.substring(eqIdx + 1), 10);
+            if (!isNaN(value)) {
+              options.defines[name] = value;
+            }
+          }
+        }
+      }
     } else if (arg === "--test") {
       // Collect all following arguments that don't start with '-' as test files
       i++;
@@ -225,6 +266,7 @@ Options:
   --cxx-flags <flags>       Extra C++ compiler flags
   -L, --lib-path <path>     Library search path (repeatable)
   --no-default-libs         Do not auto-add bundled library paths
+  -D, --define NAME=VALUE   Define a global constant (repeatable)
   -v, --version             Show version
   -h, --help                Show this help
 
@@ -407,15 +449,24 @@ function findBundledLibsDir(): string | null {
  */
 function getEffectiveLibraryPaths(options: CLIOptions): string[] {
   const paths: string[] = [];
+  const seen = new Set<string>();
 
   if (!options.noDefaultLibs) {
     const bundledDir = findBundledLibsDir();
     if (bundledDir) {
-      paths.push(bundledDir);
+      const resolved = resolve(bundledDir);
+      seen.add(resolved);
+      paths.push(resolved);
     }
   }
 
-  paths.push(...options.libraryPaths);
+  for (const p of options.libraryPaths) {
+    const resolved = resolve(p);
+    if (!seen.has(resolved)) {
+      seen.add(resolved);
+      paths.push(resolved);
+    }
+  }
   return paths;
 }
 
@@ -486,12 +537,34 @@ function compileLibraryMode(options: CLIOptions): void {
     `Compiling library "${options.libName}" from ${sources.length} source file(s)...`,
   );
 
-  const result = compileStlib(sources, {
+  // Load dependency libraries from explicit -L paths only.
+  // Unlike normal compilation, library compilation should not auto-add
+  // bundled system libraries as dependencies — only user-specified paths.
+  const dependencies: import("./library/library-manifest.js").StlibArchive[] =
+    [];
+  for (const libPath of options.libraryPaths) {
+    try {
+      dependencies.push(...discoverStlibs(libPath));
+    } catch (e) {
+      console.error(
+        `Warning: Could not load libraries from ${libPath}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+
+  const stlibOpts: Parameters<typeof compileStlib>[1] = {
     name: options.libName,
     version: options.libVersion,
     namespace: libNamespace,
     noSource: options.noSource,
-  });
+  };
+  if (dependencies.length > 0) {
+    stlibOpts.dependencies = dependencies;
+  }
+  if (Object.keys(options.defines).length > 0) {
+    stlibOpts.globalConstants = options.defines;
+  }
+  const result = compileStlib(sources, stlibOpts);
 
   if (!result.success) {
     console.error("\nLibrary compilation failed:");
@@ -557,6 +630,9 @@ function runTestMode(options: CLIOptions): void {
   }
   if (effectiveLibPaths.length > 0) {
     compileOptions.libraryPaths = effectiveLibPaths;
+  }
+  if (Object.keys(options.defines).length > 0) {
+    compileOptions.globalConstants = options.defines;
   }
 
   const result = compile(source, compileOptions);
@@ -850,6 +926,9 @@ function main(): void {
   }
   if (effectiveLibPaths.length > 0) {
     compileOptions.libraryPaths = effectiveLibPaths;
+  }
+  if (Object.keys(options.defines).length > 0) {
+    compileOptions.globalConstants = options.defines;
   }
 
   const fileLabel =

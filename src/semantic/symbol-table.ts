@@ -183,6 +183,14 @@ export class Scope {
   }
 
   /**
+   * Define a symbol, replacing any existing definition.
+   * Used by the analyzer when user code redefines a library-registered symbol.
+   */
+  defineOrReplace(symbol: AnySymbol): void {
+    this.symbols.set(symbol.name.toUpperCase(), symbol);
+  }
+
+  /**
    * Look up a symbol in this scope only (not parent scopes).
    */
   lookupLocal(name: string): AnySymbol | undefined {
