@@ -11,6 +11,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { hasGpp, runE2ETestPipeline } from "./test-helpers.js";
+import { loadStlibFromFile } from "../../src/library/library-loader.js";
 
 const VALIDATION_DIR = path.resolve(__dirname, "../st-validation");
 
@@ -32,8 +33,13 @@ function findTestFiles(dir: string): string[] {
   return results;
 }
 
-/** Path to the bundled libs directory containing .stlib files */
-const LIBS_DIR = path.resolve(__dirname, "../../libs");
+/** Load only the IEC standard FB library (not the full libs/ directory,
+ *  to avoid loading oscat-basic.stlib which would conflict with inline
+ *  OSCAT test sources that redefine the same functions/FBs). */
+const IEC_STDLIB_PATH = path.resolve(__dirname, "../../libs/iec-standard-fb.stlib");
+const iecStdlib = fs.existsSync(IEC_STDLIB_PATH)
+  ? loadStlibFromFile(IEC_STDLIB_PATH)
+  : undefined;
 
 /**
  * Run a validation test pair: source.st + test_source.st.
@@ -52,7 +58,7 @@ function runValidation(
     isTestBuild: true,
     tempDirPrefix: "strucpp-val-",
     compileOptions: {
-      libraryPaths: [LIBS_DIR],
+      libraries: iecStdlib ? [iecStdlib] : [],
     },
   });
 }

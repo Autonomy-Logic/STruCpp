@@ -11,7 +11,10 @@ import type {
   StlibArchive,
 } from "./library-manifest.js";
 import { compile } from "../index.js";
-import { extractNamespaceBody } from "./library-utils.js";
+import {
+  extractNamespaceBody,
+  stripDependencyPreambles,
+} from "./library-utils.js";
 
 /**
  * Compile ST source files into a library.
@@ -28,6 +31,8 @@ export function compileLibrary(
     namespace: string;
     /** Library archives this library depends on */
     dependencies?: StlibArchive[];
+    /** Global constants available during compilation (e.g., STRING_LENGTH) */
+    globalConstants?: Record<string, number>;
   },
 ): LibraryCompileResult {
   if (sources.length === 0) {
@@ -58,6 +63,9 @@ export function compileLibrary(
   };
   if (options.dependencies) {
     compileOpts.libraries = options.dependencies;
+  }
+  if (options.globalConstants) {
+    compileOpts.globalConstants = options.globalConstants;
   }
   const result = compile(primarySource.source, compileOpts);
 
@@ -180,6 +188,8 @@ export function compileStlib(
     noSource?: boolean;
     /** Library archives this library depends on */
     dependencies?: StlibArchive[];
+    /** Global constants available during compilation (e.g., STRING_LENGTH) */
+    globalConstants?: Record<string, number>;
   },
 ): StlibCompileResult {
   const libResult = compileLibrary(sources, options);
@@ -198,8 +208,29 @@ export function compileStlib(
     };
   }
 
-  const headerBody = extractNamespaceBody(libResult.headerCode);
-  const cppBody = extractNamespaceBody(libResult.cppCode);
+  let headerBody = extractNamespaceBody(libResult.headerCode);
+  let cppBody = extractNamespaceBody(libResult.cppCode);
+
+  // Strip dependency preamble code from the archive — consumers load
+  // dependencies separately, so baking them in would cause redefinitions.
+  if (options.dependencies && options.dependencies.length > 0) {
+    const depNames = new Set(options.dependencies.map((d) => d.manifest.name));
+    const headerPreambles = new Map<string, Set<string>>();
+    const cppPreambles = new Map<string, Set<string>>();
+    for (const dep of options.dependencies) {
+      headerPreambles.set(
+        dep.manifest.name,
+        new Set(dep.headerCode.split("\n")),
+      );
+      cppPreambles.set(dep.manifest.name, new Set(dep.cppCode.split("\n")));
+    }
+    headerBody = stripDependencyPreambles(
+      headerBody,
+      depNames,
+      headerPreambles,
+    );
+    cppBody = stripDependencyPreambles(cppBody, depNames, cppPreambles);
+  }
 
   // Clear manifest.headers — the .stlib archive inlines its C++ code
   // directly into the consumer's output via addLibraryPreamble(), so
@@ -211,13 +242,22 @@ export function compileStlib(
     manifest,
     headerCode: headerBody,
     cppCode: cppBody,
-    dependencies: [],
+    dependencies: (options.dependencies ?? []).map((d) => ({
+      name: d.manifest.name,
+      version: d.manifest.version,
+    })),
   };
   if (!options.noSource) {
     archive.sources = sources.map((s) => ({
       fileName: s.fileName,
       source: s.source,
     }));
+  }
+  if (
+    options.globalConstants &&
+    Object.keys(options.globalConstants).length > 0
+  ) {
+    archive.globalConstants = options.globalConstants;
   }
 
   return {

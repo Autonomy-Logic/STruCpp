@@ -430,6 +430,27 @@ export function loadStlibArchive(json: unknown): StlibArchive {
     }>;
   }
 
+  // Optional globalConstants
+  if (
+    obj.globalConstants !== null &&
+    obj.globalConstants !== undefined &&
+    typeof obj.globalConstants === "object" &&
+    !Array.isArray(obj.globalConstants)
+  ) {
+    const gc: Record<string, number> = {};
+    for (const [key, val] of Object.entries(
+      obj.globalConstants as Record<string, unknown>,
+    )) {
+      if (typeof val !== "number") {
+        throw new LibraryManifestError(
+          `Invalid stlib archive: globalConstants["${key}"] must be a number, got ${typeof val}`,
+        );
+      }
+      gc[key] = val;
+    }
+    archive.globalConstants = gc;
+  }
+
   return archive;
 }
 

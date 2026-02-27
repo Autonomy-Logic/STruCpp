@@ -230,10 +230,14 @@ END_TEST
     );
     expect(libBResult.success).toBe(true);
 
-    // 3. Write only the top-level library to disk. The double-counter-lib stlib
-    //    already includes BaseCounter's inlined code from its dependency.
+    // 3. Write both libraries to disk. Dependency code is stripped from
+    //    archives so consumers must load all transitive dependencies.
     const libDir = path.join(tempDir, "libs-deps");
     fs.mkdirSync(libDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(libDir, "base-counter-lib.stlib"),
+      JSON.stringify(libAResult.archive),
+    );
     fs.writeFileSync(
       path.join(libDir, "double-counter-lib.stlib"),
       JSON.stringify(libBResult.archive),

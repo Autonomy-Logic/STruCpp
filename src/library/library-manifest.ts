@@ -103,6 +103,8 @@ export interface StlibArchive {
   cppCode: string;
   /** Original ST source files (omitted for closed-source distribution) */
   sources?: Array<{ fileName: string; source: string }>;
+  /** Global constants required by this library (e.g., STRING_LENGTH, LIST_LENGTH) */
+  globalConstants?: Record<string, number>;
   /** Reserved for future library-to-library dependency resolution */
   dependencies: Array<{ name: string; version: string }>;
 }

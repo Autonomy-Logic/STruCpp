@@ -1,8 +1,9 @@
 {
-  "timestamp": "2026-02-18T16:00:41.944Z",
+  "timestamp": "2026-02-27T15:49:53.590Z",
+  "source": "oscat-basic.stlib",
   "summary": {
-    "totalFiles": 551,
-    "successCount": 551,
+    "totalFiles": 553,
+    "successCount": 553,
     "failureCount": 0,
     "successRate": "100.0%"
   },
@@ -97,6 +98,7 @@
     "CLICK_DEC",
     "CLK_DIV",
     "CLK_N",
+    "CLK_PRG",
     "CLK_PULSE",
     "CLOG",
     "CMP",
@@ -426,6 +428,7 @@
     "RMP_SOFT",
     "RMP_W",
     "RND",
+    "ROUND",
     "RTC_2",
     "RTC_MS",
     "SCALE",

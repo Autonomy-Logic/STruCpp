@@ -43,6 +43,57 @@ export function extractNamespaceBody(code: string): string {
 }
 
 /**
+ * Strip library preamble sections from extracted namespace body code.
+ * Used by `compileStlib()` to remove dependency code that would otherwise
+ * be baked into the archive — consumers load dependencies separately.
+ *
+ * Each dependency's headerCode/cppCode is known exactly, so we build a
+ * set of lines to skip and match them against the `// Library: <name>`
+ * marked section.
+ */
+export function stripDependencyPreambles(
+  code: string,
+  dependencyNames: Set<string>,
+  /** Map of dependency name → the exact preamble lines injected by codegen */
+  preambleLines: Map<string, Set<string>>,
+): string {
+  if (dependencyNames.size === 0) return code;
+
+  const lines = code.split("\n");
+  const result: string[] = [];
+  let currentDepPreamble: Set<string> | null = null;
+
+  for (const line of lines) {
+    const match = line.match(/^\/\/ Library: (.+)$/);
+    if (match) {
+      const name = match[1]!;
+      if (dependencyNames.has(name)) {
+        // Start skipping this dependency's preamble section
+        currentDepPreamble = preambleLines.get(name) ?? null;
+        continue;
+      } else {
+        currentDepPreamble = null;
+      }
+    }
+
+    if (currentDepPreamble !== null) {
+      // Skip lines that belong to the dependency's preamble.
+      // We check membership to handle the case where codegen adds
+      // blank lines around the preamble content.
+      if (line.trim() === "" || currentDepPreamble.has(line)) {
+        continue;
+      }
+      // Non-matching line means we've exited the preamble section
+      currentDepPreamble = null;
+    }
+
+    result.push(line);
+  }
+
+  return result.join("\n");
+}
+
+/**
  * Recursively discover all `.st` files in a directory.
  *
  * @param dir - Directory to scan

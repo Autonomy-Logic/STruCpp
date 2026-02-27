@@ -1,10 +1,10 @@
 /**
  * OSCAT Basic 335 — Full End-to-End Compilation Test
  *
- * Transpiles all 551 OSCAT .st files to C++, generates a test harness that
+ * Loads the pre-compiled oscat-basic.stlib archive, compiles a dummy program
+ * that pulls in all OSCAT library code, generates a test harness that
  * instantiates every function block, then does a full g++ compile + link + run.
- * This goes beyond syntax-only checking — it verifies constructors, vtables,
- * linker symbol resolution, and binary execution.
+ * This verifies constructors, vtables, linker symbol resolution, and binary execution.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -12,6 +12,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { compile } from "../../src/index.js";
+import { loadStlibFromFile } from "../../src/library/library-loader.js";
+import type { StlibArchive } from "../../src/library/library-manifest.js";
 import { parseTestFile } from "../../src/testing/test-parser.js";
 import {
   generateTestMain,
@@ -25,30 +27,21 @@ import {
   TEST_RUNTIME_PATH,
 } from "./test-helpers.js";
 import { execSync } from "child_process";
-import type { CompilationUnit } from "../../src/frontend/ast.js";
 
-const OSCAT_LIB_DIR = path.resolve(__dirname, "../st-validation/oscat/lib");
 const LIBS_DIR = path.resolve(__dirname, "../../libs");
+const OSCAT_STLIB_PATH = path.resolve(LIBS_DIR, "oscat-basic.stlib");
 
-const oscatLibAvailable = (() => {
-  try {
-    const files = fs
-      .readdirSync(OSCAT_LIB_DIR)
-      .filter((f) => f.endsWith(".st"));
-    return files.length > 0;
-  } catch {
-    return false;
-  }
-})();
+const oscatStlibAvailable = fs.existsSync(OSCAT_STLIB_PATH);
 
 /**
- * Auto-generate a test .st file that instantiates every FB in the AST.
- * Each FB gets its own TEST block with a local VAR declaration.
+ * Auto-generate a test .st file that instantiates every FB from the archive manifest.
  */
-function generateInstantiationTests(ast: CompilationUnit): string {
+function generateInstantiationTests(
+  fbs: Array<{ name: string }>,
+): string {
   const lines: string[] = [];
 
-  for (const fb of ast.functionBlocks) {
+  for (const fb of fbs) {
     lines.push(`TEST '${fb.name} instantiation'`);
     lines.push(`  VAR uut : ${fb.name}; END_VAR`);
     lines.push(`  ASSERT_TRUE(TRUE);`);
@@ -59,16 +52,17 @@ function generateInstantiationTests(ast: CompilationUnit): string {
   return lines.join("\n");
 }
 
-describe.skipIf(!hasGpp || !oscatLibAvailable)(
+describe.skipIf(!hasGpp || !oscatStlibAvailable)(
   "OSCAT Full Compilation",
   () => {
     let tempDir: string;
     let pchPath: string;
-    let ast: CompilationUnit | undefined;
+    let oscatArchive: StlibArchive;
 
     beforeAll(() => {
       tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-oscat-e2e-"));
       pchPath = createPCH(tempDir);
+      oscatArchive = loadStlibFromFile(OSCAT_STLIB_PATH);
     }, 30000);
 
     afterAll(() => {
@@ -78,42 +72,14 @@ describe.skipIf(!hasGpp || !oscatLibAvailable)(
     });
 
     it(
-      "transpiles all OSCAT files to C++",
+      "transpiles OSCAT library to C++ via .stlib",
       () => {
-        // FLOW_CONTROL depends on TP_1D which only exists in the V3 library.
-        const EXCLUDED_FILES = new Set(["FLOW_CONTROL.st"]);
-        const stFiles = fs
-          .readdirSync(OSCAT_LIB_DIR)
-          .filter((f) => f.endsWith(".st") && !EXCLUDED_FILES.has(f))
-          .sort();
-        expect(stFiles.length).toBeGreaterThan(500);
-
-        // Read all ST sources
-        const additionalSources: Array<{
-          source: string;
-          fileName: string;
-        }> = [];
-        const primarySource = fs.readFileSync(
-          path.join(OSCAT_LIB_DIR, stFiles[0]),
-          "utf-8",
-        );
-
-        for (let i = 1; i < stFiles.length; i++) {
-          additionalSources.push({
-            source: fs.readFileSync(
-              path.join(OSCAT_LIB_DIR, stFiles[i]),
-              "utf-8",
-            ),
-            fileName: stFiles[i],
-          });
-        }
-
-        const result = compile(primarySource, {
+        // Compile a minimal dummy program with the OSCAT library loaded
+        const dummyST = "PROGRAM _Dummy\nEND_PROGRAM\n";
+        const result = compile(dummyST, {
           headerFileName: "oscat_all.hpp",
-          fileName: stFiles[0],
-          additionalSources,
+          fileName: "_dummy.st",
           libraryPaths: [LIBS_DIR],
-          globalConstants: { STRING_LENGTH: 254, LIST_LENGTH: 254 },
         });
 
         if (!result.success) {
@@ -125,9 +91,6 @@ describe.skipIf(!hasGpp || !oscatLibAvailable)(
             `OSCAT transpilation had ${result.errors.length} errors (showing first 20):\n${errorSummary}`,
           );
         }
-
-        // Save for the next test
-        ast = result.ast;
 
         // Write generated C++ to temp dir
         fs.writeFileSync(
@@ -141,6 +104,12 @@ describe.skipIf(!hasGpp || !oscatLibAvailable)(
 
         expect((result.headerCode || "").length).toBeGreaterThan(0);
         expect((result.cppCode || "").length).toBeGreaterThan(0);
+
+        console.log(
+          `OSCAT archive: ${oscatArchive.manifest.functions.length} functions, ` +
+            `${oscatArchive.manifest.functionBlocks.length} FBs, ` +
+            `${oscatArchive.manifest.types.length} types`,
+        );
       },
       120000,
     );
@@ -157,17 +126,13 @@ describe.skipIf(!hasGpp || !oscatLibAvailable)(
           );
           return;
         }
-        if (!ast) {
-          console.warn("Skipping — no AST available from previous step");
-          return;
-        }
 
-        // Generate test .st that instantiates every FB
-        const testST = generateInstantiationTests(ast);
-        const fbCount = ast.functionBlocks.length;
-        expect(fbCount).toBeGreaterThan(0);
+        // Generate test .st that instantiates every FB from the archive manifest
+        const fbs = oscatArchive.manifest.functionBlocks;
+        const testST = generateInstantiationTests(fbs);
+        expect(fbs.length).toBeGreaterThan(0);
         console.log(
-          `Generated ${fbCount} FB instantiation tests, ${ast.functions.length} functions compiled`,
+          `Generated ${fbs.length} FB instantiation tests`,
         );
 
         // Parse the test file through the STruC++ test parser
@@ -182,15 +147,24 @@ describe.skipIf(!hasGpp || !oscatLibAvailable)(
           throw new Error(`Test parse failed: ${errMsgs}`);
         }
 
-        // Build POU info from the OSCAT AST
-        const { pous } = buildPOUInfoFromAST(ast);
+        // Compile a dummy to get the AST for POU info (needed by test-main-gen)
+        const dummyST = "PROGRAM _Dummy\nEND_PROGRAM\n";
+        const dummyResult = compile(dummyST, {
+          headerFileName: "oscat_all.hpp",
+          fileName: "_dummy.st",
+          libraryPaths: [LIBS_DIR],
+        });
+        const { pous } = dummyResult.ast
+          ? buildPOUInfoFromAST(dummyResult.ast)
+          : { pous: [] };
 
         // Generate test_main.cpp
         const testMainCpp = generateTestMain([parseResult.testFile!], {
           headerFileName: "oscat_all.hpp",
           pous,
           isTestBuild: true,
-          ast,
+          ast: dummyResult.ast,
+          libraryArchives: dummyResult.resolvedLibraries,
         });
 
         const testMainPath = path.join(tempDir, "test_main.cpp");
