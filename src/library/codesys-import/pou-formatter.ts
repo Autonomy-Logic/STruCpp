@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Autonomy / OpenPLC Project
 /**
  * POU Formatter — shared by V2.3 and V3 parsers.
  *

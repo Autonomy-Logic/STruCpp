@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: GPL-3.0-or-later WITH STruCpp-runtime-exception
+// Copyright (C) 2025 Autonomy / OpenPLC Project
+// This file is part of the STruC++ Runtime Library and is covered by the
+// STruC++ Runtime Library Exception. See COPYING.RUNTIME for details.
 /**
  * STruC++ Runtime - IEC Variable Wrapper
  *

@@ -42,8 +42,8 @@
     "code-generator",
     "openplc"
   ],
-  "author": "Autonomy Logic / OpenPLC Project <thiago.alves@autonomylogic.com>",
-  "license": "LGPL-3.0",
+  "author": "Autonomy / OpenPLC Project <thiago.alves@autonomylogic.com>",
+  "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/Autonomy-Logic/STruCpp.git"
@@ -59,7 +59,10 @@
     "chevrotain": "^11.0.0"
   },
   "lint-staged": {
-    "src/**/*.{ts,tsx,js,jsx}": "prettier --write",
+    "src/**/*.{ts,tsx,js,jsx}": [
+      "eslint",
+      "prettier --write"
+    ],
     "src/**/*.{json,md}": "prettier --write"
   },
   "devDependencies": {

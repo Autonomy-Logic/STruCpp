@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Autonomy / OpenPLC Project
 /**
  * STruC++ Type Checker
  *
@@ -573,7 +575,7 @@ export class TypeChecker {
 
     // Find the FB declaration and the method
     const fb = this.ast.functionBlocks.find(
-      (f) => f.name.toUpperCase() === objTypeName!.toUpperCase(),
+      (f) => f.name.toUpperCase() === objTypeName.toUpperCase(),
     );
     if (fb) {
       const method = fb.methods.find(

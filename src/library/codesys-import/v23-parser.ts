@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Autonomy / OpenPLC Project
 /**
  * CODESYS V2.3 .lib file parser.
  *
@@ -47,7 +49,7 @@ function findPOUDeclarations(data: Buffer): ExtractedPOU[] {
 
   for (const { bytes: pattern, type } of POU_PATTERNS) {
     let offset = 0;
-    while (true) {
+    for (;;) {
       const idx = data.indexOf(pattern, offset);
       if (idx === -1) break;
       offset = idx + 1;

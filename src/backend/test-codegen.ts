@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Autonomy / OpenPLC Project
 /**
  * TestCodeGenerator — subclass of CodeGenerator for test main generation.
  *

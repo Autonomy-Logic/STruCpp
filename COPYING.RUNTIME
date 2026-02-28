@@ -1,0 +1,55 @@
+STruC++ RUNTIME LIBRARY EXCEPTION
+
+Version 1.0, 2025
+
+Copyright (C) 2025 Autonomy / OpenPLC Project.
+
+Everyone is permitted to copy and distribute verbatim copies of this
+license document, but changing it is not allowed.
+
+This STruC++ Runtime Library Exception ("Exception") is an additional
+permission under section 7 of the GNU General Public License, version 3
+("GPLv3"). It applies to a given file (the "Runtime Library") that bears
+a notice placed by the copyright holder of the file stating that the file
+is governed by GPLv3 along with this Exception.
+
+When you use STruC++ to compile a program, STruC++ may combine portions of
+certain STruC++ header files and runtime libraries with the compiled
+program. The purpose of this Exception is to allow compilation of non-GPL
+(including proprietary) programs to use, in this way, the header files and
+runtime libraries covered by this Exception.
+
+0. Definitions.
+
+A file is an "Independent Module" if it either requires no license from
+the copyright holders of the covered file, or if the license it requires
+is compatible with both the GPLv3 and this Exception.
+
+"STruC++" means a version of the STruC++ compiler, with or without
+modifications, governed by version 3 (or a specified later version) of
+the GNU General Public License (GPL) and not solely by any other licenses.
+
+"Target Code" is output from any compiler for a real or virtual target
+processor architecture, in a form suitable for input to an assembler,
+loader, linker and/or execution environment.
+
+"Compilation Process" means a process that transforms source code governed
+only by Independent Modules into Target Code.
+
+"Eligible Compilation Process" means a Compilation Process that uses
+STruC++, alone or with other GPL-compatible software, to transform code.
+
+1. Grant of Additional Permission.
+
+You have permission to propagate a work of Target Code formed by combining
+the Runtime Library with Independent Modules, even if such propagation
+would otherwise violate the terms of GPLv3, provided that all Target Code
+was generated through Eligible Compilation Processes. You may then convey
+such a combination under terms of your choice, consistent with the
+licensing of the Independent Modules.
+
+2. No Weakening of STruC++ Copyleft.
+
+The availability of this Exception does not imply any general presumption
+that third-party software is unaffected by the copyleft requirements of
+the license of STruC++.

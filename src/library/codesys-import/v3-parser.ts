@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2025 Autonomy / OpenPLC Project
 /**
  * CODESYS V3 .library file parser.
  *
@@ -461,7 +463,7 @@ export function parseV3Library(data: Buffer): {
     name.endsWith(".object"),
   );
 
-  for (const [_name, objData] of objectEntries) {
+  for (const [, objData] of objectEntries) {
     // Skip tiny metadata objects
     if (objData.length < MIN_OBJECT_SIZE) continue;
 
