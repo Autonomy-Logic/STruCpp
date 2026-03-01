@@ -38,7 +38,7 @@ import {
   statSync,
 } from "fs";
 import { resolve, basename, dirname, join } from "path";
-import { tmpdir } from "os";
+import { tmpdir, platform } from "os";
 import { execFileSync } from "child_process";
 import { compile, getVersion, compileStlib } from "./index.js";
 import { loadStlibFromFile, discoverStlibs } from "./library/library-loader.js";
@@ -337,6 +337,84 @@ function splitCxxFlags(flags: string): string[] {
 }
 
 /**
+ * Check whether a compiler is available by probing with --version.
+ * Returns true if the command executes successfully, false otherwise.
+ */
+function isCompilerAvailable(command: string): boolean {
+  try {
+    execFileSync(command, ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check whether winget is available on Windows.
+ */
+function hasWinget(): boolean {
+  try {
+    execFileSync("winget", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Print platform-specific compiler installation instructions and exit.
+ */
+function printCompilerNotFound(compiler: string, flag: string): never {
+  console.error(
+    `\nError: ${compiler === "g++" || compiler === "clang++" ? "C++" : "C"} compiler '${compiler}' not found.\n`,
+  );
+
+  const os = platform();
+  if (os === "win32") {
+    console.error(
+      "To compile on Windows you need a C/C++ toolchain (MinGW-w64).\n",
+    );
+    if (hasWinget()) {
+      console.error("  Quick install via winget (LLVM/Clang toolchain):");
+      console.error(
+        "    winget install -e --id MartinStorsjo.LLVM-MinGW.UCRT\n",
+      );
+      console.error("  Then reopen your terminal and use:");
+      console.error(
+        "    strucpp input.st -o output.cpp --build --gpp clang++ --cc clang\n",
+      );
+    }
+    console.error("  For GCC/g++, download standalone MinGW-w64 from:");
+    console.error("    https://winlibs.com\n");
+    console.error("  Extract it and add the bin/ folder to your PATH.");
+  } else if (os === "darwin") {
+    console.error("  Install the Xcode Command Line Tools:\n");
+    console.error("    xcode-select --install");
+  } else {
+    console.error("  Install a C/C++ toolchain:\n");
+    console.error("    Ubuntu/Debian:  sudo apt install build-essential");
+    console.error("    Fedora/RHEL:    sudo dnf install gcc-c++");
+    console.error("    Arch Linux:     sudo pacman -S base-devel");
+  }
+
+  console.error(`\n  Or specify a custom compiler with --${flag} <path>`);
+  process.exit(1);
+}
+
+/**
+ * Verify that the required compilers are available before attempting compilation.
+ * Called early in --build and --test flows to fail fast with helpful messages.
+ */
+function ensureCompilersAvailable(options: CLIOptions, needsCC: boolean): void {
+  if (!isCompilerAvailable(options.gpp)) {
+    printCompilerNotFound(options.gpp, "gpp");
+  }
+  if (needsCC && !isCompilerAvailable(options.cc)) {
+    printCompilerNotFound(options.cc, "cc");
+  }
+}
+
+/**
  * Locate the runtime include directory by auto-discovery or from --cxx-flags.
  * Returns the resolved path or null if not found.
  */
@@ -597,6 +675,8 @@ function compileLibraryMode(options: CLIOptions): void {
  * Test runner mode: compile source, parse tests, generate + compile + run test binary.
  */
 function runTestMode(options: CLIOptions): void {
+  ensureCompilersAvailable(options, false);
+
   if (options.inputs.length === 0) {
     console.error("Error: No source files specified for testing");
     console.error("Usage: strucpp <source.st> --test <test.st>");
@@ -1088,6 +1168,8 @@ function main(): void {
 
   // --build: generate main.cpp and invoke g++
   if (options.build) {
+    ensureCompilersAvailable(options, true);
+
     if (!result.ast || !result.projectModel) {
       console.error("Error: AST/ProjectModel not available for --build");
       process.exit(1);
