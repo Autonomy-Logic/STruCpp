@@ -174,12 +174,12 @@ jobs:
           cp src/runtime/include/*.hpp staging/strucpp/runtime/include/
           cp libs/*.stlib staging/strucpp/libs/
           cp LICENSE COPYING COPYING.RUNTIME staging/strucpp/ 2>/dev/null || true
-          tar -czf strucpp-darwin-x64.tar.gz -C staging strucpp
+          cd staging && zip -r ../strucpp-darwin-x64.zip strucpp
 
       - uses: actions/upload-artifact@v4
         with:
           name: strucpp-darwin-x64
-          path: strucpp-darwin-x64.tar.gz
+          path: strucpp-darwin-x64.zip
 
   # ---------------------------------------------------------------------------
   # macOS ARM64 (Apple Silicon)
@@ -222,12 +222,12 @@ jobs:
           cp src/runtime/include/*.hpp staging/strucpp/runtime/include/
           cp libs/*.stlib staging/strucpp/libs/
           cp LICENSE COPYING COPYING.RUNTIME staging/strucpp/ 2>/dev/null || true
-          tar -czf strucpp-darwin-arm64.tar.gz -C staging strucpp
+          cd staging && zip -r ../strucpp-darwin-arm64.zip strucpp
 
       - uses: actions/upload-artifact@v4
         with:
           name: strucpp-darwin-arm64
-          path: strucpp-darwin-arm64.tar.gz
+          path: strucpp-darwin-arm64.zip
 
   # ---------------------------------------------------------------------------
   # Windows x64 (cross-compiled via pkg on Linux)
@@ -300,8 +300,8 @@ jobs:
           mkdir -p release
           cp artifacts/strucpp-linux-x64/strucpp-linux-x64.tar.gz release/
           cp artifacts/strucpp-linux-arm64/strucpp-linux-arm64.tar.gz release/
-          cp artifacts/strucpp-darwin-x64/strucpp-darwin-x64.tar.gz release/
-          cp artifacts/strucpp-darwin-arm64/strucpp-darwin-arm64.tar.gz release/
+          cp artifacts/strucpp-darwin-x64/strucpp-darwin-x64.zip release/
+          cp artifacts/strucpp-darwin-arm64/strucpp-darwin-arm64.zip release/
           cp artifacts/strucpp-win32-x64/strucpp-win32-x64.zip release/
           # Windows ARM64 runs x64 binaries via emulation
           cp release/strucpp-win32-x64.zip release/strucpp-win32-arm64.zip
