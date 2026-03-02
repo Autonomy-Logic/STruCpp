@@ -927,6 +927,40 @@ export class STParser extends CstParser {
     );
   }
 
+  /**
+   * Lookahead helper to detect if the current position starts a CASE label.
+   * Scans forward looking for a bare Colon (:) before finding Assign (:=),
+   * Semicolon, or LParen — which would indicate a statement, not a label.
+   * Handles: `42:`, `x:`, `MyEnum.RED:`, `1..5:`
+   */
+  private isCaseLabelStart(): boolean {
+    const la1Type = this.LA(1).tokenType;
+    // Case labels must start with a value expression: integer literal,
+    // identifier, or contextual keyword
+    if (
+      la1Type !== tokens.IntegerLiteral &&
+      la1Type !== tokens.Minus &&
+      !this.isIdentifierOrKeywordToken(la1Type)
+    ) {
+      return false;
+    }
+    // Scan forward (up to 8 tokens) looking for Colon before Assign/Semicolon/LParen
+    for (let i = 2; i <= 8; i++) {
+      const t = this.LA(i).tokenType;
+      if (t === tokens.Colon) return true;
+      if (
+        t === tokens.Assign ||
+        t === tokens.Semicolon ||
+        t === tokens.LParen ||
+        t === tokens.END_CASE ||
+        t === tokens.ELSE
+      ) {
+        return false;
+      }
+    }
+    return false;
+  }
+
   private isMethodCallAhead(): boolean {
     return (
       this.isIdentifierOrKeywordToken(this.LA(1).tokenType) &&
@@ -1052,8 +1086,9 @@ export class STParser extends CstParser {
     this.CONSUME(tokens.CASE);
     this.SUBRULE(this.expression);
     this.CONSUME(tokens.OF);
-    this.MANY(() => {
-      this.SUBRULE(this.caseElement);
+    this.MANY({
+      GATE: () => this.isCaseLabelStart(),
+      DEF: () => this.SUBRULE(this.caseElement),
     });
     this.OPTION(() => {
       this.CONSUME(tokens.ELSE);
@@ -1074,7 +1109,20 @@ export class STParser extends CstParser {
       DEF: () => this.SUBRULE(this.caseLabel),
     });
     this.CONSUME(tokens.Colon);
-    this.SUBRULE(this.statementList);
+    this.SUBRULE(this.caseStatementList);
+  });
+
+  /**
+   * Statement list inside a CASE element.
+   * Stops iterating when the next tokens look like a new case label
+   * (identifier/integer followed by Colon), preventing the parser from
+   * consuming the next case label as an assignment statement.
+   */
+  public caseStatementList = this.RULE("caseStatementList", () => {
+    this.MANY({
+      GATE: () => !this.isCaseLabelStart(),
+      DEF: () => this.SUBRULE(this.statement),
+    });
   });
 
   /**

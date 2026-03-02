@@ -10,6 +10,7 @@
 import type {
   CompilationUnit,
   ElementaryType,
+  EnumType,
   Expression,
   FunctionBlockDeclaration,
   FunctionCallExpression,
@@ -218,11 +219,19 @@ export class SemanticAnalyzer {
     // Register type declarations
     for (const typeDecl of ast.types) {
       try {
-        const resolvedType: ElementaryType = {
-          typeKind: "elementary",
-          name: typeDecl.name,
-          sizeBits: 0,
-        };
+        // Use enum typeKind for EnumDefinition so CASE and type checks work correctly
+        const resolvedType: EnumType | ElementaryType =
+          typeDecl.definition.kind === "EnumDefinition"
+            ? {
+                typeKind: "enum" as const,
+                name: typeDecl.name,
+                values: typeDecl.definition.members.map((m) => m.name),
+              }
+            : {
+                typeKind: "elementary" as const,
+                name: typeDecl.name,
+                sizeBits: 0,
+              };
         this.symbolTables.globalScope.defineOrReplace({
           name: typeDecl.name,
           kind: "type",
@@ -312,11 +321,17 @@ export class SemanticAnalyzer {
             );
             // Register method return variable (MethodName := value)
             if (method.returnType) {
-              const retType: ElementaryType = {
-                typeKind: "elementary",
-                name: method.returnType.name,
-                sizeBits: 0,
-              };
+              const retTypeSymbol = this.symbolTables.globalScope.lookup(
+                method.returnType.name,
+              );
+              const retType =
+                retTypeSymbol?.kind === "type" && retTypeSymbol.resolvedType
+                  ? retTypeSymbol.resolvedType
+                  : {
+                      typeKind: "elementary" as const,
+                      name: method.returnType.name,
+                      sizeBits: 0,
+                    };
               methodScope.define({
                 name: method.name,
                 kind: "variable",
@@ -411,11 +426,18 @@ export class SemanticAnalyzer {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           try {
-            const varType: ElementaryType = {
-              typeKind: "elementary",
-              name: decl.type.name,
-              sizeBits: 0,
-            };
+            // Use the registered type symbol if available (preserves enum typeKind)
+            const typeSymbol = this.symbolTables.globalScope.lookup(
+              decl.type.name,
+            );
+            const varType =
+              typeSymbol?.kind === "type" && typeSymbol.resolvedType
+                ? typeSymbol.resolvedType
+                : {
+                    typeKind: "elementary" as const,
+                    name: decl.type.name,
+                    sizeBits: 0,
+                  };
             if (block.isConstant) {
               this.symbolTables.globalScope.define({
                 name,
@@ -468,11 +490,18 @@ export class SemanticAnalyzer {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           try {
-            const varType: ElementaryType = {
-              typeKind: "elementary",
-              name: decl.type.name,
-              sizeBits: 0,
-            };
+            // Use the registered type symbol if available (preserves enum typeKind)
+            const typeSymbol = this.symbolTables.globalScope.lookup(
+              decl.type.name,
+            );
+            const varType =
+              typeSymbol?.kind === "type" && typeSymbol.resolvedType
+                ? typeSymbol.resolvedType
+                : {
+                    typeKind: "elementary" as const,
+                    name: decl.type.name,
+                    sizeBits: 0,
+                  };
             if (block.isConstant) {
               scope.define({
                 name,
