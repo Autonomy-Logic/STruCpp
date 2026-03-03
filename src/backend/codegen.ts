@@ -248,6 +248,9 @@ export class CodeGenerator {
   /** Set of known struct/UDT type names (upper case) */
   protected knownStructTypes: Set<string> = new Set();
 
+  /** Map of enum type name (upper case) → set of member names (upper case) for :: emission */
+  protected enumTypeMembers: Map<string, Set<string>> = new Map();
+
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
 
@@ -481,9 +484,15 @@ export class CodeGenerator {
       }
     }
 
-    // Build set of known struct/UDT types
+    // Build set of known struct/UDT types and enum member maps
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
+      if (td.definition.kind === "EnumDefinition") {
+        const members = new Set(
+          td.definition.members.map((m) => m.name.toUpperCase()),
+        );
+        this.enumTypeMembers.set(td.name.toUpperCase(), members);
+      }
     }
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
@@ -2579,6 +2588,20 @@ export class CodeGenerator {
       }
     }
 
+    // Enum qualified access: TrafficState.RED → TrafficState::RED
+    if (this.enumTypeMembers.has(nameUpper)) {
+      if (
+        expr.accessChain &&
+        expr.accessChain.length === 1 &&
+        expr.accessChain[0]!.kind === "field"
+      ) {
+        return `${expr.name}::${expr.accessChain[0]!.name}`;
+      }
+      if (expr.fieldAccess.length === 1) {
+        return `${expr.name}::${expr.fieldAccess[0]}`;
+      }
+    }
+
     // Use ordered access chain when available (preserves interleaving)
     if (expr.accessChain && expr.accessChain.length > 0) {
       return this.generateAccessChain(result, expr.accessChain, nameUpper);
@@ -3770,6 +3793,14 @@ export class CodeGenerator {
    */
   private getDefaultValue(typeName: string, initialValue?: string): string {
     if (initialValue) {
+      // Convert enum dot-notation (TRAFFICSTATE.RED) to C++ scoped access (TRAFFICSTATE::RED)
+      const dotIdx = initialValue.indexOf(".");
+      if (dotIdx > 0) {
+        const prefix = initialValue.substring(0, dotIdx).toUpperCase();
+        if (this.enumTypeMembers.has(prefix)) {
+          return initialValue.replace(".", "::");
+        }
+      }
       return initialValue;
     }
 

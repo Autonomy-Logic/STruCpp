@@ -226,6 +226,64 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.cppCode).toContain("case 89:");
     expect(result.cppCode).toContain("default:");
   });
+
+
+  it("should generate CASE with enum dot-notation labels using ::", () => {
+    const result = compileST(`
+      TYPE
+        TrafficState : (RED, YELLOW, GREEN);
+      END_TYPE
+      PROGRAM TestEnumCase
+        VAR state : TrafficState; x : INT; END_VAR
+        CASE state OF
+          TrafficState.RED:    x := 1;
+          TrafficState.GREEN:  x := 2;
+          TrafficState.YELLOW: x := 3;
+        END_CASE;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("switch (STATE) {");
+    expect(result.cppCode).toContain("case TRAFFICSTATE::RED:");
+    expect(result.cppCode).toContain("case TRAFFICSTATE::GREEN:");
+    expect(result.cppCode).toContain("case TRAFFICSTATE::YELLOW:");
+  });
+
+  it("should generate enum dot-notation in assignments and expressions", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM TestEnumAssign
+        VAR c : Color; matched : BOOL; END_VAR
+        c := Color.RED;
+        matched := (c = Color.GREEN);
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("C = COLOR::RED;");
+    expect(result.cppCode).toContain("COLOR::GREEN");
+  });
+
+  it("should generate enum dot-notation with multiple enum types", () => {
+    const result = compileST(`
+      TYPE
+        TrafficState : (RED, YELLOW, GREEN);
+        PedState : (WALK, DONT_WALK, FLASHING);
+      END_TYPE
+      PROGRAM TestMultiEnum
+        VAR
+          ts : TrafficState;
+          ps : PedState;
+        END_VAR
+        ts := TrafficState.RED;
+        ps := PedState.WALK;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("TRAFFICSTATE::RED");
+    expect(result.cppCode).toContain("PEDSTATE::WALK");
+  });
 });
 
 // =============================================================================

@@ -80,6 +80,12 @@ export class TestCodeGenerator extends CodeGenerator {
     }
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
+      if (td.definition?.kind === "EnumDefinition") {
+        const members = new Set(
+          td.definition.members.map((m) => m.name.toUpperCase()),
+        );
+        this.enumTypeMembers.set(td.name.toUpperCase(), members);
+      }
     }
     for (const prog of ast.programs) {
       this.knownProgramTypes.add(prog.name.toUpperCase());

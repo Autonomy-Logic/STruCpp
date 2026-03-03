@@ -1766,8 +1766,10 @@ export class ASTBuilder {
       labels.push(this.buildCaseLabel(labelNode));
     }
 
-    // Statements
-    const stmtListNode = getFirstNode(children.statementList);
+    // Statements (uses caseStatementList rule which has GATE to stop at case labels)
+    const stmtListNode =
+      getFirstNode(children.caseStatementList) ??
+      getFirstNode(children.statementList);
     const statements = this.extractStatementsFromList(stmtListNode);
 
     return {
