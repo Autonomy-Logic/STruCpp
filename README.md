@@ -5,19 +5,19 @@
 [![CI](https://github.com/Autonomy-Logic/strucpp/actions/workflows/ci.yml/badge.svg)](https://github.com/Autonomy-Logic/strucpp/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
-STruC++ compiles PLC programs written in [Structured Text](https://en.wikipedia.org/wiki/Structured_text) into clean, readable C++17. It ships with a built-in unit testing framework, an interactive REPL for program debugging, and a reusable library system -- all from a single standalone binary.
+STruC++ compiles PLC programs written in [Structured Text](https://en.wikipedia.org/wiki/Structured_text) into clean, readable C++17. It ships with a built-in unit testing framework, an interactive REPL for program debugging, and a reusable library system.
 
-> The name **STruC++** comes from **ST** (Structured Text) + **stru** (Latin root meaning "to build") + **C++** (the target language). It was originally created for the [OpenPLC](https://autonomylogic.com) toolchain.
+> The name **STruC++** comes from **ST** (Structured Text) + **stru** (Latin root meaning "to build") + **C++** (the target language).
 
 ---
 
 ## Why STruC++?
 
-**The only ST-to-C++ compiler.** Other tools target C (MatIEC) or proprietary bytecode (CODESYS, TwinCAT). STruC++ generates idiomatic C++17 -- classes for function blocks, virtual methods for interfaces, templates for generics -- producing code you can actually read, debug, and integrate with existing C++ projects.
+**The only ST-to-C++ compiler.** Other tools target C (MatIEC) or proprietary bytecode. STruC++ generates idiomatic C++17 with classes for function blocks, virtual methods for interfaces, and templates for generics, producing code you can actually read, debug, and integrate with existing C++ projects.
 
-**Built-in unit testing.** Every PLC testing solution today requires a separate IDE add-on, an external library, or PLC hardware to run tests. STruC++ has a test runner built into the compiler itself -- write tests in ST, run them on any machine with `strucpp source.st --test tests.st`. No PLC needed.
+**Built-in unit testing.** Every PLC testing solution today requires a separate IDE add-on, an external library, or PLC hardware to run tests. STruC++ has a test runner built into the compiler itself. Users can write tests in ST, run them on any machine with `strucpp source.st --test tests.st`. No PLC needed, perfect for automated build pipelines.
 
-**Interactive REPL.** Build your ST program into a standalone binary with `--build` and step through it interactively: set inputs, advance cycles, inspect variables, force values -- all from the command line.
+**Interactive REPL.** Build your ST program into a standalone binary with `--build` and step through it interactively to check correctness. The interactive REPL allows users to print ST and C++ code side-by-side, set inputs, advance cycles, inspect variables, and force values.
 
 **Zero runtime dependencies.** The compiler is a single binary. The C++ runtime is header-only. Generated code compiles with any C++17 compiler (g++, clang++, MSVC).
 
@@ -86,7 +86,7 @@ strucpp[5]> vars Main
 
 ## Unit Testing
 
-Write test files using `TEST` blocks with assertions -- no IDE plugins, no PLC hardware required:
+Write test files in Structured Text using `TEST` blocks with assertions. No need for IDE plugins, no PLC hardware required:
 
 **Source** (`adder.st`):
 
