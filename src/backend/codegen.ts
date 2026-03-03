@@ -267,6 +267,9 @@ export class CodeGenerator {
   /** Map of UPPER(typeName).UPPER(methodName) → declared method name for case normalization */
   protected methodNameMap: Map<string, string> = new Map();
 
+  /** Map of UPPER(interfaceName) → Set of UPPER(methodName) for variable/method collision detection */
+  protected interfaceMethodsByInterface: Map<string, Set<string>> = new Map();
+
   /** Map of UPPER(typeName).UPPER(propName) → declared property name for property access codegen */
   protected propertyNameMap: Map<string, string> = new Map();
 
@@ -277,8 +280,14 @@ export class CodeGenerator {
   private varInstMangledNames: Map<string, string> = new Map();
 
   /** Mapping of member names (upper case) that collide with their type name
-   *  to mangled names (e.g., SENSOR → SENSOR_ to avoid GCC -Wchanges-meaning) */
+   *  or interface method names to mangled names (e.g., SENSOR → SENSOR_) */
   private memberMangledNames: Map<string, string> = new Map();
+
+  /** Interface method names for the current FB (UPPER case), used for variable/method collision detection */
+  private currentFBInterfaceMethods: Set<string> = new Set();
+
+  /** Map of UPPER(fbName) → Set of UPPER(interfaceMethodName) for external field access mangling */
+  protected fbInterfaceMethodNames: Map<string, Set<string>> = new Map();
 
   /** Current FB's var blocks, kept so method scopes can see FB member types */
   private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
@@ -458,18 +467,24 @@ export class CodeGenerator {
       this.knownFBTypes.add(fb.name.toUpperCase());
     }
 
-    // Build set of known interface types and method name map
+    // Build set of known interface types, method name map, and per-interface method sets
     for (const iface of ast.interfaces) {
       this.knownInterfaceTypes.add(iface.name.toUpperCase());
+      const ifaceMethods = new Set<string>();
       for (const method of iface.methods) {
         this.methodNameMap.set(
           `${iface.name.toUpperCase()}.${method.name.toUpperCase()}`,
           method.name,
         );
+        ifaceMethods.add(method.name.toUpperCase());
       }
+      this.interfaceMethodsByInterface.set(
+        iface.name.toUpperCase(),
+        ifaceMethods,
+      );
     }
 
-    // Build method name map and property name map for FBs
+    // Build method name map, property name map, and interface method names for FBs
     for (const fb of ast.functionBlocks) {
       for (const method of fb.methods) {
         this.methodNameMap.set(
@@ -482,6 +497,11 @@ export class CodeGenerator {
           `${fb.name.toUpperCase()}.${prop.name.toUpperCase()}`,
           prop.name,
         );
+      }
+      // Precompute interface method names for each FB (for field access mangling)
+      const ifaceMethods = this.getInterfaceMethodNames(fb);
+      if (ifaceMethods.size > 0) {
+        this.fbInterfaceMethodNames.set(fb.name.toUpperCase(), ifaceMethods);
       }
     }
 
@@ -767,6 +787,9 @@ export class CodeGenerator {
   private generateFBHeaderDeclaration(
     fb: CompilationUnit["functionBlocks"][0],
   ): void {
+    // Populate interface method names for variable/method collision detection
+    this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
+
     // Build inheritance clause
     const bases: string[] = [];
     if (fb.extends) {
@@ -1307,6 +1330,7 @@ export class CodeGenerator {
     this.currentFBName = fb.name;
     this.currentFBExtends = fb.extends;
     this.currentFBVarBlocks = fb.varBlocks;
+    this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
 
     // Constructor with initializer list for variables with defaults
     const fbInits: string[] = [];
@@ -1369,6 +1393,7 @@ export class CodeGenerator {
     this.currentFBName = undefined;
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
+    this.currentFBInterfaceMethods = new Set();
   }
 
   /**
@@ -2546,7 +2571,11 @@ export class CodeGenerator {
             }
           }
           const fieldType = this.resolveMemberType(currentType, field);
-          const fieldCppName = this.needsFieldMangling(field, fieldType)
+          const fieldCppName = this.needsFieldMangling(
+            field,
+            fieldType,
+            currentType,
+          )
             ? `${field}_`
             : field;
           if (i > 0) result += ".";
@@ -2576,7 +2605,11 @@ export class CodeGenerator {
             }
           }
           const fieldType = this.resolveMemberType(currentType, field);
-          const fieldCppName = this.needsFieldMangling(field, fieldType)
+          const fieldCppName = this.needsFieldMangling(
+            field,
+            fieldType,
+            currentType,
+          )
             ? `${field}_`
             : field;
           if (i > 0) result += ".";
@@ -2661,9 +2694,13 @@ export class CodeGenerator {
             continue;
           }
         }
-        // Check if this field needs mangling (name == type in parent)
+        // Check if this field needs mangling (name == type or interface method in parent)
         const fieldType = this.resolveMemberType(currentType, field);
-        const fieldCppName = this.needsFieldMangling(field, fieldType)
+        const fieldCppName = this.needsFieldMangling(
+          field,
+          fieldType,
+          currentType,
+        )
           ? `${field}_`
           : field;
         result += `.${fieldCppName}`;
@@ -2721,7 +2758,11 @@ export class CodeGenerator {
             }
           }
           const fieldType = this.resolveMemberType(currentType, step.name);
-          const fieldCppName = this.needsFieldMangling(step.name, fieldType)
+          const fieldCppName = this.needsFieldMangling(
+            step.name,
+            fieldType,
+            currentType,
+          )
             ? `${step.name}_`
             : step.name;
           // Array elements store T directly — always use . for field access
@@ -3550,7 +3591,7 @@ export class CodeGenerator {
       for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
         const f = expr.fieldAccess[i]!;
         const ft = this.resolveMemberType(ct, f);
-        objectCode += (this.needsFieldMangling(f, ft) ? `${f}_` : f) + ".";
+        objectCode += (this.needsFieldMangling(f, ft, ct) ? `${f}_` : f) + ".";
         ct = ft;
       }
     } else if (nameUpper === "SUPER" && this.currentFBExtends) {
@@ -3559,7 +3600,7 @@ export class CodeGenerator {
       for (let i = 0; i < expr.fieldAccess.length - 1; i++) {
         const f = expr.fieldAccess[i]!;
         const ft = this.resolveMemberType(ct, f);
-        objectCode += (this.needsFieldMangling(f, ft) ? `${f}_` : f) + ".";
+        objectCode += (this.needsFieldMangling(f, ft, ct) ? `${f}_` : f) + ".";
         ct = ft;
       }
     } else {
@@ -3635,6 +3676,10 @@ export class CodeGenerator {
             this.isUserDefinedType(decl.type.name) &&
             name.toUpperCase() === cppType.toUpperCase()
           ) {
+            this.memberMangledNames.set(name.toUpperCase(), `${name}_`);
+          }
+          // Detect member name collisions with interface method names
+          if (this.currentFBInterfaceMethods.has(name.toUpperCase())) {
             this.memberMangledNames.set(name.toUpperCase(), `${name}_`);
           }
         }
@@ -3779,8 +3824,27 @@ export class CodeGenerator {
   }
 
   /**
-   * If a member variable name matches its C++ type name (case-insensitive),
-   * append '_' to avoid GCC -Wchanges-meaning error.
+   * Collect all interface method names (UPPER case) for a FB's IMPLEMENTS list.
+   */
+  protected getInterfaceMethodNames(fb: {
+    implements?: string[];
+  }): Set<string> {
+    const result = new Set<string>();
+    if (!fb.implements) return result;
+    for (const ifaceName of fb.implements) {
+      const methods = this.interfaceMethodsByInterface.get(
+        ifaceName.toUpperCase(),
+      );
+      if (methods) {
+        for (const m of methods) result.add(m);
+      }
+    }
+    return result;
+  }
+
+  /**
+   * If a member variable name collides with its C++ type name or an interface
+   * method name (case-insensitive), append '_' to avoid C++ errors.
    * Populates memberMangledNames map and returns the (possibly mangled) name.
    */
   private mangleMemberIfNeeded(
@@ -3788,28 +3852,50 @@ export class CodeGenerator {
     _cppType: string,
     stTypeName: string,
   ): string {
-    // Only FB/struct/interface instances can collide (IEC_ prefixed types can't)
-    // Compare against the ST type name, not cppType (which may include pointer '*' suffix).
-    if (!this.isUserDefinedType(stTypeName)) return name;
-    if (name.toUpperCase() !== stTypeName.toUpperCase()) return name;
-    const mangled = `${name}_`;
-    this.memberMangledNames.set(name.toUpperCase(), mangled);
-    return mangled;
+    // Variable name vs type name collision (GCC -Wchanges-meaning)
+    if (this.isUserDefinedType(stTypeName)) {
+      if (name.toUpperCase() === stTypeName.toUpperCase()) {
+        const mangled = `${name}_`;
+        this.memberMangledNames.set(name.toUpperCase(), mangled);
+        return mangled;
+      }
+    }
+    // Variable name vs interface method name collision
+    if (this.currentFBInterfaceMethods.has(name.toUpperCase())) {
+      const mangled = `${name}_`;
+      this.memberMangledNames.set(name.toUpperCase(), mangled);
+      return mangled;
+    }
+    return name;
   }
 
   /**
-   * Check if a field access needs mangling — true when the field's resolved
-   * type name matches the field name. GCC -Wchanges-meaning applies to both
-   * class and struct members.
+   * Check if a field access needs mangling — true when the field name collides
+   * with its type name (GCC -Wchanges-meaning) or with an interface method name.
    */
   private needsFieldMangling(
     fieldName: string,
     fieldTypeName: string | undefined,
+    parentTypeName?: string,
   ): boolean {
-    if (!fieldTypeName) return false;
-    if (!this.isUserDefinedType(fieldTypeName)) return false;
-    if (fieldName.toUpperCase() !== fieldTypeName.toUpperCase()) return false;
-    return true;
+    // Field name vs type name collision
+    if (
+      fieldTypeName &&
+      this.isUserDefinedType(fieldTypeName) &&
+      fieldName.toUpperCase() === fieldTypeName.toUpperCase()
+    ) {
+      return true;
+    }
+    // Field name vs interface method name collision
+    if (parentTypeName) {
+      const ifaceMethods = this.fbInterfaceMethodNames.get(
+        parentTypeName.toUpperCase(),
+      );
+      if (ifaceMethods?.has(fieldName.toUpperCase())) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

@@ -118,6 +118,40 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       // No method implementation for interface
       expect(result.cppCode).not.toContain("ISENSOR::GETVALUE");
     });
+
+    it("should mangle VAR_INPUT names that collide with interface method names", () => {
+      const result = compileAndCheck(`
+        INTERFACE IControllable
+          METHOD Enable : BOOL
+          END_METHOD
+          METHOD Disable : BOOL
+          END_METHOD
+        END_INTERFACE
+        FUNCTION_BLOCK Motor IMPLEMENTS IControllable
+          VAR_INPUT
+            enable : BOOL := TRUE;
+            speed  : INT := 0;
+          END_VAR
+          METHOD PUBLIC Enable : BOOL
+            Enable := enable;
+          END_METHOD
+          METHOD PUBLIC Disable : BOOL
+            enable := FALSE;
+            Disable := TRUE;
+          END_METHOD
+        END_FUNCTION_BLOCK
+        PROGRAM Main END_PROGRAM
+      `);
+
+      // Variable 'enable' should be mangled to 'ENABLE_' to avoid conflict with ENABLE() method
+      expect(result.headerCode).toContain("IEC_BOOL ENABLE_;");
+      // Non-colliding variable should NOT be mangled
+      expect(result.headerCode).toContain("IEC_INT SPEED;");
+      // Interface method should still be generated
+      expect(result.headerCode).toContain("IEC_BOOL ENABLE()");
+      // Method body should reference the mangled variable name
+      expect(result.cppCode).toContain("ENABLE_");
+    });
   });
 
   // ─────────────────────────────────────────────────────────────────────

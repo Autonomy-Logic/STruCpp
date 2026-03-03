@@ -54,6 +54,22 @@ export class TestCodeGenerator extends CodeGenerator {
    */
   initFromAST(ast: CompilationUnit): void {
     this.ast = ast;
+    // Interfaces first — needed for FB interface method name resolution
+    for (const iface of ast.interfaces) {
+      this.knownInterfaceTypes.add(iface.name.toUpperCase());
+      const ifaceMethods = new Set<string>();
+      for (const method of iface.methods) {
+        this.methodNameMap.set(
+          `${iface.name.toUpperCase()}.${method.name.toUpperCase()}`,
+          method.name,
+        );
+        ifaceMethods.add(method.name.toUpperCase());
+      }
+      this.interfaceMethodsByInterface.set(
+        iface.name.toUpperCase(),
+        ifaceMethods,
+      );
+    }
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
       for (const method of fb.methods) {
@@ -68,14 +84,10 @@ export class TestCodeGenerator extends CodeGenerator {
           prop.name,
         );
       }
-    }
-    for (const iface of ast.interfaces) {
-      this.knownInterfaceTypes.add(iface.name.toUpperCase());
-      for (const method of iface.methods) {
-        this.methodNameMap.set(
-          `${iface.name.toUpperCase()}.${method.name.toUpperCase()}`,
-          method.name,
-        );
+      // Precompute interface method names for field access mangling
+      const ifaceMethods = this.getInterfaceMethodNames(fb);
+      if (ifaceMethods.size > 0) {
+        this.fbInterfaceMethodNames.set(fb.name.toUpperCase(), ifaceMethods);
       }
     }
     for (const td of ast.types) {
@@ -144,11 +156,17 @@ export class TestCodeGenerator extends CodeGenerator {
       const field = path[i]!;
       if (currentType && this.ast) {
         const memberType = this.resolveMemberType(currentType, field);
-        if (
+        // Check for field name vs type name collision
+        const typeCollision =
           memberType &&
           this.isUserDefinedType(memberType) &&
-          field.toUpperCase() === memberType.toUpperCase()
-        ) {
+          field.toUpperCase() === memberType.toUpperCase();
+        // Check for field name vs interface method name collision
+        const ifaceCollision =
+          this.fbInterfaceMethodNames
+            .get(currentType.toUpperCase())
+            ?.has(field.toUpperCase()) ?? false;
+        if (typeCollision || ifaceCollision) {
           parts.push(`${field}_`);
         } else {
           parts.push(field);
