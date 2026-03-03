@@ -15,11 +15,11 @@ STruC++ compiles PLC programs written in [Structured Text](https://en.wikipedia.
 
 **The only ST-to-C++ compiler.** Other tools target C (MatIEC) or proprietary bytecode. STruC++ generates idiomatic C++17 with classes for function blocks, virtual methods for interfaces, and templates for generics, producing code you can actually read, debug, and integrate with existing C++ projects.
 
-**Built-in unit testing.** Every PLC testing solution today requires a separate IDE add-on, an external library, or PLC hardware to run tests. STruC++ has a test runner built into the compiler itself. Users can write tests in ST, run them on any machine with `strucpp source.st --test tests.st`. No PLC needed, perfect for automated build pipelines.
+**Built-in unit testing.** Every PLC testing solution today requires a separate IDE add-on, an external library, or PLC hardware to run tests. STruC++ has a test runner built into the compiler itself. Users can write tests in ST, run them on any machine with `strucpp source.st --test tests.st`. No PLC needed, perfect for automated build pipelines. See the [Testing Guide](docs/TESTING.md).
 
-**Interactive REPL.** Build your ST program into a standalone binary with `--build` and step through it interactively to check correctness. The interactive REPL allows users to print ST and C++ code side-by-side, set inputs, advance cycles, inspect variables, and force values.
+**Interactive REPL.** Build your ST program into a standalone binary with `--build` and step through it interactively to check correctness. The interactive REPL allows users to print ST and C++ code side-by-side, set inputs, advance cycles, inspect variables, and force values. See the [REPL Guide](docs/REPL.md).
 
-**Zero runtime dependencies.** The compiler is a single binary. The C++ runtime is header-only. Generated code compiles with any C++17 compiler (g++, clang++, MSVC).
+**Zero runtime dependencies.** The compiler is a single binary. The C++ runtime is header-only. Generated code compiles with any C++17 compiler (g++, clang++, MSVC). See the [CLI Reference](docs/CLI.md) and [C++ Runtime](docs/RUNTIME.md).
 
 ---
 
@@ -62,7 +62,7 @@ test_adder.st
 2 tests, 2 passed, 0 failed
 ```
 
-### Interactive REPL
+### Interactive REPL ([full guide](docs/REPL.md))
 
 ```bash
 strucpp program.st -o program.cpp --build
@@ -84,7 +84,7 @@ strucpp[5]> vars Main
 
 ---
 
-## Unit Testing
+## Unit Testing ([full guide](docs/TESTING.md))
 
 Write test files in Structured Text using `TEST` blocks with assertions. No need for IDE plugins, no PLC hardware required:
 
