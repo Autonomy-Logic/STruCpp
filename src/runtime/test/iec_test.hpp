@@ -36,11 +36,17 @@ extern int64_t __CURRENT_TIME_NS;
  * Convert a value to a display string for assertion failure messages.
  * Uses overloads to handle different IEC types correctly.
  */
-template<typename T>
+template<typename T, typename std::enable_if<!std::is_enum<T>::value, int>::type = 0>
 inline std::string to_display_string(const T& value) {
     std::ostringstream oss;
     oss << value;
     return oss.str();
+}
+
+// Enum class specialization: display underlying integer value
+template<typename T, typename std::enable_if<std::is_enum<T>::value, int>::type = 0>
+inline std::string to_display_string(const T& value) {
+    return std::to_string(static_cast<typename std::underlying_type<T>::type>(value));
 }
 
 // Bool specialization: show TRUE/FALSE instead of 1/0

@@ -1307,8 +1307,31 @@ export class CodeGenerator {
     this.currentFBExtends = fb.extends;
     this.currentFBVarBlocks = fb.varBlocks;
 
-    // Constructor
-    this.emit(`${fb.name}::${fb.name}() {`);
+    // Constructor with initializer list for variables with defaults
+    const fbInits: string[] = [];
+    for (const block of fb.varBlocks) {
+      for (const decl of block.declarations) {
+        if (decl.initialValue) {
+          const initExpr = this.generateExpression(decl.initialValue);
+          for (const name of decl.names) {
+            const cppType = this.mapTypeRefToCpp(decl.type);
+            const memberName = this.mangleMemberIfNeeded(
+              name,
+              cppType,
+              decl.type.name,
+            );
+            fbInits.push(`${memberName}(${initExpr})`);
+          }
+        }
+      }
+    }
+    if (fbInits.length > 0) {
+      this.emit(`${fb.name}::${fb.name}()`);
+      this.emit(`    : ${fbInits.join(", ")}`);
+      this.emit("{");
+    } else {
+      this.emit(`${fb.name}::${fb.name}() {`);
+    }
     this.emit("    // Initialize variables");
     this.emit("}");
     this.emit("");
@@ -3800,6 +3823,17 @@ export class CodeGenerator {
         if (this.enumTypeMembers.has(prefix)) {
           return initialValue.replace(".", "::");
         }
+      }
+      // Convert TIME/LTIME literals (T#30s, TIME#1m2s) to nanoseconds
+      const upperInit = initialValue.toUpperCase();
+      if (
+        upperInit.startsWith("T#") ||
+        upperInit.startsWith("TIME#") ||
+        upperInit.startsWith("LTIME#") ||
+        upperInit.startsWith("LT#")
+      ) {
+        const timeVal = parseTimeLiteral(initialValue);
+        return `${timeVal.nanoseconds}LL`;
       }
       return initialValue;
     }
