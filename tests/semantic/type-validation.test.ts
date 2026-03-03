@@ -284,6 +284,41 @@ describe("Type Validation", () => {
       );
       expect(caseErrors).toHaveLength(0);
     });
+
+    it("should allow enum selector with dot-notation labels", () => {
+      const { errors } = analyzeSource(`
+        TYPE
+          TrafficState : (RED, YELLOW, GREEN);
+        END_TYPE
+        PROGRAM Main
+          VAR state : TrafficState; x : INT; END_VAR
+          CASE state OF
+            TrafficState.RED: x := 1;
+            TrafficState.GREEN: x := 2;
+          END_CASE;
+        END_PROGRAM
+      `);
+      const caseErrors = errors.filter(
+        (e) => e.includes("CASE") && e.includes("selector"),
+      );
+      expect(caseErrors).toHaveLength(0);
+    });
+
+    it("should allow enum assignment with dot notation", () => {
+      const { errors } = analyzeSource(`
+        TYPE
+          TrafficState : (RED, YELLOW, GREEN);
+        END_TYPE
+        PROGRAM Main
+          VAR state : TrafficState; END_VAR
+          state := TrafficState.RED;
+        END_PROGRAM
+      `);
+      const assignErrors = errors.filter(
+        (e) => e.includes("Cannot assign"),
+      );
+      expect(assignErrors).toHaveLength(0);
+    });
   });
 
   describe("Cross-type assignments in real-world patterns", () => {

@@ -3793,6 +3793,14 @@ export class CodeGenerator {
    */
   private getDefaultValue(typeName: string, initialValue?: string): string {
     if (initialValue) {
+      // Convert enum dot-notation (TRAFFICSTATE.RED) to C++ scoped access (TRAFFICSTATE::RED)
+      const dotIdx = initialValue.indexOf(".");
+      if (dotIdx > 0) {
+        const prefix = initialValue.substring(0, dotIdx).toUpperCase();
+        if (this.enumTypeMembers.has(prefix)) {
+          return initialValue.replace(".", "::");
+        }
+      }
       return initialValue;
     }
 

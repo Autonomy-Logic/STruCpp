@@ -702,6 +702,9 @@ export class ProjectModelBuilder {
       return lit.rawValue;
     }
     if (expr.kind === "VariableExpression") {
+      if (expr.fieldAccess.length > 0) {
+        return `${expr.name}.${expr.fieldAccess.join(".")}`;
+      }
       return expr.name;
     }
     return "";

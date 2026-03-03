@@ -944,7 +944,13 @@ export class STParser extends CstParser {
     ) {
       return false;
     }
-    // Scan forward (up to 8 tokens) looking for Colon before Assign/Semicolon/LParen
+    // Scan forward looking for Colon before Assign/Semicolon/LParen.
+    // 8-token cap covers all realistic label patterns:
+    //   42:                → 2 tokens    EnumType.MEMBER:  → 4 tokens
+    //   -5:                → 3 tokens    1, 2, 3, 4:       → 8 tokens
+    //   1..10:             → 4 tokens
+    // The AT_LEAST_ONE_SEP in caseElement handles comma-separated labels
+    // internally, so the gate only needs to detect the first label's colon.
     for (let i = 2; i <= 8; i++) {
       const t = this.LA(i).tokenType;
       if (t === tokens.Colon) return true;

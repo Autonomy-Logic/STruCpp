@@ -213,6 +213,17 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * Resolve a type name to its registered type (preserves enum typeKind)
+   * or fall back to a generic elementary type for unknown/user-defined types.
+   */
+  private resolveVarType(typeName: string): EnumType | ElementaryType {
+    const typeSymbol = this.symbolTables.globalScope.lookup(typeName);
+    return typeSymbol?.kind === "type" && typeSymbol.resolvedType
+      ? (typeSymbol.resolvedType as EnumType | ElementaryType)
+      : { typeKind: "elementary" as const, name: typeName, sizeBits: 0 };
+  }
+
+  /**
    * Build symbol tables from the AST.
    */
   private buildSymbolTables(ast: CompilationUnit): void {
@@ -321,17 +332,7 @@ export class SemanticAnalyzer {
             );
             // Register method return variable (MethodName := value)
             if (method.returnType) {
-              const retTypeSymbol = this.symbolTables.globalScope.lookup(
-                method.returnType.name,
-              );
-              const retType =
-                retTypeSymbol?.kind === "type" && retTypeSymbol.resolvedType
-                  ? retTypeSymbol.resolvedType
-                  : {
-                      typeKind: "elementary" as const,
-                      name: method.returnType.name,
-                      sizeBits: 0,
-                    };
+              const retType = this.resolveVarType(method.returnType.name);
               methodScope.define({
                 name: method.name,
                 kind: "variable",
@@ -426,18 +427,7 @@ export class SemanticAnalyzer {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           try {
-            // Use the registered type symbol if available (preserves enum typeKind)
-            const typeSymbol = this.symbolTables.globalScope.lookup(
-              decl.type.name,
-            );
-            const varType =
-              typeSymbol?.kind === "type" && typeSymbol.resolvedType
-                ? typeSymbol.resolvedType
-                : {
-                    typeKind: "elementary" as const,
-                    name: decl.type.name,
-                    sizeBits: 0,
-                  };
+            const varType = this.resolveVarType(decl.type.name);
             if (block.isConstant) {
               this.symbolTables.globalScope.define({
                 name,
@@ -490,18 +480,7 @@ export class SemanticAnalyzer {
       for (const decl of block.declarations) {
         for (const name of decl.names) {
           try {
-            // Use the registered type symbol if available (preserves enum typeKind)
-            const typeSymbol = this.symbolTables.globalScope.lookup(
-              decl.type.name,
-            );
-            const varType =
-              typeSymbol?.kind === "type" && typeSymbol.resolvedType
-                ? typeSymbol.resolvedType
-                : {
-                    typeKind: "elementary" as const,
-                    name: decl.type.name,
-                    sizeBits: 0,
-                  };
+            const varType = this.resolveVarType(decl.type.name);
             if (block.isConstant) {
               scope.define({
                 name,

@@ -179,6 +179,38 @@ describe('STParser', () => {
       expect(result.errors).toHaveLength(0);
     });
 
+    it('should parse CASE with enum dot-notation labels', () => {
+      const source = `
+        TYPE
+          TrafficState : (RED, YELLOW, GREEN);
+        END_TYPE
+        PROGRAM Main
+          VAR state : TrafficState; x : INT; END_VAR
+          CASE state OF
+            TrafficState.RED:    x := 1;
+            TrafficState.GREEN:  x := 2;
+            TrafficState.YELLOW: x := 3;
+          END_CASE;
+        END_PROGRAM
+      `;
+      const result = parse(source);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should parse CASE with mixed integer and identifier labels', () => {
+      const source = `
+        PROGRAM Main
+          VAR state : INT; x : INT; END_VAR
+          CASE state OF
+            1: x := 10;
+            2, 3: x := 20;
+          END_CASE;
+        END_PROGRAM
+      `;
+      const result = parse(source);
+      expect(result.errors).toHaveLength(0);
+    });
+
     it('should parse a struct type', () => {
       const source = `
         TYPE
