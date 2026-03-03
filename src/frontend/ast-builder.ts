@@ -45,6 +45,7 @@ import type {
   DrefExpression,
   NewExpression,
   DeleteStatement,
+  ArrayLiteralExpression,
   FunctionCallExpression,
   MethodCallExpression,
   FunctionCallStatement,
@@ -2223,6 +2224,23 @@ export class ASTBuilder {
       return this.buildDrefExpression(getFirstNode(children.drefExpression)!);
     }
 
+    // Check for array literal [expr, expr, ...]
+    if (children.arrayLiteral) {
+      const litNode = getFirstNode(children.arrayLiteral)!;
+      const litChildren = litNode.children as CstChildren;
+      const exprNodes = getAllNodes(litChildren.expression);
+      const elements: Expression[] = [];
+      for (const en of exprNodes) {
+        const e = this.buildExpression(en);
+        if (e) elements.push(e);
+      }
+      return {
+        kind: "ArrayLiteralExpression",
+        sourceSpan: nodeToSourceSpan(litNode),
+        elements,
+      } as ArrayLiteralExpression;
+    }
+
     // Check for __NEW(type) or __NEW(type, size) expression
     if (children.newExpression) {
       return this.buildNewExpression(getFirstNode(children.newExpression)!);
@@ -2787,12 +2805,28 @@ export class ASTBuilder {
   buildSuperAccessExpression(node: CstNode): Expression {
     const children = node.children as CstChildren;
     const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
-    const memberName =
-      idOrKwNodes.length > 0
-        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
-        : "";
 
-    // If there's a LParen, it's a method call
+    // SUPER^() — parent body call (no method name)
+    if (idOrKwNodes.length === 0) {
+      const args: Argument[] = [];
+      const argListNode = getFirstNode(children.argumentList);
+      if (argListNode) {
+        const argListChildren = argListNode.children as CstChildren;
+        for (const argNode of getAllNodes(argListChildren.argument)) {
+          args.push(this.buildArgument(argNode));
+        }
+      }
+      return {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: "SUPER",
+        arguments: args,
+      };
+    }
+
+    const memberName = getIdentifierOrKeywordImage(idOrKwNodes[0]!);
+
+    // SUPER^.method(args) — parent method call
     if (children.LParen) {
       const args: Argument[] = [];
       const argListNode = getFirstNode(children.argumentList);
@@ -2810,7 +2844,7 @@ export class ASTBuilder {
       };
     }
 
-    // Otherwise it's member access
+    // SUPER^.member — parent member access
     return {
       kind: "VariableExpression",
       sourceSpan: nodeToSourceSpan(node),
@@ -3083,16 +3117,12 @@ export class ASTBuilder {
   }
 
   /**
-   * Build a SUPER call statement: SUPER.method(args);
-   * Maps to FunctionCallStatement with functionName = "SUPER.method"
+   * Build a SUPER call statement: SUPER^(); or SUPER^.method(args);
+   * Body call → functionName = "SUPER"; method call → functionName = "SUPER.method"
    */
   buildSuperCallStatement(node: CstNode): FunctionCallStatement {
     const children = node.children as CstChildren;
     const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
-    const methodName =
-      idOrKwNodes.length > 0
-        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
-        : "";
 
     const args: Argument[] = [];
     const argListNode = getFirstNode(children.argumentList);
@@ -3103,6 +3133,22 @@ export class ASTBuilder {
       }
     }
 
+    // SUPER^() — parent body call (no method name)
+    if (idOrKwNodes.length === 0) {
+      return {
+        kind: "FunctionCallStatement",
+        sourceSpan: nodeToSourceSpan(node),
+        call: {
+          kind: "FunctionCallExpression",
+          sourceSpan: nodeToSourceSpan(node),
+          functionName: "SUPER",
+          arguments: args,
+        },
+      };
+    }
+
+    // SUPER^.method(args) — parent method call
+    const methodName = getIdentifierOrKeywordImage(idOrKwNodes[0]!);
     return {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),

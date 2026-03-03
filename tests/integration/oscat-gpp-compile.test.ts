@@ -25,6 +25,7 @@ import {
   createPCH,
   RUNTIME_INCLUDE_PATH,
   TEST_RUNTIME_PATH,
+  cxxEnv,
 } from "./test-helpers.js";
 import { execSync } from "child_process";
 
@@ -186,7 +187,7 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
         ].join(" ");
 
         try {
-          execSync(gppCmd, { encoding: "utf-8", timeout: 180000 });
+          execSync(gppCmd, { encoding: "utf-8", timeout: 180000, env: cxxEnv });
         } catch (error) {
           const execError = error as {
             stdout?: string;

@@ -50,6 +50,27 @@ import {
   buildPOUInfoFromAST,
 } from "./backend/test-main-gen.js";
 import { analyzeTestFile } from "./semantic/analyzer.js";
+
+/**
+ * On macOS, newer Xcode CLT versions move libc++ headers to the SDK.
+ * Returns an env object with CPLUS_INCLUDE_PATH set so g++ can find them.
+ */
+function getCxxEnv(): NodeJS.ProcessEnv | undefined {
+  if (platform() !== "darwin") return undefined;
+  try {
+    const sdkPath = execFileSync("xcrun", ["--show-sdk-path"], {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim();
+    const cxxInclude = join(sdkPath, "usr", "include", "c++", "v1");
+    if (existsSync(cxxInclude)) {
+      return { ...process.env, CPLUS_INCLUDE_PATH: cxxInclude };
+    }
+  } catch {
+    /* xcrun not available */
+  }
+  return undefined;
+}
 import type { CompileOptions } from "./types.js";
 import { importCodesysLibrary } from "./library/codesys-import/index.js";
 
@@ -841,7 +862,7 @@ function runTestMode(options: CLIOptions): void {
           "-o",
           binaryPath,
         ],
-        { stdio: ["pipe", "pipe", "pipe"] },
+        { stdio: ["pipe", "pipe", "pipe"], env: getCxxEnv() },
       );
     } catch (err: unknown) {
       const execErr = err as {
@@ -1256,7 +1277,10 @@ function main(): void {
 
     console.log(`Building binary: ${basename(binaryPath)}`);
     try {
-      execFileSync(options.gpp, gppArgs, { stdio: "inherit" });
+      execFileSync(options.gpp, gppArgs, {
+        stdio: "inherit",
+        env: getCxxEnv(),
+      });
       console.log(`Binary built: ${binaryPath}`);
       console.log(`Run it with: ${binaryPath}`);
     } catch (err: unknown) {

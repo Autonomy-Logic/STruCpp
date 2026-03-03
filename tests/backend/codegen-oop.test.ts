@@ -261,13 +261,13 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
           METHOD PUBLIC SetSpeed
             VAR_INPUT s : INT; END_VAR
-            SUPER.SetSpeed(s);
+            SUPER^.SetSpeed(s);
           END_METHOD
         END_FUNCTION_BLOCK
         PROGRAM Main END_PROGRAM
       `);
 
-      // SUPER.SetSpeed(s) → MOTOR::SETSPEED(S)
+      // SUPER^.SetSpeed(s) → MOTOR::SETSPEED(S)
       expect(result.cppCode).toContain("MOTOR::SETSPEED(S)");
     });
 
@@ -283,7 +283,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
           METHOD PUBLIC SetSpeed
             VAR_INPUT s : INT; END_VAR
-            SUPER.SetSpeed(s);
+            SUPER^.SetSpeed(s);
           END_METHOD
         END_FUNCTION_BLOCK
         PROGRAM Main END_PROGRAM
@@ -297,6 +297,45 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // The overriding method should have override, not virtual
       expect(advancedMotorSection).toContain("override");
+    });
+
+    it("should generate parent body call for SUPER^()", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Base
+          VAR _x : INT; END_VAR
+          _x := _x + 1;
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Child EXTENDS Base
+          VAR _y : INT; END_VAR
+          SUPER^();
+          _y := _y + 1;
+        END_FUNCTION_BLOCK
+        PROGRAM Main END_PROGRAM
+      `);
+
+      // SUPER^() → BASE::operator()()
+      expect(result.cppCode).toContain("BASE::operator()()");
+    });
+
+    it("should NOT inject implicit parent body call", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Base
+          VAR _x : INT; END_VAR
+          _x := _x + 1;
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Child EXTENDS Base
+          VAR _y : INT; END_VAR
+          _y := _y + 1;
+        END_FUNCTION_BLOCK
+        PROGRAM Main END_PROGRAM
+      `);
+
+      // Without explicit SUPER^(), parent body should NOT be called
+      const childSection = result.cppCode.slice(
+        result.cppCode.indexOf("void CHILD::operator()()"),
+      );
+      const childBody = childSection.slice(0, childSection.indexOf("\n}\n") + 3);
+      expect(childBody).not.toContain("BASE::operator()()");
     });
   });
 

@@ -442,6 +442,20 @@ export class STParser extends CstParser {
     });
   });
 
+  /**
+   * Array literal: [expr, expr, ...]
+   * Bracket-enclosed comma-separated expressions for array initialization.
+   */
+  public arrayLiteral = this.RULE("arrayLiteral", () => {
+    this.CONSUME(tokens.LBracket);
+    this.SUBRULE(this.expression);
+    this.MANY(() => {
+      this.CONSUME(tokens.Comma);
+      this.SUBRULE2(this.expression);
+    });
+    this.CONSUME(tokens.RBracket);
+  });
+
   // ==========================================================================
   // Type declarations
   // ==========================================================================
@@ -788,7 +802,9 @@ export class STParser extends CstParser {
         },
         {
           ALT: () => this.SUBRULE(this.superCallStatement),
-          GATE: () => this.LA(1).tokenType === tokens.SUPER,
+          GATE: () =>
+            this.LA(1).tokenType === tokens.SUPER &&
+            this.LA(2).tokenType === tokens.Caret,
         },
         // methodCallStatement must come before assignmentStatement/functionCallStatement
         // since all start with Identifier but methodCall needs Ident.Ident( lookahead
@@ -996,19 +1012,35 @@ export class STParser extends CstParser {
   });
 
   /**
-   * SUPER.method(args); statement
+   * SUPER^(); or SUPER^.method(args); statement
+   * Caret is mandatory — SUPER is a pointer to parent (CODESYS semantics).
    */
   public superCallStatement = this.RULE("superCallStatement", () => {
     this.CONSUME(tokens.SUPER);
-    this.CONSUME(tokens.Dot);
-    this.SUBRULE(this.identifierOrKeyword);
-    this.OPTION(() => {
-      this.CONSUME(tokens.LParen);
-      this.OPTION2(() => {
-        this.SUBRULE(this.argumentList);
-      });
-      this.CONSUME(tokens.RParen);
-    });
+    this.CONSUME(tokens.Caret);
+    this.OR([
+      {
+        // SUPER^(); — parent body call
+        GATE: () => this.LA(1).tokenType === tokens.LParen,
+        ALT: () => {
+          this.CONSUME(tokens.LParen);
+          this.OPTION(() => this.SUBRULE(this.argumentList));
+          this.CONSUME(tokens.RParen);
+        },
+      },
+      {
+        // SUPER^.method(args);
+        ALT: () => {
+          this.CONSUME(tokens.Dot);
+          this.SUBRULE(this.identifierOrKeyword);
+          this.OPTION2(() => {
+            this.CONSUME2(tokens.LParen);
+            this.OPTION3(() => this.SUBRULE2(this.argumentList));
+            this.CONSUME2(tokens.RParen);
+          });
+        },
+      },
+    ]);
     this.CONSUME(tokens.Semicolon);
   });
 
@@ -1371,11 +1403,17 @@ export class STParser extends CstParser {
         },
         {
           ALT: () => this.SUBRULE(this.superAccess),
-          GATE: () => this.LA(1).tokenType === tokens.SUPER,
+          GATE: () =>
+            this.LA(1).tokenType === tokens.SUPER &&
+            this.LA(2).tokenType === tokens.Caret,
         },
         {
           ALT: () => this.SUBRULE(this.methodCall),
           GATE: () => this.isMethodCallAhead(),
+        },
+        {
+          ALT: () => this.SUBRULE(this.arrayLiteral),
+          GATE: () => this.LA(1).tokenType === tokens.LBracket,
         },
         // functionCall and variable both start with Identifier;
         // functionCall needs Ident( lookahead to disambiguate
@@ -1458,20 +1496,35 @@ export class STParser extends CstParser {
   });
 
   /**
-   * SUPER.method(args) access
+   * SUPER^() or SUPER^.method(args) access
+   * Caret is mandatory — SUPER is a pointer to parent (CODESYS semantics).
    */
   public superAccess = this.RULE("superAccess", () => {
     this.CONSUME(tokens.SUPER);
-    this.CONSUME(tokens.Dot);
-    this.SUBRULE(this.identifierOrKeyword);
-    // Optional function call: SUPER.Method(args)
-    this.OPTION(() => {
-      this.CONSUME(tokens.LParen);
-      this.OPTION2(() => {
-        this.SUBRULE(this.argumentList);
-      });
-      this.CONSUME(tokens.RParen);
-    });
+    this.CONSUME(tokens.Caret);
+    this.OR([
+      {
+        // SUPER^() — parent body call
+        GATE: () => this.LA(1).tokenType === tokens.LParen,
+        ALT: () => {
+          this.CONSUME(tokens.LParen);
+          this.OPTION(() => this.SUBRULE(this.argumentList));
+          this.CONSUME(tokens.RParen);
+        },
+      },
+      {
+        // SUPER^.method(args) or SUPER^.member
+        ALT: () => {
+          this.CONSUME(tokens.Dot);
+          this.SUBRULE(this.identifierOrKeyword);
+          this.OPTION2(() => {
+            this.CONSUME2(tokens.LParen);
+            this.OPTION3(() => this.SUBRULE2(this.argumentList));
+            this.CONSUME2(tokens.RParen);
+          });
+        },
+      },
+    ]);
   });
 
   /**

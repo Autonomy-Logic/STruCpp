@@ -187,17 +187,16 @@ export class TestCodeGenerator extends CodeGenerator {
    * For POUs, maps to the C++ class name. For elementary types, delegates to base.
    */
   resolveType(typeOrName: TypeReference | string): string {
-    const name = typeof typeOrName === "string" ? typeOrName : typeOrName.name;
-    const maxLength =
-      typeof typeOrName === "string" ? undefined : typeOrName.maxLength;
-    const pou = this.pouMap.get(name.toUpperCase());
-    if (pou) {
-      return pou.cppClassName;
+    if (typeof typeOrName === "string") {
+      const pou = this.pouMap.get(typeOrName.toUpperCase());
+      if (pou) return pou.cppClassName;
+      return this.mapVarTypeToCpp(typeOrName);
     }
-    return this.mapVarTypeToCpp(
-      name,
-      typeof maxLength === "number" ? maxLength : undefined,
-    );
+    const pou = this.pouMap.get(typeOrName.name.toUpperCase());
+    if (pou) return pou.cppClassName;
+    // Use mapTypeRefToCpp to handle inline array types (__INLINE_ARRAY_*)
+    // with arrayDimensions and elementTypeName
+    return this.mapTypeRefToCpp(typeOrName);
   }
 
   // --- Hook overrides ---

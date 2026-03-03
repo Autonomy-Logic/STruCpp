@@ -893,5 +893,37 @@ export class StdFunctionRegistry {
       isConversion: false,
       category: "system",
     });
+
+    // LOWER_BOUND(arr, dim) -> DINT (lower bound of array dimension)
+    this.register({
+      name: "LOWER_BOUND",
+      cppName: "LOWER_BOUND",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "DINT",
+      params: [
+        { name: "ARR", constraint: "ANY", isByRef: true },
+        { name: "DIM", constraint: "ANY_INT", isByRef: false },
+      ],
+      isVariadic: false,
+      isConversion: false,
+      category: "system",
+    });
+
+    // UPPER_BOUND(arr, dim) -> DINT (upper bound of array dimension)
+    this.register({
+      name: "UPPER_BOUND",
+      cppName: "UPPER_BOUND",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "DINT",
+      params: [
+        { name: "ARR", constraint: "ANY", isByRef: true },
+        { name: "DIM", constraint: "ANY_INT", isByRef: false },
+      ],
+      isVariadic: false,
+      isConversion: false,
+      category: "system",
+    });
   }
 }

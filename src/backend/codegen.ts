@@ -324,10 +324,11 @@ export class CodeGenerator {
     maxLength?: number | string,
   ): string {
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
+    // Use IECVar-wrapped types to match concrete Array1D<IEC_T, ...> elements
     const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
     if (vlaMatch) {
       const ndims = vlaMatch[1];
-      const elemType = this.typeCodeGen.mapTypeToCpp(vlaMatch[2]!);
+      const elemType = this.mapVarTypeToCpp(vlaMatch[2]!);
       return `ArrayView${ndims}D<${elemType}>`;
     }
     // Handle parameterized STRING(n) / WSTRING(n) / STRING(CONSTANT_NAME)
@@ -1307,8 +1308,31 @@ export class CodeGenerator {
     this.currentFBExtends = fb.extends;
     this.currentFBVarBlocks = fb.varBlocks;
 
-    // Constructor
-    this.emit(`${fb.name}::${fb.name}() {`);
+    // Constructor with initializer list for variables with defaults
+    const fbInits: string[] = [];
+    for (const block of fb.varBlocks) {
+      for (const decl of block.declarations) {
+        if (decl.initialValue) {
+          const initExpr = this.generateExpression(decl.initialValue);
+          for (const name of decl.names) {
+            const cppType = this.mapTypeRefToCpp(decl.type);
+            const memberName = this.mangleMemberIfNeeded(
+              name,
+              cppType,
+              decl.type.name,
+            );
+            fbInits.push(`${memberName}(${initExpr})`);
+          }
+        }
+      }
+    }
+    if (fbInits.length > 0) {
+      this.emit(`${fb.name}::${fb.name}()`);
+      this.emit(`    : ${fbInits.join(", ")}`);
+      this.emit("{");
+    } else {
+      this.emit(`${fb.name}::${fb.name}() {`);
+    }
     this.emit("    // Initialize variables");
     this.emit("}");
     this.emit("");
@@ -3135,12 +3159,32 @@ export class CodeGenerator {
 
     const nameUpper = expr.functionName.toUpperCase();
 
+    // SUPER^() — parent body call
+    if (nameUpper === "SUPER" && this.currentFBExtends) {
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
+      return `${this.currentFBExtends}::operator()(${args.join(", ")})`;
+    }
+
     // 0. ADR(x) → &(x) (CODESYS address-of operator)
     if (nameUpper === "ADR") {
       const args = expr.arguments.map((arg) =>
         this.generateExpression(arg.value),
       );
       return `&(${args[0] ?? ""})`;
+    }
+
+    // 0b. LOWER_BOUND/UPPER_BOUND(arr, dim) → arr.lower_bound() / arr.upper_bound()
+    if (nameUpper === "LOWER_BOUND" || nameUpper === "UPPER_BOUND") {
+      const method =
+        nameUpper === "LOWER_BOUND" ? "lower_bound" : "upper_bound";
+      const arrExpr = this.generateExpression(expr.arguments[0]!.value);
+      if (expr.arguments.length >= 2) {
+        const dimExpr = this.generateExpression(expr.arguments[1]!.value);
+        return `${arrExpr}.${method}(${dimExpr})`;
+      }
+      return `${arrExpr}.${method}()`;
     }
 
     // 1. Check for *_TO_* conversion pattern (e.g., INT_TO_REAL -> TO_REAL)
@@ -3801,6 +3845,20 @@ export class CodeGenerator {
           return initialValue.replace(".", "::");
         }
       }
+      // Convert TIME/LTIME literals (T#30s, TIME#1m2s) to nanoseconds
+      const upperInit = initialValue.toUpperCase();
+      if (
+        upperInit.startsWith("T#") ||
+        upperInit.startsWith("TIME#") ||
+        upperInit.startsWith("LTIME#") ||
+        upperInit.startsWith("LT#")
+      ) {
+        const timeVal = parseTimeLiteral(initialValue);
+        return `${timeVal.nanoseconds}LL`;
+      }
+      // Convert IEC BOOL literals to C++ bool literals
+      if (upperInit === "TRUE") return "true";
+      if (upperInit === "FALSE") return "false";
       return initialValue;
     }
 

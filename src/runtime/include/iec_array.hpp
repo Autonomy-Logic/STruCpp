@@ -99,8 +99,8 @@ public:
     
     // Size information
     static constexpr size_t length() noexcept { return size; }
-    static constexpr int64_t lower_bound() noexcept { return Bounds::lower; }
-    static constexpr int64_t upper_bound() noexcept { return Bounds::upper; }
+    static constexpr int64_t lower_bound(int = 1) noexcept { return Bounds::lower; }
+    static constexpr int64_t upper_bound(int = 1) noexcept { return Bounds::upper; }
     
     // Raw data access (for interop)
     var_type* data() noexcept { return data_.data(); }
@@ -253,8 +253,8 @@ public:
         return data_[index - lower_];
     }
 
-    int64_t lower_bound() const noexcept { return lower_; }
-    int64_t upper_bound() const noexcept { return upper_; }
+    int64_t lower_bound(int = 1) const noexcept { return lower_; }
+    int64_t upper_bound(int = 1) const noexcept { return upper_; }
     int64_t length() const noexcept { return upper_ - lower_ + 1; }
 };
 

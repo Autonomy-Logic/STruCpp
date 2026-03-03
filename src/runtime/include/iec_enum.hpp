@@ -13,6 +13,8 @@
 #pragma once
 
 #include <cstdint>
+#include <ostream>
+#include <type_traits>
 #include "iec_var.hpp"
 
 namespace strucpp {
@@ -210,6 +212,13 @@ public:
  */
 template<typename EnumType>
 using IEC_ENUM = IEC_ENUM_Var<EnumType>;
+
+// Stream output for IEC_ENUM_Var — outputs underlying integer value
+template<typename EnumType>
+inline std::ostream& operator<<(std::ostream& os, const IEC_ENUM_Var<EnumType>& v) {
+    return os << static_cast<typename std::underlying_type<EnumType>::type>(
+        static_cast<EnumType>(v));
+}
 
 /*
  * Example generated enumeration:

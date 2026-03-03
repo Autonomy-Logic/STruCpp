@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstddef>
 #include <new>
+#include "iec_ptr.hpp"
 
 namespace strucpp {
 
@@ -56,6 +57,19 @@ void iec_delete(T*& ptr) {
     if (ptr) {
         ptr->~T();  // Call destructor
         std::free(ptr);
+        ptr = nullptr;
+    }
+}
+
+/**
+ * Deallocate via IEC_Ptr. Extracts raw pointer, frees, and resets to nullptr.
+ */
+template<typename T>
+void iec_delete(IEC_Ptr<T>& ptr) {
+    T* raw = ptr.get();
+    if (raw) {
+        raw->~T();
+        std::free(raw);
         ptr = nullptr;
     }
 }

@@ -869,7 +869,7 @@ describe('OOP Parser', () => {
       const source = `
         FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
           METHOD PUBLIC OVERRIDE Start
-            SUPER.Start();
+            SUPER^.Start();
           END_METHOD
         END_FUNCTION_BLOCK
       `;
@@ -885,7 +885,7 @@ describe('OOP Parser', () => {
             VAR_INPUT
               newSpeed : INT;
             END_VAR
-            SUPER.SetSpeed(newSpeed);
+            SUPER^.SetSpeed(newSpeed);
           END_METHOD
         END_FUNCTION_BLOCK
       `;
@@ -898,7 +898,7 @@ describe('OOP Parser', () => {
       const source = `
         FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
           METHOD PUBLIC OVERRIDE Start
-            SUPER.Start;
+            SUPER^.Start;
           END_METHOD
         END_FUNCTION_BLOCK
       `;
@@ -914,7 +914,7 @@ describe('OOP Parser', () => {
             _turboEnabled : BOOL;
           END_VAR
           METHOD PUBLIC OVERRIDE Start
-            SUPER.Start();
+            SUPER^.Start();
             THIS._turboEnabled := TRUE;
           END_METHOD
         END_FUNCTION_BLOCK
@@ -1059,13 +1059,13 @@ describe('OOP Parser', () => {
 
         FUNCTION_BLOCK Middle EXTENDS Base
           METHOD PUBLIC OVERRIDE DoWork
-            SUPER.DoWork();
+            SUPER^.DoWork();
           END_METHOD
         END_FUNCTION_BLOCK
 
         FUNCTION_BLOCK Leaf EXTENDS Middle
           METHOD PUBLIC OVERRIDE DoWork
-            SUPER.DoWork();
+            SUPER^.DoWork();
           END_METHOD
         END_FUNCTION_BLOCK
       `;
@@ -1128,7 +1128,7 @@ describe('OOP Parser', () => {
             VAR
               temp : REAL;
             END_VAR
-            temp := SUPER.Calculate(input);
+            temp := SUPER^.Calculate(input);
             Calculate := temp * 2.0;
           END_METHOD
           METHOD PRIVATE Helper

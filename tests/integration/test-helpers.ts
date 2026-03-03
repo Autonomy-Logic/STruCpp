@@ -52,6 +52,22 @@ export const hasGpp = (() => {
 })();
 
 /**
+ * On macOS, newer Xcode CLT versions move libc++ headers to the SDK.
+ * Returns an env object with CPLUS_INCLUDE_PATH set, or undefined.
+ */
+export const cxxEnv: Record<string, string> | undefined = (() => {
+  if (process.platform !== 'darwin') return undefined;
+  try {
+    const sdkPath = execSync('xcrun --show-sdk-path', { encoding: 'utf-8' }).trim();
+    const cxxInclude = path.join(sdkPath, 'usr', 'include', 'c++', 'v1');
+    if (fs.existsSync(cxxInclude)) {
+      return { ...process.env, CPLUS_INCLUDE_PATH: cxxInclude };
+    }
+  } catch { /* xcrun not available */ }
+  return undefined;
+})();
+
+/**
  * Check if cc (C compiler) is available on the system.
  */
 export const hasCc = (() => {
@@ -74,7 +90,7 @@ export function createPCH(tempDir: string): string {
   fs.writeFileSync(pchHppPath, PCH_INCLUDES);
   execSync(
     `g++ -std=c++17 -x c++-header -I"${RUNTIME_INCLUDE_PATH}" "${pchHppPath}" -o "${pchGchPath}" 2>&1`,
-    { encoding: 'utf-8' },
+    { encoding: 'utf-8', env: cxxEnv },
   );
 
   return pchHppPath;
@@ -148,14 +164,14 @@ export function compileWithGpp(opts: CompileWithGppOptions): CompileResult {
     if (syntaxOnly) {
       execSync(
         `g++ -std=c++17 -fsyntax-only ${includeFlags} ${flagsStr} "${cppPath}" 2>&1`,
-        { encoding: 'utf-8' },
+        { encoding: 'utf-8', env: cxxEnv },
       );
       return { success: true };
     } else {
       const binPath = path.join(tempDir, testName);
       execSync(
         `g++ -std=c++17 ${includeFlags} ${flagsStr} "${cppPath}" ${objectsStr} -o "${binPath}" 2>&1`,
-        { encoding: 'utf-8' },
+        { encoding: 'utf-8', env: cxxEnv },
       );
       return { success: true, outputPath: binPath };
     }
@@ -307,7 +323,7 @@ export function runE2ETestPipeline(
     ].join(' ');
 
     try {
-      execSync(gppCommand, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+      execSync(gppCommand, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'], env: cxxEnv });
     } catch (err: unknown) {
       const execErr = err as { stderr?: string; message?: string };
       throw new Error(

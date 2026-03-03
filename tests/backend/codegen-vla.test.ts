@@ -115,7 +115,7 @@ describe("Phase 3.4: VLA Code Generation", () => {
     `);
     expect(result.success).toBe(true);
     // Function signature should use ArrayView1D
-    expect(result.cppCode).toContain("ArrayView1D<INT_t>");
+    expect(result.cppCode).toContain("ArrayView1D<IEC_INT>");
   });
 
   it("should generate ArrayView2D parameter for 2D VLA", () => {
@@ -129,7 +129,7 @@ describe("Phase 3.4: VLA Code Generation", () => {
     `);
     expect(result.success).toBe(true);
     // Function signature should use ArrayView2D
-    expect(result.cppCode).toContain("ArrayView2D<REAL_t>");
+    expect(result.cppCode).toContain("ArrayView2D<IEC_REAL>");
   });
 
   it("should generate ArrayView1D in function header", () => {
@@ -142,7 +142,7 @@ describe("Phase 3.4: VLA Code Generation", () => {
       END_FUNCTION
     `);
     expect(result.success).toBe(true);
-    expect(result.headerCode).toContain("ArrayView1D<BOOL_t>");
+    expect(result.headerCode).toContain("ArrayView1D<IEC_BOOL>");
   });
 
   it("should handle VLA with non-VLA parameters", () => {
@@ -160,7 +160,7 @@ describe("Phase 3.4: VLA Code Generation", () => {
     expect(result.success).toBe(true);
     // Should have both regular input and ArrayView parameter
     expect(result.cppCode).toContain("IEC_INT");
-    expect(result.cppCode).toContain("ArrayView1D<INT_t>");
+    expect(result.cppCode).toContain("ArrayView1D<IEC_INT>");
   });
 
   it("should pass VAR_IN_OUT non-VLA by reference", () => {
@@ -257,6 +257,6 @@ describe("Phase 3.4: Array Dimension Star Support", () => {
       END_FUNCTION
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("ArrayView1D<REAL_t>");
+    expect(result.cppCode).toContain("ArrayView1D<IEC_REAL>");
   });
 });

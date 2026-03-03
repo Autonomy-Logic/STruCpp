@@ -648,7 +648,7 @@ describe("AST Builder - OOP Features", () => {
       const ast = parseAndBuild(`
         FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
           METHOD OVERRIDE Start
-            SUPER.Start();
+            SUPER^.Start();
           END_METHOD
         END_FUNCTION_BLOCK
       `);
@@ -664,7 +664,7 @@ describe("AST Builder - OOP Features", () => {
       const ast = parseAndBuild(`
         FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
           METHOD OVERRIDE SetSpeed
-            SUPER.SetSpeed(speed := 50);
+            SUPER^.SetSpeed(speed := 50);
           END_METHOD
         END_FUNCTION_BLOCK
       `);
@@ -845,7 +845,7 @@ describe("AST Builder - OOP Features", () => {
         FUNCTION_BLOCK AdvancedMotor EXTENDS Motor
           VAR _boost : BOOL; END_VAR
           METHOD OVERRIDE Start
-            SUPER.Start();
+            SUPER^.Start();
             THIS._boost := TRUE;
           END_METHOD
         END_FUNCTION_BLOCK
@@ -854,7 +854,7 @@ describe("AST Builder - OOP Features", () => {
       const method = ast.functionBlocks[0]!.methods[0]!;
       expect(method.body).toHaveLength(2);
 
-      // First statement: SUPER.Start();
+      // First statement: SUPER^.Start();
       const superCall = method.body[0] as FunctionCallStatement;
       expect(superCall.kind).toBe("FunctionCallStatement");
       expect(superCall.call.functionName).toBe("SUPER.START");

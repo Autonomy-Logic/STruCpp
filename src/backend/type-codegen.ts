@@ -22,6 +22,7 @@ import type {
 } from "../frontend/ast.js";
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
 import { formatArrayType } from "./codegen-utils.js";
+import { parseTimeLiteral } from "../project-model.js";
 
 /**
  * Options for type code generation
@@ -506,6 +507,10 @@ export class TypeCodeGenerator {
         return `"${expr.rawValue}"`;
       case "WSTRING":
         return `L"${expr.rawValue}"`;
+      case "TIME": {
+        const timeVal = parseTimeLiteral(String(expr.value));
+        return `${timeVal.nanoseconds}LL`;
+      }
       default:
         return String(expr.value);
     }
@@ -513,6 +518,14 @@ export class TypeCodeGenerator {
 
   private variableToCpp(expr: VariableExpression): string {
     let result = expr.name;
+
+    // Enum qualified access: TrafficState.RED → TrafficState::RED
+    if (
+      this.knownEnumNames.has(expr.name.toUpperCase()) &&
+      expr.fieldAccess.length === 1
+    ) {
+      return `${expr.name}::${expr.fieldAccess[0]}`;
+    }
 
     for (const subscript of expr.subscripts) {
       result += `[${this.expressionToCpp(subscript)}]`;

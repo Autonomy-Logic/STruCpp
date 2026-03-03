@@ -20,6 +20,7 @@ import {
   precompileIsocline,
   RUNTIME_INCLUDE_PATH,
   REPL_PATH,
+  cxxEnv,
 } from './test-helpers.js';
 
 const describeIfCompilers = hasGpp && hasCc ? describe : describe.skip;
@@ -72,7 +73,7 @@ describeIfCompilers('REPL Runner Integration Tests', () => {
     // Compile C++ and link with pre-compiled isocline.o + PCH
     execSync(
       `g++ -std=c++17 -include "${pchPath}" -I"${RUNTIME_INCLUDE_PATH}" -I"${REPL_PATH}" -I"${tempDir}" "${mainPath}" "${cppPath}" "${isoclineObj}" -o "${binPath}" 2>&1`,
-      { encoding: 'utf-8' },
+      { encoding: 'utf-8', env: cxxEnv },
     );
 
     // Run with piped commands
