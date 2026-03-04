@@ -11,10 +11,52 @@ import type {
   ASTNode,
   CompilationUnit,
   Expression,
-  Statement,
   VarBlock,
   VarDeclaration,
-  AccessStep,
+  ProgramDeclaration,
+  FunctionDeclaration,
+  FunctionBlockDeclaration,
+  InterfaceDeclaration,
+  MethodDeclaration,
+  PropertyDeclaration,
+  ConfigurationDeclaration,
+  ResourceDeclaration,
+  TaskDeclaration,
+  TypeDeclaration,
+  StructDefinition,
+  EnumDefinition,
+  EnumMember,
+  SubrangeDefinition,
+  ArrayDefinition,
+  ArrayDimension,
+  AssignmentStatement,
+  RefAssignStatement,
+  IfStatement,
+  ElsifClause,
+  CaseStatement,
+  CaseElement,
+  CaseLabel,
+  ForStatement,
+  WhileStatement,
+  RepeatStatement,
+  FunctionCallStatement,
+  DeleteStatement,
+  BinaryExpression,
+  UnaryExpression,
+  FunctionCallExpression,
+  MethodCallExpression,
+  Argument,
+  VariableExpression,
+  ParenthesizedExpression,
+  RefExpression,
+  DrefExpression,
+  NewExpression,
+  ArrayLiteralExpression,
+  AssertCall,
+  MockFunctionStatement,
+  MockVerifyCallCountStatement,
+  AdvanceTimeStatement,
+  TypeReference,
 } from "./frontend/ast.js";
 
 /**
@@ -87,8 +129,6 @@ export function collectReferences(
   let currentScope: string | undefined;
 
   walkAST(ast, (node) => {
-    const rec = node as unknown as Record<string, unknown>;
-
     // Track scope
     if (
       node.kind === "ProgramDeclaration" ||
@@ -96,7 +136,13 @@ export function collectReferences(
       node.kind === "FunctionBlockDeclaration" ||
       node.kind === "MethodDeclaration"
     ) {
-      currentScope = rec.name as string;
+      currentScope = (
+        node as
+          | ProgramDeclaration
+          | FunctionDeclaration
+          | FunctionBlockDeclaration
+          | MethodDeclaration
+      ).name;
     }
 
     // Skip if scope filter doesn't match
@@ -110,31 +156,37 @@ export function collectReferences(
 
     switch (node.kind) {
       case "VariableExpression": {
-        if ((rec.name as string).toUpperCase() === upperName) {
+        if ((node as VariableExpression).name.toUpperCase() === upperName) {
           refs.push(node);
         }
         break;
       }
       case "FunctionCallExpression": {
-        if ((rec.functionName as string).toUpperCase() === upperName) {
+        if (
+          (node as FunctionCallExpression).functionName.toUpperCase() ===
+          upperName
+        ) {
           refs.push(node);
         }
         break;
       }
       case "MethodCallExpression": {
-        if ((rec.methodName as string).toUpperCase() === upperName) {
+        if (
+          (node as MethodCallExpression).methodName.toUpperCase() === upperName
+        ) {
           refs.push(node);
         }
         break;
       }
       case "TypeReference": {
-        if ((rec.typeName as string).toUpperCase() === upperName) {
+        if ((node as TypeReference).name.toUpperCase() === upperName) {
           refs.push(node);
         }
         break;
       }
       case "VarDeclaration": {
-        if ((rec.name as string).toUpperCase() === upperName) {
+        const vd = node as VarDeclaration;
+        if (vd.names.some((n) => n.toUpperCase() === upperName)) {
           refs.push(node);
         }
         break;
@@ -143,7 +195,15 @@ export function collectReferences(
       case "FunctionDeclaration":
       case "FunctionBlockDeclaration":
       case "MethodDeclaration": {
-        if ((rec.name as string).toUpperCase() === upperName) {
+        if (
+          (
+            node as
+              | ProgramDeclaration
+              | FunctionDeclaration
+              | FunctionBlockDeclaration
+              | MethodDeclaration
+          ).name.toUpperCase() === upperName
+        ) {
           refs.push(node);
         }
         break;
@@ -214,31 +274,19 @@ function getChildren(node: ASTNode): ASTNode[] {
     }
 
     case "ProgramDeclaration": {
-      const pd = node as unknown as {
-        varBlocks: VarBlock[];
-        body: Statement[];
-      };
+      const pd = node as ProgramDeclaration;
       children.push(...pd.varBlocks, ...pd.body);
       break;
     }
 
     case "FunctionDeclaration": {
-      const fd = node as unknown as {
-        returnType: ASTNode;
-        varBlocks: VarBlock[];
-        body: Statement[];
-      };
+      const fd = node as FunctionDeclaration;
       children.push(fd.returnType, ...fd.varBlocks, ...fd.body);
       break;
     }
 
     case "FunctionBlockDeclaration": {
-      const fbd = node as unknown as {
-        varBlocks: VarBlock[];
-        methods: ASTNode[];
-        properties: ASTNode[];
-        body: Statement[];
-      };
+      const fbd = node as FunctionBlockDeclaration;
       children.push(
         ...fbd.varBlocks,
         ...fbd.methods,
@@ -249,28 +297,20 @@ function getChildren(node: ASTNode): ASTNode[] {
     }
 
     case "InterfaceDeclaration": {
-      const id = node as unknown as { methods: ASTNode[] };
+      const id = node as InterfaceDeclaration;
       children.push(...id.methods);
       break;
     }
 
     case "MethodDeclaration": {
-      const md = node as unknown as {
-        returnType?: ASTNode;
-        varBlocks: VarBlock[];
-        body: Statement[];
-      };
+      const md = node as MethodDeclaration;
       if (md.returnType) children.push(md.returnType);
       children.push(...md.varBlocks, ...md.body);
       break;
     }
 
     case "PropertyDeclaration": {
-      const prop = node as unknown as {
-        type: ASTNode;
-        getter?: Statement[];
-        setter?: Statement[];
-      };
+      const prop = node as PropertyDeclaration;
       children.push(prop.type);
       if (prop.getter) children.push(...prop.getter);
       if (prop.setter) children.push(...prop.setter);
@@ -279,25 +319,19 @@ function getChildren(node: ASTNode): ASTNode[] {
 
     // --- Configuration ---
     case "ConfigurationDeclaration": {
-      const cd = node as unknown as {
-        varBlocks: VarBlock[];
-        resources: ASTNode[];
-      };
+      const cd = node as ConfigurationDeclaration;
       children.push(...cd.varBlocks, ...cd.resources);
       break;
     }
 
     case "ResourceDeclaration": {
-      const rd = node as unknown as {
-        tasks: ASTNode[];
-        programInstances: ASTNode[];
-      };
+      const rd = node as ResourceDeclaration;
       children.push(...rd.tasks, ...rd.programInstances);
       break;
     }
 
     case "TaskDeclaration": {
-      const td = node as unknown as { properties: Map<string, Expression> };
+      const td = node as TaskDeclaration;
       for (const expr of td.properties.values()) {
         children.push(expr);
       }
@@ -306,73 +340,57 @@ function getChildren(node: ASTNode): ASTNode[] {
 
     // --- Variables & Types ---
     case "VarBlock": {
-      const vb = node as unknown as { declarations: VarDeclaration[] };
+      const vb = node as VarBlock;
       children.push(...vb.declarations);
       break;
     }
 
     case "VarDeclaration": {
-      const vd = node as unknown as {
-        type: ASTNode;
-        initialValue?: Expression;
-      };
+      const vd = node as VarDeclaration;
       children.push(vd.type);
       if (vd.initialValue) children.push(vd.initialValue);
       break;
     }
 
     case "TypeDeclaration": {
-      const td = node as unknown as { definition: ASTNode };
+      const td = node as TypeDeclaration;
       children.push(td.definition);
       break;
     }
 
     case "StructDefinition": {
-      const sd = node as unknown as { fields: VarDeclaration[] };
+      const sd = node as StructDefinition;
       children.push(...sd.fields);
       break;
     }
 
     case "EnumDefinition": {
-      const ed = node as unknown as {
-        baseType?: ASTNode;
-        members: ASTNode[];
-      };
+      const ed = node as EnumDefinition;
       if (ed.baseType) children.push(ed.baseType);
       children.push(...ed.members);
       break;
     }
 
     case "EnumMember": {
-      const em = node as unknown as { value?: Expression };
+      const em = node as EnumMember;
       if (em.value) children.push(em.value);
       break;
     }
 
     case "SubrangeDefinition": {
-      const srd = node as unknown as {
-        baseType: ASTNode;
-        lowerBound: Expression;
-        upperBound: Expression;
-      };
+      const srd = node as SubrangeDefinition;
       children.push(srd.baseType, srd.lowerBound, srd.upperBound);
       break;
     }
 
     case "ArrayDefinition": {
-      const ad = node as unknown as {
-        dimensions: ASTNode[];
-        elementType: ASTNode;
-      };
+      const ad = node as ArrayDefinition;
       children.push(...ad.dimensions, ad.elementType);
       break;
     }
 
     case "ArrayDimension": {
-      const dim = node as unknown as {
-        start?: Expression;
-        end?: Expression;
-      };
+      const dim = node as ArrayDimension;
       if (dim.start) children.push(dim.start);
       if (dim.end) children.push(dim.end);
       break;
@@ -380,30 +398,19 @@ function getChildren(node: ASTNode): ASTNode[] {
 
     // --- Statements ---
     case "AssignmentStatement": {
-      const as_ = node as unknown as {
-        target: Expression;
-        value: Expression;
-      };
+      const as_ = node as AssignmentStatement;
       children.push(as_.target, as_.value);
       break;
     }
 
     case "RefAssignStatement": {
-      const ras = node as unknown as {
-        target: Expression;
-        source: Expression;
-      };
+      const ras = node as RefAssignStatement;
       children.push(ras.target, ras.source);
       break;
     }
 
     case "IfStatement": {
-      const ifs = node as unknown as {
-        condition: Expression;
-        thenStatements: Statement[];
-        elsifClauses: ASTNode[];
-        elseStatements: Statement[];
-      };
+      const ifs = node as IfStatement;
       children.push(
         ifs.condition,
         ...ifs.thenStatements,
@@ -414,50 +421,32 @@ function getChildren(node: ASTNode): ASTNode[] {
     }
 
     case "ElsifClause": {
-      const ec = node as unknown as {
-        condition: Expression;
-        statements: Statement[];
-      };
+      const ec = node as ElsifClause;
       children.push(ec.condition, ...ec.statements);
       break;
     }
 
     case "CaseStatement": {
-      const cs = node as unknown as {
-        selector: Expression;
-        cases: ASTNode[];
-        elseStatements: Statement[];
-      };
+      const cs = node as CaseStatement;
       children.push(cs.selector, ...cs.cases, ...cs.elseStatements);
       break;
     }
 
     case "CaseElement": {
-      const ce = node as unknown as {
-        labels: ASTNode[];
-        statements: Statement[];
-      };
+      const ce = node as CaseElement;
       children.push(...ce.labels, ...ce.statements);
       break;
     }
 
     case "CaseLabel": {
-      const cl = node as unknown as {
-        start: Expression;
-        end?: Expression;
-      };
+      const cl = node as CaseLabel;
       children.push(cl.start);
       if (cl.end) children.push(cl.end);
       break;
     }
 
     case "ForStatement": {
-      const fs = node as unknown as {
-        start: Expression;
-        end: Expression;
-        step?: Expression;
-        body: Statement[];
-      };
+      const fs = node as ForStatement;
       children.push(fs.start, fs.end);
       if (fs.step) children.push(fs.step);
       children.push(...fs.body);
@@ -465,79 +454,62 @@ function getChildren(node: ASTNode): ASTNode[] {
     }
 
     case "WhileStatement": {
-      const ws = node as unknown as {
-        condition: Expression;
-        body: Statement[];
-      };
+      const ws = node as WhileStatement;
       children.push(ws.condition, ...ws.body);
       break;
     }
 
     case "RepeatStatement": {
-      const rs = node as unknown as {
-        condition: Expression;
-        body: Statement[];
-      };
+      const rs = node as RepeatStatement;
       children.push(rs.condition, ...rs.body);
       break;
     }
 
     case "FunctionCallStatement": {
-      const fcs = node as unknown as {
-        call: Expression;
-      };
+      const fcs = node as FunctionCallStatement;
       children.push(fcs.call);
       break;
     }
 
     case "DeleteStatement": {
-      const ds = node as unknown as { pointer: Expression };
+      const ds = node as DeleteStatement;
       children.push(ds.pointer);
       break;
     }
 
     // --- Expressions ---
     case "BinaryExpression": {
-      const be = node as unknown as {
-        left: Expression;
-        right: Expression;
-      };
+      const be = node as BinaryExpression;
       children.push(be.left, be.right);
       break;
     }
 
     case "UnaryExpression": {
-      const ue = node as unknown as { operand: Expression };
+      const ue = node as UnaryExpression;
       children.push(ue.operand);
       break;
     }
 
     case "FunctionCallExpression": {
-      const fce = node as unknown as { arguments: ASTNode[] };
+      const fce = node as FunctionCallExpression;
       children.push(...fce.arguments);
       break;
     }
 
     case "MethodCallExpression": {
-      const mce = node as unknown as {
-        object: Expression;
-        arguments: ASTNode[];
-      };
+      const mce = node as MethodCallExpression;
       children.push(mce.object, ...mce.arguments);
       break;
     }
 
     case "Argument": {
-      const arg = node as unknown as { value: Expression };
+      const arg = node as Argument;
       children.push(arg.value);
       break;
     }
 
     case "VariableExpression": {
-      const ve = node as unknown as {
-        subscripts: Expression[];
-        accessChain?: AccessStep[];
-      };
+      const ve = node as VariableExpression;
       children.push(...ve.subscripts);
       if (ve.accessChain) {
         for (const step of ve.accessChain) {
@@ -550,60 +522,57 @@ function getChildren(node: ASTNode): ASTNode[] {
     }
 
     case "ParenthesizedExpression": {
-      const pe = node as unknown as { expression: Expression };
+      const pe = node as ParenthesizedExpression;
       children.push(pe.expression);
       break;
     }
 
     case "RefExpression": {
-      const re = node as unknown as { operand: Expression };
+      const re = node as RefExpression;
       children.push(re.operand);
       break;
     }
 
     case "DrefExpression": {
-      const dre = node as unknown as { operand: Expression };
+      const dre = node as DrefExpression;
       children.push(dre.operand);
       break;
     }
 
     case "NewExpression": {
-      const ne = node as unknown as {
-        allocationType: ASTNode;
-        arraySize?: Expression;
-      };
+      const ne = node as NewExpression;
       children.push(ne.allocationType);
       if (ne.arraySize) children.push(ne.arraySize);
       break;
     }
 
     case "ArrayLiteralExpression": {
-      const ale = node as unknown as { elements: Expression[] };
+      const ale = node as ArrayLiteralExpression;
       children.push(...ale.elements);
       break;
     }
 
     // --- Test framework ---
     case "AssertCall": {
-      const ac = node as unknown as { args: Expression[] };
+      const ac = node as AssertCall;
       children.push(...ac.args);
       break;
     }
 
     case "MockFunctionStatement": {
-      const mfs = node as unknown as { returnValue: Expression };
+      const mfs = node as MockFunctionStatement;
       children.push(mfs.returnValue);
       break;
     }
 
     case "MockVerifyCallCountStatement": {
-      const mvcc = node as unknown as { expectedCount: Expression };
+      const mvcc = node as MockVerifyCallCountStatement;
       children.push(mvcc.expectedCount);
       break;
     }
 
     case "AdvanceTimeStatement": {
-      const ats = node as unknown as { duration: Expression };
+      const ats = node as AdvanceTimeStatement;
       children.push(ats.duration);
       break;
     }

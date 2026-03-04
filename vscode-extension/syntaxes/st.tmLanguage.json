@@ -310,12 +310,12 @@
           "match": "[;,]"
         },
         {
-          "name": "punctuation.accessor.st",
-          "match": "\\."
-        },
-        {
           "name": "punctuation.range.st",
           "match": "\\.\\."
+        },
+        {
+          "name": "punctuation.accessor.st",
+          "match": "\\."
         },
         {
           "name": "punctuation.definition.colon.st",

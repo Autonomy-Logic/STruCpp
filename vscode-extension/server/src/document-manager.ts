@@ -10,6 +10,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { URI } from "vscode-uri";
 import type {
   AnalysisResult,
   CompileOptions,
@@ -30,15 +31,35 @@ export type AnalyzeFn = (
 export class DocumentManager {
   private documents = new Map<string, DocumentState>();
   private analyzeFn: AnalyzeFn;
-  private workspaceFolders: string[] = [];
+  private workspaceFolders = new Set<string>();
   private libraryPaths: string[] = [];
+  private discoveryCache = new Map<string, string[]>();
 
   constructor(analyzeFn: AnalyzeFn) {
     this.analyzeFn = analyzeFn;
   }
 
   setWorkspaceFolders(folders: string[]): void {
-    this.workspaceFolders = folders;
+    this.workspaceFolders = new Set(folders);
+    this.invalidateDiscoveryCache();
+  }
+
+  addWorkspaceFolders(folders: string[]): void {
+    for (const f of folders) {
+      this.workspaceFolders.add(f);
+    }
+    this.invalidateDiscoveryCache();
+  }
+
+  removeWorkspaceFolders(folders: string[]): void {
+    for (const f of folders) {
+      this.workspaceFolders.delete(f);
+    }
+    this.invalidateDiscoveryCache();
+  }
+
+  invalidateDiscoveryCache(): void {
+    this.discoveryCache.clear();
   }
 
   setLibraryPaths(paths: string[]): void {
@@ -112,9 +133,14 @@ export class DocumentManager {
       });
     }
 
-    // 2. Discover .st files from workspace folders (read from disk)
+    // 2. Discover .st files from workspace folders (read from disk, cached)
     for (const folder of this.workspaceFolders) {
-      for (const filePath of discoverStFiles(folder)) {
+      let discovered = this.discoveryCache.get(folder);
+      if (!discovered) {
+        discovered = discoverStFiles(folder);
+        this.discoveryCache.set(folder, discovered);
+      }
+      for (const filePath of discovered) {
         // Skip the current file and files already included from open docs
         if (filePath === currentFilePath || includedPaths.has(filePath)) continue;
         includedPaths.add(filePath);
@@ -144,27 +170,51 @@ export class DocumentManager {
   }
 }
 
+/** Maximum recursion depth for file discovery */
+const MAX_DISCOVERY_DEPTH = 10;
+
 /**
  * Recursively discover all .st / .iecst files in a directory.
+ * Guards against unbounded recursion (max depth), symlink cycles, and hidden dirs.
  */
-function discoverStFiles(dir: string): string[] {
+function discoverStFiles(
+  dir: string,
+  depth: number = 0,
+  seenReal?: Set<string>,
+): string[] {
+  if (depth > MAX_DISCOVERY_DEPTH) return [];
+
+  const seen = seenReal ?? new Set<string>();
+
+  // Resolve real path to detect symlink cycles
+  let realDir: string;
+  try {
+    realDir = fs.realpathSync(dir);
+  } catch {
+    return [];
+  }
+  if (seen.has(realDir)) return [];
+  seen.add(realDir);
+
   const results: string[] = [];
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
+      // Skip hidden directories (e.g., .git, .vscode)
+      if (entry.name.startsWith(".")) continue;
+
       const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
+      if (entry.isDirectory() || entry.isSymbolicLink()) {
         // Skip common non-source directories
         if (
           entry.name === "node_modules" ||
-          entry.name === ".git" ||
           entry.name === "dist" ||
           entry.name === "out" ||
           entry.name === "build"
         ) {
           continue;
         }
-        results.push(...discoverStFiles(fullPath));
+        results.push(...discoverStFiles(fullPath, depth + 1, seen));
       } else if (/\.(st|iecst)$/i.test(entry.name)) {
         results.push(fullPath);
       }
@@ -177,7 +227,7 @@ function discoverStFiles(dir: string): string[] {
 
 function uriToFilePath(uri: string): string {
   try {
-    return new URL(uri).pathname;
+    return URI.parse(uri).fsPath;
   } catch {
     return uri;
   }

@@ -7,6 +7,7 @@
  */
 
 import * as path from "node:path";
+import * as fs from "node:fs";
 import { ExtensionContext, workspace } from "vscode";
 import {
   LanguageClient,
@@ -18,9 +19,16 @@ import {
 let client: LanguageClient | undefined;
 
 export function activate(context: ExtensionContext): void {
-  const serverModule = context.asAbsolutePath(
+  // Prefer bundled server (esbuild output), fall back to tsc output
+  const bundledServer = context.asAbsolutePath(
+    path.join("out", "server.js"),
+  );
+  const tscServer = context.asAbsolutePath(
     path.join("out", "server", "src", "server.js"),
   );
+  const serverModule = fs.existsSync(bundledServer)
+    ? bundledServer
+    : tscServer;
 
   const serverOptions: ServerOptions = {
     run: { module: serverModule, transport: TransportKind.ipc },

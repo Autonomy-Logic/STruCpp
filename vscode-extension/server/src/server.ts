@@ -9,6 +9,7 @@
 
 import * as path from "node:path";
 import * as fs from "node:fs";
+import { URI } from "vscode-uri";
 import {
   createConnection,
   TextDocuments,
@@ -37,14 +38,14 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   if (params.workspaceFolders) {
     for (const folder of params.workspaceFolders) {
       try {
-        folders.push(new URL(folder.uri).pathname);
+        folders.push(URI.parse(folder.uri).fsPath);
       } catch {
         // skip invalid URIs
       }
     }
   } else if (params.rootUri) {
     try {
-      folders.push(new URL(params.rootUri).pathname);
+      folders.push(URI.parse(params.rootUri).fsPath);
     } catch {
       // skip
     }
@@ -74,35 +75,25 @@ connection.onNotification("workspace/didChangeWorkspaceFolders", (params) => {
     removed: Array<{ uri: string }>;
   };
 
-  const current = new Set<string>();
-  for (const doc of docManager.getAllDocuments()) {
-    try {
-      const docFolder = path.dirname(new URL(doc.uri).pathname);
-      current.add(docFolder);
-    } catch {
-      // skip
-    }
-  }
-
-  // Add new folders
+  // Apply the LSP delta directly to the workspace folder set
+  const addedPaths: string[] = [];
   for (const folder of event.added) {
     try {
-      current.add(new URL(folder.uri).pathname);
+      addedPaths.push(URI.parse(folder.uri).fsPath);
     } catch {
-      // skip
+      // skip invalid URIs
     }
   }
-
-  // Remove old folders
+  const removedPaths: string[] = [];
   for (const folder of event.removed) {
     try {
-      current.delete(new URL(folder.uri).pathname);
+      removedPaths.push(URI.parse(folder.uri).fsPath);
     } catch {
-      // skip
+      // skip invalid URIs
     }
   }
-
-  docManager.setWorkspaceFolders([...current]);
+  docManager.addWorkspaceFolders(addedPaths);
+  docManager.removeWorkspaceFolders(removedPaths);
 
   // Re-analyze all open documents with new workspace context
   const results = docManager.reanalyzeAll();
@@ -113,6 +104,7 @@ connection.onNotification("workspace/didChangeWorkspaceFolders", (params) => {
 
 // Re-analyze when .st files change on disk (saves, creates, deletes)
 connection.onDidChangeWatchedFiles((_change) => {
+  docManager.invalidateDiscoveryCache();
   const results = docManager.reanalyzeAll();
   for (const [uri, result] of results) {
     publishDiagnostics(uri, result);

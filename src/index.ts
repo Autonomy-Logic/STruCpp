@@ -38,42 +38,45 @@ export const defaultOptions: CompileOptions = {
   optimizationLevel: 0,
 };
 
+// ---------------------------------------------------------------------------
+// Shared pipeline
+// ---------------------------------------------------------------------------
+
+interface PipelineResult {
+  ast: CompilationUnit | undefined;
+  projectModel: import("./project-model.js").ProjectModel | undefined;
+  symbolTables: SymbolTables | undefined;
+  errors: CompileError[];
+  warnings: CompileError[];
+  allArchives: StlibArchive[];
+  mergedOptions: CompileOptions;
+}
+
 /**
- * Compile IEC 61131-3 Structured Text source code to C++.
+ * Run phases 1-5 of the compilation pipeline (parse → AST → project model →
+ * library loading → semantic analysis).
  *
- * @param source - The ST source code to compile
- * @param options - Compilation options
- * @returns The compilation result containing C++ code and metadata
- *
- * @example
- * ```typescript
- * import { compile } from 'strucpp';
- *
- * const stSource = `
- * PROGRAM Main
- *   VAR counter : INT; END_VAR
- *   counter := counter + 1;
- * END_PROGRAM
- * `;
- *
- * const result = compile(stSource, { debug: true, lineMapping: true });
- * console.log(result.cppCode);
- * console.log(result.lineMap);
- * ```
+ * @param continueOnError - When true (analyze mode), wraps each phase in
+ *   try/catch and never aborts early so partial results are returned.
+ *   When false (compile mode), aborts at each phase boundary on errors.
  */
-export function compile(
+function runPipeline(
   source: string,
-  options: Partial<CompileOptions> = {},
-): CompileResult {
+  options: Partial<CompileOptions>,
+  continueOnError: boolean,
+): PipelineResult {
   const mergedOptions = { ...defaultOptions, ...options };
   const errors: CompileError[] = [];
   const warnings: CompileError[] = [];
+  let ast: CompilationUnit | undefined;
+  let projectModel: import("./project-model.js").ProjectModel | undefined;
+  let symbolTables: SymbolTables | undefined;
+  const allArchives: StlibArchive[] = [];
 
   // Phase 1: Parse ST source to CST
   const parseResult = parseSource(source);
   if (parseResult.errors.length > 0) {
     for (const err of parseResult.errors) {
-      // Handle Chevrotain error format
       const errObj = err as {
         message?: string;
         token?: { startLine?: number; startColumn?: number };
@@ -86,18 +89,17 @@ export function compile(
       });
     }
     return {
-      success: false,
-      cppCode: "",
-      headerCode: "",
-      lineMap: new Map(),
-      headerLineMap: new Map(),
+      ast,
+      projectModel,
+      symbolTables,
       errors,
       warnings,
+      allArchives,
+      mergedOptions,
     };
   }
 
   // Phase 2: Build AST from CST (supports multi-file via additionalSources)
-  let ast: CompilationUnit;
   if (!parseResult.cst) {
     errors.push({
       message: "Parse failed: no CST produced",
@@ -106,15 +108,16 @@ export function compile(
       severity: "error",
     });
     return {
-      success: false,
-      cppCode: "",
-      headerCode: "",
-      lineMap: new Map(),
-      headerLineMap: new Map(),
+      ast,
+      projectModel,
+      symbolTables,
       errors,
       warnings,
+      allArchives,
+      mergedOptions,
     };
   }
+
   try {
     const globalConstants = mergedOptions.globalConstants;
     const primaryAst = buildAST(
@@ -152,15 +155,15 @@ export function compile(
       }
     }
 
-    if (errors.length > 0) {
+    if (!continueOnError && errors.length > 0) {
       return {
-        success: false,
-        cppCode: "",
-        headerCode: "",
-        lineMap: new Map(),
-        headerLineMap: new Map(),
+        ast,
+        projectModel,
+        symbolTables,
         errors,
         warnings,
+        allArchives,
+        mergedOptions,
       };
     }
 
@@ -172,326 +175,29 @@ export function compile(
       column: 0,
       severity: "error",
     });
+    if (!continueOnError) {
+      return {
+        ast,
+        projectModel,
+        symbolTables,
+        errors,
+        warnings,
+        allArchives,
+        mergedOptions,
+      };
+    }
     return {
-      success: false,
-      cppCode: "",
-      headerCode: "",
-      lineMap: new Map(),
-      headerLineMap: new Map(),
+      ast,
+      projectModel,
+      symbolTables,
       errors,
       warnings,
+      allArchives,
+      mergedOptions,
     };
   }
 
   // Phase 3: Build project model and validate
-  const projectModelResult = buildProjectModel(ast);
-  for (const err of projectModelResult.errors) {
-    errors.push({
-      message: err.message,
-      line: err.line ?? 0,
-      column: err.column ?? 0,
-      severity: "error",
-    });
-  }
-  for (const warn of projectModelResult.warnings) {
-    warnings.push({
-      message: warn.message,
-      line: warn.line ?? 0,
-      column: warn.column ?? 0,
-      severity: "warning",
-    });
-  }
-
-  if (errors.length > 0) {
-    return {
-      success: false,
-      cppCode: "",
-      headerCode: "",
-      lineMap: new Map(),
-      headerLineMap: new Map(),
-      errors,
-      warnings,
-    };
-  }
-
-  // Phase 3.5: Library loading & Semantic analysis
-  // Collect all library archives: explicit archives + discovered from paths
-  const allArchives: StlibArchive[] = [...(mergedOptions.libraries ?? [])];
-  for (const libPath of mergedOptions.libraryPaths ?? []) {
-    try {
-      allArchives.push(...discoverStlibs(libPath));
-    } catch (e) {
-      errors.push({
-        message:
-          e instanceof LibraryManifestError
-            ? e.message
-            : `Library loading failed: ${e instanceof Error ? e.message : String(e)}`,
-        line: 0,
-        column: 0,
-        severity: "error",
-      });
-    }
-  }
-
-  if (errors.length > 0) {
-    return {
-      success: false,
-      cppCode: "",
-      headerCode: "",
-      lineMap: new Map(),
-      headerLineMap: new Map(),
-      errors,
-      warnings,
-    };
-  }
-
-  // Auto-merge library globalConstants into effective constants.
-  // Library values provide defaults; user-provided values take priority.
-  for (const archive of allArchives) {
-    if (archive.globalConstants) {
-      if (!mergedOptions.globalConstants) {
-        mergedOptions.globalConstants = {};
-      }
-      for (const [key, value] of Object.entries(archive.globalConstants)) {
-        if (!(key in mergedOptions.globalConstants)) {
-          mergedOptions.globalConstants[key] = value;
-        }
-      }
-    }
-  }
-
-  // Single registration loop for all libraries (stdlib + user)
-  let semanticSymbolTables: SymbolTables | undefined;
-  if (allArchives.length > 0) {
-    semanticSymbolTables = new SymbolTables();
-    for (const archive of allArchives) {
-      registerLibrarySymbols(archive.manifest, semanticSymbolTables);
-    }
-  }
-  // Register global constants (e.g., STRING_LENGTH, LIST_LENGTH) in symbol tables
-  if (mergedOptions.globalConstants) {
-    if (!semanticSymbolTables) {
-      semanticSymbolTables = new SymbolTables();
-    }
-    for (const name of Object.keys(mergedOptions.globalConstants)) {
-      try {
-        semanticSymbolTables.globalScope.define({
-          name,
-          kind: "constant",
-          declaration:
-            undefined as unknown as import("./frontend/ast.js").VarDeclaration,
-          type: {
-            typeKind: "elementary",
-            name: "ULINT",
-            sizeBits: 64,
-          } as import("./frontend/ast.js").ElementaryType,
-        });
-      } catch {
-        // Ignore duplicate
-      }
-    }
-  }
-
-  const analyzer = new SemanticAnalyzer();
-  const semanticResult = analyzer.analyze(ast, semanticSymbolTables);
-  for (const err of semanticResult.errors) {
-    errors.push({
-      message: err.message,
-      line: err.line ?? 0,
-      column: err.column ?? 0,
-      severity: "error",
-    });
-  }
-  for (const warn of semanticResult.warnings) {
-    warnings.push({
-      message: warn.message,
-      line: warn.line ?? 0,
-      column: warn.column ?? 0,
-      severity: "warning",
-    });
-  }
-
-  if (errors.length > 0) {
-    return {
-      success: false,
-      cppCode: "",
-      headerCode: "",
-      lineMap: new Map(),
-      headerLineMap: new Map(),
-      errors,
-      warnings,
-    };
-  }
-
-  // Phase 4: Generate C++ code
-  // Collect library headers for #include directives
-  const libraryHeaders: string[] = [];
-  for (const archive of allArchives) {
-    for (const header of archive.manifest.headers) {
-      if (!libraryHeaders.includes(header)) {
-        libraryHeaders.push(header);
-      }
-    }
-  }
-
-  // Pass semantic symbol tables to codegen so it can use type info from semantic analysis
-  const codegen = new CodeGenerator(semanticSymbolTables, {
-    sourceComments: mergedOptions.debug,
-    lineDirectives: mergedOptions.lineMapping,
-    headerFileName: mergedOptions.headerFileName ?? "generated.hpp",
-    libraryHeaders,
-    isTestBuild: mergedOptions.isTestBuild ?? false,
-    globalConstants: mergedOptions.globalConstants ?? {},
-  });
-  codegen.setProjectModel(projectModelResult.model);
-
-  // Single codegen injection loop for all libraries (stdlib + user)
-  for (const archive of allArchives) {
-    codegen.registerLibraryFBTypes(
-      archive.manifest.functionBlocks.map((fb) => fb.name),
-    );
-    if (archive.headerCode) {
-      codegen.addLibraryPreamble(
-        archive.manifest.name,
-        archive.headerCode,
-        archive.cppCode,
-      );
-    }
-  }
-
-  const codeResult = codegen.generate(ast);
-
-  // Collect codegen warnings
-  for (const warn of codeResult.warnings) {
-    const entry: CompileError = {
-      message: warn.message,
-      line: warn.line ?? 0,
-      column: warn.column ?? 0,
-      severity: "warning",
-    };
-    if (warn.file !== undefined) {
-      entry.file = warn.file;
-    }
-    warnings.push(entry);
-  }
-
-  return {
-    success: true,
-    cppCode: codeResult.cppCode,
-    headerCode: codeResult.headerCode,
-    lineMap: codeResult.lineMap,
-    headerLineMap: codeResult.headerLineMap,
-    errors,
-    warnings,
-    ast,
-    projectModel: projectModelResult.model,
-    symbolTables: semanticResult.symbolTables,
-    ...(allArchives.length > 0 ? { resolvedLibraries: allArchives } : {}),
-  };
-}
-
-/**
- * Analyze ST source code without code generation.
- * Unlike compile(), returns partial results (AST, symbol tables, project model)
- * even when errors are present, making it suitable for IDE/LSP integration.
- *
- * @param source - The ST source code to analyze
- * @param options - Compilation options (codegen options are ignored)
- * @returns Analysis result with AST, symbol tables, and diagnostics
- */
-export function analyze(
-  source: string,
-  options: Partial<CompileOptions> = {},
-): AnalysisResult {
-  const mergedOptions = { ...defaultOptions, ...options };
-  const errors: CompileError[] = [];
-  const warnings: CompileError[] = [];
-  let ast: CompilationUnit | undefined;
-  let projectModel: import("./project-model.js").ProjectModel | undefined;
-  let symbolTables: SymbolTables | undefined;
-
-  // Phase 1: Parse ST source to CST
-  const parseResult = parseSource(source);
-  if (parseResult.errors.length > 0) {
-    for (const err of parseResult.errors) {
-      const errObj = err as {
-        message?: string;
-        token?: { startLine?: number; startColumn?: number };
-      };
-      errors.push({
-        message: errObj.message ?? "Parse error",
-        line: errObj.token?.startLine ?? 0,
-        column: errObj.token?.startColumn ?? 0,
-        severity: "error",
-      });
-    }
-    return { errors, warnings, stdFunctionRegistry: new StdFunctionRegistry() };
-  }
-
-  // Phase 2: Build AST from CST
-  if (!parseResult.cst) {
-    errors.push({
-      message: "Parse failed: no CST produced",
-      line: 0,
-      column: 0,
-      severity: "error",
-    });
-    return { errors, warnings, stdFunctionRegistry: new StdFunctionRegistry() };
-  }
-
-  try {
-    const globalConstants = mergedOptions.globalConstants;
-    const primaryAst = buildAST(
-      parseResult.cst,
-      mergedOptions.fileName ?? "main.st",
-      globalConstants,
-    );
-    const units: CompilationUnit[] = [primaryAst];
-
-    if (mergedOptions.additionalSources) {
-      for (const addlSource of mergedOptions.additionalSources) {
-        const addlParseResult = parseSource(addlSource.source);
-        if (addlParseResult.errors.length > 0) {
-          for (const err of addlParseResult.errors) {
-            const errObj = err as {
-              message?: string;
-              token?: { startLine?: number; startColumn?: number };
-            };
-            errors.push({
-              message: errObj.message ?? "Parse error",
-              line: errObj.token?.startLine ?? 0,
-              column: errObj.token?.startColumn ?? 0,
-              severity: "error",
-              file: addlSource.fileName,
-            });
-          }
-          continue;
-        }
-        if (addlParseResult.cst) {
-          units.push(
-            buildAST(addlParseResult.cst, addlSource.fileName, globalConstants),
-          );
-        }
-      }
-    }
-
-    ast = mergeCompilationUnits(units);
-  } catch (e) {
-    errors.push({
-      message: `AST building failed: ${e instanceof Error ? e.message : String(e)}`,
-      line: 0,
-      column: 0,
-      severity: "error",
-    });
-    return {
-      ...(ast ? { ast } : {}),
-      errors,
-      warnings,
-      stdFunctionRegistry: new StdFunctionRegistry(),
-    };
-  }
-
-  // Phase 3: Build project model (continue even on errors)
   try {
     const projectModelResult = buildProjectModel(ast);
     projectModel = projectModelResult.model;
@@ -511,12 +217,41 @@ export function analyze(
         severity: "warning",
       });
     }
-  } catch {
-    // Project model failure is non-fatal for analysis
+  } catch (e) {
+    if (!continueOnError) {
+      errors.push({
+        message: `Project model failed: ${e instanceof Error ? e.message : String(e)}`,
+        line: 0,
+        column: 0,
+        severity: "error",
+      });
+      return {
+        ast,
+        projectModel,
+        symbolTables,
+        errors,
+        warnings,
+        allArchives,
+        mergedOptions,
+      };
+    }
+    // In analyze mode, project model failure is non-fatal
+  }
+
+  if (!continueOnError && errors.length > 0) {
+    return {
+      ast,
+      projectModel,
+      symbolTables,
+      errors,
+      warnings,
+      allArchives,
+      mergedOptions,
+    };
   }
 
   // Phase 4: Library loading
-  const allArchives: StlibArchive[] = [...(mergedOptions.libraries ?? [])];
+  allArchives.push(...(mergedOptions.libraries ?? []));
   for (const libPath of mergedOptions.libraryPaths ?? []) {
     try {
       allArchives.push(...discoverStlibs(libPath));
@@ -533,7 +268,20 @@ export function analyze(
     }
   }
 
-  // Auto-merge library globalConstants
+  if (!continueOnError && errors.length > 0) {
+    return {
+      ast,
+      projectModel,
+      symbolTables,
+      errors,
+      warnings,
+      allArchives,
+      mergedOptions,
+    };
+  }
+
+  // Auto-merge library globalConstants into effective constants.
+  // Library values provide defaults; user-provided values take priority.
   for (const archive of allArchives) {
     if (archive.globalConstants) {
       if (!mergedOptions.globalConstants) {
@@ -547,7 +295,7 @@ export function analyze(
     }
   }
 
-  // Phase 5: Semantic analysis (continue even on earlier errors)
+  // Phase 5: Semantic analysis
   let semanticSymbolTables: SymbolTables | undefined;
   if (allArchives.length > 0) {
     semanticSymbolTables = new SymbolTables();
@@ -556,6 +304,7 @@ export function analyze(
     }
   }
 
+  // Register global constants in symbol tables
   if (mergedOptions.globalConstants) {
     if (!semanticSymbolTables) {
       semanticSymbolTables = new SymbolTables();
@@ -599,16 +348,164 @@ export function analyze(
         severity: "warning",
       });
     }
-  } catch {
-    // Semantic analysis failure is non-fatal — return whatever we have
+  } catch (e) {
+    if (!continueOnError) {
+      errors.push({
+        message: `Semantic analysis failed: ${e instanceof Error ? e.message : String(e)}`,
+        line: 0,
+        column: 0,
+        severity: "error",
+      });
+    }
+    // In analyze mode, semantic failure is non-fatal — return whatever we have
   }
 
   return {
-    ...(ast ? { ast } : {}),
-    ...(symbolTables ? { symbolTables } : {}),
-    ...(projectModel ? { projectModel } : {}),
+    ast,
+    projectModel,
+    symbolTables,
     errors,
     warnings,
+    allArchives,
+    mergedOptions,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Compile IEC 61131-3 Structured Text source code to C++.
+ *
+ * @param source - The ST source code to compile
+ * @param options - Compilation options
+ * @returns The compilation result containing C++ code and metadata
+ *
+ * @example
+ * ```typescript
+ * import { compile } from 'strucpp';
+ *
+ * const stSource = `
+ * PROGRAM Main
+ *   VAR counter : INT; END_VAR
+ *   counter := counter + 1;
+ * END_PROGRAM
+ * `;
+ *
+ * const result = compile(stSource, { debug: true, lineMapping: true });
+ * console.log(result.cppCode);
+ * console.log(result.lineMap);
+ * ```
+ */
+export function compile(
+  source: string,
+  options: Partial<CompileOptions> = {},
+): CompileResult {
+  const pipeline = runPipeline(source, options, false);
+
+  if (pipeline.errors.length > 0 || !pipeline.ast) {
+    return {
+      success: false,
+      cppCode: "",
+      headerCode: "",
+      lineMap: new Map(),
+      headerLineMap: new Map(),
+      errors: pipeline.errors,
+      warnings: pipeline.warnings,
+    };
+  }
+
+  // Phase 6: Generate C++ code
+  // Collect library headers for #include directives
+  const libraryHeaders: string[] = [];
+  for (const archive of pipeline.allArchives) {
+    for (const header of archive.manifest.headers) {
+      if (!libraryHeaders.includes(header)) {
+        libraryHeaders.push(header);
+      }
+    }
+  }
+
+  // Pass semantic symbol tables to codegen so it can use type info from semantic analysis
+  const codegen = new CodeGenerator(pipeline.symbolTables, {
+    sourceComments: pipeline.mergedOptions.debug,
+    lineDirectives: pipeline.mergedOptions.lineMapping,
+    headerFileName: pipeline.mergedOptions.headerFileName ?? "generated.hpp",
+    libraryHeaders,
+    isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
+    globalConstants: pipeline.mergedOptions.globalConstants ?? {},
+  });
+  codegen.setProjectModel(pipeline.projectModel!);
+
+  // Single codegen injection loop for all libraries (stdlib + user)
+  for (const archive of pipeline.allArchives) {
+    codegen.registerLibraryFBTypes(
+      archive.manifest.functionBlocks.map((fb) => fb.name),
+    );
+    if (archive.headerCode) {
+      codegen.addLibraryPreamble(
+        archive.manifest.name,
+        archive.headerCode,
+        archive.cppCode,
+      );
+    }
+  }
+
+  const codeResult = codegen.generate(pipeline.ast);
+
+  // Collect codegen warnings
+  for (const warn of codeResult.warnings) {
+    const entry: CompileError = {
+      message: warn.message,
+      line: warn.line ?? 0,
+      column: warn.column ?? 0,
+      severity: "warning",
+    };
+    if (warn.file !== undefined) {
+      entry.file = warn.file;
+    }
+    pipeline.warnings.push(entry);
+  }
+
+  return {
+    success: true,
+    cppCode: codeResult.cppCode,
+    headerCode: codeResult.headerCode,
+    lineMap: codeResult.lineMap,
+    headerLineMap: codeResult.headerLineMap,
+    errors: pipeline.errors,
+    warnings: pipeline.warnings,
+    ast: pipeline.ast,
+    ...(pipeline.projectModel ? { projectModel: pipeline.projectModel } : {}),
+    ...(pipeline.symbolTables ? { symbolTables: pipeline.symbolTables } : {}),
+    ...(pipeline.allArchives.length > 0
+      ? { resolvedLibraries: pipeline.allArchives }
+      : {}),
+  };
+}
+
+/**
+ * Analyze ST source code without code generation.
+ * Unlike compile(), returns partial results (AST, symbol tables, project model)
+ * even when errors are present, making it suitable for IDE/LSP integration.
+ *
+ * @param source - The ST source code to analyze
+ * @param options - Compilation options (codegen options are ignored)
+ * @returns Analysis result with AST, symbol tables, and diagnostics
+ */
+export function analyze(
+  source: string,
+  options: Partial<CompileOptions> = {},
+): AnalysisResult {
+  const pipeline = runPipeline(source, options, true);
+
+  return {
+    ...(pipeline.ast ? { ast: pipeline.ast } : {}),
+    ...(pipeline.symbolTables ? { symbolTables: pipeline.symbolTables } : {}),
+    ...(pipeline.projectModel ? { projectModel: pipeline.projectModel } : {}),
+    errors: pipeline.errors,
+    warnings: pipeline.warnings,
     stdFunctionRegistry: new StdFunctionRegistry(),
   };
 }
