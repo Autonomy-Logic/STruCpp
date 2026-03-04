@@ -75,6 +75,12 @@ export interface CompileError {
   /** Column number in the source file (1-indexed) */
   column: number;
 
+  /** End line number (1-indexed). Falls back to line if not set. */
+  endLine?: number;
+
+  /** End column number (1-indexed). Falls back to column if not set. */
+  endColumn?: number;
+
   /** Severity of the message */
   severity: Severity;
 
@@ -138,6 +144,30 @@ export interface CompileResult {
 
   /** Resolved library archives (stdlib + user) used during compilation */
   resolvedLibraries?: import("./library/library-manifest.js").StlibArchive[];
+}
+
+/**
+ * Result of semantic analysis (no code generation).
+ * Unlike CompileResult, always returns partial results even when errors are present.
+ */
+export interface AnalysisResult {
+  /** Parsed AST (available even with semantic errors) */
+  ast?: import("./frontend/ast.js").CompilationUnit;
+
+  /** Symbol tables from semantic analysis (available even with errors) */
+  symbolTables?: import("./semantic/symbol-table.js").SymbolTables;
+
+  /** Project model (available if AST was built successfully) */
+  projectModel?: import("./project-model.js").ProjectModel;
+
+  /** Standard function registry for autocomplete */
+  stdFunctionRegistry?: import("./semantic/std-function-registry.js").StdFunctionRegistry;
+
+  /** Analysis errors */
+  errors: CompileError[];
+
+  /** Analysis warnings */
+  warnings: CompileError[];
 }
 
 /**

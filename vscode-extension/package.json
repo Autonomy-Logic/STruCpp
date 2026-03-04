@@ -1,0 +1,64 @@
+{
+  "name": "strucpp-vscode",
+  "displayName": "STruC++ — Structured Text IDE",
+  "description": "IEC 61131-3 Structured Text language support powered by the STruC++ compiler",
+  "version": "0.1.0",
+  "publisher": "autonomy-logic",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "vscode": "^1.82.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/client.js",
+  "activationEvents": [],
+  "contributes": {
+    "languages": [
+      {
+        "id": "structured-text",
+        "aliases": [
+          "Structured Text",
+          "IEC 61131-3 ST",
+          "ST"
+        ],
+        "extensions": [
+          ".st",
+          ".iecst",
+          ".ST"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "structured-text",
+        "scopeName": "source.iec61131-st",
+        "path": "./syntaxes/st.tmLanguage.json"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "watch": "tsc -b --watch",
+    "bundle": "tsc -b && node esbuild.mjs",
+    "vscode:prepublish": "node esbuild.mjs --production",
+    "package": "vsce package",
+    "lint": "eslint client/src server/src",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "strucpp": "file:..",
+    "vscode-languageclient": "^9.0.1",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.12",
+    "vscode-uri": "^3.1.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.82.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}
