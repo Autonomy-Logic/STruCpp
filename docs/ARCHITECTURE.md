@@ -101,7 +101,7 @@ LL(3) Chevrotain parser with error recovery. Grammar covers the full IEC 61131-3
 - **POUs**: PROGRAM, FUNCTION, FUNCTION_BLOCK, INTERFACE
 - **Variables**: VAR, VAR_INPUT, VAR_OUTPUT, VAR_IN_OUT, VAR_EXTERNAL, VAR_GLOBAL (with CONSTANT, RETAIN, AT modifiers)
 - **Types**: STRUCT, ENUM, ARRAY (1D/2D/3D), SUBRANGE, TYPE aliases, REF_TO, REFERENCE_TO, POINTER TO
-- **Statements**: assignment, IF/ELSIF/ELSE, FOR/WHILE/REPEAT, CASE, EXIT, RETURN, function/method calls, __NEW, __DELETE
+- **Statements**: assignment, IF/ELSIF/ELSE, FOR/WHILE/REPEAT, CASE, EXIT, RETURN, function/method calls, **NEW, **DELETE
 - **Expressions**: full operator precedence (arithmetic, comparison, logical, bitwise, shift, power, unary), function calls, method calls, array/field access, REF/DREF, typed literals
 - **OOP**: methods, properties (GET/SET), inheritance (EXTENDS), interfaces (IMPLEMENTS), visibility (PUBLIC/PRIVATE/PROTECTED), ABSTRACT/FINAL/OVERRIDE
 
@@ -142,24 +142,24 @@ Generates two files per compilation: `.hpp` (declarations) and `.cpp` (implement
 
 ### Type Mapping
 
-| IEC Type | C++ Type | Wrapped |
-|----------|----------|---------|
-| BOOL | `bool` | `IECVar<bool>` |
-| INT | `int16_t` | `IECVar<int16_t>` |
-| DINT | `int32_t` | `IECVar<int32_t>` |
-| REAL | `float` | `IECVar<float>` |
-| STRING | `IECString<N>` | `IECVar<IECString<N>>` |
-| ARRAY[1..10] OF INT | `Array1D<int16_t, 1, 10>` | - |
-| POINTER TO INT | `IEC_Ptr<int16_t>` | - |
-| REF_TO INT | `IEC_REF_TO<int16_t>` | - |
-| User struct | `struct Name { ... }` | `IECVar<Name>` |
+| IEC Type            | C++ Type                  | Wrapped                |
+| ------------------- | ------------------------- | ---------------------- |
+| BOOL                | `bool`                    | `IECVar<bool>`         |
+| INT                 | `int16_t`                 | `IECVar<int16_t>`      |
+| DINT                | `int32_t`                 | `IECVar<int32_t>`      |
+| REAL                | `float`                   | `IECVar<float>`        |
+| STRING              | `IECString<N>`            | `IECVar<IECString<N>>` |
+| ARRAY[1..10] OF INT | `Array1D<int16_t, 1, 10>` | -                      |
+| POINTER TO INT      | `IEC_Ptr<int16_t>`        | -                      |
+| REF_TO INT          | `IEC_REF_TO<int16_t>`     | -                      |
+| User struct         | `struct Name { ... }`     | `IECVar<Name>`         |
 
 All program/function variables are wrapped in `IECVar<T>` which provides transparent variable forcing support. Struct fields use IECVar-wrapped elementary types for per-field forcing.
 
 ### POU Generation
 
 - **Functions**: C++ free functions with INPUT params by value, OUTPUT/IN_OUT by reference
-- **Function Blocks**: C++ classes with member variables, `invoke()` method for the FB body, and generated methods/properties. Supports ABSTRACT (pure virtual), FINAL, EXTENDS (inheritance), and IMPLEMENTS (interfaces).
+- **Function Blocks**: C++ classes with member variables, `operator()()` method for the FB body, and generated methods/properties. Supports ABSTRACT (pure virtual), FINAL, EXTENDS (inheritance), and IMPLEMENTS (interfaces).
 - **Programs**: C++ classes with global instances, connected to CONFIGURATION/RESOURCE/TASK structure
 
 ### Line Mapping

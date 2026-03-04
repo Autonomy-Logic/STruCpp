@@ -2,15 +2,15 @@
 
 ## Installation
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/Autonomy-Logic/strucpp/releases):
+Download the latest release for your platform from [GitHub Releases](https://github.com/Autonomy-Logic/STruCpp/releases):
 
-| Platform | Archive |
-|----------|---------|
-| Linux x64 | `strucpp-linux-x64.tar.gz` |
-| Linux ARM64 | `strucpp-linux-arm64.tar.gz` |
-| macOS Intel | `strucpp-darwin-x64.zip` |
-| macOS Apple Silicon | `strucpp-darwin-arm64.zip` |
-| Windows x64 | `strucpp-win32-x64.zip` |
+| Platform            | Archive                      |
+| ------------------- | ---------------------------- |
+| Linux x64           | `strucpp-linux-x64.tar.gz`   |
+| Linux ARM64         | `strucpp-linux-arm64.tar.gz` |
+| macOS Intel         | `strucpp-darwin-x64.zip`     |
+| macOS Apple Silicon | `strucpp-darwin-arm64.zip`   |
+| Windows x64         | `strucpp-win32-x64.zip`      |
 
 Extract the archive and add the `strucpp/` directory to your `PATH`:
 
@@ -123,41 +123,41 @@ Format is auto-detected. Extracts ST source from the binary/ZIP format, compiles
 
 ### Output
 
-| Flag | Description |
-|------|-------------|
+| Flag                  | Description                                             |
+| --------------------- | ------------------------------------------------------- |
 | `-o, --output <path>` | Output file (compile) or directory (library/test modes) |
-| `--line-directives` | Emit `#line` directives in C++ output |
-| `--source-comments` | Include ST source as C++ comments |
-| `--no-line-mapping` | Disable ST-to-C++ line mapping |
-| `-O <level>` | Optimization level: 0, 1, or 2 (default: 0) |
+| `--line-directives`   | Emit `#line` directives in C++ output                   |
+| `--source-comments`   | Include ST source as C++ comments                       |
+| `--no-line-mapping`   | Disable ST-to-C++ line mapping                          |
+| `-O <level>`          | Optimization level: 0, 1, or 2 (default: 0)             |
 
 ### Libraries
 
-| Flag | Description |
-|------|-------------|
-| `-L, --lib-path <dir>` | Add library search path (repeatable) |
-| `--no-default-libs` | Do not auto-add bundled `libs/` directory |
-| `--lib-name <name>` | Library name (required for `--compile-lib` and `--import-lib`) |
-| `--lib-version <ver>` | Library version (default: `1.0.0`) |
-| `--lib-namespace <ns>` | C++ namespace (default: sanitized lib name) |
-| `--no-source` | Omit ST source from `.stlib` archive |
+| Flag                   | Description                                                    |
+| ---------------------- | -------------------------------------------------------------- |
+| `-L, --lib-path <dir>` | Add library search path (repeatable)                           |
+| `--no-default-libs`    | Do not auto-add bundled `libs/` directory                      |
+| `--lib-name <name>`    | Library name (required for `--compile-lib` and `--import-lib`) |
+| `--lib-version <ver>`  | Library version (default: `1.0.0`)                             |
+| `--lib-namespace <ns>` | C++ namespace (default: sanitized lib name)                    |
+| `--no-source`          | Omit ST source from `.stlib` archive                           |
 
 ### Compilation
 
-| Flag | Description |
-|------|-------------|
-| `--build` | Build interactive REPL binary after compilation |
-| `--gpp <path>` | Custom g++ path (default: `g++`) |
-| `--cc <path>` | Custom C compiler path (default: `cc`) |
-| `--cxx-flags <flags>` | Extra flags passed to g++ (supports quoted paths) |
-| `-D NAME=VALUE` | Define global constant (repeatable, emits `constexpr size_t`) |
-| `-d, --debug` | Enable debug output |
+| Flag                  | Description                                                   |
+| --------------------- | ------------------------------------------------------------- |
+| `--build`             | Build interactive REPL binary after compilation               |
+| `--gpp <path>`        | Custom g++ path (default: `g++`)                              |
+| `--cc <path>`         | Custom C compiler path (default: `cc`)                        |
+| `--cxx-flags <flags>` | Extra flags passed to g++ (supports quoted paths)             |
+| `-D NAME=VALUE`       | Define global constant (repeatable, emits `constexpr size_t`) |
+| `-d, --debug`         | Enable debug output                                           |
 
 ### Info
 
-| Flag | Description |
-|------|-------------|
-| `-h, --help` | Show help |
+| Flag            | Description  |
+| --------------- | ------------ |
+| `-h, --help`    | Show help    |
 | `-v, --version` | Show version |
 
 ## Library Search Order
