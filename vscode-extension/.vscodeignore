@@ -1,0 +1,15 @@
+.vscode/**
+.vscode-test/**
+client/src/**
+server/src/**
+tests/**
+node_modules/**
+!node_modules/vscode-languageclient/**
+!node_modules/vscode-languageserver/**
+!node_modules/vscode-languageserver-textdocument/**
+*.ts
+*.map
+tsconfig.json
+vitest.config.ts
+esbuild.mjs
+.vscode-test.mjs
