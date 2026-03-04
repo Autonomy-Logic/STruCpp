@@ -42,6 +42,10 @@ Companion test file for `unity_conveyor_controller.st`. Demonstrates:
 - Jam timeout verification
 - Alarm reset and restart validation
 
+### Unity TCP docs
+- `UNITY_TCP_QUICKSTART.md` -- minimal setup steps for Unity + local TCP server
+- `UNITY_TCP_PIPELINE.md` -- detailed protocol and integration notes
+
 ## Usage
 
 Once STruC++ is fully implemented (Phase 3+), you can compile these examples:
