@@ -66,3 +66,9 @@ runtime/*.a
 tmp/
 temp/
 *.tmp
+
+# REPL history
+.strucpp_history
+
+# Generated test output headers
+tests/**/*.hpp
