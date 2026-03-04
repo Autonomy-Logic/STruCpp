@@ -147,6 +147,49 @@ END_PROGRAM`;
   });
 });
 
+describe("original-case restoration via caseMap", () => {
+  it("restores symbol names to source casing", () => {
+    const analysis = getAnalysis();
+    // Build a case map from the fixture (simulates what DocumentManager does)
+    const caseMap = new Map<string, string>();
+    const regex = /\b([a-zA-Z_]\w*)\b/g;
+    let match;
+    while ((match = regex.exec(FIXTURE)) !== null) {
+      const upper = match[1].toUpperCase();
+      if (!caseMap.has(upper)) caseMap.set(upper, match[1]);
+    }
+
+    const symbols = getDocumentSymbols(analysis, "complex-project.st", caseMap);
+    const names = symbols.map((s) => s.name);
+
+    // Fixture uses PascalCase and camelCase — not UPPERCASE
+    expect(names).toContain("Main");
+    expect(names).toContain("Sprite");
+    expect(names).toContain("Distance");
+    expect(names).toContain("Point");
+    expect(names).toContain("Color");
+  });
+
+  it("restores child symbol names too", () => {
+    const analysis = getAnalysis();
+    const caseMap = new Map<string, string>();
+    const regex = /\b([a-zA-Z_]\w*)\b/g;
+    let match;
+    while ((match = regex.exec(FIXTURE)) !== null) {
+      const upper = match[1].toUpperCase();
+      if (!caseMap.has(upper)) caseMap.set(upper, match[1]);
+    }
+
+    const symbols = getDocumentSymbols(analysis, "complex-project.st", caseMap);
+    const main = symbols.find((s) => s.name === "Main");
+    expect(main).toBeDefined();
+    const childNames = main!.children!.map((c) => c.name);
+    expect(childNames).toContain("player");
+    expect(childNames).toContain("enemy");
+    expect(childNames).toContain("counter");
+  });
+});
+
 describe("getWorkspaceSymbols", () => {
   it("filters symbols by query (case-insensitive)", () => {
     const analysis = getAnalysis();

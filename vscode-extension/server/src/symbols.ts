@@ -33,10 +33,12 @@ import { sourceSpanToRange } from "./lsp-utils.js";
 /**
  * Get document symbols for a single file's analysis result.
  * When fileName is provided, only returns symbols defined in that file.
+ * When caseMap is provided, restores original identifier casing.
  */
 export function getDocumentSymbols(
   analysis: AnalysisResult,
   fileName?: string,
+  caseMap?: ReadonlyMap<string, string>,
 ): DocumentSymbol[] {
   const { ast } = analysis;
   if (!ast) return [];
@@ -65,6 +67,10 @@ export function getDocumentSymbols(
     if (inFile(varBlock.sourceSpan)) symbols.push(...buildVarBlockSymbols(varBlock));
   }
 
+  if (caseMap) {
+    restoreSymbolCasing(symbols, caseMap);
+  }
+
   return symbols;
 }
 
@@ -74,12 +80,13 @@ export function getDocumentSymbols(
 export function getWorkspaceSymbols(
   allAnalyses: Map<string, AnalysisResult>,
   query: string,
+  caseMap?: ReadonlyMap<string, string>,
 ): SymbolInformation[] {
   const results: SymbolInformation[] = [];
   const upperQuery = query.toUpperCase();
 
   for (const [uri, analysis] of allAnalyses) {
-    const symbols = getDocumentSymbols(analysis);
+    const symbols = getDocumentSymbols(analysis, undefined, caseMap);
     collectFlatSymbols(symbols, uri, upperQuery, results);
   }
 
@@ -325,6 +332,34 @@ function formatTypeName(decl: VarDeclaration): string {
     name += `(${decl.type.maxLength})`;
   }
   return name;
+}
+
+// ---------------------------------------------------------------------------
+// Case restoration
+// ---------------------------------------------------------------------------
+
+/**
+ * Recursively restore original casing on document symbol names and details.
+ */
+function restoreSymbolCasing(
+  symbols: DocumentSymbol[],
+  caseMap: ReadonlyMap<string, string>,
+): void {
+  for (const sym of symbols) {
+    const restored = caseMap.get(sym.name.toUpperCase());
+    if (restored) {
+      sym.name = restored;
+    }
+    if (sym.detail) {
+      sym.detail = sym.detail.replace(
+        /\b[A-Za-z_]\w*\b/g,
+        (word) => caseMap.get(word.toUpperCase()) ?? word,
+      );
+    }
+    if (sym.children) {
+      restoreSymbolCasing(sym.children, caseMap);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
