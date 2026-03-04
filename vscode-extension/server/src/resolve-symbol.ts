@@ -98,6 +98,8 @@ function containsPosition(
   return true;
 }
 
+/** Approximate span area for smallest-span-wins comparison.
+ *  Multiplier assumes columns stay under 10000 (safe for ST files). */
 function spanSize(span: SourceSpan | undefined): number {
   if (!span) return Infinity;
   return (span.endLine - span.startLine) * 10000 + (span.endCol - span.startCol);

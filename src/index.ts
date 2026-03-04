@@ -164,8 +164,14 @@ function runPipeline(
                 globalConstants,
               ),
             );
-          } catch {
-            // In analyze mode, partial CST may fail to build — skip this file
+          } catch (e) {
+            errors.push({
+              message: `AST build failed for ${addlSource.fileName}: ${e instanceof Error ? e.message : String(e)}`,
+              line: 0,
+              column: 0,
+              severity: "error",
+              file: addlSource.fileName,
+            });
           }
         }
       }

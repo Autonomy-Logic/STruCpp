@@ -22,7 +22,7 @@ function findSymbol(symbols: { name: string }[], name: string) {
 describe("getDocumentSymbols", () => {
   it("returns top-level POUs", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
 
     const upperNames = symbols.map((s) => s.name.toUpperCase());
     expect(upperNames).toContain("MAIN");
@@ -35,7 +35,7 @@ describe("getDocumentSymbols", () => {
 
   it("maps PROGRAM to Module symbol kind", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const main = findSymbol(symbols, "Main");
     expect(main).toBeDefined();
     expect(main!.kind).toBe(2); // SymbolKind.Module
@@ -43,7 +43,7 @@ describe("getDocumentSymbols", () => {
 
   it("maps FUNCTION_BLOCK to Class symbol kind", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const sprite = findSymbol(symbols, "Sprite");
     expect(sprite).toBeDefined();
     expect(sprite!.kind).toBe(5); // SymbolKind.Class
@@ -51,7 +51,7 @@ describe("getDocumentSymbols", () => {
 
   it("maps FUNCTION to Function symbol kind", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const dist = findSymbol(symbols, "Distance");
     expect(dist).toBeDefined();
     expect(dist!.kind).toBe(12); // SymbolKind.Function
@@ -59,7 +59,7 @@ describe("getDocumentSymbols", () => {
 
   it("maps INTERFACE to Interface symbol kind", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const iface = findSymbol(symbols, "IMovable");
     expect(iface).toBeDefined();
     expect(iface!.kind).toBe(11); // SymbolKind.Interface
@@ -67,7 +67,7 @@ describe("getDocumentSymbols", () => {
 
   it("includes struct fields as children", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const point = findSymbol(symbols, "Point");
     expect(point).toBeDefined();
     expect(point!.kind).toBe(23); // SymbolKind.Struct
@@ -79,7 +79,7 @@ describe("getDocumentSymbols", () => {
 
   it("includes enum members as children", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const color = findSymbol(symbols, "Color");
     expect(color).toBeDefined();
     expect(color!.kind).toBe(10); // SymbolKind.Enum
@@ -90,7 +90,7 @@ describe("getDocumentSymbols", () => {
 
   it("includes FB methods as children", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const sprite = findSymbol(symbols, "Sprite");
     expect(sprite).toBeDefined();
     expect(sprite!.children).toBeDefined();
@@ -101,7 +101,7 @@ describe("getDocumentSymbols", () => {
 
   it("includes variables as children of programs", () => {
     const analysis = getAnalysis();
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     const main = findSymbol(symbols, "Main");
     expect(main).toBeDefined();
     expect(main!.children).toBeDefined();
@@ -114,7 +114,7 @@ describe("getDocumentSymbols", () => {
 
   it("returns empty array for empty analysis", () => {
     const analysis: AnalysisResult = { errors: [], warnings: [] };
-    const symbols = getDocumentSymbols(analysis, "file:///test.st");
+    const symbols = getDocumentSymbols(analysis);
     expect(symbols).toEqual([]);
   });
 });
@@ -134,13 +134,13 @@ END_PROGRAM`;
     });
 
     // When filtering to main.st, should only show Main program
-    const mainSymbols = getDocumentSymbols(analysis, "file:///main.st", "main.st");
+    const mainSymbols = getDocumentSymbols(analysis, "main.st");
     const mainNames = mainSymbols.map((s) => s.name.toUpperCase());
     expect(mainNames).toContain("MAIN");
     expect(mainNames).not.toContain("MYENUM");
 
     // When filtering to types.st, should only show MyEnum type
-    const typesSymbols = getDocumentSymbols(analysis, "file:///types.st", "types.st");
+    const typesSymbols = getDocumentSymbols(analysis, "types.st");
     const typesNames = typesSymbols.map((s) => s.name.toUpperCase());
     expect(typesNames).toContain("MYENUM");
     expect(typesNames).not.toContain("MAIN");

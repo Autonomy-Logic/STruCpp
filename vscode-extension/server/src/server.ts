@@ -178,7 +178,7 @@ connection.onDocumentSymbol((params) => {
   const state = docManager.getState(params.textDocument.uri);
   if (!state?.analysisResult) return [];
   const fileName = docManager.getFileName(params.textDocument.uri);
-  return getDocumentSymbols(state.analysisResult, params.textDocument.uri, fileName);
+  return getDocumentSymbols(state.analysisResult, fileName);
 });
 
 connection.onWorkspaceSymbol((params) => {

@@ -100,7 +100,7 @@ export class DocumentManager {
   }
 
   /** Get all document states as a Map (for cross-file lookups). */
-  getAllDocumentStates(): Map<string, DocumentState> {
+  getAllDocumentStates(): ReadonlyMap<string, DocumentState> {
     return this.documents;
   }
 

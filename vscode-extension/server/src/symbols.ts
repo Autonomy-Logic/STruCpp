@@ -36,7 +36,6 @@ import { sourceSpanToRange } from "./lsp-utils.js";
  */
 export function getDocumentSymbols(
   analysis: AnalysisResult,
-  _uri: string,
   fileName?: string,
 ): DocumentSymbol[] {
   const { ast } = analysis;
@@ -80,7 +79,7 @@ export function getWorkspaceSymbols(
   const upperQuery = query.toUpperCase();
 
   for (const [uri, analysis] of allAnalyses) {
-    const symbols = getDocumentSymbols(analysis, uri);
+    const symbols = getDocumentSymbols(analysis);
     collectFlatSymbols(symbols, uri, upperQuery, results);
   }
 

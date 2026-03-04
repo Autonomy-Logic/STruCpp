@@ -9,8 +9,6 @@
 
 import { Range, Position } from "vscode-languageserver/node.js";
 import type { SourceSpan } from "strucpp";
-import type { DocumentState } from "./document-manager.js";
-
 /**
  * Convert a compiler SourceSpan (1-indexed) to an LSP Range (0-indexed).
  */
@@ -31,23 +29,3 @@ export function lspPositionToCompiler(pos: Position): {
   return { line: pos.line + 1, column: pos.character + 1 };
 }
 
-/**
- * Map a compiler fileName to a document URI.
- * The compiler uses bare filenames (e.g., "main.st"), while the LSP uses URIs.
- */
-export function fileNameToUri(
-  fileName: string,
-  allDocs: Map<string, DocumentState>,
-): string | undefined {
-  for (const [uri, state] of allDocs) {
-    // Match by basename — compiler uses bare filenames
-    if (uri.endsWith(fileName) || uri.endsWith("/" + fileName)) {
-      return uri;
-    }
-    // Also check if the state's URI contains the fileName
-    if (state.uri.endsWith(fileName)) {
-      return state.uri;
-    }
-  }
-  return undefined;
-}
