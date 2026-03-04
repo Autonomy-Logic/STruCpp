@@ -2,7 +2,7 @@
 
 **IEC 61131-3 Structured Text to C++17 compiler.**
 
-[![CI](https://github.com/Autonomy-Logic/strucpp/actions/workflows/ci.yml/badge.svg)](https://github.com/Autonomy-Logic/strucpp/actions/workflows/ci.yml)
+[![CI](https://github.com/Autonomy-Logic/STruCpp/actions/workflows/ci.yml/badge.svg)](https://github.com/Autonomy-Logic/STruCpp/actions/workflows/ci.yml)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 
 STruC++ compiles PLC programs written in [Structured Text](https://en.wikipedia.org/wiki/Structured_text) into clean, readable C++17. It ships with a built-in unit testing framework, an interactive REPL for program debugging, and a reusable library system.
@@ -25,7 +25,7 @@ STruC++ compiles PLC programs written in [Structured Text](https://en.wikipedia.
 
 ## Quick Start
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/Autonomy-Logic/strucpp/releases), extract it, and add it to your PATH:
+Download the latest release for your platform from [GitHub Releases](https://github.com/Autonomy-Logic/STruCpp/releases), extract it, and add it to your PATH:
 
 ```bash
 tar -xzf strucpp-linux-x64.tar.gz    # or unzip on macOS/Windows
@@ -110,7 +110,7 @@ END_TEST
 TEST 'Timer reaches preset'
   VAR t : TON; END_VAR
   t(IN := TRUE, PT := T#100ms);
-  ADVANCE_TIME T#100ms;
+  ADVANCE_TIME(T#100ms);
   t(IN := TRUE, PT := T#100ms);
   ASSERT_TRUE(t.Q);
 END_TEST
@@ -187,17 +187,17 @@ void Counter::operator()() {
 
 STruC++ implements a broad subset of IEC 61131-3 Edition 3 plus common CODESYS extensions:
 
-| Category | Features |
-|----------|----------|
-| **Data types** | BOOL, BYTE/WORD/DWORD/LWORD, SINT/INT/DINT/LINT, USINT/UINT/UDINT/ULINT, REAL/LREAL, STRING/WSTRING, TIME/DATE/DT/TOD (+ L-variants), arrays (1D/2D/3D/VLA), structs, enums, subranges |
-| **POUs** | PROGRAM, FUNCTION, FUNCTION_BLOCK, INTERFACE |
-| **Variables** | VAR, VAR_INPUT, VAR_OUTPUT, VAR_IN_OUT, VAR_EXTERNAL, VAR_GLOBAL, CONSTANT, RETAIN, AT (located) |
-| **Control flow** | IF/ELSIF/ELSE, CASE, FOR, WHILE, REPEAT, EXIT, RETURN |
-| **OOP** | Methods, properties (GET/SET), inheritance (EXTENDS), interfaces (IMPLEMENTS), ABSTRACT, FINAL, OVERRIDE, access modifiers |
-| **Pointers** | POINTER TO, REF_TO, REFERENCE_TO, ADR, `^` dereference, `__NEW`/`__DELETE` |
-| **Standard functions** | 80+ functions: math, trig, string, selection, comparison, bitwise, type conversion |
-| **Standard FBs** | TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS (compiled ST library) |
-| **Project model** | CONFIGURATION, RESOURCE, TASK, program scheduling |
+| Category               | Features                                                                                                                                                                               |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Data types**         | BOOL, BYTE/WORD/DWORD/LWORD, SINT/INT/DINT/LINT, USINT/UINT/UDINT/ULINT, REAL/LREAL, STRING/WSTRING, TIME/DATE/DT/TOD (+ L-variants), arrays (1D/2D/3D/VLA), structs, enums, subranges |
+| **POUs**               | PROGRAM, FUNCTION, FUNCTION_BLOCK, INTERFACE                                                                                                                                           |
+| **Variables**          | VAR, VAR_INPUT, VAR_OUTPUT, VAR_IN_OUT, VAR_EXTERNAL, VAR_GLOBAL, CONSTANT, RETAIN, AT (located)                                                                                       |
+| **Control flow**       | IF/ELSIF/ELSE, CASE, FOR, WHILE, REPEAT, EXIT, RETURN                                                                                                                                  |
+| **OOP**                | Methods, properties (GET/SET), inheritance (EXTENDS), interfaces (IMPLEMENTS), ABSTRACT, FINAL, OVERRIDE, access modifiers                                                             |
+| **Pointers**           | POINTER TO, REF_TO, REFERENCE_TO, ADR, `^` dereference, `__NEW`/`__DELETE`                                                                                                             |
+| **Standard functions** | 80+ functions: math, trig, string, selection, comparison, bitwise, type conversion                                                                                                     |
+| **Standard FBs**       | TON, TOF, TP, CTU, CTD, CTUD, R_TRIG, F_TRIG, SR, RS (compiled ST library)                                                                                                             |
+| **Project model**      | CONFIGURATION, RESOURCE, TASK, program scheduling                                                                                                                                      |
 
 See [IEC Compliance](docs/IEC_COMPLIANCE.md) for the full feature matrix.
 
@@ -208,7 +208,7 @@ See [IEC Compliance](docs/IEC_COMPLIANCE.md) for the full feature matrix.
 STruC++ can also be used as a JavaScript/TypeScript library for embedding in browser-based IDEs and web applications:
 
 ```javascript
-import { compile } from 'strucpp';
+import { compile } from "strucpp";
 
 const result = compile(`
   FUNCTION_BLOCK Counter
@@ -256,14 +256,14 @@ npm run typecheck       # Type-check without emit
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [CLI Reference](docs/CLI.md) | All compiler modes, flags, and options |
-| [Testing Guide](docs/TESTING.md) | Test syntax, assertions, mocking, time advancement |
-| [REPL Guide](docs/REPL.md) | Interactive commands and program debugging |
-| [Architecture](docs/ARCHITECTURE.md) | Compiler pipeline, module map, design decisions |
-| [C++ Runtime](docs/RUNTIME.md) | Runtime library types, IECVar wrapper, standard functions |
-| [IEC Compliance](docs/IEC_COMPLIANCE.md) | Full feature matrix with implementation status |
+| Document                                 | Description                                               |
+| ---------------------------------------- | --------------------------------------------------------- |
+| [CLI Reference](docs/CLI.md)             | All compiler modes, flags, and options                    |
+| [Testing Guide](docs/TESTING.md)         | Test syntax, assertions, mocking, time advancement        |
+| [REPL Guide](docs/REPL.md)               | Interactive commands and program debugging                |
+| [Architecture](docs/ARCHITECTURE.md)     | Compiler pipeline, module map, design decisions           |
+| [C++ Runtime](docs/RUNTIME.md)           | Runtime library types, IECVar wrapper, standard functions |
+| [IEC Compliance](docs/IEC_COMPLIANCE.md) | Full feature matrix with implementation status            |
 
 ---
 

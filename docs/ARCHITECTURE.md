@@ -142,24 +142,24 @@ Generates two files per compilation: `.hpp` (declarations) and `.cpp` (implement
 
 ### Type Mapping
 
-| IEC Type | C++ Type | Wrapped |
-|----------|----------|---------|
-| BOOL | `bool` | `IECVar<bool>` |
-| INT | `int16_t` | `IECVar<int16_t>` |
-| DINT | `int32_t` | `IECVar<int32_t>` |
-| REAL | `float` | `IECVar<float>` |
-| STRING | `IECString<N>` | `IECVar<IECString<N>>` |
-| ARRAY[1..10] OF INT | `Array1D<int16_t, 1, 10>` | - |
-| POINTER TO INT | `IEC_Ptr<int16_t>` | - |
-| REF_TO INT | `IEC_REF_TO<int16_t>` | - |
-| User struct | `struct Name { ... }` | `IECVar<Name>` |
+| IEC Type            | C++ Type                  | Wrapped                |
+| ------------------- | ------------------------- | ---------------------- |
+| BOOL                | `bool`                    | `IECVar<bool>`         |
+| INT                 | `int16_t`                 | `IECVar<int16_t>`      |
+| DINT                | `int32_t`                 | `IECVar<int32_t>`      |
+| REAL                | `float`                   | `IECVar<float>`        |
+| STRING              | `IECString<N>`            | `IECVar<IECString<N>>` |
+| ARRAY[1..10] OF INT | `Array1D<int16_t, 1, 10>` | -                      |
+| POINTER TO INT      | `IEC_Ptr<int16_t>`        | -                      |
+| REF_TO INT          | `IEC_REF_TO<int16_t>`     | -                      |
+| User struct         | `struct Name { ... }`     | `IECVar<Name>`         |
 
 All program/function variables are wrapped in `IECVar<T>` which provides transparent variable forcing support. Struct fields use IECVar-wrapped elementary types for per-field forcing.
 
 ### POU Generation
 
 - **Functions**: C++ free functions with INPUT params by value, OUTPUT/IN_OUT by reference
-- **Function Blocks**: C++ classes with member variables, `invoke()` method for the FB body, and generated methods/properties. Supports ABSTRACT (pure virtual), FINAL, EXTENDS (inheritance), and IMPLEMENTS (interfaces).
+- **Function Blocks**: C++ classes with member variables, `operator()()` method for the FB body, and generated methods/properties. Supports ABSTRACT (pure virtual), FINAL, EXTENDS (inheritance), and IMPLEMENTS (interfaces).
 - **Programs**: C++ classes with global instances, connected to CONFIGURATION/RESOURCE/TASK structure
 
 ### Line Mapping
