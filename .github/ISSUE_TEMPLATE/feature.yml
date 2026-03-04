@@ -1,0 +1,46 @@
+name: Feature Request
+description: Propose a new feature or enhancement
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What and why, in 1-3 sentences.
+      placeholder: "Add support for CODESYS POINTER TO syntax. Required for Phase 6 compatibility with CODESYS projects targeting OpenPLC.\n\nNote: do not prefix the issue title with category labels — use labels instead."
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What's included? Bullet list of capabilities.
+      placeholder: |
+        - Parse POINTER TO declarations
+        - Generate correct C++ pointer types
+        - Dereference operator (^) support
+    validations:
+      required: true
+
+  - type: textarea
+    id: implementation
+    attributes:
+      label: Implementation Notes
+      description: Key technical decisions, files affected.
+      placeholder: |
+        - Add POINTER_TO token to src/frontend/lexer.ts
+        - Extend type AST nodes in src/frontend/ast.ts
+        - Codegen in src/backend/codegen.ts
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How do we know this is done?
+      placeholder: |
+        - POINTER TO declarations parse and compile
+        - Dereference generates valid C++17
+        - Tests cover pointer semantics
+    validations:
+      required: true

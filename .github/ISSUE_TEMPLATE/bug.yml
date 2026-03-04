@@ -1,0 +1,57 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What's broken? Be concise.
+      placeholder: "Parser crashes on nested CASE statements.\n\nNote: do not prefix the issue title with category labels — use labels instead."
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: What breaks for users? Include specific symptoms.
+      placeholder: |
+        - Compilation fails silently
+        - No error message shown
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Steps or code to reproduce.
+      placeholder: |
+        1. Write a CASE statement nested inside another CASE
+        2. Run: strucpp compile input.st
+        3. Crashes with unhandled exception
+
+  - type: textarea
+    id: code-locations
+    attributes:
+      label: Code Locations
+      description: Files and lines involved.
+      placeholder: |
+        - src/frontend/parser.ts lines 210-230
+        - src/frontend/ast-builder.ts line 88
+
+  - type: textarea
+    id: fix
+    attributes:
+      label: Fix
+      description: Proposed fix if known.
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How do we know this is done?
+      placeholder: |
+        - Nested CASE compiles correctly
+        - Tests cover nested CASE scenarios
+    validations:
+      required: true
