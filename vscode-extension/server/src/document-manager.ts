@@ -240,6 +240,7 @@ function uriToFilePath(uri: string): string {
 function isTestFile(source: string): boolean {
   // Strip leading comments and whitespace, then check the first keyword
   const stripped = source
+    .replace(/^\uFEFF/, "")             // strip UTF-8 BOM
     .replace(/\/\/.*$/gm, "")           // remove line comments
     .replace(/\(\*[\s\S]*?\*\)/g, "")   // remove block comments
     .trimStart();

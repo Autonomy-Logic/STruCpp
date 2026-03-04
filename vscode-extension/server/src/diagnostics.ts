@@ -20,7 +20,7 @@ export function toLspDiagnostic(error: CompileError): Diagnostic {
   const startLine = Math.max(0, (error.line ?? 1) - 1);
   const startCol = Math.max(0, (error.column ?? 1) - 1);
   const endLine = error.endLine != null ? error.endLine - 1 : startLine;
-  const endCol = error.endColumn != null ? error.endColumn - 1 : startCol;
+  const endCol = error.endColumn != null ? error.endColumn - 1 : startCol + 1;
 
   return {
     range: Range.create(

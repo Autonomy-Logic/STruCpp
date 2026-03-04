@@ -70,9 +70,11 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
 // Re-discover workspace when folders change
 connection.onNotification("workspace/didChangeWorkspaceFolders", (params) => {
-  const event = params as {
-    added: Array<{ uri: string }>;
-    removed: Array<{ uri: string }>;
+  const { event } = params as {
+    event: {
+      added: Array<{ uri: string }>;
+      removed: Array<{ uri: string }>;
+    };
   };
 
   // Apply the LSP delta directly to the workspace folder set

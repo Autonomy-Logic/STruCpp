@@ -86,10 +86,11 @@ export function findNodeAtPosition(
 ): ASTNode | undefined {
   let best: ASTNode | undefined;
 
-  walkAST(ast, (node) => {
-    if (containsPosition(node, file, line, column)) {
-      best = node;
+  walkAST(ast, (node): boolean | void => {
+    if (!containsPosition(node, file, line, column)) {
+      return false; // prune subtrees that can't contain the position
     }
+    best = node;
   });
 
   return best;
@@ -106,8 +107,11 @@ export function findInnermostExpression(
 ): Expression | undefined {
   let best: Expression | undefined;
 
-  walkAST(ast, (node) => {
-    if (isExpression(node) && containsPosition(node, file, line, column)) {
+  walkAST(ast, (node): boolean | void => {
+    if (!containsPosition(node, file, line, column)) {
+      return false; // prune subtrees that can't contain the position
+    }
+    if (isExpression(node)) {
       best = node as Expression;
     }
   });
