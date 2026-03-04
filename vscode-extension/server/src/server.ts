@@ -27,6 +27,8 @@ import { lspPositionToCompiler } from "./lsp-utils.js";
 import { getDocumentSymbols, getWorkspaceSymbols } from "./symbols.js";
 import { getHover } from "./hover.js";
 import { getDefinition, getTypeDefinition } from "./definition.js";
+import { getCompletions } from "./completion.js";
+import { getSignatureHelp } from "./signature-help.js";
 
 const connection = createConnection(ProposedFeatures.all);
 const textDocuments = new TextDocuments(TextDocument);
@@ -67,6 +69,13 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       hoverProvider: true,
       definitionProvider: true,
       typeDefinitionProvider: true,
+      completionProvider: {
+        triggerCharacters: [".", ":"],
+        resolveProvider: false,
+      },
+      signatureHelpProvider: {
+        triggerCharacters: ["(", ","],
+      },
       workspace: {
         workspaceFolders: {
           supported: true,
@@ -178,7 +187,7 @@ connection.onDocumentSymbol((params) => {
   const state = docManager.getState(params.textDocument.uri);
   if (!state?.analysisResult) return [];
   const fileName = docManager.getFileName(params.textDocument.uri);
-  return getDocumentSymbols(state.analysisResult, fileName);
+  return getDocumentSymbols(state.analysisResult, fileName, docManager.getCaseMap());
 });
 
 connection.onWorkspaceSymbol((params) => {
@@ -188,7 +197,7 @@ connection.onWorkspaceSymbol((params) => {
       allAnalyses.set(doc.uri, doc.analysisResult);
     }
   }
-  return getWorkspaceSymbols(allAnalyses, params.query);
+  return getWorkspaceSymbols(allAnalyses, params.query, docManager.getCaseMap());
 });
 
 connection.onHover((params) => {
@@ -227,6 +236,39 @@ connection.onTypeDefinition((params) => {
     params.textDocument.uri,
     (fn) => docManager.resolveFileNameToUri(fn),
   );
+});
+
+// ---------------------------------------------------------------------------
+// Phase 3 handlers: Completion, Signature Help
+// ---------------------------------------------------------------------------
+
+connection.onCompletion((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return [];
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+  // Use live document text (updates synchronously) rather than state.source
+  // which is debounced and may be stale when a trigger character fires.
+  const source =
+    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
+  return getCompletions(
+    state.analysisResult,
+    fileName,
+    line,
+    column,
+    source,
+    docManager.getCaseMap(),
+  );
+});
+
+connection.onSignatureHelp((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return null;
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+  const source =
+    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
+  return getSignatureHelp(state.analysisResult, fileName, line, column, source);
 });
 
 function publishDiagnostics(

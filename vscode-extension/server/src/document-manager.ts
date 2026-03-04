@@ -35,8 +35,20 @@ export class DocumentManager {
   private libraryPaths: string[] = [];
   private discoveryCache = new Map<string, string[]>();
 
+  /**
+   * Case map: UPPERCASE identifier → first-seen original casing.
+   * Built from ALL source texts encountered during analysis (open docs +
+   * workspace files from disk). Used by completion to restore original casing.
+   */
+  private _caseMap = new Map<string, string>();
+
   constructor(analyzeFn: AnalyzeFn) {
     this.analyzeFn = analyzeFn;
+  }
+
+  /** Get the workspace-wide case map for identifier casing restoration. */
+  getCaseMap(): ReadonlyMap<string, string> {
+    return this._caseMap;
   }
 
   setWorkspaceFolders(folders: string[]): void {
@@ -213,6 +225,15 @@ export class DocumentManager {
     };
 
     state.analysisResult = this.analyzeFn(state.source, options);
+
+    // Rebuild the workspace-wide case map from all sources we just read.
+    // This runs on every analysis (~400ms debounced), reusing the sources
+    // we already have in memory — no extra I/O.
+    this._caseMap.clear();
+    addToCaseMap(this._caseMap, state.source);
+    for (const addlSrc of additionalSources) {
+      addToCaseMap(this._caseMap, addlSrc.source);
+    }
   }
 }
 
@@ -276,6 +297,23 @@ function uriToFilePath(uri: string): string {
     return URI.parse(uri).fsPath;
   } catch {
     return uri;
+  }
+}
+
+/**
+ * Extract identifiers from source text and add them to a case map.
+ * First-occurrence wins: if the map already has an entry for an uppercase key,
+ * it is not overwritten.
+ */
+function addToCaseMap(map: Map<string, string>, source: string): void {
+  const regex = /\b([a-zA-Z_]\w*)\b/g;
+  let match;
+  while ((match = regex.exec(source)) !== null) {
+    const original = match[1];
+    const upper = original.toUpperCase();
+    if (!map.has(upper)) {
+      map.set(upper, original);
+    }
   }
 }
 

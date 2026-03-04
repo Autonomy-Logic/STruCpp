@@ -242,7 +242,7 @@ export function resolveSymbolAtPosition(
   }
 }
 
-function getScopeForContext(
+export function getScopeForContext(
   symbolTables: NonNullable<AnalysisResult["symbolTables"]>,
   scope: EnclosingScope,
 ): Scope | undefined {
