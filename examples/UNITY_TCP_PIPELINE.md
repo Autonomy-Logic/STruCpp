@@ -2,6 +2,11 @@
 
 This setup replaces the PLC server with a local ST controller process on your Mac.
 
+## Reference & Inspiration
+
+- Original digital-twin project (Unity + B&R OPC UA):
+  https://github.com/rparak/Unity3D_Robotics_Sorting_Machine
+
 ## 1) Compile ST controller to C++
 
 ```bash
