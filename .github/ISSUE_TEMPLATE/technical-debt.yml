@@ -1,0 +1,35 @@
+name: Technical Debt
+description: Cleanup, refactoring, dependency updates, dead code removal
+labels: ["technical-debt"]
+body:
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Why does this need doing? What triggered it?
+      placeholder: "Dead code audit found unused IR module never imported anywhere.\n\nNote: do not prefix the issue title with category labels — use labels instead."
+    validations:
+      required: true
+
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: Specific items to address. Be exhaustive.
+      placeholder: |
+        - src/ir/ir.ts: 444 lines, never imported
+        - vitest.config.ts: stale coverage exclusions with outdated phase comments
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance
+      description: How do we know this is done?
+      placeholder: |
+        - All listed items removed or justified
+        - Tests pass
+        - Build succeeds
+    validations:
+      required: true

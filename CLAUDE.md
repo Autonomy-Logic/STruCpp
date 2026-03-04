@@ -48,7 +48,7 @@ ST Source → Lexer → Parser (CST) → AST Builder → Project Model → Symbo
 - `src/project-model.ts` - CONFIGURATION/RESOURCE/TASK parsing
 - `src/runtime/include/` - Header-only C++ runtime library (IEC type wrappers)
 - `tests/` - Test suite organized by compiler phase
-- `docs/implementation-phases/` - Detailed implementation plans
+- `docs/` - Architecture, CLI, compliance, testing, and runtime documentation
 
 ### Parser Framework
 
@@ -61,12 +61,12 @@ Generates two files: `.cpp` (implementation) and `.hpp` (header). All generated 
 ## Implementation Status
 
 - **Completed**: Phases 0-3.6 (C++ runtime, lexer, parser, AST, symbol tables, project structure, user-defined types, located variables, references, nested comments, variable modifiers, namespaces, pragmas, ST translation with all expressions/control flow/composite types/VLAs/dynamic memory, REPL binary generator)
-- **Completed**: Phase 4 (Functions) - full function call pipeline (AST builder, codegen), standard function registry with all IEC std functions, *_TO_* conversion mapping, multi-file compilation, library system with manifest/compiler/loader
+- **Completed**: Phase 4 (Functions) - full function call pipeline (AST builder, codegen), standard function registry with all IEC std functions, _*TO*_ conversion mapping, multi-file compilation, library system with manifest/compiler/loader
 - **Completed**: Phase 5.1 (Function Block Instances and Invocations) - FB instantiation, invocation, member access, class skeleton codegen
 - **Completed**: Phase 5.2 (OOP extensions - methods, interfaces, inheritance, properties, semantic validations)
 - **Completed**: Phase 5.3 (IEC 61131-3 Standard FB Library - TON/TOF/TP/CTU/CTD/R_TRIG/F_TRIG/SR/RS as compiled ST library)
 - **Completed**: Phase 5.4 (Testing strategy for FB/OOP)
-- **Pending**: Phase 6 (CODESYS compatibility - POINTER TO, UNION, FB_Init/FB_Exit, __QUERYINTERFACE, bit access, typed literals, 64-bit time types, ACTION, exceptions, generics, conditional compilation)
+- **Pending**: Phase 6 (CODESYS compatibility - POINTER TO, UNION, FB_Init/FB_Exit, \_\_QUERYINTERFACE, bit access, typed literals, 64-bit time types, ACTION, exceptions, generics, conditional compilation)
 - **Pending**: Phase 7 (OpenPLC runtime integration - located variable infrastructure already complete)
 - **Pending**: Phase 8 (optimizations and advanced debug support)
 - **Pending**: Phase 9 (IEC 61131-3 testing framework)

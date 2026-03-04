@@ -1,0 +1,21 @@
+name: Idea
+description: Far-future idea or concept not yet ready for planning
+labels: ["idea"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is the idea? 1-3 sentences.
+      placeholder: "Add a simulated PLC runtime for testing ST logic without physical hardware.\n\nNote: do not prefix the issue title with category labels — use labels instead."
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: Why would this be valuable?
+      placeholder: Eliminates need for physical PLC during development. Faster feedback loop for logic testing.
+    validations:
+      required: true
