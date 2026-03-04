@@ -101,7 +101,7 @@ LL(3) Chevrotain parser with error recovery. Grammar covers the full IEC 61131-3
 - **POUs**: PROGRAM, FUNCTION, FUNCTION_BLOCK, INTERFACE
 - **Variables**: VAR, VAR_INPUT, VAR_OUTPUT, VAR_IN_OUT, VAR_EXTERNAL, VAR_GLOBAL (with CONSTANT, RETAIN, AT modifiers)
 - **Types**: STRUCT, ENUM, ARRAY (1D/2D/3D), SUBRANGE, TYPE aliases, REF_TO, REFERENCE_TO, POINTER TO
-- **Statements**: assignment, IF/ELSIF/ELSE, FOR/WHILE/REPEAT, CASE, EXIT, RETURN, function/method calls, **NEW, **DELETE
+- **Statements**: assignment, IF/ELSIF/ELSE, FOR/WHILE/REPEAT, CASE, EXIT, RETURN, function/method calls, __NEW, __DELETE
 - **Expressions**: full operator precedence (arithmetic, comparison, logical, bitwise, shift, power, unary), function calls, method calls, array/field access, REF/DREF, typed literals
 - **OOP**: methods, properties (GET/SET), inheritance (EXTENDS), interfaces (IMPLEMENTS), visibility (PUBLIC/PRIVATE/PROTECTED), ABSTRACT/FINAL/OVERRIDE
 
