@@ -23,6 +23,10 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { analyze } from "strucpp";
 import { DocumentManager } from "./document-manager.js";
 import { toLspDiagnostics } from "./diagnostics.js";
+import { lspPositionToCompiler } from "./lsp-utils.js";
+import { getDocumentSymbols, getWorkspaceSymbols } from "./symbols.js";
+import { getHover } from "./hover.js";
+import { getDefinition, getTypeDefinition } from "./definition.js";
 
 const connection = createConnection(ProposedFeatures.all);
 const textDocuments = new TextDocuments(TextDocument);
@@ -58,6 +62,11 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Full,
+      documentSymbolProvider: true,
+      workspaceSymbolProvider: true,
+      hoverProvider: true,
+      definitionProvider: true,
+      typeDefinitionProvider: true,
       workspace: {
         workspaceFolders: {
           supported: true,
@@ -159,6 +168,65 @@ textDocuments.onDidClose((event) => {
   docManager.onDocumentClose(uri);
   // Clear diagnostics for closed files
   connection.sendDiagnostics({ uri, diagnostics: [] });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2 handlers: Document Symbols, Hover, Go to Definition
+// ---------------------------------------------------------------------------
+
+connection.onDocumentSymbol((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return [];
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  return getDocumentSymbols(state.analysisResult, params.textDocument.uri, fileName);
+});
+
+connection.onWorkspaceSymbol((params) => {
+  const allAnalyses = new Map<string, import("strucpp").AnalysisResult>();
+  for (const doc of docManager.getAllDocuments()) {
+    if (doc.analysisResult) {
+      allAnalyses.set(doc.uri, doc.analysisResult);
+    }
+  }
+  return getWorkspaceSymbols(allAnalyses, params.query);
+});
+
+connection.onHover((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return null;
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+  return getHover(state.analysisResult, fileName, line, column);
+});
+
+connection.onDefinition((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return null;
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+  return getDefinition(
+    state.analysisResult,
+    fileName,
+    line,
+    column,
+    params.textDocument.uri,
+    (fn) => docManager.resolveFileNameToUri(fn),
+  );
+});
+
+connection.onTypeDefinition((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return null;
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+  return getTypeDefinition(
+    state.analysisResult,
+    fileName,
+    line,
+    column,
+    params.textDocument.uri,
+    (fn) => docManager.resolveFileNameToUri(fn),
+  );
 });
 
 function publishDiagnostics(

@@ -88,15 +88,19 @@ function runPipeline(
         severity: "error",
       });
     }
-    return {
-      ast,
-      projectModel,
-      symbolTables,
-      errors,
-      warnings,
-      allArchives,
-      mergedOptions,
-    };
+    // In analyze mode, continue with partial CST from Chevrotain recovery.
+    // In compile mode, abort immediately.
+    if (!continueOnError) {
+      return {
+        ast,
+        projectModel,
+        symbolTables,
+        errors,
+        warnings,
+        allArchives,
+        mergedOptions,
+      };
+    }
   }
 
   // Phase 2: Build AST from CST (supports multi-file via additionalSources)
@@ -145,12 +149,24 @@ function runPipeline(
               file: addlSource.fileName,
             });
           }
-          continue;
+          // In compile mode, skip files with parse errors.
+          // In analyze mode, try to build from the partial CST.
+          if (!continueOnError) {
+            continue;
+          }
         }
         if (addlParseResult.cst) {
-          units.push(
-            buildAST(addlParseResult.cst, addlSource.fileName, globalConstants),
-          );
+          try {
+            units.push(
+              buildAST(
+                addlParseResult.cst,
+                addlSource.fileName,
+                globalConstants,
+              ),
+            );
+          } catch {
+            // In analyze mode, partial CST may fail to build — skip this file
+          }
         }
       }
     }
@@ -186,6 +202,13 @@ function runPipeline(
         mergedOptions,
       };
     }
+    // In analyze mode, AST building failure is non-fatal — continue with
+    // whatever partial ast is available (may be undefined)
+  }
+
+  // Phase 3: Build project model and validate
+  if (!ast) {
+    // No AST available (parse/build failed completely) — skip remaining phases
     return {
       ast,
       projectModel,
@@ -196,8 +219,6 @@ function runPipeline(
       mergedOptions,
     };
   }
-
-  // Phase 3: Build project model and validate
   try {
     const projectModelResult = buildProjectModel(ast);
     projectModel = projectModelResult.model;
@@ -612,6 +633,9 @@ export type {
   ReferenceType,
   FunctionBlockType,
   AccessStep,
+  StructDefinition,
+  EnumDefinition,
+  EnumMember,
 } from "./frontend/ast.js";
 
 // Re-export symbol table types
@@ -659,7 +683,9 @@ export {
   findNodeAtPosition,
   findInnermostExpression,
   collectReferences,
+  findEnclosingPOU,
 } from "./ast-utils.js";
+export type { EnclosingScope } from "./ast-utils.js";
 
 // Re-export library system
 export { compileLibrary, compileStlib } from "./library/library-compiler.js";

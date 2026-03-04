@@ -219,6 +219,56 @@ export function collectReferences(
 }
 
 // ---------------------------------------------------------------------------
+// Enclosing scope resolution
+// ---------------------------------------------------------------------------
+
+export interface EnclosingScope {
+  kind: "program" | "function" | "functionBlock" | "method" | "global";
+  name: string;
+  parentName?: string; // FB name when kind === 'method'
+}
+
+/**
+ * Determine which POU contains a given source position.
+ * Returns the most specific match (method > FB > function > program > global).
+ */
+export function findEnclosingPOU(
+  ast: CompilationUnit,
+  file: string,
+  line: number,
+  column: number,
+): EnclosingScope {
+  // Check programs
+  for (const prog of ast.programs) {
+    if (containsPosition(prog, file, line, column)) {
+      return { kind: "program", name: prog.name };
+    }
+  }
+
+  // Check functions
+  for (const func of ast.functions) {
+    if (containsPosition(func, file, line, column)) {
+      return { kind: "function", name: func.name };
+    }
+  }
+
+  // Check function blocks (and nested methods)
+  for (const fb of ast.functionBlocks) {
+    if (containsPosition(fb, file, line, column)) {
+      // Check methods first (more specific)
+      for (const method of fb.methods) {
+        if (containsPosition(method, file, line, column)) {
+          return { kind: "method", name: method.name, parentName: fb.name };
+        }
+      }
+      return { kind: "functionBlock", name: fb.name };
+    }
+  }
+
+  return { kind: "global", name: "global" };
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 

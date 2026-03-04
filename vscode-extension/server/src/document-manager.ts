@@ -99,6 +99,52 @@ export class DocumentManager {
     return [...this.documents.values()];
   }
 
+  /** Get all document states as a Map (for cross-file lookups). */
+  getAllDocumentStates(): Map<string, DocumentState> {
+    return this.documents;
+  }
+
+  /** Extract a bare fileName from a URI. */
+  getFileName(uri: string): string {
+    return path.basename(uriToFilePath(uri));
+  }
+
+  /** Map a bare fileName back to a URI among open documents. */
+  getUriForFile(fileName: string): string | undefined {
+    for (const [uri] of this.documents) {
+      if (path.basename(uriToFilePath(uri)) === fileName) {
+        return uri;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Resolve a bare fileName (from compiler sourceSpan) to a file:// URI.
+   * Searches open documents first, then discovered workspace files.
+   */
+  resolveFileNameToUri(fileName: string): string | undefined {
+    // 1. Check open documents first (may have unsaved edits)
+    const openUri = this.getUriForFile(fileName);
+    if (openUri) return openUri;
+
+    // 2. Search discovered workspace files
+    for (const folder of this.workspaceFolders) {
+      let discovered = this.discoveryCache.get(folder);
+      if (!discovered) {
+        discovered = discoverStFiles(folder);
+        this.discoveryCache.set(folder, discovered);
+      }
+      for (const filePath of discovered) {
+        if (path.basename(filePath) === fileName) {
+          return URI.file(filePath).toString();
+        }
+      }
+    }
+
+    return undefined;
+  }
+
   /**
    * Re-analyze all open documents. Useful when workspace folders change
    * or when a file is saved that may affect other files.
