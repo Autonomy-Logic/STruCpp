@@ -18,11 +18,15 @@ import {
   InitializeResult,
   TextDocumentSyncKind,
   DidChangeWatchedFilesNotification,
+  Hover,
+  MarkupKind,
+  TextDocumentPositionParams,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { analyze } from "strucpp";
 import { DocumentManager } from "./document-manager.js";
 import { toLspDiagnostics } from "./diagnostics.js";
+import { getHoverForWord, getWordAtOffset } from "./hover-provider.js";
 
 const connection = createConnection(ProposedFeatures.all);
 const textDocuments = new TextDocuments(TextDocument);
@@ -58,6 +62,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   return {
     capabilities: {
       textDocumentSync: TextDocumentSyncKind.Full,
+      hoverProvider: true,
       workspace: {
         workspaceFolders: {
           supported: true,
@@ -207,6 +212,17 @@ function findLibraryPaths(): string[] {
 
   return paths;
 }
+
+connection.onHover((params: TextDocumentPositionParams): Hover | null => {
+  const doc = textDocuments.get(params.textDocument.uri);
+  if (!doc) return null;
+  const line = doc.getText().split("\n")[params.position.line] ?? "";
+  const word = getWordAtOffset(line, params.position.character);
+  if (!word) return null;
+  const content = getHoverForWord(word);
+  if (!content) return null;
+  return { contents: { kind: MarkupKind.Markdown, value: content } };
+});
 
 textDocuments.listen(connection);
 connection.listen();
