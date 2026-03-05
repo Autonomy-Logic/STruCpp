@@ -671,6 +671,7 @@ export class TypeChecker {
               `FOR control variable '${stmt.controlVariable}' must be an integer type, got ${typeNameUtil(ctrlType)}`,
               stmt.sourceSpan.startLine,
               stmt.sourceSpan.startCol,
+              stmt.sourceSpan.file,
             );
           }
           // Validate start/end compatibility with control variable
@@ -689,6 +690,7 @@ export class TypeChecker {
                 `FOR start value type ${typeNameUtil(startType)} is not compatible with control variable type ${typeNameUtil(ctrlType)}`,
                 stmt.start.sourceSpan.startLine,
                 stmt.start.sourceSpan.startCol,
+                stmt.start.sourceSpan.file,
               );
             }
           }
@@ -702,6 +704,7 @@ export class TypeChecker {
                 `FOR end value type ${typeNameUtil(endType)} is not compatible with control variable type ${typeNameUtil(ctrlType)}`,
                 stmt.end.sourceSpan.startLine,
                 stmt.end.sourceSpan.startCol,
+                stmt.end.sourceSpan.file,
               );
             }
           }
@@ -809,6 +812,7 @@ export class TypeChecker {
             `Implicit narrowing conversion from ${vName} to ${tName}`,
             value.sourceSpan.startLine,
             value.sourceSpan.startCol,
+            value.sourceSpan.file,
           );
           return;
         }
@@ -818,6 +822,7 @@ export class TypeChecker {
         `Cannot assign ${typeNameUtil(valueType)} to ${typeNameUtil(targetType)}`,
         value.sourceSpan.startLine,
         value.sourceSpan.startCol,
+        value.sourceSpan.file,
       );
       return;
     }
@@ -850,6 +855,7 @@ export class TypeChecker {
         `Condition must be a boolean or bit type, got ${typeNameUtil(condType)}`,
         condExpr.sourceSpan.startLine,
         condExpr.sourceSpan.startCol,
+        condExpr.sourceSpan.file,
       );
     }
   }
@@ -868,6 +874,7 @@ export class TypeChecker {
         `CASE selector must be an integer, bit, or enum type, got ${typeNameUtil(selectorType)}`,
         selectorExpr.sourceSpan.startLine,
         selectorExpr.sourceSpan.startCol,
+        selectorExpr.sourceSpan.file,
       );
     }
   }
@@ -905,12 +912,14 @@ export class TypeChecker {
                 `Argument '${param.name}' of '${nameUpper}' expects ${param.specificType}, got ${argTypeName} (narrowing)`,
                 arg.value.sourceSpan.startLine,
                 arg.value.sourceSpan.startCol,
+                arg.value.sourceSpan.file,
               );
             } else {
               this.addError(
                 `Argument '${param.name}' of '${nameUpper}' expects ${param.specificType}, got ${argTypeName}`,
                 arg.value.sourceSpan.startLine,
                 arg.value.sourceSpan.startCol,
+                arg.value.sourceSpan.file,
               );
             }
           }
@@ -927,6 +936,7 @@ export class TypeChecker {
             `Argument '${param.name}' of '${nameUpper}' expects ${param.constraint}, got ${argTypeName}`,
             arg.value.sourceSpan.startLine,
             arg.value.sourceSpan.startCol,
+            arg.value.sourceSpan.file,
           );
         }
       }
@@ -1002,24 +1012,36 @@ export class TypeChecker {
   /**
    * Add an error message.
    */
-  private addError(message: string, line: number, column: number): void {
+  private addError(
+    message: string,
+    line: number,
+    column: number,
+    file?: string,
+  ): void {
     this.errors.push({
       message,
       line,
       column,
       severity: "error",
+      ...(file ? { file } : {}),
     });
   }
 
   /**
    * Add a warning message.
    */
-  protected addWarning(message: string, line: number, column: number): void {
+  protected addWarning(
+    message: string,
+    line: number,
+    column: number,
+    file?: string,
+  ): void {
     this.warnings.push({
       message,
       line,
       column,
       severity: "warning",
+      ...(file ? { file } : {}),
     });
   }
 }

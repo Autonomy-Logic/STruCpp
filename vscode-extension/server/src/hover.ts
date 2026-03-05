@@ -140,7 +140,7 @@ function formatVariable(sym: VariableSymbol, symbolTables: SymbolTables | undefi
       // Expand struct type details
       const typeSym = symbolTables.lookupType(typStr);
       if (typeSym?.declaration?.definition?.kind === "StructDefinition") {
-        const fields = typeSym.declaration.definition.fields;
+        const fields = typeSym.declaration.definition.fields ?? [];
         const fieldLines = fields
           .map((f: { names: string[]; type: { name: string } }) =>
             `  ${f.names.map(rc).join(", ")} : ${rc(f.type.name)}`,
@@ -198,7 +198,7 @@ function formatConstant(sym: ConstantSymbol, rc: RestoreFn): string {
 }
 
 function formatFunction(sym: FunctionSymbol, rc: RestoreFn): string {
-  const params = sym.parameters
+  const params = (sym.parameters ?? [])
     .map((p) => {
       const qualifier = p.isInput ? "" : p.isOutput ? "VAR_OUTPUT " : p.isInOut ? "VAR_IN_OUT " : "";
       const typeStr = rc(p.declaration?.type?.name ?? (p.type ? typeName(p.type) : "unknown"));
@@ -246,7 +246,7 @@ function formatType(sym: TypeSymbol, rc: RestoreFn): string {
   const defKind = sym.declaration?.definition?.kind;
 
   if (defKind === "StructDefinition") {
-    const fields = sym.declaration.definition.fields;
+    const fields = sym.declaration.definition.fields ?? [];
     const fieldLines = fields
       .map((f: { names: string[]; type: { name: string } }) =>
         `  ${f.names.map(rc).join(", ")} : ${rc(f.type.name)}`,
@@ -256,7 +256,7 @@ function formatType(sym: TypeSymbol, rc: RestoreFn): string {
   }
 
   if (defKind === "EnumDefinition") {
-    const members = sym.declaration.definition.members
+    const members = (sym.declaration.definition.members ?? [])
       .map((m: { name: string }) => rc(m.name))
       .join(", ");
     return `\`\`\`\nTYPE ${rc(sym.name)} : (${members})\n\`\`\``;
@@ -288,7 +288,7 @@ function formatEnumValue(sym: EnumValueSymbol, rc: RestoreFn): string {
 }
 
 function formatStdFunction(fn: StdFunctionDescriptor): string {
-  const params = fn.params
+  const params = (fn.params ?? [])
     .map((p) => {
       const typeStr = p.specificType ?? p.constraint;
       return `${p.name} : ${typeStr}`;

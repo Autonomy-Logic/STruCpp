@@ -121,7 +121,11 @@ export function findInnermostExpression(
 
 /**
  * Collect all AST nodes that reference a given symbol name.
- * Optionally filter by scope (e.g., "MyProgram").
+ * Optionally filter by scope (e.g., "MyProgram" or "MyFB").
+ *
+ * Uses a scope stack to correctly handle nested scopes (methods inside FBs).
+ * When code appears in a FB body after method declarations, the scope is the
+ * FB — not the last-visited method.
  */
 export function collectReferences(
   ast: CompilationUnit,
@@ -130,17 +134,18 @@ export function collectReferences(
 ): ASTNode[] {
   const refs: ASTNode[] = [];
   const upperName = symbolName.toUpperCase();
-  let currentScope: string | undefined;
+  const upperScope = scope?.toUpperCase();
 
-  walkAST(ast, (node) => {
-    // Track scope
+  function visit(node: ASTNode, currentScope: string | undefined): void {
+    // Determine the scope for this node and its children
+    let nodeScope = currentScope;
     if (
       node.kind === "ProgramDeclaration" ||
       node.kind === "FunctionDeclaration" ||
       node.kind === "FunctionBlockDeclaration" ||
       node.kind === "MethodDeclaration"
     ) {
-      currentScope = (
+      nodeScope = (
         node as
           | ProgramDeclaration
           | FunctionDeclaration
@@ -149,15 +154,16 @@ export function collectReferences(
       ).name;
     }
 
-    // Skip if scope filter doesn't match
-    if (
-      scope &&
-      currentScope &&
-      currentScope.toUpperCase() !== scope.toUpperCase()
-    ) {
+    // Check scope filter
+    if (upperScope && nodeScope && nodeScope.toUpperCase() !== upperScope) {
+      // Still recurse into children — a matching POU may be nested inside
+      for (const child of getChildren(node)) {
+        visit(child, nodeScope);
+      }
       return;
     }
 
+    // Check if this node is a reference to the symbol
     switch (node.kind) {
       case "VariableExpression": {
         if ((node as VariableExpression).name.toUpperCase() === upperName) {
@@ -213,8 +219,14 @@ export function collectReferences(
         break;
       }
     }
-  });
 
+    // Recurse into children with the correct scope
+    for (const child of getChildren(node)) {
+      visit(child, nodeScope);
+    }
+  }
+
+  visit(ast, undefined);
   return refs;
 }
 

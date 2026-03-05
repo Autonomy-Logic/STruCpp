@@ -55,6 +55,9 @@ export function getReferences(
     : undefined;
 
   const locations: Location[] = [];
+  // Deduplicate: each document's merged AST may contain refs from all files,
+  // so the same reference can appear from multiple documents' analyses.
+  const seen = new Set<string>();
 
   // Search across all documents
   for (const [, doc] of allDocuments) {
@@ -78,6 +81,10 @@ export function getReferences(
       }
 
       const targetUri = resolveUri(span, doc.uri, resolveFileName);
+      const key = `${targetUri}:${span.startLine}:${span.startCol}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
       locations.push(Location.create(targetUri, sourceSpanToRange(span)));
     }
   }

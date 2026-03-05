@@ -255,6 +255,7 @@ export class SemanticAnalyzer {
             err.message,
             typeDecl.sourceSpan.startLine,
             typeDecl.sourceSpan.startCol,
+            typeDecl.sourceSpan.file,
           );
         }
       }
@@ -290,6 +291,7 @@ export class SemanticAnalyzer {
             err.message,
             funcDecl.sourceSpan.startLine,
             funcDecl.sourceSpan.startCol,
+            funcDecl.sourceSpan.file,
           );
         }
       }
@@ -352,6 +354,7 @@ export class SemanticAnalyzer {
                 methodErr.message,
                 method.sourceSpan.startLine,
                 method.sourceSpan.startCol,
+                method.sourceSpan.file,
               );
             }
           }
@@ -362,6 +365,7 @@ export class SemanticAnalyzer {
             err.message,
             fbDecl.sourceSpan.startLine,
             fbDecl.sourceSpan.startCol,
+            fbDecl.sourceSpan.file,
           );
         }
       }
@@ -388,6 +392,7 @@ export class SemanticAnalyzer {
             err.message,
             ifaceDecl.sourceSpan.startLine,
             ifaceDecl.sourceSpan.startCol,
+            ifaceDecl.sourceSpan.file,
           );
         }
       }
@@ -417,6 +422,7 @@ export class SemanticAnalyzer {
             err.message,
             progDecl.sourceSpan.startLine,
             progDecl.sourceSpan.startCol,
+            progDecl.sourceSpan.file,
           );
         }
       }
@@ -456,6 +462,7 @@ export class SemanticAnalyzer {
                 err.message,
                 decl.sourceSpan.startLine,
                 decl.sourceSpan.startCol,
+                decl.sourceSpan.file,
               );
             }
           }
@@ -521,6 +528,7 @@ export class SemanticAnalyzer {
                     `Invalid address format: ${decl.address}`,
                     decl.sourceSpan.startLine,
                     decl.sourceSpan.startCol,
+                    decl.sourceSpan.file,
                   );
                 }
               }
@@ -531,6 +539,7 @@ export class SemanticAnalyzer {
                 err.message,
                 decl.sourceSpan.startLine,
                 decl.sourceSpan.startCol,
+                decl.sourceSpan.file,
               );
             }
           }
@@ -621,6 +630,7 @@ export class SemanticAnalyzer {
               `Cannot assign to CONSTANT variable '${varName}'`,
               stmt.sourceSpan.startLine,
               stmt.sourceSpan.startCol,
+              stmt.sourceSpan.file,
             );
           }
         }
@@ -695,6 +705,7 @@ export class SemanticAnalyzer {
           `Located variable '${locVar.name}' at ${locVar.address} not allowed in FUNCTION_BLOCK '${locVar.scopeName}'. Located variables can only be declared in PROGRAM or VAR_GLOBAL scope.`,
           decl.sourceSpan.startLine,
           decl.sourceSpan.startCol,
+          decl.sourceSpan.file,
         );
         continue;
       }
@@ -706,6 +717,7 @@ export class SemanticAnalyzer {
           `Type '${locVar.typeName}' is not compatible with address size '${locVar.parsed.size}' in '${locVar.address}'. Expected one of: ${compatibleTypes.join(", ")}`,
           decl.sourceSpan.startLine,
           decl.sourceSpan.startCol,
+          decl.sourceSpan.file,
         );
       }
 
@@ -718,6 +730,7 @@ export class SemanticAnalyzer {
           `Bit index ${locVar.parsed.bitIndex} out of range (0-7) in address '${locVar.address}'`,
           decl.sourceSpan.startLine,
           decl.sourceSpan.startCol,
+          decl.sourceSpan.file,
         );
       }
 
@@ -729,6 +742,7 @@ export class SemanticAnalyzer {
           `Duplicate address ${locVar.address}: variable '${locVar.name}' conflicts with '${existing.name}'`,
           decl.sourceSpan.startLine,
           decl.sourceSpan.startCol,
+          decl.sourceSpan.file,
         );
       } else {
         addressMap.set(key, locVar);
@@ -753,6 +767,7 @@ export class SemanticAnalyzer {
         "Variable cannot be both RETAIN and CONSTANT",
         block.sourceSpan.startLine,
         block.sourceSpan.startCol,
+        block.sourceSpan.file,
       );
       return; // Skip further validation for this block
     }
@@ -768,6 +783,7 @@ export class SemanticAnalyzer {
               `CONSTANT variable '${names}' must have an initializer`,
               decl.sourceSpan.startLine,
               decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
             );
           }
         }
@@ -779,12 +795,14 @@ export class SemanticAnalyzer {
           "VAR_OUTPUT cannot be CONSTANT",
           block.sourceSpan.startLine,
           block.sourceSpan.startCol,
+          block.sourceSpan.file,
         );
       } else if (blockType === "VAR_IN_OUT") {
         this.addError(
           "VAR_IN_OUT cannot be CONSTANT",
           block.sourceSpan.startLine,
           block.sourceSpan.startCol,
+          block.sourceSpan.file,
         );
       }
     }
@@ -804,6 +822,7 @@ export class SemanticAnalyzer {
           `${blockType} cannot be RETAIN`,
           block.sourceSpan.startLine,
           block.sourceSpan.startCol,
+          block.sourceSpan.file,
         );
       }
     }
@@ -812,12 +831,18 @@ export class SemanticAnalyzer {
   /**
    * Add an error message.
    */
-  private addError(message: string, line: number, column: number): void {
+  private addError(
+    message: string,
+    line: number,
+    column: number,
+    file?: string,
+  ): void {
     this.errors.push({
       message,
       line,
       column,
       severity: "error",
+      ...(file ? { file } : {}),
     });
   }
 
@@ -848,6 +873,7 @@ export class SemanticAnalyzer {
               `The setter parameter will shadow the member variable.`,
             prop.sourceSpan.startLine,
             prop.sourceSpan.startCol,
+            prop.sourceSpan.file,
           );
         }
       }
@@ -881,6 +907,7 @@ export class SemanticAnalyzer {
           `FUNCTION_BLOCK '${fb.name}' cannot be both ABSTRACT and FINAL.`,
           fb.sourceSpan.startLine,
           fb.sourceSpan.startCol,
+          fb.sourceSpan.file,
         );
       }
 
@@ -895,6 +922,7 @@ export class SemanticAnalyzer {
             `Cannot extend FINAL FUNCTION_BLOCK '${fb.extends}'.`,
             fb.sourceSpan.startLine,
             fb.sourceSpan.startCol,
+            fb.sourceSpan.file,
           );
         }
       }
@@ -907,6 +935,7 @@ export class SemanticAnalyzer {
               `ABSTRACT methods can only appear in ABSTRACT function blocks.`,
             method.sourceSpan.startLine,
             method.sourceSpan.startCol,
+            method.sourceSpan.file,
           );
         }
 
@@ -916,6 +945,7 @@ export class SemanticAnalyzer {
             `Method '${method.name}' in '${fb.name}' cannot be both ABSTRACT and FINAL.`,
             method.sourceSpan.startLine,
             method.sourceSpan.startCol,
+            method.sourceSpan.file,
           );
         }
 
@@ -926,6 +956,7 @@ export class SemanticAnalyzer {
               `Method '${method.name}' in '${fb.name}' is marked OVERRIDE but '${fb.name}' does not extend any function block.`,
               method.sourceSpan.startLine,
               method.sourceSpan.startCol,
+              method.sourceSpan.file,
             );
           } else {
             const parentMethod = parentMethods.get(method.name.toUpperCase());
@@ -934,6 +965,7 @@ export class SemanticAnalyzer {
                 `Method '${method.name}' in '${fb.name}' is marked OVERRIDE but no method '${method.name}' exists in parent '${fb.extends}'.`,
                 method.sourceSpan.startLine,
                 method.sourceSpan.startCol,
+                method.sourceSpan.file,
               );
             } else {
               // Cannot override a FINAL method
@@ -942,6 +974,7 @@ export class SemanticAnalyzer {
                   `Cannot override FINAL method '${method.name}' from '${fb.extends}'.`,
                   method.sourceSpan.startLine,
                   method.sourceSpan.startCol,
+                  method.sourceSpan.file,
                 );
               }
               // Signature must match parent
@@ -976,6 +1009,7 @@ export class SemanticAnalyzer {
                   `FUNCTION_BLOCK '${fb.name}' implements '${ifaceName}' but does not provide method '${reqMethod}'.`,
                   fb.sourceSpan.startLine,
                   fb.sourceSpan.startCol,
+                  fb.sourceSpan.file,
                 );
               }
             }
@@ -1061,6 +1095,7 @@ export class SemanticAnalyzer {
           `Expected: (${parentSig}) : ${parentRetStr}, got: (${childSig}) : ${childRetStr}.`,
         method.sourceSpan.startLine,
         method.sourceSpan.startCol,
+        method.sourceSpan.file,
       );
     }
   }
@@ -1127,6 +1162,7 @@ export class SemanticAnalyzer {
             `Cannot instantiate ABSTRACT FUNCTION_BLOCK '${decl.type.name}'.`,
             decl.sourceSpan.startLine,
             decl.sourceSpan.startCol,
+            decl.sourceSpan.file,
           );
         }
       }
@@ -1224,6 +1260,7 @@ export class SemanticAnalyzer {
                 `Property '${fieldName}' of '${varType}' is read-only (no SET accessor).`,
                 stmt.sourceSpan.startLine,
                 stmt.sourceSpan.startCol,
+                stmt.sourceSpan.file,
               );
             }
           }
@@ -1481,6 +1518,7 @@ export class SemanticAnalyzer {
             `'${nameUpper}' requires at least ${minArgs} argument(s), got ${argCount}`,
             expr.sourceSpan.startLine,
             expr.sourceSpan.startCol,
+            expr.sourceSpan.file,
           );
         }
       } else {
@@ -1490,6 +1528,7 @@ export class SemanticAnalyzer {
             `'${nameUpper}' requires ${expected} argument(s), got ${argCount}`,
             expr.sourceSpan.startLine,
             expr.sourceSpan.startCol,
+            expr.sourceSpan.file,
           );
         }
       }
@@ -1500,6 +1539,7 @@ export class SemanticAnalyzer {
           `'${nameUpper}' requires 1 argument, got ${argCount}`,
           expr.sourceSpan.startLine,
           expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
         );
       }
     }
@@ -1512,6 +1552,7 @@ export class SemanticAnalyzer {
           "ADR() requires a variable reference, not an expression",
           expr.sourceSpan.startLine,
           expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
         );
       }
     }
@@ -1525,7 +1566,7 @@ export class SemanticAnalyzer {
     expr: {
       name: string;
       fieldAccess: string[];
-      sourceSpan: { startLine: number; startCol: number };
+      sourceSpan: { startLine: number; startCol: number; file?: string };
     },
     varTypeMap: Map<string, string>,
     ast: CompilationUnit,
@@ -1570,6 +1611,7 @@ export class SemanticAnalyzer {
           `Bit access is not valid on type ${typeName}`,
           expr.sourceSpan.startLine,
           expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
         );
         return;
       }
@@ -1578,6 +1620,7 @@ export class SemanticAnalyzer {
           `Bit index ${bitIndex} is out of range for type ${typeName} (0..${bits - 1})`,
           expr.sourceSpan.startLine,
           expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
         );
       }
       return; // Only check the first bit access
@@ -1692,7 +1735,7 @@ export class SemanticAnalyzer {
             object?: Expression;
             methodName?: string;
             arguments: Array<{ value: Expression }>;
-            sourceSpan: { startLine: number; startCol: number };
+            sourceSpan: { startLine: number; startCol: number; file?: string };
           };
         };
         // Handle dotted FunctionCallExpression: m.Method() → functionName = "m.Method"
@@ -1715,7 +1758,11 @@ export class SemanticAnalyzer {
             fcStmt.call as {
               object: Expression;
               methodName: string;
-              sourceSpan: { startLine: number; startCol: number };
+              sourceSpan: {
+                startLine: number;
+                startCol: number;
+                file?: string;
+              };
             },
             varTypeMap,
             methodVisibility,
@@ -1763,7 +1810,7 @@ export class SemanticAnalyzer {
         expr as {
           object: Expression;
           methodName: string;
-          sourceSpan: { startLine: number; startCol: number };
+          sourceSpan: { startLine: number; startCol: number; file?: string };
         },
         varTypeMap,
         methodVisibility,
@@ -1837,7 +1884,7 @@ export class SemanticAnalyzer {
    */
   private checkDottedFunctionCallAccess(
     functionName: string,
-    sourceSpan: { startLine: number; startCol: number },
+    sourceSpan: { startLine: number; startCol: number; file?: string },
     varTypeMap: Map<string, string>,
     methodVisibility: Map<string, Visibility>,
     callerFB: string | null,
@@ -1861,6 +1908,7 @@ export class SemanticAnalyzer {
           `Cannot call PRIVATE method '${methodName}' of '${calleeFBType}' from outside '${calleeFBType}'.`,
           sourceSpan.startLine,
           sourceSpan.startCol,
+          sourceSpan.file,
         );
       }
     } else if (visibility === "PROTECTED") {
@@ -1871,6 +1919,7 @@ export class SemanticAnalyzer {
             `Cannot call PROTECTED method '${methodName}' of '${calleeFBType}' from '${callerFB ?? "PROGRAM"}'.`,
             sourceSpan.startLine,
             sourceSpan.startCol,
+            sourceSpan.file,
           );
         }
       }
@@ -1884,7 +1933,7 @@ export class SemanticAnalyzer {
     call: {
       object: Expression;
       methodName: string;
-      sourceSpan: { startLine: number; startCol: number };
+      sourceSpan: { startLine: number; startCol: number; file?: string };
     },
     varTypeMap: Map<string, string>,
     methodVisibility: Map<string, Visibility>,
@@ -1909,6 +1958,7 @@ export class SemanticAnalyzer {
           `Cannot call PRIVATE method '${call.methodName}' of '${calleeFBType}' from outside '${calleeFBType}'.`,
           call.sourceSpan.startLine,
           call.sourceSpan.startCol,
+          call.sourceSpan.file,
         );
       }
     } else if (visibility === "PROTECTED") {
@@ -1920,6 +1970,7 @@ export class SemanticAnalyzer {
             `Cannot call PROTECTED method '${call.methodName}' of '${calleeFBType}' from '${callerFB ?? "PROGRAM"}'.`,
             call.sourceSpan.startLine,
             call.sourceSpan.startCol,
+            call.sourceSpan.file,
           );
         }
       }
@@ -2056,6 +2107,7 @@ export class SemanticAnalyzer {
         `Undefined type '${nameToCheck}'${context ? " in " + context : ""}`,
         typeRef.sourceSpan.startLine,
         typeRef.sourceSpan.startCol,
+        typeRef.sourceSpan.file,
       );
     }
   }
@@ -2100,6 +2152,7 @@ export class SemanticAnalyzer {
             `Undefined type '${fb.extends}' in EXTENDS clause of FUNCTION_BLOCK '${fb.name}'`,
             fb.sourceSpan.startLine,
             fb.sourceSpan.startCol,
+            fb.sourceSpan.file,
           );
         }
       }
@@ -2112,6 +2165,7 @@ export class SemanticAnalyzer {
               `Undefined type '${ifaceName}' in IMPLEMENTS clause of FUNCTION_BLOCK '${fb.name}'`,
               fb.sourceSpan.startLine,
               fb.sourceSpan.startCol,
+              fb.sourceSpan.file,
             );
           }
         }
@@ -2149,6 +2203,7 @@ export class SemanticAnalyzer {
               `Undefined type '${baseName}' in EXTENDS clause of INTERFACE '${iface.name}'`,
               iface.sourceSpan.startLine,
               iface.sourceSpan.startCol,
+              iface.sourceSpan.file,
             );
           }
         }
@@ -2437,7 +2492,7 @@ export class SemanticAnalyzer {
     name: string,
     scope: Scope,
     ctx: UndeclaredVarContext,
-    sourceSpan: { startLine: number; startCol: number },
+    sourceSpan: { startLine: number; startCol: number; file?: string },
   ): void {
     const upper = name.toUpperCase();
 
@@ -2481,6 +2536,7 @@ export class SemanticAnalyzer {
       `Undeclared variable '${name}'`,
       sourceSpan.startLine,
       sourceSpan.startCol,
+      sourceSpan.file,
     );
   }
 
@@ -2618,12 +2674,18 @@ export class SemanticAnalyzer {
    * Add a warning message.
    * Used in Phase 3+ for semantic validation warnings.
    */
-  protected addWarning(message: string, line: number, column: number): void {
+  protected addWarning(
+    message: string,
+    line: number,
+    column: number,
+    file?: string,
+  ): void {
     this.warnings.push({
       message,
       line,
       column,
       severity: "warning",
+      ...(file ? { file } : {}),
     });
   }
 }

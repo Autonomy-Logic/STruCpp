@@ -365,6 +365,7 @@ function runPipeline(
         line: err.line ?? 0,
         column: err.column ?? 0,
         severity: "error",
+        ...(err.file ? { file: err.file } : {}),
       });
     }
     for (const warn of semanticResult.warnings) {
@@ -373,6 +374,7 @@ function runPipeline(
         line: warn.line ?? 0,
         column: warn.column ?? 0,
         severity: "warning",
+        ...(warn.file ? { file: warn.file } : {}),
       });
     }
   } catch (e) {
