@@ -76,11 +76,14 @@ interface RawToken {
 export function getSemanticTokens(
   analysis: AnalysisResult,
   fileName: string,
+  source?: string,
 ): number[] {
   const { ast, symbolTables } = analysis;
   if (!ast || !symbolTables) return [];
 
   const tokens: RawToken[] = [];
+  const sourceLines = source?.split("\n") ?? [];
+  const varBlockMap = buildVarBlockMap(ast);
 
   walkAST(ast, (node) => {
     // Filter to only nodes in the requested file
@@ -88,27 +91,27 @@ export function getSemanticTokens(
 
     switch (node.kind) {
       case "ProgramDeclaration":
-        emitName(tokens, node as ProgramDeclaration, TYPE_IDX.namespace, MOD_BIT.declaration);
+        emitPOUName(tokens, node as ProgramDeclaration, "PROGRAM", TYPE_IDX.namespace, MOD_BIT.declaration, sourceLines);
         break;
 
       case "FunctionDeclaration":
-        emitName(tokens, node as FunctionDeclaration, TYPE_IDX.function, MOD_BIT.declaration);
+        emitPOUName(tokens, node as FunctionDeclaration, "FUNCTION", TYPE_IDX.function, MOD_BIT.declaration, sourceLines);
         break;
 
       case "FunctionBlockDeclaration":
-        emitName(tokens, node as FunctionBlockDeclaration, TYPE_IDX.class, MOD_BIT.declaration);
+        emitPOUName(tokens, node as FunctionBlockDeclaration, "FUNCTION_BLOCK", TYPE_IDX.class, MOD_BIT.declaration, sourceLines);
         break;
 
       case "InterfaceDeclaration":
-        emitName(tokens, node as InterfaceDeclaration, TYPE_IDX.interface, MOD_BIT.declaration);
+        emitPOUName(tokens, node as InterfaceDeclaration, "INTERFACE", TYPE_IDX.interface, MOD_BIT.declaration, sourceLines);
         break;
 
       case "MethodDeclaration":
-        emitName(tokens, node as MethodDeclaration, TYPE_IDX.method, MOD_BIT.declaration);
+        emitPOUName(tokens, node as MethodDeclaration, "METHOD", TYPE_IDX.method, MOD_BIT.declaration, sourceLines);
         break;
 
       case "PropertyDeclaration":
-        emitName(tokens, node as PropertyDeclaration, TYPE_IDX.property, MOD_BIT.declaration);
+        emitPOUName(tokens, node as PropertyDeclaration, "PROPERTY", TYPE_IDX.property, MOD_BIT.declaration, sourceLines);
         break;
 
       case "EnumMember":
@@ -116,7 +119,7 @@ export function getSemanticTokens(
         break;
 
       case "VarDeclaration":
-        emitVarDeclaration(tokens, node as VarDeclaration, ast);
+        emitVarDeclaration(tokens, node as VarDeclaration, varBlockMap);
         break;
 
       case "VariableExpression":
@@ -166,6 +169,25 @@ function pushToken(
   });
 }
 
+/**
+ * Emit a token for a POU declaration name by finding the identifier
+ * position in the source text (sourceSpan points at the keyword, not the name).
+ */
+function emitPOUName(
+  tokens: RawToken[],
+  node: { name: string; sourceSpan: SourceSpan },
+  keyword: string,
+  typeIdx: number,
+  modBits: number,
+  sourceLines: string[],
+): void {
+  if (!node.sourceSpan) return;
+  const col = findNameCol(sourceLines, node.sourceSpan.startLine, node.name, keyword);
+  if (col < 0) return;
+  pushToken(tokens, node.sourceSpan.startLine, col, node.name.length, typeIdx, modBits);
+}
+
+/** Emit a token for nodes where sourceSpan already points at the name (e.g. EnumMember). */
 function emitName(
   tokens: RawToken[],
   node: { name: string; sourceSpan: SourceSpan },
@@ -183,12 +205,12 @@ function emitName(
 function emitVarDeclaration(
   tokens: RawToken[],
   vd: VarDeclaration,
-  ast: NonNullable<AnalysisResult["ast"]>,
+  varBlockMap: Map<VarDeclaration, VarBlock>,
 ): void {
   if (!vd.sourceSpan) return;
 
   // Find parent VarBlock to determine block type
-  const parentBlock = findParentVarBlock(ast, vd);
+  const parentBlock = varBlockMap.get(vd);
   const isInput = parentBlock?.blockType === "VAR_INPUT" || parentBlock?.blockType === "VAR_IN_OUT";
   const isConstant = parentBlock?.isConstant ?? false;
 
@@ -291,7 +313,7 @@ function emitLiteral(
   lit: LiteralExpression,
 ): void {
   if (!lit.sourceSpan) return;
-  const length = lit.sourceSpan.endCol - lit.sourceSpan.startCol;
+  const length = lit.sourceSpan.endCol - lit.sourceSpan.startCol + 1;
   if (length <= 0) return;
 
   if (lit.literalType === "STRING") {
@@ -306,46 +328,51 @@ function emitLiteral(
 // ---------------------------------------------------------------------------
 
 /**
- * Find the VarBlock that contains a given VarDeclaration.
+ * Build a map from every VarDeclaration to its parent VarBlock (O(n) total).
  */
-function findParentVarBlock(
+function buildVarBlockMap(
   ast: NonNullable<AnalysisResult["ast"]>,
-  vd: VarDeclaration,
-): VarBlock | undefined {
-  const allBlocks: VarBlock[] = [];
+): Map<VarDeclaration, VarBlock> {
+  const map = new Map<VarDeclaration, VarBlock>();
 
-  // Collect from programs
-  for (const prog of ast.programs) {
-    allBlocks.push(...prog.varBlocks);
+  function indexBlocks(blocks: VarBlock[]) {
+    for (const block of blocks) {
+      for (const decl of block.declarations) {
+        map.set(decl, block);
+      }
+    }
   }
-  // Functions
-  for (const func of ast.functions) {
-    allBlocks.push(...func.varBlocks);
-  }
-  // Function blocks + methods
+
+  for (const prog of ast.programs) indexBlocks(prog.varBlocks);
+  for (const func of ast.functions) indexBlocks(func.varBlocks);
   for (const fb of ast.functionBlocks) {
-    allBlocks.push(...fb.varBlocks);
-    for (const method of fb.methods) {
-      allBlocks.push(...method.varBlocks);
-    }
+    indexBlocks(fb.varBlocks);
+    for (const method of fb.methods) indexBlocks(method.varBlocks);
   }
-  // Interfaces (methods)
   for (const iface of ast.interfaces ?? []) {
-    for (const method of iface.methods) {
-      allBlocks.push(...method.varBlocks);
-    }
+    for (const method of iface.methods) indexBlocks(method.varBlocks);
   }
-  // Global var blocks
-  if (ast.globalVarBlocks) {
-    allBlocks.push(...ast.globalVarBlocks);
-  }
+  if (ast.globalVarBlocks) indexBlocks(ast.globalVarBlocks);
 
-  for (const block of allBlocks) {
-    if (block.declarations.includes(vd)) {
-      return block;
-    }
-  }
-  return undefined;
+  return map;
+}
+
+/**
+ * Find the 1-indexed column of `name` on a source line, searching after `keyword`.
+ * Returns -1 if not found.
+ */
+function findNameCol(
+  sourceLines: string[],
+  lineNum: number,
+  name: string,
+  keyword: string,
+): number {
+  const lineText = (sourceLines[lineNum - 1] ?? "").toUpperCase();
+  const kwIdx = lineText.indexOf(keyword.toUpperCase());
+  if (kwIdx < 0) return -1;
+  const nameIdx = lineText.indexOf(name.toUpperCase(), kwIdx + keyword.length);
+  if (nameIdx < 0) return -1;
+  return nameIdx + 1; // 1-indexed
 }
 
 /**

@@ -59,7 +59,7 @@ function findToken(
 describe("getSemanticTokens", () => {
   it("returns valid delta-encoded data", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     // Data length should be multiple of 5
     expect(data.length % 5).toBe(0);
     // Should have some tokens
@@ -68,43 +68,43 @@ describe("getSemanticTokens", () => {
 
   it("emits program name as namespace + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
-    const token = findToken(decoded, "PROGRAM Main", TYPE_IDX.namespace);
+    const token = findToken(decoded, "Main", TYPE_IDX.namespace);
     expect(token).toBeDefined();
     expect(token![4] & MOD_BIT.declaration).toBeTruthy();
   });
 
   it("emits function declaration as function + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
-    const token = findToken(decoded, "FUNCTION Distance", TYPE_IDX.function);
+    const token = findToken(decoded, "Distance", TYPE_IDX.function);
     expect(token).toBeDefined();
     expect(token![4] & MOD_BIT.declaration).toBeTruthy();
   });
 
   it("emits function block declaration as class + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
-    const token = findToken(decoded, "FUNCTION_BLOCK Sprite", TYPE_IDX.class);
+    const token = findToken(decoded, "Sprite", TYPE_IDX.class);
     expect(token).toBeDefined();
     expect(token![4] & MOD_BIT.declaration).toBeTruthy();
   });
 
   it("emits interface declaration as interface + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
-    const token = findToken(decoded, "INTERFACE IMovable", TYPE_IDX.interface);
+    const token = findToken(decoded, "IMovable", TYPE_IDX.interface);
     expect(token).toBeDefined();
     expect(token![4] & MOD_BIT.declaration).toBeTruthy();
   });
 
   it("emits method declaration as method + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     // There are two Move methods (interface + FB); find any
     const moveTokens = decoded.filter(
@@ -115,7 +115,7 @@ describe("getSemanticTokens", () => {
 
   it("emits variable declaration as variable + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     // "counter" in VAR block of Main
     const token = findToken(decoded, "counter : INT", TYPE_IDX.variable);
@@ -125,7 +125,7 @@ describe("getSemanticTokens", () => {
 
   it("emits VAR_INPUT declarations as parameter + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     // "visible" is VAR_INPUT in Sprite
     const token = findToken(decoded, "visible : BOOL", TYPE_IDX.parameter);
@@ -135,7 +135,7 @@ describe("getSemanticTokens", () => {
 
   it("emits function call as function", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     const token = findToken(decoded, "Distance(p1", TYPE_IDX.function);
     expect(token).toBeDefined();
@@ -143,7 +143,7 @@ describe("getSemanticTokens", () => {
 
   it("emits elementary type references with defaultLibrary", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     // REAL appears as a type reference
     const realTokens = decoded.filter(
@@ -156,7 +156,7 @@ describe("getSemanticTokens", () => {
 
   it("emits FB type references as class", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     // "Sprite" as a type reference in "player : Sprite"
     const lines = FIXTURE.split("\n");
@@ -173,7 +173,7 @@ describe("getSemanticTokens", () => {
 
   it("emits user type references as type", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     // "Point" as a type reference in "position : Point"
     const lines = FIXTURE.split("\n");
@@ -190,7 +190,7 @@ describe("getSemanticTokens", () => {
 
   it("emits numeric literals as number", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     const numberTokens = decoded.filter((t) => t[3] === TYPE_IDX.number);
     // There are numeric literals: 1.0, 0.0, 0, 1
@@ -217,8 +217,8 @@ END_FUNCTION`;
       additionalSources: [{ source: otherSource, fileName: "other.st" }],
     });
 
-    const mainTokens = getSemanticTokens(analysis, "main.st");
-    const otherTokens = getSemanticTokens(analysis, "other.st");
+    const mainTokens = getSemanticTokens(analysis, "main.st", mainSource);
+    const otherTokens = getSemanticTokens(analysis, "other.st", otherSource);
 
     // main.st should have tokens (at least program name + var decl)
     expect(mainTokens.length).toBeGreaterThan(0);
@@ -230,7 +230,7 @@ END_FUNCTION`;
 
   it("delta encodes correctly", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
 
     // Verify monotonically increasing (line, col)
@@ -247,7 +247,7 @@ END_FUNCTION`;
 
   it("emits enum members as enumMember + declaration", () => {
     const analysis = getAnalysis();
-    const data = getSemanticTokens(analysis, "complex-project.st");
+    const data = getSemanticTokens(analysis, "complex-project.st", FIXTURE);
     const decoded = decodeTokens(data);
     const enumMemberTokens = decoded.filter(
       (t) => t[3] === TYPE_IDX.enumMember && (t[4] & MOD_BIT.declaration),

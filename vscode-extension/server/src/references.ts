@@ -44,9 +44,7 @@ export function getReferences(
   if (stdFunction && !symbol) return [];
   if (!symbol) return [];
 
-  // Determine the symbol name to search for
-  const symbolName = getSymbolName(symbol);
-  if (!symbolName) return [];
+  const symbolName = symbol.name;
 
   // Determine scope filter: local variables/constants stay within their POU
   const scopeFilter = getScopeFilter(symbol, scope);
@@ -91,22 +89,15 @@ export function getReferences(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getSymbolName(
-  symbol: NonNullable<ReturnType<typeof resolveSymbolAtPosition>>["symbol"],
-): string | undefined {
-  if (!symbol) return undefined;
-  return symbol.name;
-}
+type ResolvedInfo = NonNullable<ReturnType<typeof resolveSymbolAtPosition>>;
 
 /**
  * Determine whether this symbol should be scoped to a specific POU.
  * Local variables/constants are scoped; global symbols (functions, FBs, types, etc.) are not.
  */
 function getScopeFilter(
-  symbol: NonNullable<ReturnType<typeof resolveSymbolAtPosition>>["symbol"],
-  scope: ReturnType<typeof resolveSymbolAtPosition> extends undefined
-    ? never
-    : NonNullable<ReturnType<typeof resolveSymbolAtPosition>>["scope"],
+  symbol: ResolvedInfo["symbol"],
+  scope: ResolvedInfo["scope"],
 ): string | undefined {
   if (!symbol) return undefined;
 

@@ -354,7 +354,7 @@ connection.languages.semanticTokens.on((params) => {
 
   if (!state.analysisResult) return { data: [] };
   const fileName = docManager.getFileName(uri);
-  const data = getSemanticTokens(state.analysisResult, fileName);
+  const data = getSemanticTokens(state.analysisResult, fileName, state.source);
   return { data };
 });
 

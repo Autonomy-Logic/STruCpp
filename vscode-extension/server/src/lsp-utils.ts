@@ -25,9 +25,6 @@ export function restoreCase(
   return caseMap.get(name.toUpperCase()) ?? name;
 }
 /**
- * Convert a compiler SourceSpan (1-indexed) to an LSP Range (0-indexed).
- */
-/**
  * Convert a compiler SourceSpan (1-indexed, inclusive end) to an LSP Range
  * (0-indexed, exclusive end).
  *
