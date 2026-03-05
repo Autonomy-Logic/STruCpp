@@ -14,6 +14,7 @@ import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type { ElementaryType, VarDeclaration } from "../frontend/ast.js";
 import { createDefaultSourceSpan } from "../frontend/ast.js";
+import { ELEMENTARY_TYPES } from "../semantic/type-utils.js";
 
 /**
  * Error thrown when a library manifest fails validation.
@@ -47,7 +48,7 @@ function makeVarSymbol(
   typeName: string,
   direction: "input" | "output" | "inout",
 ): VariableSymbol {
-  const varType: ElementaryType = {
+  const varType: ElementaryType = ELEMENTARY_TYPES[typeName.toUpperCase()] ?? {
     typeKind: "elementary",
     name: typeName,
     sizeBits: 0,
@@ -266,7 +267,9 @@ export function registerLibrarySymbols(
 ): void {
   // Register functions
   for (const fn of manifest.functions) {
-    const returnType: ElementaryType = {
+    const returnType: ElementaryType = ELEMENTARY_TYPES[
+      fn.returnType.toUpperCase()
+    ] ?? {
       typeKind: "elementary",
       name: fn.returnType,
       sizeBits: 0,
@@ -303,7 +306,9 @@ export function registerLibrarySymbols(
 
   // Register types
   for (const t of manifest.types) {
-    const resolvedType: ElementaryType = {
+    const resolvedType: ElementaryType = ELEMENTARY_TYPES[
+      t.name.toUpperCase()
+    ] ?? {
       typeKind: "elementary",
       name: t.name,
       sizeBits: 0,

@@ -54,6 +54,10 @@ export const ELEMENTARY_TYPES: Record<string, ElementaryType> = {
     name: "DATE_AND_TIME",
     sizeBits: 64,
   },
+  // Aliases
+  TOD: { typeKind: "elementary", name: "TOD", sizeBits: 64 },
+  DT: { typeKind: "elementary", name: "DT", sizeBits: 64 },
+  // Variable-width string types — 0 is correct (no fixed bit width)
   STRING: { typeKind: "elementary", name: "STRING", sizeBits: 0 },
   WSTRING: { typeKind: "elementary", name: "WSTRING", sizeBits: 0 },
 };
@@ -383,7 +387,7 @@ export function getCommonType(a: IECType, b: IECType): IECType | undefined {
     return ELEMENTARY_TYPES["REAL"];
   }
 
-  // Use canonical bit widths from ELEMENTARY_TYPES (symbol table may store 0)
+  // Use canonical bit widths from ELEMENTARY_TYPES
   const aBits = ELEMENTARY_TYPES[aElem.name]?.sizeBits ?? aElem.sizeBits;
   const bBits = ELEMENTARY_TYPES[bElem.name]?.sizeBits ?? bElem.sizeBits;
 
