@@ -29,6 +29,9 @@ import { getHover } from "./hover.js";
 import { getDefinition, getTypeDefinition } from "./definition.js";
 import { getCompletions } from "./completion.js";
 import { getSignatureHelp } from "./signature-help.js";
+import { getReferences } from "./references.js";
+import { prepareRename, getRenameEdits } from "./rename.js";
+import { getSemanticTokens, TOKEN_TYPES, TOKEN_MODIFIERS } from "./semantic-tokens.js";
 
 const connection = createConnection(ProposedFeatures.all);
 const textDocuments = new TextDocuments(TextDocument);
@@ -75,6 +78,12 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       },
       signatureHelpProvider: {
         triggerCharacters: ["(", ","],
+      },
+      referencesProvider: true,
+      renameProvider: { prepareProvider: true },
+      semanticTokensProvider: {
+        legend: { tokenTypes: TOKEN_TYPES, tokenModifiers: TOKEN_MODIFIERS },
+        full: true,
       },
       workspace: {
         workspaceFolders: {
@@ -205,7 +214,7 @@ connection.onHover((params) => {
   if (!state?.analysisResult) return null;
   const fileName = docManager.getFileName(params.textDocument.uri);
   const { line, column } = lspPositionToCompiler(params.position);
-  return getHover(state.analysisResult, fileName, line, column);
+  return getHover(state.analysisResult, fileName, line, column, docManager.getCaseMap());
 });
 
 connection.onDefinition((params) => {
@@ -269,6 +278,84 @@ connection.onSignatureHelp((params) => {
   const source =
     textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
   return getSignatureHelp(state.analysisResult, fileName, line, column, source);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 4 handlers: References, Rename, Semantic Tokens
+// ---------------------------------------------------------------------------
+
+connection.onReferences((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return [];
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+
+  // Build document map for cross-file reference search
+  const allDocs = new Map<string, { uri: string; analysisResult?: import("strucpp").AnalysisResult }>();
+  for (const doc of docManager.getAllDocuments()) {
+    allDocs.set(doc.uri, doc);
+  }
+
+  return getReferences(
+    state.analysisResult,
+    fileName,
+    line,
+    column,
+    params.textDocument.uri,
+    allDocs,
+    (fn) => docManager.resolveFileNameToUri(fn),
+    params.context.includeDeclaration,
+  );
+});
+
+connection.onPrepareRename((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return null;
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+  return prepareRename(state.analysisResult, fileName, line, column, docManager.getCaseMap());
+});
+
+connection.onRenameRequest((params) => {
+  const state = docManager.getState(params.textDocument.uri);
+  if (!state?.analysisResult) return null;
+  const fileName = docManager.getFileName(params.textDocument.uri);
+  const { line, column } = lspPositionToCompiler(params.position);
+
+  const allDocs = new Map<string, { uri: string; analysisResult?: import("strucpp").AnalysisResult }>();
+  for (const doc of docManager.getAllDocuments()) {
+    allDocs.set(doc.uri, doc);
+  }
+
+  return getRenameEdits(
+    state.analysisResult,
+    fileName,
+    line,
+    column,
+    params.newName,
+    params.textDocument.uri,
+    allDocs,
+    (fn) => docManager.resolveFileNameToUri(fn),
+  );
+});
+
+connection.languages.semanticTokens.on((params) => {
+  const uri = params.textDocument.uri;
+  let state = docManager.getState(uri);
+  if (!state) return { data: [] };
+
+  // If the live document text differs from the last analyzed source
+  // (e.g. after a rename edit, before the debounce fires), re-analyze
+  // immediately so token positions match the current text.
+  const liveDoc = textDocuments.get(uri);
+  if (liveDoc && liveDoc.getText() !== state.source) {
+    state = docManager.onDocumentChange(uri, liveDoc.getText(), liveDoc.version) ?? state;
+  }
+
+  if (!state.analysisResult) return { data: [] };
+  const fileName = docManager.getFileName(uri);
+  const data = getSemanticTokens(state.analysisResult, fileName);
+  return { data };
 });
 
 function publishDiagnostics(

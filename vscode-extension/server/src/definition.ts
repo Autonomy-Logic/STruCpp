@@ -18,10 +18,7 @@ import type {
   SourceSpan,
 } from "strucpp";
 import { resolveSymbolAtPosition } from "./resolve-symbol.js";
-import { sourceSpanToRange } from "./lsp-utils.js";
-
-/** Resolves a bare compiler fileName to a file:// URI. */
-export type FileNameResolver = (fileName: string) => string | undefined;
+import { sourceSpanToRange, resolveUri, type FileNameResolver } from "./lsp-utils.js";
 
 /**
  * Get the definition location for the symbol at cursor.
@@ -142,22 +139,3 @@ function getDeclarationSpan(
   }
 }
 
-function resolveUri(
-  span: SourceSpan,
-  currentUri: string,
-  resolveFileName?: FileNameResolver,
-): string {
-  if (!span.file) return currentUri;
-
-  // If the span's file matches the current file, stay in the same document
-  const currentBasename = currentUri.split("/").pop() ?? "";
-  if (span.file === currentBasename) return currentUri;
-
-  // Try to resolve via the file name resolver (searches open docs + workspace)
-  if (resolveFileName) {
-    const found = resolveFileName(span.file);
-    if (found) return found;
-  }
-
-  return currentUri;
-}

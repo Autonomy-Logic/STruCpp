@@ -9,13 +9,36 @@
 
 import { Range, Position } from "vscode-languageserver/node.js";
 import type { SourceSpan } from "strucpp";
+
+/** Resolves a bare compiler fileName to a file:// URI. */
+export type FileNameResolver = (fileName: string) => string | undefined;
+
+/**
+ * Restore an identifier's original casing using the workspace case map.
+ * Falls back to the uppercased name if not found.
+ */
+export function restoreCase(
+  name: string,
+  caseMap?: ReadonlyMap<string, string>,
+): string {
+  if (!caseMap) return name;
+  return caseMap.get(name.toUpperCase()) ?? name;
+}
 /**
  * Convert a compiler SourceSpan (1-indexed) to an LSP Range (0-indexed).
+ */
+/**
+ * Convert a compiler SourceSpan (1-indexed, inclusive end) to an LSP Range
+ * (0-indexed, exclusive end).
+ *
+ * Chevrotain's endColumn points AT the last character (inclusive).
+ * LSP Range.end points PAST the last character (exclusive).
+ * So: startCol - 1 (0-index), but endCol stays as-is (inclusive→exclusive cancel out).
  */
 export function sourceSpanToRange(span: SourceSpan): Range {
   return Range.create(
     Position.create(span.startLine - 1, span.startCol - 1),
-    Position.create(span.endLine - 1, span.endCol - 1),
+    Position.create(span.endLine - 1, span.endCol),
   );
 }
 
@@ -36,6 +59,29 @@ export function lspPositionToCompiler(pos: Position): {
  *
  * Line breaks are preserved so that line/column positions remain valid.
  */
+/**
+ * Resolve a SourceSpan's file to a URI, falling back to the current document URI.
+ */
+export function resolveUri(
+  span: SourceSpan,
+  currentUri: string,
+  resolveFileName?: FileNameResolver,
+): string {
+  if (!span.file) return currentUri;
+
+  // If the span's file matches the current file, stay in the same document
+  const currentBasename = currentUri.split("/").pop() ?? "";
+  if (span.file === currentBasename) return currentUri;
+
+  // Try to resolve via the file name resolver (searches open docs + workspace)
+  if (resolveFileName) {
+    const found = resolveFileName(span.file);
+    if (found) return found;
+  }
+
+  return currentUri;
+}
+
 export function stripCommentsAndStrings(text: string): string {
   const chars = text.split("");
   let i = 0;
