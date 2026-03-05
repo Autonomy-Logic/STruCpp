@@ -68,9 +68,10 @@ const MATCHERS: ActionMatcher[] = [
   {
     pattern: /Undeclared variable '([^']+)'/,
     produce: (match, diag, source, uri) => {
-      const name = match[1];
       const lines = source.split("\n");
       const diagLine = diag.range.start.line;
+      // Extract original-case name from source (compiler uppercases it in the error message)
+      const name = extractOriginalName(lines[diagLine], diag.range.start.character, match[1]);
 
       // Infer type from assignment context on the diagnostic line
       const type = inferTypeFromLine(lines[diagLine] ?? "");
@@ -109,11 +110,21 @@ const MATCHERS: ActionMatcher[] = [
     pattern: /Expecting token of type --> Semicolon <--|Expecting.*Semicolon.*but found/,
     produce: (_match, diag, source, uri) => {
       // The error points at the unexpected token; the semicolon belongs
-      // at the end of the preceding non-blank line
+      // at the end of the preceding non-blank, non-comment code line
       const lines = source.split("\n");
+      const stripped = stripCommentsAndStrings(source);
+      const strippedLines = stripped.split("\n");
+
       let insertLine = diag.range.start.line - 1;
-      while (insertLine >= 0 && lines[insertLine].trim() === "") {
-        insertLine--;
+      while (insertLine >= 0) {
+        const trimmed = lines[insertLine].trim();
+        const strippedTrimmed = strippedLines[insertLine].trim();
+        // Skip blank lines and lines that are entirely comments/strings
+        if (trimmed === "" || strippedTrimmed === "") {
+          insertLine--;
+          continue;
+        }
+        break;
       }
       if (insertLine < 0) return null;
 
@@ -176,8 +187,13 @@ const MATCHERS: ActionMatcher[] = [
   // 4. Undefined type → create type template
   {
     pattern: /Undefined type '([^']+)'(?! in (EXTENDS|IMPLEMENTS))/,
-    produce: (match, _diag, _source, uri) => {
-      const typeName = match[1];
+    produce: (match, _diag, source, uri) => {
+      // Extract original-case name from source (compiler uppercases it in the error message)
+      const typeName = extractOriginalName(
+        source.split("\n")[_diag.range.start.line] ?? "",
+        _diag.range.start.character,
+        match[1],
+      );
       const template =
         `TYPE ${typeName} :\n` +
         `  STRUCT\n` +
@@ -267,6 +283,32 @@ function findVarBlockInsertion(
     }
   }
   return null;
+}
+
+/**
+ * Extract the original-case identifier from the source line.
+ * The compiler uppercases all identifiers in error messages, so we
+ * find the identifier at or near `col` on `line` that matches `upperName`
+ * case-insensitively and return it with its original casing.
+ */
+function extractOriginalName(line: string, col: number, upperName: string): string {
+  // Try to extract the identifier starting at the diagnostic column
+  const identAtCol = line.slice(col).match(/^[A-Za-z_]\w*/);
+  if (identAtCol && identAtCol[0].toUpperCase() === upperName.toUpperCase()) {
+    return identAtCol[0];
+  }
+
+  // Fallback: scan the line for any identifier matching the uppercase name
+  const re = /[A-Za-z_]\w*/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(line)) !== null) {
+    if (m[0].toUpperCase() === upperName.toUpperCase()) {
+      return m[0];
+    }
+  }
+
+  // Last resort: return as-is from the error message
+  return upperName;
 }
 
 /**

@@ -39,8 +39,8 @@ END_PROGRAM`;
       expect(edits.length).toBe(1);
       // Should insert before END_VAR (line 3)
       expect(edits[0].range.start.line).toBe(3);
-      // Compiler uppercases identifiers, so the name from the error message is uppercase
-      expect(edits[0].newText).toContain("Y : INT");
+      // Should preserve the original casing from the source (not the uppercased error message)
+      expect(edits[0].newText).toContain("y : INT");
     });
 
     it("creates new VAR block when none exists above", () => {
@@ -116,6 +116,27 @@ END_PROGRAM`;
       expect(action).toBeDefined();
       expect(action!.edit!.changes![URI][0].newText).toBe(";");
     });
+
+    it("skips comment lines when finding semicolon insertion point", () => {
+      const source = `PROGRAM Main
+  VAR
+    x : INT;
+  END_VAR
+  x := 1
+  (* this is a comment *)
+  x := 2;
+END_PROGRAM`;
+      const { diagnostics, analysis } = getDiagnostics(source);
+      const semiDiag = diagnostics.find((d) => /Semicolon/i.test(d.message));
+      if (!semiDiag) return;
+
+      const actions = getCodeActions([semiDiag], source, URI, analysis);
+      const action = actions.find((a) => a.title === "Add missing semicolon");
+      expect(action).toBeDefined();
+      const edit = action!.edit!.changes![URI][0];
+      // Should insert on line 4 (x := 1), not on line 5 (the comment)
+      expect(edit.range.start.line).toBe(4);
+    });
   });
 
   describe("Narrowing conversion", () => {
@@ -155,8 +176,8 @@ END_PROGRAM`;
       expect(action).toBeDefined();
       const edit = action!.edit!.changes![URI][0];
       expect(edit.range.start.line).toBe(0);
-      // Compiler uppercases identifiers in error messages
-      expect(edit.newText).toContain("TYPE MYPOINT");
+      // Should preserve the original casing from the source
+      expect(edit.newText).toContain("TYPE MyPoint");
       expect(edit.newText).toContain("STRUCT");
       expect(edit.newText).toContain("END_TYPE");
     });
