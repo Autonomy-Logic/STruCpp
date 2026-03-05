@@ -1166,7 +1166,8 @@ Add configuration via `contributes.configuration`:
 
 ```json
 {
-  "strucpp.libraryPaths": { "type": "array", "default": [], "description": "Additional library search paths" },
+  "strucpp.libraryPaths": { "type": "array", "default": [], "description": "Additional .stlib library search paths (absolute or workspace-relative)" },
+  "strucpp.autoDiscoverLibraries": { "type": "boolean", "default": true, "description": "Automatically discover .stlib files in workspace libs/ directories" },
   "strucpp.outputDirectory": { "type": "string", "default": "./generated", "description": "C++ output directory" },
   "strucpp.gppPath": { "type": "string", "default": "g++", "description": "Path to g++ compiler" },
   "strucpp.ccPath": { "type": "string", "default": "cc", "description": "Path to C compiler" },
@@ -1178,19 +1179,72 @@ Add configuration via `contributes.configuration`:
 }
 ```
 
+The server reads these settings via `workspace/configuration` requests and passes them to the `DocumentManager`. Settings changes trigger re-analysis of all open documents.
+
+### Phase 6.5 — Workspace Library Discovery
+
+Automatic discovery of `.stlib` library files in the user's workspace, so that user-defined or third-party libraries are picked up without manual configuration.
+
+**Library resolution order (all paths are merged and deduplicated):**
+
+1. **Bundled libraries** — The `libs/` directory shipped with the strucpp package (provides `iec-standard-fb.stlib`, `oscat-basic.stlib`, etc.). Always loaded. Resolved via `findLibraryPaths()` at server startup.
+2. **Workspace auto-discovery** — When `strucpp.autoDiscoverLibraries` is `true` (default), scan each workspace folder for `.stlib` files in conventional locations:
+   - `{workspaceFolder}/libs/`
+   - `{workspaceFolder}/libraries/`
+   - `{workspaceFolder}/.stlibs/`
+   - Configurable depth: scan up to 2 levels deep within these directories
+   - Skip hidden directories (`.git`, `.vscode`, `node_modules`, etc.)
+3. **User-configured paths** — Directories listed in `strucpp.libraryPaths`. Each entry can be:
+   - An absolute path (`/home/user/my-libs/`)
+   - A workspace-relative path (`./vendor/libs/`) — resolved against each workspace folder
+
+**Implementation in `document-manager.ts`:**
+
+```typescript
+/** Discover .stlib files in conventional workspace library directories. */
+discoverWorkspaceLibraries(): string[] {
+  const libDirs: string[] = [];
+  const conventionalNames = ["libs", "libraries", ".stlibs"];
+  for (const folder of this.workspaceFolders) {
+    for (const name of conventionalNames) {
+      const candidate = path.join(folder, name);
+      if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+        libDirs.push(candidate);
+      }
+    }
+  }
+  return libDirs;
+}
+```
+
+**Refresh triggers — library paths are recomputed and documents re-analyzed when:**
+- Workspace folders are added/removed (`workspace/didChangeWorkspaceFolders`)
+- A `.stlib` file is created, changed, or deleted in the workspace (register a `FileSystemWatcher` for `**/*.stlib`)
+- The user changes `strucpp.libraryPaths` or `strucpp.autoDiscoverLibraries` in settings (`workspace/didChangeConfiguration`)
+- The server initializes (`onInitialize`)
+
+**Deduplication:** All library path sources are merged into a `Set<string>` (by resolved absolute path) before passing to `analyze()`. If the same `.stlib` appears in both bundled and workspace directories, it is loaded only once.
+
+**Status bar indicator (optional):** Show the number of loaded libraries in the status bar (e.g., "STruC++ | 4 libs") to give users visibility into what libraries are active.
+
 ### Phase 6.6 — Tests
 
 **Unit tests:**
 - `commands.test.ts` — compile command produces `.cpp`/`.hpp` output; build command invokes g++ with correct flags
+- `library-discovery.test.ts` — workspace library discovery finds `.stlib` files in `libs/`, `libraries/`, `.stlibs/` directories; respects `autoDiscoverLibraries` setting; merges and deduplicates bundled + workspace + user-configured paths; re-discovers on workspace folder changes; ignores hidden directories
 
 **Integration tests:**
 - `commands.test.ts` — commands appear in Command Palette; compile command writes output files; settings are read from workspace configuration
+- `library-discovery.test.ts` — adding a `.stlib` to workspace `libs/` triggers re-analysis; symbols from workspace libraries appear in completion/hover; removing a `.stlib` clears its symbols from analysis
 
 ### Phase 6 Deliverables
 
 - Ctrl+Shift+B compiles ST to C++
 - Command palette: Compile, Build, Build and Run
 - Configurable library paths, output directory, compiler flags
+- Automatic discovery of `.stlib` libraries in workspace `libs/` directories
+- User-configured additional library paths via `strucpp.libraryPaths` setting
+- Re-analysis on library file changes (add/remove/modify `.stlib`)
 - g++ errors appear in the output channel
 - Task provider for `tasks.json` integration
 
