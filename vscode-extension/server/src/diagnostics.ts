@@ -36,12 +36,19 @@ export function toLspDiagnostic(error: CompileError): Diagnostic {
 
 /**
  * Convert an array of CompileErrors to LSP Diagnostics.
+ * When `fileName` is provided, only errors from that file (or with no file)
+ * are included — prevents showing errors from additionalSources in the wrong file.
  */
 export function toLspDiagnostics(
   errors: CompileError[],
   warnings: CompileError[],
+  fileName?: string,
 ): Diagnostic[] {
-  return [...errors, ...warnings].map(toLspDiagnostic);
+  const all = [...errors, ...warnings];
+  const filtered = fileName
+    ? all.filter((e) => !e.file || e.file === fileName)
+    : all;
+  return filtered.map(toLspDiagnostic);
 }
 
 function mapSeverity(severity: string): DiagnosticSeverity {

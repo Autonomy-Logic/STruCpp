@@ -390,7 +390,8 @@ function publishDiagnostics(
   result?: import("strucpp").AnalysisResult,
 ): void {
   if (!result) return;
-  const diagnostics = toLspDiagnostics(result.errors, result.warnings);
+  const fileName = docManager.getFileName(uri);
+  const diagnostics = toLspDiagnostics(result.errors, result.warnings, fileName);
   connection.sendDiagnostics({ uri, diagnostics });
 }
 
