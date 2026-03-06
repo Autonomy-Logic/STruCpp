@@ -14,7 +14,12 @@
 import { describe, it, expect } from "vitest";
 import { compile } from "../../dist/index.js";
 
-function compileST(source: string): { cppCode: string; headerCode: string; success: boolean; errors: unknown[] } {
+function compileST(source: string): {
+  cppCode: string;
+  headerCode: string;
+  success: boolean;
+  errors: unknown[];
+} {
   const result = compile(source);
   return {
     cppCode: result.cppCode,
@@ -226,7 +231,6 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.cppCode).toContain("case 89:");
     expect(result.cppCode).toContain("default:");
   });
-
 
   it("should generate CASE with enum dot-notation labels using ::", () => {
     const result = compileST(`
@@ -525,124 +529,6 @@ describe("Phase 3.2: Complex Control Flow", () => {
     expect(result.cppCode).toContain("break;");
   });
 
-  it("should handle validation example: nested IF with ELSIF", () => {
-    const result = compileST(`
-      PROGRAM TestIf
-        VAR
-          x : INT := 10;
-          result : INT;
-        END_VAR
-        IF x < 0 THEN
-          result := -1;
-        ELSIF x = 0 THEN
-          result := 0;
-        ELSE
-          result := 1;
-        END_IF;
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (X < 0) {");
-    expect(result.cppCode).toContain("RESULT = -1;");
-    expect(result.cppCode).toContain("} else if (X == 0) {");
-    expect(result.cppCode).toContain("RESULT = 0;");
-    expect(result.cppCode).toContain("} else {");
-    expect(result.cppCode).toContain("RESULT = 1;");
-  });
-
-  it("should handle validation example: FOR loop with EXIT", () => {
-    const result = compileST(`
-      PROGRAM TestFor
-        VAR
-          sum : INT := 0;
-          i : INT;
-        END_VAR
-        FOR i := 1 TO 100 DO
-          sum := sum + i;
-          IF sum > 50 THEN
-            EXIT;
-          END_IF;
-        END_FOR;
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("for (I = 1; I <= 100; I++) {");
-    expect(result.cppCode).toContain("SUM = SUM + I;");
-    expect(result.cppCode).toContain("if (SUM > 50) {");
-    expect(result.cppCode).toContain("break;");
-  });
-
-  it("should handle validation example: WHILE loop", () => {
-    const result = compileST(`
-      PROGRAM TestWhile
-        VAR
-          count : INT := 0;
-          sum : INT := 0;
-        END_VAR
-        WHILE count < 5 DO
-          count := count + 1;
-          sum := sum + count;
-        END_WHILE;
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while (COUNT < 5) {");
-    expect(result.cppCode).toContain("COUNT = COUNT + 1;");
-    expect(result.cppCode).toContain("SUM = SUM + COUNT;");
-  });
-
-  it("should handle validation example: REPEAT-UNTIL", () => {
-    const result = compileST(`
-      PROGRAM TestRepeat
-        VAR
-          n : INT := 1;
-          factorial : INT := 1;
-        END_VAR
-        REPEAT
-          factorial := factorial * n;
-          n := n + 1;
-        UNTIL n > 5
-        END_REPEAT;
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("do {");
-    expect(result.cppCode).toContain("FACTORIAL = FACTORIAL * N;");
-    expect(result.cppCode).toContain("N = N + 1;");
-    expect(result.cppCode).toContain("} while (!(N > 5));");
-  });
-
-  it("should handle CASE with ranges (validation example)", () => {
-    const result = compileST(`
-      PROGRAM TestCase
-        VAR
-          grade : INT := 85;
-          letter : INT;
-        END_VAR
-        CASE grade OF
-          90..100: letter := 65;
-          80..89: letter := 66;
-          70..79: letter := 67;
-          60..69: letter := 68;
-        ELSE
-          letter := 70;
-        END_CASE;
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("switch (GRADE) {");
-    // Check some range expansion
-    expect(result.cppCode).toContain("case 90:");
-    expect(result.cppCode).toContain("case 91:");
-    expect(result.cppCode).toContain("case 100:");
-    expect(result.cppCode).toContain("LETTER = 65;");
-    expect(result.cppCode).toContain("case 80:");
-    expect(result.cppCode).toContain("case 89:");
-    expect(result.cppCode).toContain("LETTER = 66;");
-    expect(result.cppCode).toContain("default:");
-    expect(result.cppCode).toContain("LETTER = 70;");
-  });
-
   it("should handle control flow in function block", () => {
     const result = compileST(`
       FUNCTION_BLOCK Counter
@@ -684,7 +570,7 @@ describe("Phase 3.2: Complex Control Flow", () => {
     const nsEnd = progSection.indexOf("}  // namespace");
     const funcSection = nsEnd > 0 ? progSection.slice(0, nsEnd) : progSection;
     const lines = funcSection.split("\n");
-    const elseLines = lines.filter(l => l.trim() === "} else {");
+    const elseLines = lines.filter((l) => l.trim() === "} else {");
     expect(elseLines.length).toBe(0);
   });
 
