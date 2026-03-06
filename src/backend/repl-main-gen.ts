@@ -276,11 +276,17 @@ function emitProgramDescriptorsAndMain(
 
   lines.push("int main(int argc, char* argv[]) {");
   lines.push("    bool cyclic = false;");
+  lines.push("    bool print_vars = false;");
   lines.push("    for (int i = 1; i < argc; ++i) {");
   lines.push('        if (std::string(argv[i]) == "--cyclic") cyclic = true;');
+  lines.push(
+    '        if (std::string(argv[i]) == "--print-vars") print_vars = true;',
+  );
   lines.push("    }");
   lines.push("    if (cyclic) {");
-  lines.push(`        strucpp::cyclic_run(programs, ${programs.length});`);
+  lines.push(
+    `        strucpp::cyclic_run(programs, ${programs.length}, print_vars);`,
+  );
   lines.push("    } else {");
   lines.push(
     `        strucpp::repl_run(programs, ${programs.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,

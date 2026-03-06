@@ -5,9 +5,10 @@
 /**
  * STruC++ Runtime - Cyclic Execution Mode
  *
- * Runs PLC programs at their configured task intervals in real-time,
- * printing variable state to stdout periodically. Designed for use with
- * VSCode "Build and Run (Cyclic)" and future Phase 7 debug integration.
+ * Runs PLC programs at their configured task intervals in real-time.
+ * Designed for use with VSCode "Build and Run (Cyclic)" and future
+ * Phase 7 debug integration. Variable printing is off by default
+ * (use --print-vars from the CLI for diagnostic output).
  *
  * Depends on types and helpers from iec_repl.hpp — include that first.
  */
@@ -34,10 +35,10 @@ inline void cyclic_signal_handler(int) {
 /**
  * Run programs in real-time cyclic mode.
  * Each program executes at its configured task interval.
- * Variable state is printed to stdout every `status_cycles` GCD ticks.
+ * When print_vars is true, variable state is printed every `status_cycles` ticks.
  */
 inline void cyclic_run(ProgramDescriptor* programs, size_t program_count,
-                       int status_cycles = 50) {
+                       bool print_vars = false, int status_cycles = 50) {
     if (program_count == 0) return;
 
     // Default 0 intervals to 20ms (same as REPL)
@@ -79,8 +80,8 @@ inline void cyclic_run(ProgramDescriptor* programs, size_t program_count,
             }
         }
 
-        // Periodic status output
-        if (status_cycles > 0 && (cycle_count % static_cast<unsigned long long>(status_cycles)) == 0) {
+        // Periodic status output (only when --print-vars is passed)
+        if (print_vars && status_cycles > 0 && (cycle_count % static_cast<unsigned long long>(status_cycles)) == 0) {
             fprintf(stdout, "--- cycle %llu  t=%lld ns ---\n", cycle_count, static_cast<long long>(__CURRENT_TIME_NS));
             for (size_t i = 0; i < program_count; ++i) {
                 auto& prog = programs[i];
