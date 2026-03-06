@@ -12,9 +12,14 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../dist/index.js";
+import { compile } from "../../src/index.js";
 
-function compileST(source: string): { cppCode: string; headerCode: string; success: boolean; errors: unknown[] } {
+function compileST(source: string): {
+  cppCode: string;
+  headerCode: string;
+  success: boolean;
+  errors: unknown[];
+} {
   const result = compile(source);
   return {
     cppCode: result.cppCode,

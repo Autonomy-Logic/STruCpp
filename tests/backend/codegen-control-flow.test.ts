@@ -12,9 +12,14 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../dist/index.js";
+import { compile } from "../../src/index.js";
 
-function compileST(source: string): { cppCode: string; headerCode: string; success: boolean; errors: unknown[] } {
+function compileST(source: string): {
+  cppCode: string;
+  headerCode: string;
+  success: boolean;
+  errors: unknown[];
+} {
   const result = compile(source);
   return {
     cppCode: result.cppCode,
@@ -226,7 +231,6 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.cppCode).toContain("case 89:");
     expect(result.cppCode).toContain("default:");
   });
-
 
   it("should generate CASE with enum dot-notation labels using ::", () => {
     const result = compileST(`
@@ -684,7 +688,7 @@ describe("Phase 3.2: Complex Control Flow", () => {
     const nsEnd = progSection.indexOf("}  // namespace");
     const funcSection = nsEnd > 0 ? progSection.slice(0, nsEnd) : progSection;
     const lines = funcSection.split("\n");
-    const elseLines = lines.filter(l => l.trim() === "} else {");
+    const elseLines = lines.filter((l) => l.trim() === "} else {");
     expect(elseLines.length).toBe(0);
   });
 
