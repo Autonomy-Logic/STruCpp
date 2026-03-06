@@ -15,7 +15,7 @@ import type {
   VarDeclaration,
   IECType,
 } from "../frontend/ast.js";
-import { ELEMENTARY_TYPES } from "./type-utils.js";
+import { resolveElementaryType } from "./type-utils.js";
 
 // =============================================================================
 // Symbol Types
@@ -307,11 +307,7 @@ export class SymbolTables {
         name: typeName,
         kind: "type",
         declaration: undefined as unknown as TypeDeclaration,
-        resolvedType: ELEMENTARY_TYPES[typeName] ?? {
-          typeKind: "elementary",
-          name: typeName,
-          sizeBits: 0,
-        },
+        resolvedType: resolveElementaryType(typeName),
       } as TypeSymbol);
     }
   }

@@ -62,6 +62,21 @@ export const ELEMENTARY_TYPES: Record<string, ElementaryType> = {
   WSTRING: { typeKind: "elementary", name: "WSTRING", sizeBits: 0 },
 };
 
+/**
+ * Resolve a type name to its ElementaryType from the canonical registry,
+ * falling back to a generic elementary type with sizeBits: 0 for
+ * non-elementary types (structs, FBs, interfaces, user-defined).
+ */
+export function resolveElementaryType(name: string): ElementaryType {
+  return (
+    ELEMENTARY_TYPES[name.toUpperCase()] ?? {
+      typeKind: "elementary",
+      name,
+      sizeBits: 0,
+    }
+  );
+}
+
 // =============================================================================
 // Type Categories
 // =============================================================================
@@ -387,9 +402,8 @@ export function getCommonType(a: IECType, b: IECType): IECType | undefined {
     return ELEMENTARY_TYPES["REAL"];
   }
 
-  // Use canonical bit widths from ELEMENTARY_TYPES
-  const aBits = ELEMENTARY_TYPES[aElem.name]?.sizeBits ?? aElem.sizeBits;
-  const bBits = ELEMENTARY_TYPES[bElem.name]?.sizeBits ?? bElem.sizeBits;
+  const aBits = resolveElementaryType(aElem.name).sizeBits;
+  const bBits = resolveElementaryType(bElem.name).sizeBits;
 
   // Both must be in compatible numeric categories
   const aCategories = TYPE_CATEGORIES[aElem.name];

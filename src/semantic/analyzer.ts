@@ -32,7 +32,7 @@ import {
   getBitAccessWidth,
   resolveFieldType,
   resolveArrayElementType,
-  ELEMENTARY_TYPES,
+  resolveElementaryType,
 } from "./type-utils.js";
 
 // =============================================================================
@@ -264,13 +264,7 @@ export class SemanticAnalyzer {
     // Register function declarations
     for (const funcDecl of ast.functions) {
       try {
-        const returnType: ElementaryType = ELEMENTARY_TYPES[
-          funcDecl.returnType.name.toUpperCase()
-        ] ?? {
-          typeKind: "elementary",
-          name: funcDecl.returnType.name,
-          sizeBits: 0,
-        };
+        const returnType = resolveElementaryType(funcDecl.returnType.name);
         this.symbolTables.globalScope.defineOrReplace({
           name: funcDecl.name,
           kind: "function",

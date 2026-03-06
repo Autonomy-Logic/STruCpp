@@ -29,6 +29,7 @@ import type { StdFunctionRegistry } from "./std-function-registry.js";
 import type { CompileError } from "../types.js";
 import {
   ELEMENTARY_TYPES,
+  resolveElementaryType,
   isTypeInCategory as _isTypeInCategory,
   isAssignable as _isAssignable,
   isNarrowingConversion,
@@ -291,13 +292,7 @@ export class TypeChecker {
           );
           if (fieldType) {
             currentTypeName = fieldType;
-            currentType =
-              ELEMENTARY_TYPES[fieldType.toUpperCase()] ??
-              ({
-                typeKind: "elementary",
-                name: fieldType,
-                sizeBits: 0,
-              } as ElementaryType);
+            currentType = resolveElementaryType(fieldType);
           } else {
             // Check if it's a numeric bit access (e.g., var.0)
             if (/^\d+$/.test(step.name)) {
@@ -313,13 +308,7 @@ export class TypeChecker {
           const elemType = resolveArrayElementType(currentTypeName, this.ast);
           if (elemType) {
             currentTypeName = elemType;
-            currentType =
-              ELEMENTARY_TYPES[elemType.toUpperCase()] ??
-              ({
-                typeKind: "elementary",
-                name: elemType,
-                sizeBits: 0,
-              } as ElementaryType);
+            currentType = resolveElementaryType(elemType);
           } else {
             currentType = undefined;
             currentTypeName = undefined;
@@ -350,13 +339,7 @@ export class TypeChecker {
         const elemType = resolveArrayElementType(currentTypeName, this.ast);
         if (elemType) {
           currentTypeName = elemType;
-          currentType =
-            ELEMENTARY_TYPES[elemType.toUpperCase()] ??
-            ({
-              typeKind: "elementary",
-              name: elemType,
-              sizeBits: 0,
-            } as ElementaryType);
+          currentType = resolveElementaryType(elemType);
         }
       }
 
@@ -377,13 +360,7 @@ export class TypeChecker {
             );
             if (fieldType) {
               currentTypeName = fieldType;
-              currentType =
-                ELEMENTARY_TYPES[fieldType.toUpperCase()] ??
-                ({
-                  typeKind: "elementary",
-                  name: fieldType,
-                  sizeBits: 0,
-                } as ElementaryType);
+              currentType = resolveElementaryType(fieldType);
             } else {
               currentType = undefined;
               currentTypeName = undefined;
@@ -582,13 +559,7 @@ export class TypeChecker {
         (m) => m.name.toUpperCase() === expr.methodName.toUpperCase(),
       );
       if (method?.returnType) {
-        const retType =
-          ELEMENTARY_TYPES[method.returnType.name.toUpperCase()] ??
-          ({
-            typeKind: "elementary",
-            name: method.returnType.name,
-            sizeBits: 0,
-          } as ElementaryType);
+        const retType = resolveElementaryType(method.returnType.name);
         expr.resolvedType = retType;
         return retType;
       }
@@ -944,29 +915,17 @@ export class TypeChecker {
     const upper = typeName.toUpperCase();
     // ANY_REAL: integer types can be implicitly promoted to REAL
     if (constraint === "ANY_REAL") {
-      const elemType: ElementaryType = ELEMENTARY_TYPES[upper] ?? {
-        typeKind: "elementary" as const,
-        name: upper,
-        sizeBits: 0,
-      };
+      const elemType = resolveElementaryType(upper);
       return _isTypeInCategory(elemType, "ANY_INT");
     }
     // ANY_NUM: bit types can be promoted to numeric
     if (constraint === "ANY_NUM") {
-      const elemType: ElementaryType = ELEMENTARY_TYPES[upper] ?? {
-        typeKind: "elementary" as const,
-        name: upper,
-        sizeBits: 0,
-      };
+      const elemType = resolveElementaryType(upper);
       return _isTypeInCategory(elemType, "ANY_BIT");
     }
     // ANY_BIT: integer types can be used in bit operations (CODESYS compat)
     if (constraint === "ANY_BIT") {
-      const elemType: ElementaryType = ELEMENTARY_TYPES[upper] ?? {
-        typeKind: "elementary" as const,
-        name: upper,
-        sizeBits: 0,
-      };
+      const elemType = resolveElementaryType(upper);
       return _isTypeInCategory(elemType, "ANY_INT");
     }
     return false;
