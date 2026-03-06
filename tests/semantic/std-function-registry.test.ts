@@ -5,7 +5,7 @@
  * Covers Phase 4.2: Standard Library Function Registry.
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import { StdFunctionRegistry } from "../../src/semantic/std-function-registry.js";
 
 describe("StdFunctionRegistry", () => {
