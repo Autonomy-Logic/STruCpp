@@ -21,7 +21,7 @@ describe("discoverWorkspaceLibraries", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("finds libs/ directory in workspace", () => {
+  it("finds .stlib files in libs/ at workspace root", () => {
     const libsDir = path.join(tempDir, "libs");
     fs.mkdirSync(libsDir);
     fs.writeFileSync(path.join(libsDir, "test.stlib"), "{}", "utf-8");
@@ -30,30 +30,47 @@ describe("discoverWorkspaceLibraries", () => {
     expect(discovered).toContain(libsDir);
   });
 
-  it("finds libraries/ directory in workspace", () => {
-    const libsDir = path.join(tempDir, "libraries");
-    fs.mkdirSync(libsDir);
+  it("finds .stlib files in nested subdirectories", () => {
+    const nestedDir = path.join(tempDir, "src", "libs");
+    fs.mkdirSync(nestedDir, { recursive: true });
+    fs.writeFileSync(path.join(nestedDir, "mylib.stlib"), "{}", "utf-8");
 
     const discovered = docManager.discoverWorkspaceLibraries();
-    expect(discovered).toContain(libsDir);
+    expect(discovered).toContain(nestedDir);
   });
 
-  it("finds .stlibs/ directory in workspace", () => {
-    const libsDir = path.join(tempDir, ".stlibs");
+  it("deduplicates directories with multiple .stlib files", () => {
+    const libsDir = path.join(tempDir, "libs");
     fs.mkdirSync(libsDir);
+    fs.writeFileSync(path.join(libsDir, "a.stlib"), "{}", "utf-8");
+    fs.writeFileSync(path.join(libsDir, "b.stlib"), "{}", "utf-8");
 
     const discovered = docManager.discoverWorkspaceLibraries();
-    expect(discovered).toContain(libsDir);
+    expect(discovered).toEqual([libsDir]);
   });
 
-  it("returns empty when no conventional dirs exist", () => {
+  it("returns directories from multiple locations", () => {
+    const dir1 = path.join(tempDir, "libs");
+    const dir2 = path.join(tempDir, "vendor", "deps");
+    fs.mkdirSync(dir1);
+    fs.mkdirSync(dir2, { recursive: true });
+    fs.writeFileSync(path.join(dir1, "a.stlib"), "{}", "utf-8");
+    fs.writeFileSync(path.join(dir2, "b.stlib"), "{}", "utf-8");
+
+    const discovered = docManager.discoverWorkspaceLibraries();
+    expect(discovered).toContain(dir1);
+    expect(discovered).toContain(dir2);
+  });
+
+  it("returns empty when no .stlib files exist", () => {
     const discovered = docManager.discoverWorkspaceLibraries();
     expect(discovered).toEqual([]);
   });
 
-  it("skips non-directory entries", () => {
-    // Create a file named "libs" (not a directory)
-    fs.writeFileSync(path.join(tempDir, "libs"), "not a dir", "utf-8");
+  it("skips hidden directories", () => {
+    const hiddenDir = path.join(tempDir, ".hidden");
+    fs.mkdirSync(hiddenDir);
+    fs.writeFileSync(path.join(hiddenDir, "secret.stlib"), "{}", "utf-8");
 
     const discovered = docManager.discoverWorkspaceLibraries();
     expect(discovered).toEqual([]);

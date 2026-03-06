@@ -12,8 +12,10 @@ import type { LanguageClient } from "vscode-languageclient/node.js";
 import {
   CompileRequest,
   BuildRequest,
+  CompileLibRequest,
   type CompileResponse,
   type BuildResponse,
+  type CompileLibResponse,
 } from "../../shared/protocol.js";
 import {
   getCxxEnv,
@@ -41,6 +43,9 @@ export function registerCommands(
     ),
     vscode.commands.registerCommand("strucpp.buildAndRunCyclic", () =>
       buildCommand(client, true, true),
+    ),
+    vscode.commands.registerCommand("strucpp.compileLib", () =>
+      compileLibCommand(client),
     ),
   );
 }
@@ -283,6 +288,76 @@ async function buildCommand(
       } else {
         vscode.window.showInformationMessage(`Built: ${binaryName}`);
       }
+    },
+  );
+}
+
+async function compileLibCommand(client: LanguageClient): Promise<void> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "structured-text") {
+    vscode.window.showWarningMessage("Open a Structured Text (.st) file first.");
+    return;
+  }
+
+  const libName = await vscode.window.showInputBox({
+    prompt: "Library name (e.g., my-utils)",
+    placeHolder: "my-library",
+    validateInput: (value) => {
+      if (!value.trim()) return "Library name is required";
+      if (!/^[a-zA-Z_][a-zA-Z0-9_-]*$/.test(value.trim())) {
+        return "Use letters, digits, hyphens, and underscores (start with letter or _)";
+      }
+      return undefined;
+    },
+  });
+
+  if (!libName) return; // User cancelled
+
+  const uri = editor.document.uri.toString();
+  const config = vscode.workspace.getConfiguration("strucpp");
+  const outputDir = resolveOutputDirectory(
+    config.get<string>("outputDirectory", "./generated"),
+    editor.document.uri,
+  );
+
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "STruC++: Compiling library...",
+      cancellable: false,
+    },
+    async () => {
+      const response: CompileLibResponse = await client.sendRequest(
+        CompileLibRequest,
+        { uri, libName: libName.trim() },
+      );
+
+      if (!response.success) {
+        outputChannel.clear();
+        outputChannel.show(true);
+        outputChannel.appendLine("Library compilation failed:");
+        for (const err of response.errors) {
+          const loc = err.file
+            ? `${err.file}:${err.line}:${err.column}`
+            : `${err.line}:${err.column}`;
+          outputChannel.appendLine(`  ${loc}: ${err.severity}: ${err.message}`);
+        }
+        vscode.window.showErrorMessage(
+          `Library compilation failed with ${response.errors.length} error(s). See Output panel.`,
+        );
+        return;
+      }
+
+      // Write .stlib file
+      fs.mkdirSync(outputDir, { recursive: true });
+      const stlibPath = path.join(outputDir, `${response.libName}.stlib`);
+      fs.writeFileSync(stlibPath, response.archiveJson, "utf-8");
+
+      const relPath = path.relative(
+        vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "",
+        stlibPath,
+      );
+      vscode.window.showInformationMessage(`Library compiled: ${relPath}`);
     },
   );
 }

@@ -20,14 +20,16 @@ import {
   DidChangeWatchedFilesNotification,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { analyze, compile, generateReplMain } from "strucpp";
+import { analyze, compile, generateReplMain, compileStlib, loadStlibFromFile } from "strucpp";
 import {
   CompileRequest,
   BuildRequest,
+  CompileLibRequest,
   GetSettingsRequest,
   type ExtensionSettings,
   type CompileResponse,
   type BuildResponse,
+  type CompileLibResponse,
 } from "../../shared/protocol.js";
 import { DocumentManager } from "./document-manager.js";
 import { toLspDiagnostics } from "./diagnostics.js";
@@ -651,6 +653,76 @@ connection.onRequest(BuildRequest, (params): BuildResponse => {
 
 connection.onRequest(GetSettingsRequest, (): ExtensionSettings => {
   return currentSettings;
+});
+
+connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
+  const { libName } = params;
+  const namespace = libName.replace(/-/g, "_");
+
+  const sources = docManager.buildAllWorkspaceSources();
+
+  if (sources.length === 0) {
+    return {
+      success: false,
+      archiveJson: "",
+      errors: [{ message: "No .st files found in workspace", line: 0, column: 0, severity: "error" }],
+      warnings: [],
+      libName,
+    };
+  }
+
+  // Load dependency libraries from configured paths
+  const depArchives: import("strucpp").StlibArchive[] = [];
+  for (const libDir of docManager.getLibraryPaths()) {
+    try {
+      const entries = fs.readdirSync(libDir);
+      for (const entry of entries) {
+        if (entry.endsWith(".stlib")) {
+          try {
+            depArchives.push(loadStlibFromFile(path.join(libDir, entry)));
+          } catch {
+            // Skip unreadable library files
+          }
+        }
+      }
+    } catch {
+      // Skip unreadable directories
+    }
+  }
+
+  const result = compileStlib(sources, {
+    name: libName,
+    version: "1.0.0",
+    namespace,
+    ...(depArchives.length > 0 ? { dependencies: depArchives } : {}),
+    ...(Object.keys(currentSettings.globalConstants).length > 0
+      ? { globalConstants: currentSettings.globalConstants }
+      : {}),
+  });
+
+  if (!result.success) {
+    return {
+      success: false,
+      archiveJson: "",
+      errors: result.errors.map((e) => ({
+        message: e.message,
+        line: e.line ?? 0,
+        column: 0,
+        severity: "error",
+        ...(e.file ? { file: e.file } : {}),
+      })),
+      warnings: [],
+      libName,
+    };
+  }
+
+  return {
+    success: true,
+    archiveJson: JSON.stringify(result.archive, null, 2),
+    errors: [],
+    warnings: [],
+    libName,
+  };
 });
 
 function publishDiagnostics(

@@ -87,27 +87,65 @@ export class DocumentManager {
   }
 
   /**
-   * Discover .stlib files in conventional library directories within workspace folders.
-   * Scans `libs/`, `libraries/`, and `.stlibs/` one level deep.
+   * Discover directories containing .stlib files anywhere in the workspace.
+   * Recursively walks workspace folders (same guards as .st discovery)
+   * and returns deduplicated parent directories of any .stlib files found.
    */
   discoverWorkspaceLibraries(): string[] {
-    const libDirs: string[] = [];
-    const conventionalDirs = ["libs", "libraries", ".stlibs"];
+    const dirSet = new Set<string>();
 
     for (const folder of this.workspaceFolders) {
-      for (const dirName of conventionalDirs) {
-        const candidate = path.join(folder, dirName);
+      for (const stlibPath of discoverFiles(folder, /\.stlib$/i)) {
+        dirSet.add(path.dirname(stlibPath));
+      }
+    }
+
+    return [...dirSet];
+  }
+
+  /**
+   * Build sources from ALL workspace .st files (open docs + disk).
+   * Used for library compilation where no file is excluded.
+   */
+  buildAllWorkspaceSources(): Array<{ source: string; fileName: string }> {
+    const sources: Array<{ source: string; fileName: string }> = [];
+    const includedPaths = new Set<string>();
+
+    // 1. Include open documents (they may have unsaved edits)
+    for (const [uri, state] of this.documents) {
+      if (isTestFile(state.source)) continue;
+      const filePath = uriToFilePath(uri);
+      includedPaths.add(filePath);
+      sources.push({
+        source: state.source,
+        fileName: path.basename(filePath),
+      });
+    }
+
+    // 2. Discover .st files from workspace folders (read from disk, cached)
+    for (const folder of this.workspaceFolders) {
+      let discovered = this.discoveryCache.get(folder);
+      if (!discovered) {
+        discovered = discoverStFiles(folder);
+        this.discoveryCache.set(folder, discovered);
+      }
+      for (const filePath of discovered) {
+        if (includedPaths.has(filePath)) continue;
+        includedPaths.add(filePath);
         try {
-          if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
-            libDirs.push(candidate);
-          }
+          const source = fs.readFileSync(filePath, "utf-8");
+          if (isTestFile(source)) continue;
+          sources.push({
+            source,
+            fileName: path.basename(filePath),
+          });
         } catch {
-          // skip
+          // Skip unreadable files
         }
       }
     }
 
-    return libDirs;
+    return sources;
   }
 
   /**
@@ -321,12 +359,16 @@ export class DocumentManager {
 /** Maximum recursion depth for file discovery */
 const MAX_DISCOVERY_DEPTH = 10;
 
+/** Pattern matching .st and .iecst source files */
+const ST_FILE_PATTERN = /\.(st|iecst)$/i;
+
 /**
- * Recursively discover all .st / .iecst files in a directory.
+ * Recursively discover files matching a pattern in a directory.
  * Guards against unbounded recursion (max depth), symlink cycles, and hidden dirs.
  */
-function discoverStFiles(
+function discoverFiles(
   dir: string,
+  pattern: RegExp,
   depth: number = 0,
   seenReal?: Set<string>,
 ): string[] {
@@ -362,8 +404,8 @@ function discoverStFiles(
         ) {
           continue;
         }
-        results.push(...discoverStFiles(fullPath, depth + 1, seen));
-      } else if (/\.(st|iecst)$/i.test(entry.name)) {
+        results.push(...discoverFiles(fullPath, pattern, depth + 1, seen));
+      } else if (pattern.test(entry.name)) {
         results.push(fullPath);
       }
     }
@@ -371,6 +413,11 @@ function discoverStFiles(
     // Skip unreadable directories
   }
   return results;
+}
+
+/** Discover all .st / .iecst files recursively. */
+function discoverStFiles(dir: string): string[] {
+  return discoverFiles(dir, ST_FILE_PATTERN);
 }
 
 function uriToFilePath(uri: string): string {

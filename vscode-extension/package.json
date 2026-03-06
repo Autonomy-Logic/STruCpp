@@ -56,14 +56,41 @@
       {
         "command": "strucpp.buildAndRun",
         "title": "STruC++: Build and Run REPL",
+        "icon": "$(play)",
         "enablement": "editorLangId == structured-text"
       },
       {
         "command": "strucpp.buildAndRunCyclic",
         "title": "STruC++: Build and Run (Cyclic)",
+        "icon": "$(debug-alt-small)",
+        "enablement": "editorLangId == structured-text"
+      },
+      {
+        "command": "strucpp.compileLib",
+        "title": "STruC++: Compile Library (.stlib)",
+        "icon": "$(package)",
         "enablement": "editorLangId == structured-text"
       }
     ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "strucpp.buildAndRunCyclic",
+          "group": "navigation@1",
+          "when": "editorLangId == structured-text"
+        },
+        {
+          "command": "strucpp.buildAndRun",
+          "group": "navigation@2",
+          "when": "editorLangId == structured-text"
+        },
+        {
+          "command": "strucpp.compileLib",
+          "group": "navigation@3",
+          "when": "editorLangId == structured-text"
+        }
+      ]
+    },
     "configuration": {
       "title": "STruC++",
       "properties": {

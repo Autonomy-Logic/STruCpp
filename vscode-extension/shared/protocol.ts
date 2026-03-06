@@ -82,3 +82,26 @@ export const GetSettingsRequest = new RequestType<
   ExtensionSettings,
   void
 >("strucpp/getSettings");
+
+// ---------------------------------------------------------------------------
+// strucpp/compileLib — compile workspace .st files into a .stlib archive
+// ---------------------------------------------------------------------------
+
+export interface CompileLibParams {
+  uri: string;
+  libName: string;
+}
+
+export interface CompileLibResponse {
+  success: boolean;
+  archiveJson: string;
+  errors: CompileError[];
+  warnings: CompileError[];
+  libName: string;
+}
+
+export const CompileLibRequest = new RequestType<
+  CompileLibParams,
+  CompileLibResponse,
+  void
+>("strucpp/compileLib");
