@@ -297,6 +297,7 @@ export function compile(
       line: err.line ?? 0,
       column: err.column ?? 0,
       severity: "error",
+      ...(err.code !== undefined ? { code: err.code } : {}),
     });
   }
   for (const warn of semanticResult.warnings) {
@@ -305,6 +306,7 @@ export function compile(
       line: warn.line ?? 0,
       column: warn.column ?? 0,
       severity: "warning",
+      ...(warn.code !== undefined ? { code: warn.code } : {}),
     });
   }
 
