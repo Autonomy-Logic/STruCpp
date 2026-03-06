@@ -38,8 +38,8 @@ function parseAST(source: string) {
 
 describe("type-utils", () => {
   describe("ELEMENTARY_TYPES", () => {
-    it("should define all 21 types", () => {
-      expect(Object.keys(ELEMENTARY_TYPES)).toHaveLength(21);
+    it("should define all 23 types (21 canonical + TOD + DT aliases)", () => {
+      expect(Object.keys(ELEMENTARY_TYPES)).toHaveLength(23);
     });
 
     it("should have correct sizes for integer types", () => {
@@ -52,6 +52,11 @@ describe("type-utils", () => {
     it("should have correct sizes for real types", () => {
       expect(ELEMENTARY_TYPES["REAL"]!.sizeBits).toBe(32);
       expect(ELEMENTARY_TYPES["LREAL"]!.sizeBits).toBe(64);
+    });
+
+    it("should have correct sizes for TOD and DT aliases", () => {
+      expect(ELEMENTARY_TYPES["TOD"]!.sizeBits).toBe(64);
+      expect(ELEMENTARY_TYPES["DT"]!.sizeBits).toBe(64);
     });
   });
 
