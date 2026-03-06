@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../dist/index.js";
+import { compile } from "../../src/index.js";
 
 function compileAndCheck(source: string) {
   const result = compile(source);
@@ -229,9 +229,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain(
-        "class WORKER : public IRUNNABLE {",
-      );
+      expect(result.headerCode).toContain("class WORKER : public IRUNNABLE {");
     });
   });
 
@@ -368,7 +366,10 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       const childSection = result.cppCode.slice(
         result.cppCode.indexOf("void CHILD::operator()()"),
       );
-      const childBody = childSection.slice(0, childSection.indexOf("\n}\n") + 3);
+      const childBody = childSection.slice(
+        0,
+        childSection.indexOf("\n}\n") + 3,
+      );
       expect(childBody).not.toContain("BASE::operator()()");
     });
   });

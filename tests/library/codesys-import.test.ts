@@ -16,16 +16,13 @@ import {
   readLEB128,
   formatPOU,
   pouToSources,
-} from "../../dist/library/codesys-import/index.js";
-import type { ExtractedPOU } from "../../dist/library/codesys-import/index.js";
+} from "../../src/library/codesys-import/index.js";
+import type { ExtractedPOU } from "../../src/library/codesys-import/index.js";
 
 // Path to CODESYS library fixtures checked into the repository
 const FIXTURES_DIR = resolve(__dirname, "../fixtures/codesys");
 const OSCAT_V23_PATH = resolve(FIXTURES_DIR, "oscat_basic_335.lib");
-const OSCAT_V3_PATH = resolve(
-  FIXTURES_DIR,
-  "oscat_basic_335_codesys3.library",
-);
+const OSCAT_V3_PATH = resolve(FIXTURES_DIR, "oscat_basic_335_codesys3.library");
 const V23_REFERENCE_DIR = resolve(FIXTURES_DIR, "v23-reference");
 
 describe("detectFormat", () => {
