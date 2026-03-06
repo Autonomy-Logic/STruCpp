@@ -119,6 +119,7 @@ export function generateReplMain(
   // Includes
   lines.push(`#include "${options.headerFileName}"`);
   lines.push('#include "iec_repl.hpp"');
+  lines.push('#include "iec_cyclic.hpp"');
   lines.push("");
   lines.push(`using namespace ${ns};`);
   lines.push("using strucpp::VarTypeTag;");
@@ -273,10 +274,24 @@ function emitProgramDescriptorsAndMain(
   lines.push("};");
   lines.push("");
 
-  lines.push("int main() {");
+  lines.push("int main(int argc, char* argv[]) {");
+  lines.push("    bool cyclic = false;");
+  lines.push("    bool print_vars = false;");
+  lines.push("    for (int i = 1; i < argc; ++i) {");
+  lines.push('        if (std::string(argv[i]) == "--cyclic") cyclic = true;');
   lines.push(
-    `    strucpp::repl_run(programs, ${programs.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,
+    '        if (std::string(argv[i]) == "--print-vars") print_vars = true;',
   );
+  lines.push("    }");
+  lines.push("    if (cyclic) {");
+  lines.push(
+    `        strucpp::cyclic_run(programs, ${programs.length}, print_vars);`,
+  );
+  lines.push("    } else {");
+  lines.push(
+    `        strucpp::repl_run(programs, ${programs.length}, g_st_source, g_cpp_source, g_line_map, g_line_map_count);`,
+  );
+  lines.push("    }");
   lines.push("    return 0;");
   lines.push("}");
   lines.push("");

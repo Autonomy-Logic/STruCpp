@@ -20,7 +20,17 @@ import {
   DidChangeWatchedFilesNotification,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { analyze } from "strucpp";
+import { analyze, compile, generateReplMain, compileStlib, loadStlibFromFile } from "strucpp";
+import {
+  CompileRequest,
+  BuildRequest,
+  CompileLibRequest,
+  GetSettingsRequest,
+  type ExtensionSettings,
+  type CompileResponse,
+  type BuildResponse,
+  type CompileLibResponse,
+} from "../../shared/protocol.js";
 import { DocumentManager } from "./document-manager.js";
 import { toLspDiagnostics } from "./diagnostics.js";
 import { lspPositionToCompiler } from "./lsp-utils.js";
@@ -39,9 +49,87 @@ const connection = createConnection(ProposedFeatures.all);
 const textDocuments = new TextDocuments(TextDocument);
 const docManager = new DocumentManager(analyze);
 
+/** Default extension settings */
+const DEFAULT_SETTINGS: ExtensionSettings = {
+  libraryPaths: [],
+  autoDiscoverLibraries: true,
+  outputDirectory: "./generated",
+  gppPath: "g++",
+  ccPath: process.platform === "win32" ? "gcc" : "cc",
+  cxxFlags: "",
+  globalConstants: {},
+  autoAnalyze: true,
+  analyzeDelay: 400,
+};
+
+let currentSettings: ExtensionSettings = { ...DEFAULT_SETTINGS };
+
 /** Debounce timeout for re-analysis on document change (ms) */
-const ANALYSIS_DEBOUNCE_MS = 400;
+let analysisDebounceMs = currentSettings.analyzeDelay;
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Fetch settings from the client and update internal state.
+ */
+async function fetchSettings(): Promise<void> {
+  try {
+    const config = await connection.workspace.getConfiguration("strucpp");
+    if (config) {
+      currentSettings = {
+        libraryPaths: config.libraryPaths ?? DEFAULT_SETTINGS.libraryPaths,
+        autoDiscoverLibraries:
+          config.autoDiscoverLibraries ?? DEFAULT_SETTINGS.autoDiscoverLibraries,
+        outputDirectory: config.outputDirectory ?? DEFAULT_SETTINGS.outputDirectory,
+        gppPath: config.gppPath || DEFAULT_SETTINGS.gppPath,
+        ccPath: config.ccPath || DEFAULT_SETTINGS.ccPath,
+        cxxFlags: config.cxxFlags ?? DEFAULT_SETTINGS.cxxFlags,
+        globalConstants: config.globalConstants ?? DEFAULT_SETTINGS.globalConstants,
+        autoAnalyze: config.autoAnalyze ?? DEFAULT_SETTINGS.autoAnalyze,
+        analyzeDelay: config.analyzeDelay ?? DEFAULT_SETTINGS.analyzeDelay,
+      };
+      analysisDebounceMs = currentSettings.analyzeDelay;
+    }
+  } catch {
+    // Use defaults if config fetch fails
+  }
+}
+
+/**
+ * Merge library paths from 3 sources: bundled → workspace auto-discovery → user paths.
+ * Deduplicates with Set<string>.
+ */
+function updateLibraryPaths(): void {
+  const seen = new Set<string>();
+  const merged: string[] = [];
+
+  // 1. Bundled libs from strucpp package
+  for (const p of findLibraryPaths()) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      merged.push(p);
+    }
+  }
+
+  // 2. Auto-discovered workspace library directories
+  if (currentSettings.autoDiscoverLibraries) {
+    for (const p of docManager.discoverWorkspaceLibraries()) {
+      if (!seen.has(p)) {
+        seen.add(p);
+        merged.push(p);
+      }
+    }
+  }
+
+  // 3. User-configured library paths
+  for (const p of currentSettings.libraryPaths) {
+    if (!seen.has(p)) {
+      seen.add(p);
+      merged.push(p);
+    }
+  }
+
+  docManager.setLibraryPaths(merged);
+}
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   // Set workspace folders for multi-file discovery
@@ -62,9 +150,6 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     }
   }
   docManager.setWorkspaceFolders(folders);
-
-  // Resolve bundled libs/ directory from the strucpp package
-  docManager.setLibraryPaths(findLibraryPaths());
 
   return {
     capabilities: {
@@ -137,19 +222,43 @@ connection.onNotification("workspace/didChangeWorkspaceFolders", (params) => {
   }
 });
 
-// Re-analyze when .st files change on disk (saves, creates, deletes)
-connection.onDidChangeWatchedFiles((_change) => {
+// Re-analyze when .st/.stlib files change on disk (saves, creates, deletes)
+connection.onDidChangeWatchedFiles((change) => {
   docManager.invalidateDiscoveryCache();
+
+  // If any .stlib files changed, re-discover library paths
+  const hasStlibChange = change.changes.some((c) =>
+    c.uri.endsWith(".stlib"),
+  );
+  if (hasStlibChange) {
+    updateLibraryPaths();
+  }
+
   const results = docManager.reanalyzeAll();
   for (const [uri, result] of results) {
     publishDiagnostics(uri, result);
   }
 });
 
-connection.onInitialized(() => {
-  // Register for file watching after initialization
+// Re-fetch settings when configuration changes
+connection.onDidChangeConfiguration(async () => {
+  await fetchSettings();
+  updateLibraryPaths();
+
+  const results = docManager.reanalyzeAll();
+  for (const [uri, result] of results) {
+    publishDiagnostics(uri, result);
+  }
+});
+
+connection.onInitialized(async () => {
+  // Fetch settings from the client and configure library paths
+  await fetchSettings();
+  updateLibraryPaths();
+
+  // Register for file watching after initialization (ST files + stlib files)
   void connection.client.register(DidChangeWatchedFilesNotification.type, {
-    watchers: [{ globPattern: "**/*.{st,iecst,ST}" }],
+    watchers: [{ globPattern: "**/*.{st,iecst,ST,stlib}" }],
   });
 });
 
@@ -178,7 +287,7 @@ textDocuments.onDidChangeContent((event) => {
       if (state) {
         publishDiagnostics(uri, state.analysisResult);
       }
-    }, ANALYSIS_DEBOUNCE_MS),
+    }, analysisDebounceMs),
   );
 });
 
@@ -385,6 +494,237 @@ connection.onDocumentFormatting((params) => {
   return formatDocument(state.source, params.options);
 });
 
+// ---------------------------------------------------------------------------
+// Phase 6 handlers: Compile, Build, Settings
+// ---------------------------------------------------------------------------
+
+connection.onRequest(CompileRequest, (params): CompileResponse => {
+  const uri = params.uri;
+  const state = docManager.getState(uri);
+  const source = state?.source;
+
+  if (!source) {
+    return {
+      success: false,
+      cppCode: "",
+      headerCode: "",
+      errors: [{ message: "No source available for compilation", line: 0, column: 0, severity: "error" }],
+      warnings: [],
+      primaryFileName: "",
+    };
+  }
+
+  const fileName = docManager.getFileName(uri);
+  const additionalSources = params.workspace
+    ? docManager.buildWorkspaceSources(uri)
+    : [];
+
+  const options: Partial<import("strucpp").CompileOptions> = {
+    fileName,
+    headerFileName: fileName.replace(/\.(st|iecst)$/i, ".hpp"),
+    ...(additionalSources.length > 0 ? { additionalSources } : {}),
+    ...(docManager.getLibraryPaths().length > 0
+      ? { libraryPaths: docManager.getLibraryPaths() }
+      : {}),
+    ...(Object.keys(currentSettings.globalConstants).length > 0
+      ? { globalConstants: currentSettings.globalConstants }
+      : {}),
+  };
+
+  const result = compile(source, options);
+
+  return {
+    success: result.success,
+    cppCode: result.cppCode,
+    headerCode: result.headerCode,
+    errors: result.errors.map((e) => ({
+      message: e.message,
+      line: e.line,
+      column: e.column,
+      severity: e.severity,
+      ...(e.file ? { file: e.file } : {}),
+    })),
+    warnings: result.warnings.map((w) => ({
+      message: w.message,
+      line: w.line,
+      column: w.column,
+      severity: w.severity,
+      ...(w.file ? { file: w.file } : {}),
+    })),
+    primaryFileName: fileName,
+  };
+});
+
+connection.onRequest(BuildRequest, (params): BuildResponse => {
+  const uri = params.uri;
+  const state = docManager.getState(uri);
+  const source = state?.source;
+
+  const failResponse = (errors: BuildResponse["errors"]): BuildResponse => ({
+    success: false,
+    cppCode: "",
+    headerCode: "",
+    mainCppCode: "",
+    headerFileName: "",
+    runtimeIncludeDir: "",
+    replDir: "",
+    errors,
+    warnings: [],
+    primaryFileName: "",
+  });
+
+  if (!source) {
+    return failResponse([{ message: "No source available for build", line: 0, column: 0, severity: "error" }]);
+  }
+
+  // Resolve runtime paths early so we fail fast before compilation
+  const runtimePaths = findRuntimePaths();
+  if (!runtimePaths) {
+    return failResponse([{
+      message: "Could not locate STruC++ runtime directory. Ensure the strucpp package is installed correctly.",
+      line: 0, column: 0, severity: "error",
+    }]);
+  }
+
+  const fileName = docManager.getFileName(uri);
+  const headerFileName = fileName.replace(/\.(st|iecst)$/i, ".hpp");
+  const additionalSources = docManager.buildWorkspaceSources(uri);
+
+  const options: Partial<import("strucpp").CompileOptions> = {
+    fileName,
+    headerFileName,
+    ...(additionalSources.length > 0 ? { additionalSources } : {}),
+    ...(docManager.getLibraryPaths().length > 0
+      ? { libraryPaths: docManager.getLibraryPaths() }
+      : {}),
+    ...(Object.keys(currentSettings.globalConstants).length > 0
+      ? { globalConstants: currentSettings.globalConstants }
+      : {}),
+  };
+
+  const result = compile(source, options);
+
+  const mapErrors = (errs: typeof result.errors) =>
+    errs.map((e) => ({
+      message: e.message,
+      line: e.line,
+      column: e.column,
+      severity: e.severity,
+      ...(e.file ? { file: e.file } : {}),
+    }));
+
+  if (!result.success || !result.ast || !result.projectModel) {
+    return {
+      success: false,
+      cppCode: result.cppCode,
+      headerCode: result.headerCode,
+      mainCppCode: "",
+      headerFileName,
+      runtimeIncludeDir: "",
+      replDir: "",
+      errors: mapErrors(result.errors),
+      warnings: mapErrors(result.warnings),
+      primaryFileName: fileName,
+    };
+  }
+
+  const mainCppCode = generateReplMain(result.ast, result.projectModel, {
+    headerFileName,
+    stSource: source,
+    cppCode: result.cppCode,
+    headerCode: result.headerCode,
+    lineMap: result.lineMap,
+    headerLineMap: result.headerLineMap,
+  });
+
+  return {
+    success: true,
+    cppCode: result.cppCode,
+    headerCode: result.headerCode,
+    mainCppCode,
+    headerFileName,
+    runtimeIncludeDir: runtimePaths.includeDir,
+    replDir: runtimePaths.replDir,
+    errors: mapErrors(result.errors),
+    warnings: mapErrors(result.warnings),
+    primaryFileName: fileName,
+  };
+});
+
+connection.onRequest(GetSettingsRequest, (): ExtensionSettings => {
+  return currentSettings;
+});
+
+connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
+  const { libName } = params;
+  const namespace = libName.replace(/-/g, "_");
+
+  const sources = docManager.buildAllWorkspaceSources();
+
+  if (sources.length === 0) {
+    return {
+      success: false,
+      archiveJson: "",
+      errors: [{ message: "No .st files found in workspace", line: 0, column: 0, severity: "error" }],
+      warnings: [],
+      libName,
+    };
+  }
+
+  // Load dependency libraries from configured paths
+  const depArchives: import("strucpp").StlibArchive[] = [];
+  for (const libDir of docManager.getLibraryPaths()) {
+    try {
+      const entries = fs.readdirSync(libDir);
+      for (const entry of entries) {
+        if (entry.endsWith(".stlib")) {
+          try {
+            depArchives.push(loadStlibFromFile(path.join(libDir, entry)));
+          } catch {
+            // Skip unreadable library files
+          }
+        }
+      }
+    } catch {
+      // Skip unreadable directories
+    }
+  }
+
+  const result = compileStlib(sources, {
+    name: libName,
+    version: "1.0.0",
+    namespace,
+    ...(depArchives.length > 0 ? { dependencies: depArchives } : {}),
+    ...(Object.keys(currentSettings.globalConstants).length > 0
+      ? { globalConstants: currentSettings.globalConstants }
+      : {}),
+  });
+
+  if (!result.success) {
+    return {
+      success: false,
+      archiveJson: "",
+      errors: result.errors.map((e) => ({
+        message: e.message,
+        line: e.line ?? 0,
+        column: 0,
+        severity: "error",
+        ...(e.file ? { file: e.file } : {}),
+      })),
+      warnings: [],
+      libName,
+    };
+  }
+
+  return {
+    success: true,
+    archiveJson: JSON.stringify(result.archive, null, 2),
+    errors: [],
+    warnings: [],
+    libName,
+  };
+});
+
 function publishDiagnostics(
   uri: string,
   result?: import("strucpp").AnalysisResult,
@@ -396,16 +736,80 @@ function publishDiagnostics(
 }
 
 /**
+ * Find the runtime include and repl directories from the strucpp package.
+ * Uses require.resolve to locate the package on disk, then navigates to
+ * src/runtime/include/ and src/runtime/repl/.
+ */
+function findRuntimePaths(): { includeDir: string; replDir: string } | null {
+  // Bundled runtime (highest priority — works in published .vsix)
+  // After esbuild bundle: out/server.js → runtime/include/, runtime/repl/
+  const bundledCandidates = [
+    path.resolve(__dirname, "..", "runtime"),
+    path.resolve(__dirname, "..", "..", "runtime"),
+  ];
+  for (const base of bundledCandidates) {
+    const includeDir = path.join(base, "include");
+    const replDir = path.join(base, "repl");
+    if (
+      fs.existsSync(path.join(includeDir, "iec_types.hpp")) &&
+      fs.existsSync(path.join(replDir, "isocline.h"))
+    ) {
+      return { includeDir, replDir };
+    }
+  }
+
+  // From require.resolve (works with symlinked file: dependency in dev)
+  const candidates: string[] = [];
+  try {
+    const strucppMain = require.resolve("strucpp");
+    const pkgRoot = path.resolve(path.dirname(strucppMain), "..");
+    candidates.push(pkgRoot);
+  } catch {
+    // strucpp not resolvable
+  }
+
+  // Fallback: relative from this server file's location
+  candidates.push(
+    path.resolve(__dirname, "..", "..", ".."),
+    path.resolve(__dirname, "..", "..", "..", ".."),
+  );
+
+  for (const base of candidates) {
+    const includeDir = path.join(base, "src", "runtime", "include");
+    const replDir = path.join(base, "src", "runtime", "repl");
+    if (
+      fs.existsSync(path.join(includeDir, "iec_types.hpp")) &&
+      fs.existsSync(path.join(replDir, "isocline.h"))
+    ) {
+      return { includeDir, replDir };
+    }
+  }
+
+  return null;
+}
+
+/**
  * Find the bundled libs/ directory from the strucpp package.
  * The strucpp package is linked via file:.. so libs/ is at the package root.
  */
 function findLibraryPaths(): string[] {
   const paths: string[] = [];
 
+  // Bundled libs (highest priority — works in published .vsix)
+  const bundledCandidates = [
+    path.resolve(__dirname, "..", "bundled-libs"),
+    path.resolve(__dirname, "..", "..", "bundled-libs"),
+  ];
+  for (const candidate of bundledCandidates) {
+    if (fs.existsSync(candidate)) {
+      paths.push(candidate);
+      return paths;
+    }
+  }
+
   // Resolve from require.resolve (works with symlinked file: dependency)
   try {
     const strucppMain = require.resolve("strucpp");
-    // strucppMain = .../strucpp/dist/index.js → .../strucpp/libs/
     const libsDir = path.resolve(path.dirname(strucppMain), "..", "libs");
     if (fs.existsSync(libsDir)) {
       paths.push(libsDir);
@@ -415,8 +819,6 @@ function findLibraryPaths(): string[] {
   }
 
   // Fallback: relative from this server file's location
-  // server.ts is at vscode-extension/server/src/server.ts
-  // libs/ is at strucpp/libs/ (3 levels up)
   if (paths.length === 0) {
     const candidates = [
       path.resolve(__dirname, "..", "..", "..", "libs"),

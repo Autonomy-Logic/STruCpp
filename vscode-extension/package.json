@@ -36,6 +36,150 @@
         "scopeName": "source.iec61131-st",
         "path": "./syntaxes/st.tmLanguage.json"
       }
+    ],
+    "commands": [
+      {
+        "command": "strucpp.compile",
+        "title": "STruC++: Compile Current File to C++",
+        "enablement": "editorLangId == structured-text"
+      },
+      {
+        "command": "strucpp.compileWorkspace",
+        "title": "STruC++: Compile Workspace to C++",
+        "enablement": "workspaceFolderCount > 0"
+      },
+      {
+        "command": "strucpp.build",
+        "title": "STruC++: Build Executable (REPL)",
+        "enablement": "editorLangId == structured-text"
+      },
+      {
+        "command": "strucpp.buildAndRun",
+        "title": "STruC++: Build and Run REPL",
+        "icon": "$(play)",
+        "enablement": "editorLangId == structured-text"
+      },
+      {
+        "command": "strucpp.buildAndRunCyclic",
+        "title": "STruC++: Build and Run (Cyclic)",
+        "icon": "$(debug-alt-small)",
+        "enablement": "editorLangId == structured-text"
+      },
+      {
+        "command": "strucpp.compileLib",
+        "title": "STruC++: Compile Library (.stlib)",
+        "icon": "$(package)",
+        "enablement": "editorLangId == structured-text"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "strucpp.buildAndRunCyclic",
+          "group": "navigation@1",
+          "when": "editorLangId == structured-text"
+        },
+        {
+          "command": "strucpp.buildAndRun",
+          "group": "navigation@2",
+          "when": "editorLangId == structured-text"
+        },
+        {
+          "command": "strucpp.compileLib",
+          "group": "navigation@3",
+          "when": "editorLangId == structured-text"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "STruC++",
+      "properties": {
+        "strucpp.libraryPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Additional .stlib library search paths"
+        },
+        "strucpp.autoDiscoverLibraries": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-discover .stlib files in workspace libs/, libraries/, and .stlibs/ directories"
+        },
+        "strucpp.outputDirectory": {
+          "type": "string",
+          "default": "./generated",
+          "description": "Output directory for generated C++ files (relative to workspace root)"
+        },
+        "strucpp.gppPath": {
+          "type": "string",
+          "default": "g++",
+          "description": "Path to the g++ compiler"
+        },
+        "strucpp.ccPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the C compiler. Defaults to `cc` on macOS/Linux, `gcc` on Windows."
+        },
+        "strucpp.cxxFlags": {
+          "type": "string",
+          "default": "",
+          "description": "Extra C++ compiler flags passed to g++"
+        },
+        "strucpp.globalConstants": {
+          "type": "object",
+          "additionalProperties": { "type": "number" },
+          "default": {},
+          "description": "Global constants passed to the compiler (-D NAME=VALUE)"
+        },
+        "strucpp.autoAnalyze": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically analyze files on change"
+        },
+        "strucpp.analyzeDelay": {
+          "type": "number",
+          "default": 400,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Debounce delay in milliseconds before re-analyzing after a change"
+        }
+      }
+    },
+    "taskDefinitions": [
+      {
+        "type": "strucpp",
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "enum": ["compile", "build", "buildAndRun"],
+            "description": "The STruC++ command to run"
+          },
+          "file": {
+            "type": "string",
+            "description": "Source file to compile (defaults to active editor)"
+          },
+          "output": {
+            "type": "string",
+            "description": "Output directory (overrides strucpp.outputDirectory)"
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "strucpp-gpp",
+        "owner": "strucpp",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^(.+):(\\d+):(\\d+):\\s+(error|warning|note):\\s+(.+)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "message": 5
+        }
+      }
     ]
   },
   "scripts": {

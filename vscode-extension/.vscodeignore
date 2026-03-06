@@ -2,6 +2,7 @@
 .vscode-test/**
 client/src/**
 server/src/**
+shared/**
 tests/**
 node_modules/**
 !node_modules/vscode-languageclient/**
@@ -13,3 +14,5 @@ tsconfig.json
 vitest.config.ts
 esbuild.mjs
 .vscode-test.mjs
+!runtime/**
+!bundled-libs/**

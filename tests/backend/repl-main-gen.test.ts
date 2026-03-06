@@ -30,7 +30,9 @@ describe('Phase 3.6 - REPL Main Generator', () => {
       expect(mainCpp).toContain('VarTypeTag::INT');
       expect(mainCpp).toContain('"COUNT"');
       expect(mainCpp).toContain('repl_run(programs');
-      expect(mainCpp).toContain('int main()');
+      expect(mainCpp).toContain('int main(int argc, char* argv[])');
+      expect(mainCpp).toContain('cyclic_run(programs');
+      expect(mainCpp).toContain('#include "iec_cyclic.hpp"');
     });
 
     it('should generate VarDescriptor for multiple variables', () => {

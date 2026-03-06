@@ -8,13 +8,15 @@
 
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { ExtensionContext, workspace } from "vscode";
+import { ExtensionContext, tasks, workspace } from "vscode";
 import {
   LanguageClient,
   LanguageClientOptions,
   ServerOptions,
   TransportKind,
 } from "vscode-languageclient/node.js";
+import { registerCommands } from "./commands.js";
+import { StrucppTaskProvider } from "./task-provider.js";
 
 let client: LanguageClient | undefined;
 
@@ -43,6 +45,7 @@ export function activate(context: ExtensionContext): void {
     documentSelector: [{ scheme: "file", language: "structured-text" }],
     synchronize: {
       fileEvents: workspace.createFileSystemWatcher("**/*.{st,iecst,ST}"),
+      configurationSection: "strucpp",
     },
   };
 
@@ -53,7 +56,14 @@ export function activate(context: ExtensionContext): void {
     clientOptions,
   );
 
-  client.start();
+  client.start().then(() => {
+    registerCommands(context, client!);
+  });
+
+  // Register task provider
+  context.subscriptions.push(
+    tasks.registerTaskProvider(StrucppTaskProvider.type, new StrucppTaskProvider()),
+  );
 }
 
 export function deactivate(): Thenable<void> | undefined {

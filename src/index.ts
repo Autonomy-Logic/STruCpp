@@ -744,3 +744,16 @@ export type {
   CodesysImportResult,
   CodesysFormat,
 } from "./library/codesys-import/index.js";
+
+// REPL main generator (for build command)
+export { generateReplMain } from "./backend/repl-main-gen.js";
+export type { ReplMainGenOptions } from "./backend/repl-main-gen.js";
+
+// Build utilities (for extension client)
+export {
+  getCxxEnv,
+  splitCxxFlags,
+  isCompilerAvailable,
+  findRuntimeIncludeDir,
+  findBundledLibsDir,
+} from "./build-utils.js";
