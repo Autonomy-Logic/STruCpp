@@ -153,9 +153,10 @@ function cacheLibraryArchives(libDirs: string[]): void {
     }
     for (const entry of entries) {
       if (!entry.endsWith(".stlib")) continue;
+      const filePath = path.join(libDir, entry);
       try {
-        const archive = loadStlibFromFile(path.join(libDir, entry));
-        docManager.setLibraryArchiveCache(archive.manifest.name, archive);
+        const archive = loadStlibFromFile(filePath);
+        docManager.setLibraryArchiveCache(archive.manifest.name, archive, filePath);
       } catch {
         // Skip invalid archives
       }
@@ -696,7 +697,7 @@ connection.onRequest(GetSettingsRequest, (): ExtensionSettings => {
 });
 
 connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
-  const { libName } = params;
+  const { libName, libVersion } = params;
   const namespace = libName.replace(/-/g, "_");
 
   const sources = docManager.buildAllWorkspaceSources();
@@ -732,7 +733,7 @@ connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
 
   const result = compileStlib(sources, {
     name: libName,
-    version: "1.0.0",
+    version: libVersion,
     namespace,
     ...(depArchives.length > 0 ? { dependencies: depArchives } : {}),
     ...(Object.keys(currentSettings.globalConstants).length > 0
@@ -766,33 +767,7 @@ connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
 });
 
 connection.onRequest(GetLibrariesRequest, (): LibraryArchiveInfo[] => {
-  const results: LibraryArchiveInfo[] = [];
-  const seen = new Set<string>();
-
-  for (const libDir of docManager.getLibraryPaths()) {
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(libDir);
-    } catch {
-      continue;
-    }
-
-    for (const entry of entries) {
-      if (!entry.endsWith(".stlib")) continue;
-      const filePath = path.join(libDir, entry);
-      try {
-        const archive = loadStlibFromFile(filePath);
-        const key = `${archive.manifest.name}@${archive.manifest.version}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        results.push({ filePath, archive });
-      } catch {
-        // Skip invalid archives
-      }
-    }
-  }
-
-  return results;
+  return docManager.getCachedLibraries();
 });
 
 function publishDiagnostics(

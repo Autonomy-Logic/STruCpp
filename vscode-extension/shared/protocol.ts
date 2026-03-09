@@ -91,6 +91,7 @@ export const GetSettingsRequest = new RequestType<
 export interface CompileLibParams {
   uri: string;
   libName: string;
+  libVersion: string;
 }
 
 export interface CompileLibResponse {

@@ -39,6 +39,8 @@ export class DocumentManager {
   private librarySources = new Map<string, Array<{ fileName: string; source: string }>>();
   /** Cached library archives keyed by library name, for passing as dependencies. */
   private libraryArchives = new Map<string, StlibArchive>();
+  /** Cached file paths for library archives, keyed by library name. */
+  private libraryFilePaths = new Map<string, string>();
 
   /**
    * Case map: UPPERCASE identifier → first-seen original casing.
@@ -88,16 +90,32 @@ export class DocumentManager {
   }
 
   /** Cache a library's source files and archive for strucpp-lib: document analysis. */
-  setLibraryArchiveCache(libName: string, archive: StlibArchive): void {
+  setLibraryArchiveCache(libName: string, archive: StlibArchive, filePath?: string): void {
     if (archive.sources && archive.sources.length > 0) {
       this.librarySources.set(libName, archive.sources);
     }
     this.libraryArchives.set(libName, archive);
+    if (filePath) {
+      this.libraryFilePaths.set(libName, filePath);
+    }
   }
 
   clearLibraryArchiveCache(): void {
     this.librarySources.clear();
     this.libraryArchives.clear();
+    this.libraryFilePaths.clear();
+  }
+
+  /** Get all cached library archives with their file paths. */
+  getCachedLibraries(): Array<{ filePath: string; archive: StlibArchive }> {
+    const results: Array<{ filePath: string; archive: StlibArchive }> = [];
+    for (const [name, archive] of this.libraryArchives) {
+      results.push({
+        filePath: this.libraryFilePaths.get(name) ?? "",
+        archive,
+      });
+    }
+    return results;
   }
 
   getWorkspaceFolders(): ReadonlySet<string> {
@@ -126,11 +144,33 @@ export class DocumentManager {
    * Used for library compilation where no file is excluded.
    */
   buildAllWorkspaceSources(): Array<{ source: string; fileName: string }> {
+    return this.collectWorkspaceSources();
+  }
+
+  /**
+   * Build additional sources from all workspace .st files (open docs + disk),
+   * excluding the given primary file URI.
+   */
+  buildWorkspaceSources(
+    excludeUri: string,
+  ): Array<{ source: string; fileName: string }> {
+    return this.collectWorkspaceSources(excludeUri);
+  }
+
+  /**
+   * Collect workspace .st sources from open documents and disk.
+   * If excludeUri is provided, that document and its disk path are skipped.
+   */
+  private collectWorkspaceSources(
+    excludeUri?: string,
+  ): Array<{ source: string; fileName: string }> {
+    const excludePath = excludeUri ? uriToFilePath(excludeUri) : undefined;
     const sources: Array<{ source: string; fileName: string }> = [];
     const includedPaths = new Set<string>();
 
     // 1. Include open documents (they may have unsaved edits)
     for (const [uri, state] of this.documents) {
+      if (uri === excludeUri) continue;
       if (isTestFile(state.source)) continue;
       const filePath = uriToFilePath(uri);
       includedPaths.add(filePath);
@@ -148,7 +188,7 @@ export class DocumentManager {
         this.discoveryCache.set(folder, discovered);
       }
       for (const filePath of discovered) {
-        if (includedPaths.has(filePath)) continue;
+        if (filePath === excludePath || includedPaths.has(filePath)) continue;
         includedPaths.add(filePath);
         try {
           const source = fs.readFileSync(filePath, "utf-8");
@@ -164,55 +204,6 @@ export class DocumentManager {
     }
 
     return sources;
-  }
-
-  /**
-   * Build additional sources from all workspace .st files (open docs + disk),
-   * excluding the given primary file URI.
-   */
-  buildWorkspaceSources(
-    excludeUri: string,
-  ): Array<{ source: string; fileName: string }> {
-    const currentFilePath = uriToFilePath(excludeUri);
-    const additionalSources: Array<{ source: string; fileName: string }> = [];
-    const includedPaths = new Set<string>();
-
-    // 1. Include other open documents (they may have unsaved edits)
-    for (const [otherUri, otherState] of this.documents) {
-      if (otherUri === excludeUri) continue;
-      if (isTestFile(otherState.source)) continue;
-      const otherPath = uriToFilePath(otherUri);
-      includedPaths.add(otherPath);
-      additionalSources.push({
-        source: otherState.source,
-        fileName: path.basename(otherPath),
-      });
-    }
-
-    // 2. Discover .st files from workspace folders (read from disk, cached)
-    for (const folder of this.workspaceFolders) {
-      let discovered = this.discoveryCache.get(folder);
-      if (!discovered) {
-        discovered = discoverStFiles(folder);
-        this.discoveryCache.set(folder, discovered);
-      }
-      for (const filePath of discovered) {
-        if (filePath === currentFilePath || includedPaths.has(filePath)) continue;
-        includedPaths.add(filePath);
-        try {
-          const source = fs.readFileSync(filePath, "utf-8");
-          if (isTestFile(source)) continue;
-          additionalSources.push({
-            source,
-            fileName: path.basename(filePath),
-          });
-        } catch {
-          // Skip unreadable files
-        }
-      }
-    }
-
-    return additionalSources;
   }
 
   onDocumentOpen(uri: string, source: string): DocumentState {
@@ -276,8 +267,9 @@ export class DocumentManager {
   findSymbolInLibrarySources(
     symbolName: string,
   ): { uri: string; line: number } | undefined {
+    const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const declPattern = new RegExp(
-      `^\\s*(?:FUNCTION_BLOCK|FUNCTION|TYPE|PROGRAM)\\s+${symbolName}\\b`,
+      `^\\s*(?:FUNCTION_BLOCK|FUNCTION|TYPE|PROGRAM)\\s+${escaped}\\b`,
       "im",
     );
     for (const [libName, sources] of this.librarySources) {

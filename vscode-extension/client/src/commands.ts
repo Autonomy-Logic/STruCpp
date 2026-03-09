@@ -77,10 +77,9 @@ function execProcess(
   env?: NodeJS.ProcessEnv,
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const proc = execFile(command, args, { cwd, env }, (error, stdout, stderr) => {
-      const exitCode = error ? (error as NodeJS.ErrnoException & { code?: number }).code ?? 1 : 0;
+    const proc = execFile(command, args, { cwd, env }, (_error, stdout, stderr) => {
       resolve({
-        exitCode: typeof exitCode === "number" ? exitCode : 1,
+        exitCode: proc.exitCode ?? 1,
         stdout: stdout ?? "",
         stderr: stderr ?? "",
       });
@@ -276,9 +275,10 @@ async function buildCommand(
         const terminalName = cyclic
           ? `STruC++ Cyclic: ${baseName}`
           : `STruC++ REPL: ${baseName}`;
+        const quoted = binaryPath.includes(" ") ? `"${binaryPath}"` : binaryPath;
         const terminalCmd = cyclic
-          ? `${binaryPath} --cyclic`
-          : binaryPath;
+          ? `${quoted} --cyclic`
+          : quoted;
         const terminal = vscode.window.createTerminal({
           name: terminalName,
           cwd: outputDir,
@@ -313,6 +313,20 @@ async function compileLibCommand(client: LanguageClient): Promise<void> {
 
   if (!libName) return; // User cancelled
 
+  const libVersion = await vscode.window.showInputBox({
+    prompt: "Library version (semver)",
+    value: "1.0.0",
+    validateInput: (value) => {
+      if (!value.trim()) return "Version is required";
+      if (!/^\d+\.\d+\.\d+/.test(value.trim())) {
+        return "Use semver format (e.g., 1.0.0)";
+      }
+      return undefined;
+    },
+  });
+
+  if (!libVersion) return; // User cancelled
+
   const uri = editor.document.uri.toString();
   const config = vscode.workspace.getConfiguration("strucpp");
   const outputDir = resolveOutputDirectory(
@@ -329,7 +343,7 @@ async function compileLibCommand(client: LanguageClient): Promise<void> {
     async () => {
       const response: CompileLibResponse = await client.sendRequest(
         CompileLibRequest,
-        { uri, libName: libName.trim() },
+        { uri, libName: libName.trim(), libVersion: libVersion.trim() },
       );
 
       if (!response.success) {
