@@ -757,3 +757,21 @@ export {
   findRuntimeIncludeDir,
   findBundledLibsDir,
 } from "./build-utils.js";
+
+// Test framework
+export { parseTestFile } from "./testing/test-parser.js";
+export { analyzeTestFile } from "./semantic/analyzer.js";
+export {
+  generateTestMain,
+  buildPOUInfoFromAST,
+} from "./backend/test-main-gen.js";
+export type { TestMainGenOptions, POUInfo } from "./backend/test-main-gen.js";
+export type {
+  TestFile,
+  TestCase,
+  SetupBlock,
+  TeardownBlock,
+  AssertType,
+  AssertCall,
+  TestStatement,
+} from "./testing/test-model.js";

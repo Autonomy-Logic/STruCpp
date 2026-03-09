@@ -120,16 +120,19 @@ function detectPOUFromText(lines: string[], cursorLine: number): EnclosingScope 
     end: RegExp;
     open: RegExp;
     kind: EnclosingScope["kind"];
+    namePattern?: RegExp;
   }> = [
     { end: /\bEND_METHOD\b/g, open: /\bMETHOD\b/g, kind: "method" },
     { end: /\bEND_FUNCTION_BLOCK\b/g, open: /\bFUNCTION_BLOCK\b/g, kind: "functionBlock" },
     { end: /\bEND_FUNCTION(?!_BLOCK)\b/g, open: /\bFUNCTION(?!_BLOCK)\b/g, kind: "function" },
     { end: /\bEND_PROGRAM\b/g, open: /\bPROGRAM\b/g, kind: "program" },
+    // TEST blocks are treated as "program" scope for completion purposes
+    { end: /\bEND_TEST\b/g, open: /\bTEST\b/g, kind: "program", namePattern: /\bTEST\s+'([^']+)'/ },
   ];
 
   // Simple approach: scan backwards for the nearest unmatched POU opener
   const maxLine = Math.min(cursorLine - 1, lines.length - 1);
-  for (const { end, open, kind } of pouPatterns) {
+  for (const { end, open, kind, namePattern } of pouPatterns) {
     let depth = 0;
     for (let i = maxLine; i >= 0; i--) {
       const upper = lines[i].toUpperCase();
@@ -138,9 +141,11 @@ function detectPOUFromText(lines: string[], cursorLine: number): EnclosingScope 
       depth += opens;
       if (depth > 0) {
         // Extract name from the opener line
-        const nameMatch = upper.match(
-          new RegExp(`\\b(?:PROGRAM|FUNCTION_BLOCK|FUNCTION|METHOD)\\s+(\\w+)`),
-        );
+        const nameMatch = namePattern
+          ? lines[i].match(namePattern)
+          : upper.match(
+              new RegExp(`\\b(?:PROGRAM|FUNCTION_BLOCK|FUNCTION|METHOD)\\s+(\\w+)`),
+            );
         return { kind, name: nameMatch?.[1] ?? "unknown" };
       }
     }

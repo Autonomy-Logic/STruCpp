@@ -22,8 +22,9 @@ import type {
   SymbolTables,
 } from "strucpp";
 import { typeName } from "strucpp";
-import { resolveSymbolAtPosition } from "./resolve-symbol.js";
+import { resolveSymbolAtPosition, lookupSymbolByName } from "./resolve-symbol.js";
 import { sourceSpanToRange, restoreCase } from "./lsp-utils.js";
+import { isTestFile, getWordAt } from "../../shared/test-utils.js";
 
 /** Shorthand: restore casing via the case map. */
 type CaseMap = ReadonlyMap<string, string>;
@@ -37,9 +38,23 @@ export function getHover(
   line: number,
   column: number,
   caseMap?: CaseMap,
+  source?: string,
 ): Hover | null {
+  // Check for test framework keyword hover first
+  if (source && isTestFile(source)) {
+    const testHover = getTestKeywordHover(source, line, column);
+    if (testHover) return testHover;
+  }
+
   const resolved = resolveSymbolAtPosition(analysis, fileName, line, column);
-  if (!resolved) return null;
+  if (!resolved) {
+    // For test files the AST is empty (no standard-parser nodes), so fall back
+    // to text-based word extraction and direct symbol table lookup.
+    if (source && isTestFile(source) && analysis.symbolTables) {
+      return getTestSymbolHover(source, line, column, analysis.symbolTables, caseMap);
+    }
+    return null;
+  }
 
   const { node, symbol, stdFunction } = resolved;
   const rc = (name: string) => restoreCase(name, caseMap);
@@ -299,4 +314,88 @@ function formatStdFunction(fn: StdFunctionDescriptor): string {
   result += `\n\nCategory: ${fn.category}`;
   if (fn.isVariadic) result += " (variadic)";
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Test framework keyword hover
+// ---------------------------------------------------------------------------
+
+/** Map of test framework keywords → hover documentation. */
+const TEST_KEYWORD_HOVER: Record<string, string> = {
+  ASSERT_EQ:
+    "```\nASSERT_EQ(actual: ANY, expected: ANY [, message: STRING])\n```\n\nAssert that `actual` equals `expected`. Shows diff view on failure.",
+  ASSERT_NEQ:
+    "```\nASSERT_NEQ(actual: ANY, expected: ANY [, message: STRING])\n```\n\nAssert that `actual` does not equal `expected`.",
+  ASSERT_TRUE:
+    "```\nASSERT_TRUE(condition: BOOL [, message: STRING])\n```\n\nAssert that `condition` is TRUE.",
+  ASSERT_FALSE:
+    "```\nASSERT_FALSE(condition: BOOL [, message: STRING])\n```\n\nAssert that `condition` is FALSE.",
+  ASSERT_GT:
+    "```\nASSERT_GT(actual: ANY_NUM, threshold: ANY_NUM [, message: STRING])\n```\n\nAssert that `actual` is greater than `threshold`.",
+  ASSERT_LT:
+    "```\nASSERT_LT(actual: ANY_NUM, threshold: ANY_NUM [, message: STRING])\n```\n\nAssert that `actual` is less than `threshold`.",
+  ASSERT_GE:
+    "```\nASSERT_GE(actual: ANY_NUM, threshold: ANY_NUM [, message: STRING])\n```\n\nAssert that `actual` is greater than or equal to `threshold`.",
+  ASSERT_LE:
+    "```\nASSERT_LE(actual: ANY_NUM, threshold: ANY_NUM [, message: STRING])\n```\n\nAssert that `actual` is less than or equal to `threshold`.",
+  ASSERT_NEAR:
+    "```\nASSERT_NEAR(actual: ANY_REAL, expected: ANY_REAL, tolerance: ANY_REAL [, message: STRING])\n```\n\nAssert that `actual` is within `tolerance` of `expected`.",
+  MOCK:
+    "```\nMOCK instance\n```\n\nEnable mock mode for a function block instance. Calls are recorded but the FB body is not executed.",
+  MOCK_FUNCTION:
+    "```\nMOCK_FUNCTION FuncName RETURNS value\n```\n\nMock a function to return a fixed value instead of executing.",
+  MOCK_VERIFY_CALLED:
+    "```\nMOCK_VERIFY_CALLED(instance)\n```\n\nAssert that the mocked function block instance was called at least once.",
+  MOCK_VERIFY_CALL_COUNT:
+    "```\nMOCK_VERIFY_CALL_COUNT(instance, count: INT)\n```\n\nAssert that the mocked function block instance was called exactly `count` times.",
+  ADVANCE_TIME:
+    "```\nADVANCE_TIME(duration: TIME)\n```\n\nAdvance the scan-cycle time by `duration`. Affects TON/TOF/TP timers.",
+  TEST:
+    "```\nTEST 'name'\n  (* test body *)\nEND_TEST\n```\n\nDefine a test case. Each TEST block runs independently with its own SETUP/TEARDOWN cycle.",
+  END_TEST:
+    "```\nEND_TEST\n```\n\nEnd of a TEST block.",
+  SETUP:
+    "```\nSETUP\n  VAR ... END_VAR\nEND_SETUP\n```\n\nSetup block executed before each TEST. Declare shared test variables here.",
+  TEARDOWN:
+    "```\nTEARDOWN\n  (* cleanup *)\nEND_TEARDOWN\n```\n\nTeardown block executed after each TEST. Clean up resources here.",
+  END_SETUP: "```\nEND_SETUP\n```\n\nEnd of a SETUP block.",
+  END_TEARDOWN: "```\nEND_TEARDOWN\n```\n\nEnd of a TEARDOWN block.",
+};
+
+/**
+ * Check if the cursor is on a test framework keyword and return hover info.
+ */
+function getTestKeywordHover(
+  source: string,
+  line: number,
+  column: number,
+): Hover | null {
+  const hit = getWordAt(source, line, column);
+  if (!hit) return null;
+  const doc = TEST_KEYWORD_HOVER[hit.word.toUpperCase()];
+  return doc ? makeHover(doc) : null;
+}
+
+/**
+ * Text-based symbol hover for test files. Since the standard parser doesn't
+ * produce AST nodes for test source, we extract the word under the cursor
+ * and look it up directly in the symbol tables (types, FBs, functions, etc.).
+ */
+function getTestSymbolHover(
+  source: string,
+  line: number,
+  column: number,
+  symbolTables: NonNullable<AnalysisResult["symbolTables"]>,
+  caseMap?: CaseMap,
+): Hover | null {
+  const hit = getWordAt(source, line, column);
+  if (!hit) return null;
+
+  const name = hit.word.toUpperCase();
+  const symbol = lookupSymbolByName(name, symbolTables);
+  if (!symbol) return null;
+
+  const rc = (n: string) => restoreCase(n, caseMap);
+  const md = formatSymbol(symbol, symbolTables, rc);
+  return md ? makeHover(md) : null;
 }

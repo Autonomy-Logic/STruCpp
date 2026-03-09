@@ -8,6 +8,10 @@
  * Header-only C++ test runtime for the STruC++ testing framework.
  * Provides TestContext (assertion methods), TestRunner (orchestration),
  * and value-to-string formatting for failure messages.
+ *
+ * Supports two output modes:
+ * - Text (default): human-readable [PASS]/[FAIL] output for CLI
+ * - JSON (--json flag): machine-readable JSON for IDE integration
  */
 #pragma once
 
@@ -72,24 +76,97 @@ inline std::string to_display_string(const strucpp::IECStringVar<N>& value) {
 }
 
 // ============================================================================
+// JSON helpers (no external library — simple char-by-char escaping)
+// ============================================================================
+
+/**
+ * Escape a string for safe inclusion in a JSON string value.
+ */
+inline std::string json_escape(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 8);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+                break;
+        }
+    }
+    return out;
+}
+
+// ============================================================================
+// FailureRecord — stores assertion failure details for JSON output
+// ============================================================================
+
+struct FailureRecord {
+    std::string assert_type;   // "ASSERT_EQ", "ASSERT_TRUE", etc.
+    std::string detail;        // Human-readable description
+    std::string file;          // Source file
+    int line = 0;              // Line number
+    std::string message;       // Optional user message
+    std::string expected;      // For ASSERT_EQ/NEQ: expected value
+    std::string actual;        // For ASSERT_EQ/NEQ: actual value
+};
+
+// ============================================================================
 // TestContext
 // ============================================================================
 
 /**
  * Per-test context that tracks assertion results and provides assert methods.
  * All assert methods support an optional custom message (nullptr if not provided).
+ *
+ * In JSON mode, failures are collected into failure_records instead of printed.
  */
 struct TestContext {
     const char* test_file = "";
     int failures = 0;
+    bool json_mode = false;
+    std::vector<FailureRecord> failure_records;
 
     /**
-     * Print optional custom message if provided.
+     * Print optional custom message if provided (text mode only).
      */
     void print_message(const char* msg) {
         if (msg && msg[0] != '\0') {
             printf("         Message: %s\n", msg);
         }
+    }
+
+    /**
+     * Record a failure. In text mode, prints to stdout. In JSON mode, appends to failure_records.
+     */
+    void record_failure(const char* assert_type, const std::string& detail,
+                        int line, const char* msg,
+                        const std::string& expected = "", const std::string& actual = "") {
+        if (json_mode) {
+            FailureRecord rec;
+            rec.assert_type = assert_type;
+            rec.detail = detail;
+            rec.file = test_file;
+            rec.line = line;
+            if (msg && msg[0] != '\0') rec.message = msg;
+            rec.expected = expected;
+            rec.actual = actual;
+            failure_records.push_back(std::move(rec));
+        } else {
+            printf("         %s failed: %s\n", assert_type, detail.c_str());
+            printf("         at %s:%d\n", test_file, line);
+            print_message(msg);
+        }
+        failures++;
     }
 
     /**
@@ -102,11 +179,8 @@ struct TestContext {
         if (actual == expected) return true;
         std::string actual_str = to_display_string(actual);
         std::string expected_str = to_display_string(expected);
-        printf("         ASSERT_EQ failed: %s expected %s, got %s\n",
-               actual_expr, expected_str.c_str(), actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " expected " + expected_str + ", got " + actual_str;
+        record_failure("ASSERT_EQ", detail, line, msg, expected_str, actual_str);
         return false;
     }
 
@@ -121,11 +195,8 @@ struct TestContext {
         if (actual == expected) return true;
         std::string actual_str = to_display_string(actual);
         std::string expected_str = to_display_string(expected);
-        printf("         ASSERT_EQ failed: %s expected %s, got %s\n",
-               actual_expr, expected_str.c_str(), actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " expected " + expected_str + ", got " + actual_str;
+        record_failure("ASSERT_EQ", detail, line, msg, expected_str, actual_str);
         return false;
     }
 
@@ -138,11 +209,8 @@ struct TestContext {
                     int line, const char* msg = "") {
         if (actual != expected) return true;
         std::string actual_str = to_display_string(actual);
-        printf("         ASSERT_NEQ failed: %s should not equal %s\n",
-               actual_expr, actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " should not equal " + actual_str;
+        record_failure("ASSERT_NEQ", detail, line, msg, actual_str, actual_str);
         return false;
     }
 
@@ -156,11 +224,8 @@ struct TestContext {
                     int line, const char* msg = "") {
         if (actual != expected) return true;
         std::string actual_str = to_display_string(actual);
-        printf("         ASSERT_NEQ failed: %s should not equal %s\n",
-               actual_expr, actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " should not equal " + actual_str;
+        record_failure("ASSERT_NEQ", detail, line, msg, actual_str, actual_str);
         return false;
     }
 
@@ -170,10 +235,8 @@ struct TestContext {
     bool assert_true(bool condition, const char* expr, int line,
                      const char* msg = "") {
         if (condition) return true;
-        printf("         ASSERT_TRUE failed: %s expected TRUE, got FALSE\n", expr);
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(expr) + " expected TRUE, got FALSE";
+        record_failure("ASSERT_TRUE", detail, line, msg);
         return false;
     }
 
@@ -183,10 +246,8 @@ struct TestContext {
     bool assert_false(bool condition, const char* expr, int line,
                       const char* msg = "") {
         if (!condition) return true;
-        printf("         ASSERT_FALSE failed: %s expected FALSE, got TRUE\n", expr);
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(expr) + " expected FALSE, got TRUE";
+        record_failure("ASSERT_FALSE", detail, line, msg);
         return false;
     }
 
@@ -200,11 +261,8 @@ struct TestContext {
         if (actual > threshold) return true;
         std::string actual_str = to_display_string(actual);
         std::string threshold_str = to_display_string(threshold);
-        printf("         ASSERT_GT failed: %s expected > %s, got %s\n",
-               actual_expr, threshold_str.c_str(), actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " expected > " + threshold_str + ", got " + actual_str;
+        record_failure("ASSERT_GT", detail, line, msg, threshold_str, actual_str);
         return false;
     }
 
@@ -218,11 +276,8 @@ struct TestContext {
         if (actual < threshold) return true;
         std::string actual_str = to_display_string(actual);
         std::string threshold_str = to_display_string(threshold);
-        printf("         ASSERT_LT failed: %s expected < %s, got %s\n",
-               actual_expr, threshold_str.c_str(), actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " expected < " + threshold_str + ", got " + actual_str;
+        record_failure("ASSERT_LT", detail, line, msg, threshold_str, actual_str);
         return false;
     }
 
@@ -236,11 +291,8 @@ struct TestContext {
         if (actual >= threshold) return true;
         std::string actual_str = to_display_string(actual);
         std::string threshold_str = to_display_string(threshold);
-        printf("         ASSERT_GE failed: %s expected >= %s, got %s\n",
-               actual_expr, threshold_str.c_str(), actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " expected >= " + threshold_str + ", got " + actual_str;
+        record_failure("ASSERT_GE", detail, line, msg, threshold_str, actual_str);
         return false;
     }
 
@@ -254,11 +306,8 @@ struct TestContext {
         if (actual <= threshold) return true;
         std::string actual_str = to_display_string(actual);
         std::string threshold_str = to_display_string(threshold);
-        printf("         ASSERT_LE failed: %s expected <= %s, got %s\n",
-               actual_expr, threshold_str.c_str(), actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " expected <= " + threshold_str + ", got " + actual_str;
+        record_failure("ASSERT_LE", detail, line, msg, threshold_str, actual_str);
         return false;
     }
 
@@ -275,12 +324,9 @@ struct TestContext {
         std::string actual_str = to_display_string(actual);
         std::string expected_str = to_display_string(expected);
         std::string tolerance_str = to_display_string(tolerance);
-        printf("         ASSERT_NEAR failed: %s expected %s +/- %s, got %s\n",
-               actual_expr, expected_str.c_str(), tolerance_str.c_str(),
-               actual_str.c_str());
-        printf("         at %s:%d\n", test_file, line);
-        print_message(msg);
-        failures++;
+        std::string detail = std::string(actual_expr) + " expected " + expected_str +
+                             " +/- " + tolerance_str + ", got " + actual_str;
+        record_failure("ASSERT_NEAR", detail, line, msg, expected_str, actual_str);
         return false;
     }
 };
@@ -297,22 +343,44 @@ struct TestCaseEntry {
 };
 
 /**
+ * Per-test result used by JSON output mode.
+ */
+struct TestCaseResult {
+    const char* name;
+    bool passed;
+    std::string exception_msg;           // Non-empty if test threw an exception
+    std::vector<FailureRecord> failures; // Assertion failures (from TestContext)
+};
+
+/**
  * Test runner that orchestrates test execution and reports results.
+ * Supports text (default) and JSON (--json) output modes.
  */
 class TestRunner {
     const char* test_file_;
     std::vector<TestCaseEntry> tests_;
     int passed_ = 0;
     int failed_ = 0;
+    bool json_mode_ = false;
 
 public:
     explicit TestRunner(const char* test_file) : test_file_(test_file) {}
+
+    void set_json_mode(bool enabled) { json_mode_ = enabled; }
 
     void add(const char* name, TestFunc func) {
         tests_.push_back({name, std::move(func)});
     }
 
     int run() {
+        if (json_mode_) {
+            return run_json();
+        }
+        return run_text();
+    }
+
+private:
+    int run_text() {
         printf("STruC++ Test Runner v1.0\n\n");
         printf("%s\n", test_file_);
 
@@ -342,6 +410,84 @@ public:
         int total = passed_ + failed_;
         printf("%d %s, %d passed, %d failed\n",
                total, total == 1 ? "test" : "tests", passed_, failed_);
+
+        return failed_ > 0 ? 1 : 0;
+    }
+
+    int run_json() {
+        std::vector<TestCaseResult> results;
+
+        for (auto& tc : tests_) {
+            TestContext ctx;
+            ctx.test_file = test_file_;
+            ctx.json_mode = true;
+            __CURRENT_TIME_NS = 0;
+
+            TestCaseResult result;
+            result.name = tc.name;
+            result.passed = false;
+
+            try {
+                bool ok = tc.func(ctx);
+                result.passed = ok && ctx.failures == 0;
+                result.failures = std::move(ctx.failure_records);
+            } catch (const std::exception& e) {
+                result.exception_msg = e.what();
+            } catch (...) {
+                result.exception_msg = "unknown exception";
+            }
+
+            if (result.passed) passed_++;
+            else failed_++;
+            results.push_back(std::move(result));
+        }
+
+        // Serialize to JSON using printf (no JSON library)
+        int total = passed_ + failed_;
+        printf("{\"version\":1,\"file\":\"%s\",\"results\":[",
+               json_escape(test_file_).c_str());
+
+        for (size_t i = 0; i < results.size(); i++) {
+            if (i > 0) printf(",");
+            const auto& r = results[i];
+            printf("{\"name\":\"%s\",\"passed\":%s",
+                   json_escape(r.name).c_str(),
+                   r.passed ? "true" : "false");
+
+            if (!r.passed) {
+                // Emit first failure (most relevant for IDE) or exception
+                if (!r.exception_msg.empty()) {
+                    printf(",\"failure\":{\"assertType\":\"EXCEPTION\","
+                           "\"detail\":\"%s\","
+                           "\"file\":\"%s\",\"line\":0}",
+                           json_escape(r.exception_msg).c_str(),
+                           json_escape(test_file_).c_str());
+                } else if (!r.failures.empty()) {
+                    const auto& f = r.failures[0];
+                    printf(",\"failure\":{\"assertType\":\"%s\","
+                           "\"detail\":\"%s\","
+                           "\"file\":\"%s\",\"line\":%d",
+                           json_escape(f.assert_type).c_str(),
+                           json_escape(f.detail).c_str(),
+                           json_escape(f.file).c_str(),
+                           f.line);
+                    if (!f.message.empty()) {
+                        printf(",\"message\":\"%s\"",
+                               json_escape(f.message).c_str());
+                    }
+                    if (!f.expected.empty() || !f.actual.empty()) {
+                        printf(",\"expected\":\"%s\",\"actual\":\"%s\"",
+                               json_escape(f.expected).c_str(),
+                               json_escape(f.actual).c_str());
+                    }
+                    printf("}");
+                }
+            }
+            printf("}");
+        }
+
+        printf("],\"summary\":{\"total\":%d,\"passed\":%d,\"failed\":%d}}",
+               total, passed_, failed_);
 
         return failed_ > 0 ? 1 : 0;
     }

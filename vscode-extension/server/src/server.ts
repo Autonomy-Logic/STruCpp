@@ -9,6 +9,8 @@
 
 import * as path from "node:path";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import { execFileSync } from "node:child_process";
 import { URI } from "vscode-uri";
 import {
   createConnection,
@@ -20,7 +22,19 @@ import {
   DidChangeWatchedFilesNotification,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { analyze, compile, generateReplMain, compileStlib, loadStlibFromFile } from "strucpp";
+import {
+  analyze,
+  compile,
+  generateReplMain,
+  compileStlib,
+  loadStlibFromFile,
+  parseTestFile,
+  analyzeTestFile,
+  generateTestMain,
+  buildPOUInfoFromAST,
+  getCxxEnv,
+  splitCxxFlags,
+} from "strucpp";
 import {
   CompileRequest,
   BuildRequest,
@@ -28,12 +42,16 @@ import {
   GetSettingsRequest,
   GetLibrariesRequest,
   LibrariesChangedNotification,
+  RunTestsRequest,
   type ExtensionSettings,
   type CompileResponse,
   type BuildResponse,
   type CompileLibResponse,
   type LibraryArchiveInfo,
+  type RunTestsParams,
+  type RunTestsResponse,
 } from "../../shared/protocol.js";
+import { parseTestJson } from "../../shared/test-result.js";
 import { DocumentManager } from "./document-manager.js";
 import { toLspDiagnostics } from "./diagnostics.js";
 import { lspPositionToCompiler } from "./lsp-utils.js";
@@ -44,7 +62,8 @@ import { getCompletions } from "./completion.js";
 import { getSignatureHelp } from "./signature-help.js";
 import { getReferences } from "./references.js";
 import { prepareRename, getRenameEdits } from "./rename.js";
-import { getSemanticTokens, TOKEN_TYPES, TOKEN_MODIFIERS } from "./semantic-tokens.js";
+import { getSemanticTokens, getTestFileSemanticTokens, TOKEN_TYPES, TOKEN_MODIFIERS } from "./semantic-tokens.js";
+import { isTestFile } from "../../shared/test-utils.js";
 import { getCodeActions } from "./code-actions.js";
 import { formatDocument } from "./formatting.js";
 
@@ -368,7 +387,9 @@ connection.onHover((params) => {
   if (!state?.analysisResult) return null;
   const fileName = docManager.getFileName(params.textDocument.uri);
   const { line, column } = lspPositionToCompiler(params.position);
-  return getHover(state.analysisResult, fileName, line, column, docManager.getCaseMap());
+  const source =
+    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
+  return getHover(state.analysisResult, fileName, line, column, docManager.getCaseMap(), source);
 });
 
 connection.onDefinition((params) => {
@@ -376,6 +397,8 @@ connection.onDefinition((params) => {
   if (!state?.analysisResult) return null;
   const fileName = docManager.getFileName(params.textDocument.uri);
   const { line, column } = lspPositionToCompiler(params.position);
+  const source =
+    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
   return getDefinition(
     state.analysisResult,
     fileName,
@@ -384,6 +407,7 @@ connection.onDefinition((params) => {
     params.textDocument.uri,
     (fn) => docManager.resolveFileNameToUri(fn),
     (name) => docManager.findSymbolInLibrarySources(name),
+    source,
   );
 });
 
@@ -510,7 +534,9 @@ connection.languages.semanticTokens.on((params) => {
 
   if (!state.analysisResult) return { data: [] };
   const fileName = docManager.getFileName(uri);
-  const data = getSemanticTokens(state.analysisResult, fileName, state.source);
+  const data = isTestFile(state.source)
+    ? getTestFileSemanticTokens(state.analysisResult, state.source)
+    : getSemanticTokens(state.analysisResult, fileName, state.source);
   return { data };
 });
 
@@ -768,6 +794,197 @@ connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
 
 connection.onRequest(GetLibrariesRequest, (): LibraryArchiveInfo[] => {
   return docManager.getCachedLibraries();
+});
+
+// ---------------------------------------------------------------------------
+// strucpp/runTests — compile and execute test file
+// ---------------------------------------------------------------------------
+
+connection.onRequest(RunTestsRequest, (params: RunTestsParams): RunTestsResponse => {
+  const testUri = params.testFileUri;
+  const testFilePath = URI.parse(testUri).fsPath;
+  const testFileName = path.basename(testFilePath);
+
+  // 1. Read test file source
+  let testSource: string;
+  try {
+    testSource = fs.readFileSync(testFilePath, "utf-8");
+  } catch {
+    return {
+      success: false,
+      errors: [{ message: `Cannot read test file: ${testFilePath}`, line: 0, column: 0, severity: "error" }],
+    };
+  }
+
+  // 2. Gather workspace sources (all non-test .st files)
+  const workspaceSources = docManager.buildAllWorkspaceSources();
+  if (workspaceSources.length === 0) {
+    return {
+      success: false,
+      errors: [{ message: "No source files found in workspace", line: 0, column: 0, severity: "error" }],
+    };
+  }
+
+  // 3. Compile sources with isTestBuild flag
+  const primarySource = workspaceSources[0]!;
+  const additionalSources = workspaceSources.slice(1);
+  const libraryPaths = docManager.getLibraryPaths();
+
+  const compileResult = compile(primarySource.source, {
+    fileName: primarySource.fileName,
+    headerFileName: "generated.hpp",
+    isTestBuild: true,
+    ...(additionalSources.length > 0 ? { additionalSources } : {}),
+    ...(libraryPaths.length > 0 ? { libraryPaths } : {}),
+  });
+
+  if (!compileResult.success) {
+    return {
+      success: false,
+      errors: compileResult.errors.map((e) => ({
+        message: e.message,
+        line: e.line,
+        column: e.column,
+        severity: e.severity,
+        ...(e.file ? { file: e.file } : {}),
+      })),
+    };
+  }
+
+  // 4. Parse test file
+  const parseResult = parseTestFile(testSource, testFileName);
+  if (parseResult.errors.length > 0) {
+    return {
+      success: false,
+      errors: parseResult.errors.map((e) => ({
+        message: e.message,
+        line: e.line,
+        column: e.column,
+        severity: e.severity,
+      })),
+    };
+  }
+
+  if (!parseResult.testFile || parseResult.testFile.testCases.length === 0) {
+    return {
+      success: false,
+      errors: [{ message: "No test cases found in test file", line: 0, column: 0, severity: "error" }],
+    };
+  }
+
+  // 5. Semantic analysis of test file
+  if (compileResult.symbolTables) {
+    const testAnalysis = analyzeTestFile(parseResult.testFile, compileResult.symbolTables);
+    if (testAnalysis.errors.length > 0) {
+      return {
+        success: false,
+        errors: testAnalysis.errors.map((e) => ({
+          message: e.message,
+          line: e.line,
+          column: e.column,
+          severity: e.severity,
+        })),
+      };
+    }
+  }
+
+  // 6. Generate test_main.cpp
+  const pous = compileResult.ast ? buildPOUInfoFromAST(compileResult.ast).pous : [];
+  const testMainCpp = generateTestMain([parseResult.testFile], {
+    headerFileName: "generated.hpp",
+    pous,
+    isTestBuild: true,
+    ...(compileResult.ast ? { ast: compileResult.ast } : {}),
+    ...(compileResult.resolvedLibraries ? { libraryArchives: compileResult.resolvedLibraries } : {}),
+  });
+
+  // 7. Write to temp directory
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-test-"));
+  try {
+    fs.writeFileSync(path.join(tempDir, "generated.hpp"), compileResult.headerCode, "utf-8");
+    fs.writeFileSync(path.join(tempDir, "generated.cpp"), compileResult.cppCode, "utf-8");
+    fs.writeFileSync(path.join(tempDir, "test_main.cpp"), testMainCpp, "utf-8");
+
+    // 8. Find runtime paths
+    const runtimePaths = findRuntimePaths();
+    if (!runtimePaths) {
+      return {
+        success: false,
+        errors: [{ message: "Could not locate runtime include directory", line: 0, column: 0, severity: "error" }],
+      };
+    }
+    const testRuntimeDir = path.resolve(path.dirname(runtimePaths.includeDir), "test");
+
+    // 9. Compile with g++
+    const binaryName = process.platform === "win32" ? "test_runner.exe" : "test_runner";
+    const binaryPath = path.join(tempDir, binaryName);
+    const gppPath = currentSettings.gppPath || "g++";
+    const cxxFlags = currentSettings.cxxFlags || "";
+
+    try {
+      execFileSync(gppPath, [
+        "-std=c++17",
+        `-I${runtimePaths.includeDir}`,
+        `-I${testRuntimeDir}`,
+        `-I${tempDir}`,
+        ...splitCxxFlags(cxxFlags),
+        path.join(tempDir, "test_main.cpp"),
+        path.join(tempDir, "generated.cpp"),
+        "-o",
+        binaryPath,
+      ], { stdio: ["pipe", "pipe", "pipe"], env: getCxxEnv() });
+    } catch (err: unknown) {
+      const execErr = err as { stderr?: Buffer | string };
+      const stderr = execErr.stderr
+        ? typeof execErr.stderr === "string" ? execErr.stderr : execErr.stderr.toString()
+        : "Unknown compilation error";
+      return {
+        success: false,
+        errors: [{ message: `C++ compilation failed:\n${stderr}`, line: 0, column: 0, severity: "error" }],
+      };
+    }
+
+    // 10. Execute test binary with --json flag
+    let stdout: string;
+    try {
+      stdout = execFileSync(binaryPath, ["--json"], {
+        encoding: "utf-8",
+        timeout: 30000,
+      });
+    } catch (err: unknown) {
+      const execErr = err as { stdout?: string; stderr?: string; signal?: string; status?: number };
+      // Test binary returns exit code 1 when tests fail — that's normal, stdout still has JSON
+      if (execErr.stdout) {
+        stdout = execErr.stdout;
+      } else {
+        const detail = execErr.signal
+          ? `Test binary crashed with signal ${execErr.signal}`
+          : `Test binary failed with exit code ${execErr.status ?? 1}`;
+        return {
+          success: false,
+          errors: [{ message: detail, line: 0, column: 0, severity: "error" }],
+        };
+      }
+    }
+
+    // 11. Parse JSON output
+    try {
+      const output = parseTestJson(stdout);
+      return { success: true, output, errors: [] };
+    } catch {
+      return {
+        success: false,
+        errors: [{ message: `Failed to parse test output: ${stdout.slice(0, 200)}`, line: 0, column: 0, severity: "error" }],
+      };
+    }
+  } finally {
+    // Cleanup temp directory
+    try {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 });
 
 function publishDiagnostics(

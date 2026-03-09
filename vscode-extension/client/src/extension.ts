@@ -19,6 +19,7 @@ import {
 import { registerCommands } from "./commands.js";
 import { StrucppTaskProvider } from "./task-provider.js";
 import { StlibExplorer, STLIB_URI_SCHEME } from "./stlib-explorer.js";
+import { StrucppTestController } from "./test-controller.js";
 import { LibrariesChangedNotification } from "../../shared/protocol.js";
 
 let client: LanguageClient | undefined;
@@ -98,6 +99,10 @@ export function activate(context: ExtensionContext): void {
       updateStatusBar(statusBarItem, explorer);
     });
     explorer.refresh().then(() => updateStatusBar(statusBarItem, explorer));
+
+    // Test Explorer integration
+    const testController = new StrucppTestController(context, client!);
+    context.subscriptions.push(testController);
 
     // Format on save: trigger document formatting when strucpp.formatOnSave is enabled
     context.subscriptions.push(

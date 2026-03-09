@@ -17,8 +17,9 @@ import type {
   TypeSymbol,
   SourceSpan,
 } from "strucpp";
-import { resolveSymbolAtPosition } from "./resolve-symbol.js";
+import { resolveSymbolAtPosition, lookupSymbolByName } from "./resolve-symbol.js";
 import { sourceSpanToRange, resolveUri, type FileNameResolver } from "./lsp-utils.js";
+import { isTestFile, getWordAt } from "../../shared/test-utils.js";
 
 /** Resolves a symbol name to a library source location (URI + 0-indexed line). */
 export type LibrarySymbolResolver = (
@@ -36,9 +37,18 @@ export function getDefinition(
   uri: string,
   resolveFileName?: FileNameResolver,
   resolveLibrarySymbol?: LibrarySymbolResolver,
+  source?: string,
 ): Location | null {
   const resolved = resolveSymbolAtPosition(analysis, fileName, line, column);
-  if (!resolved) return null;
+  if (!resolved) {
+    // Test files have no AST — fall back to text-based symbol lookup
+    if (source && isTestFile(source) && analysis.symbolTables) {
+      return getTestSymbolDefinition(
+        source, line, column, analysis.symbolTables, uri, resolveFileName, resolveLibrarySymbol,
+      );
+    }
+    return null;
+  }
 
   const { symbol, stdFunction } = resolved;
 
@@ -145,6 +155,36 @@ function tryResolveLibraryLocation(
     result.uri,
     Range.create(result.line, 0, result.line, 0),
   );
+}
+
+/**
+ * Text-based go-to-definition for test files. Extracts the word under the
+ * cursor and resolves it via symbol tables, then returns its declaration span.
+ */
+function getTestSymbolDefinition(
+  source: string,
+  line: number,
+  column: number,
+  symbolTables: NonNullable<AnalysisResult["symbolTables"]>,
+  uri: string,
+  resolveFileName?: FileNameResolver,
+  resolveLibrarySymbol?: LibrarySymbolResolver,
+): Location | null {
+  const hit = getWordAt(source, line, column);
+  if (!hit) return null;
+
+  const symbol = lookupSymbolByName(hit.word.toUpperCase(), symbolTables);
+  if (!symbol) return null;
+
+  const span = getDeclarationSpan(symbol);
+  if (!span) return null;
+
+  if (isDefaultSpan(span)) {
+    return tryResolveLibraryLocation(symbol.name, resolveLibrarySymbol);
+  }
+
+  const targetUri = resolveUri(span, uri, resolveFileName);
+  return Location.create(targetUri, sourceSpanToRange(span));
 }
 
 function getDeclarationSpan(

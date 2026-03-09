@@ -238,6 +238,121 @@ END_PROGRAM`;
   });
 });
 
+describe("getDefinition in test files", () => {
+  const TYPES_SOURCE = `TYPE PedestrianState : (WALK, DONT_WALK, FLASHING); END_TYPE
+
+FUNCTION_BLOCK PedestrianLight
+  VAR_INPUT enable : BOOL; END_VAR
+  VAR_OUTPUT active : BOOL; END_VAR
+END_FUNCTION_BLOCK
+`;
+
+  const TEST_SOURCE = `TEST 'PedestrianState values'
+  VAR
+    s1 : PedestrianState;
+  END_VAR
+
+  s1 := PedestrianState.WALK;
+  ASSERT_TRUE(TRUE);
+END_TEST
+`;
+
+  function getTestAnalysis(): AnalysisResult {
+    return analyze("", {
+      fileName: "test_pedestrian.st",
+      additionalSources: [{ source: TYPES_SOURCE, fileName: "types.st" }],
+    });
+  }
+
+  it("navigates type name in test file to its declaration", () => {
+    const analysis = getTestAnalysis();
+    const lines = TEST_SOURCE.split("\n");
+    const lineIdx = lines.findIndex((l) => l.includes("s1 : PedestrianState"));
+    const col = lines[lineIdx].indexOf("PedestrianState") + 1;
+
+    const def = getDefinition(
+      analysis,
+      "test_pedestrian.st",
+      lineIdx + 1,
+      col,
+      "file:///workspace/test_pedestrian.st",
+      (fn) => fn === "types.st" ? "file:///workspace/types.st" : undefined,
+      undefined,
+      TEST_SOURCE,
+    );
+
+    expect(def).not.toBeNull();
+    expect(def!.uri).toBe("file:///workspace/types.st");
+  });
+
+  it("navigates FB name in test file to its declaration", () => {
+    const testWithFB = `TEST 'fb test'
+  VAR pl : PedestrianLight; END_VAR
+  ASSERT_TRUE(TRUE);
+END_TEST
+`;
+    const analysis = getTestAnalysis();
+    const lines = testWithFB.split("\n");
+    const lineIdx = lines.findIndex((l) => l.includes("PedestrianLight"));
+    const col = lines[lineIdx].indexOf("PedestrianLight") + 1;
+
+    const def = getDefinition(
+      analysis,
+      "test_pedestrian.st",
+      lineIdx + 1,
+      col,
+      "file:///workspace/test_pedestrian.st",
+      (fn) => fn === "types.st" ? "file:///workspace/types.st" : undefined,
+      undefined,
+      testWithFB,
+    );
+
+    expect(def).not.toBeNull();
+    expect(def!.uri).toBe("file:///workspace/types.st");
+  });
+
+  it("returns null for unknown symbols in test files", () => {
+    const analysis = getTestAnalysis();
+    // "s1" is a locally declared variable — not in symbol tables
+    const lines = TEST_SOURCE.split("\n");
+    const lineIdx = lines.findIndex((l) => l.includes("s1 :="));
+    const col = lines[lineIdx].indexOf("s1") + 1;
+
+    const def = getDefinition(
+      analysis,
+      "test_pedestrian.st",
+      lineIdx + 1,
+      col,
+      "file:///workspace/test_pedestrian.st",
+      undefined,
+      undefined,
+      TEST_SOURCE,
+    );
+
+    expect(def).toBeNull();
+  });
+
+  it("returns null for test framework keywords", () => {
+    const analysis = getTestAnalysis();
+    const lines = TEST_SOURCE.split("\n");
+    const lineIdx = lines.findIndex((l) => l.includes("ASSERT_TRUE"));
+    const col = lines[lineIdx].indexOf("ASSERT_TRUE") + 1;
+
+    const def = getDefinition(
+      analysis,
+      "test_pedestrian.st",
+      lineIdx + 1,
+      col,
+      "file:///workspace/test_pedestrian.st",
+      undefined,
+      undefined,
+      TEST_SOURCE,
+    );
+
+    expect(def).toBeNull();
+  });
+});
+
 describe("getTypeDefinition", () => {
   it("navigates variable to its type declaration", () => {
     const analysis = getAnalysis();

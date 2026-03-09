@@ -25,6 +25,8 @@ import type {
 import { ELEMENTARY_TYPES, typeName } from "strucpp";
 import { getCursorContext } from "./cursor-context.js";
 import { getScopeForContext } from "./resolve-symbol.js";
+import { isTestFile } from "../../shared/test-utils.js";
+import { stripCommentsAndStrings } from "./lsp-utils.js";
 
 /**
  * Get completion items for the given position.
@@ -39,10 +41,12 @@ export function getCompletions(
 ): CompletionItem[] {
   const ctx = getCursorContext(analysis, fileName, line, column, source);
 
+  const isTest = isTestFile(source);
+
   let items: CompletionItem[];
   switch (ctx.kind) {
     case "top-level":
-      items = getTopLevelCompletions();
+      items = isTest ? getTestTopLevelCompletions() : getTopLevelCompletions();
       break;
     case "var-block":
       items = getVarBlockCompletions();
@@ -51,10 +55,11 @@ export function getCompletions(
       items = getTypeAnnotationCompletions(analysis);
       break;
     case "dot-access":
-      items = getDotAccessCompletions(analysis, ctx.prefixExpr, ctx.pouScope);
+      items = getDotAccessCompletions(analysis, ctx.prefixExpr, ctx.pouScope, isTest ? source : undefined);
       break;
     case "body":
-      items = getBodyCompletions(analysis, ctx.pouScope);
+      items = getBodyCompletions(analysis, ctx.pouScope, isTest ? source : undefined);
+      if (isTest) items.push(...getTestBodyCompletions());
       break;
   }
 
@@ -199,6 +204,7 @@ function getDotAccessCompletions(
   analysis: AnalysisResult,
   prefixExpr: string,
   pouScope: EnclosingScope,
+  testSource?: string,
 ): CompletionItem[] {
   const { symbolTables } = analysis;
   if (!symbolTables) return [];
@@ -209,9 +215,30 @@ function getDotAccessCompletions(
   // Parse the chain: "a.b.c" → resolve segment by segment
   const segments = prefixExpr.split(".");
   const resolvedType = resolveChainType(segments, scope, symbolTables);
-  if (!resolvedType) return [];
+  if (resolvedType) return getMembersForType(resolvedType, symbolTables);
 
-  return getMembersForType(resolvedType, symbolTables);
+  // For test files, try resolving via locally declared variable types
+  if (testSource) {
+    const testVars = extractTestVarDeclarations(testSource);
+    const varType = testVars.get(segments[0].toUpperCase());
+    if (varType) {
+      // Walk remaining segments through type chain
+      let currentTypeName = varType;
+      for (let i = 1; i < segments.length; i++) {
+        const nextType = resolveMemberType(currentTypeName, segments[i], symbolTables);
+        if (!nextType) return [];
+        currentTypeName = nextType;
+      }
+      const typeInfo = resolveTypeName(currentTypeName, symbolTables);
+      if (typeInfo) return getMembersForType(typeInfo, symbolTables);
+    }
+  }
+
+  // Fallback: first segment may be a type name (e.g., EnumType.MEMBER)
+  const typeInfo = resolveTypeName(segments[0], symbolTables);
+  if (typeInfo) return getMembersForType(typeInfo, symbolTables);
+
+  return [];
 }
 
 interface ResolvedTypeInfo {
@@ -255,6 +282,34 @@ function resolveChainType(
   }
   if (typeSym?.declaration?.definition?.kind === "EnumDefinition") {
     return { kind: "enum", name: currentTypeName };
+  }
+
+  return undefined;
+}
+
+/**
+ * Try to resolve a name as a type (enum, struct, FB) for dot-access.
+ * This handles the common pattern `EnumType.MEMBER` where the first
+ * segment is a type name, not a variable.
+ */
+function resolveTypeName(
+  name: string,
+  symbolTables: SymbolTables,
+): ResolvedTypeInfo | undefined {
+  const upper = name.toUpperCase();
+
+  // Check FB
+  if (symbolTables.lookupFunctionBlock(upper)) {
+    return { kind: "functionBlock", name: upper };
+  }
+
+  // Check type (enum, struct)
+  const typeSym = symbolTables.lookupType(upper);
+  if (typeSym?.declaration?.definition?.kind === "EnumDefinition") {
+    return { kind: "enum", name: upper };
+  }
+  if (typeSym?.declaration?.definition?.kind === "StructDefinition") {
+    return { kind: "struct", name: upper };
   }
 
   return undefined;
@@ -434,6 +489,7 @@ function getMembersForType(
 function getBodyCompletions(
   analysis: AnalysisResult,
   pouScope: EnclosingScope,
+  testSource?: string,
 ): CompletionItem[] {
   const items: CompletionItem[] = [];
 
@@ -493,10 +549,31 @@ function getBodyCompletions(
           kind: CompletionItemKind.EnumMember,
           sortText: sortPriority,
         });
+      } else if (sym.kind === "type") {
+        items.push({
+          label: sym.name,
+          kind: CompletionItemKind.Struct,
+          sortText: "4",
+        });
       }
     }
     currentScope = currentScope.parent;
     sortPriority = currentScope?.parent ? "2" : "3"; // intermediate vs global scope
+  }
+
+  // For test files, add locally declared variables from VAR blocks
+  if (testSource) {
+    const testVars = extractTestVarDeclarations(testSource);
+    for (const [name, varType] of testVars) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      items.push({
+        label: name,
+        kind: CompletionItemKind.Variable,
+        detail: varType,
+        sortText: "1",
+      });
+    }
   }
 
   // Standard library functions
@@ -567,6 +644,158 @@ function getStatementKeywordCompletions(): CompletionItem[] {
 }
 
 // ---------------------------------------------------------------------------
+// Test framework completions
+// ---------------------------------------------------------------------------
+
+/** Top-level completions for test files (TEST, SETUP, TEARDOWN blocks). */
+function getTestTopLevelCompletions(): CompletionItem[] {
+  return [
+    {
+      label: "TEST",
+      kind: CompletionItemKind.Keyword,
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "TEST '${1:test name}'\n  $0\nEND_TEST",
+      sortText: "0",
+    },
+    {
+      label: "SETUP",
+      kind: CompletionItemKind.Keyword,
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "SETUP\n  VAR\n    $0\n  END_VAR\nEND_SETUP",
+      sortText: "0",
+    },
+    {
+      label: "TEARDOWN",
+      kind: CompletionItemKind.Keyword,
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "TEARDOWN\n  $0\nEND_TEARDOWN",
+      sortText: "0",
+    },
+  ];
+}
+
+/** Body completions for inside TEST blocks (ASSERT_*, MOCK_*, ADVANCE_TIME). */
+function getTestBodyCompletions(): CompletionItem[] {
+  return [
+    // ASSERT snippets
+    {
+      label: "ASSERT_EQ",
+      kind: CompletionItemKind.Function,
+      detail: "(actual, expected [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_EQ(${1:actual}, ${2:expected});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_NEQ",
+      kind: CompletionItemKind.Function,
+      detail: "(actual, expected [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_NEQ(${1:actual}, ${2:expected});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_TRUE",
+      kind: CompletionItemKind.Function,
+      detail: "(condition [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_TRUE(${1:condition});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_FALSE",
+      kind: CompletionItemKind.Function,
+      detail: "(condition [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_FALSE(${1:condition});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_GT",
+      kind: CompletionItemKind.Function,
+      detail: "(actual, threshold [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_GT(${1:actual}, ${2:threshold});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_LT",
+      kind: CompletionItemKind.Function,
+      detail: "(actual, threshold [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_LT(${1:actual}, ${2:threshold});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_GE",
+      kind: CompletionItemKind.Function,
+      detail: "(actual, threshold [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_GE(${1:actual}, ${2:threshold});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_LE",
+      kind: CompletionItemKind.Function,
+      detail: "(actual, threshold [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_LE(${1:actual}, ${2:threshold});",
+      sortText: "0",
+    },
+    {
+      label: "ASSERT_NEAR",
+      kind: CompletionItemKind.Function,
+      detail: "(actual, expected, tolerance [, message])",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ASSERT_NEAR(${1:actual}, ${2:expected}, ${3:tolerance});",
+      sortText: "0",
+    },
+    // MOCK snippets
+    {
+      label: "MOCK",
+      kind: CompletionItemKind.Keyword,
+      detail: "Enable mock mode for a FB instance",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "MOCK ${1:instance};",
+      sortText: "0",
+    },
+    {
+      label: "MOCK_FUNCTION",
+      kind: CompletionItemKind.Keyword,
+      detail: "Mock a function's return value",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "MOCK_FUNCTION ${1:FuncName} RETURNS ${2:value};",
+      sortText: "0",
+    },
+    {
+      label: "MOCK_VERIFY_CALLED",
+      kind: CompletionItemKind.Function,
+      detail: "(instance) — Assert FB was called",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "MOCK_VERIFY_CALLED(${1:instance});",
+      sortText: "0",
+    },
+    {
+      label: "MOCK_VERIFY_CALL_COUNT",
+      kind: CompletionItemKind.Function,
+      detail: "(instance, count) — Assert call count",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "MOCK_VERIFY_CALL_COUNT(${1:instance}, ${2:count});",
+      sortText: "0",
+    },
+    // Time
+    {
+      label: "ADVANCE_TIME",
+      kind: CompletionItemKind.Function,
+      detail: "(duration) — Advance scan-cycle time",
+      insertTextFormat: InsertTextFormat.Snippet,
+      insertText: "ADVANCE_TIME(T#${1:100ms});",
+      sortText: "0",
+    },
+  ];
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -602,6 +831,30 @@ function formatStdFunctionSignature(
     .join(", ");
   const ret = fn.specificReturnType ?? fn.returnConstraint;
   return `(${params}) : ${ret}`;
+}
+
+/**
+ * Extract variable declarations from VAR blocks in test source.
+ * Returns a map of uppercase variable name → uppercase type name.
+ */
+function extractTestVarDeclarations(source: string): Map<string, string> {
+  const stripped = stripCommentsAndStrings(source);
+  const vars = new Map<string, string>();
+  const varBlockRegex = /\bVAR(?:_\w+)?\b([\s\S]*?)\bEND_VAR\b/gi;
+  let blockMatch;
+  while ((blockMatch = varBlockRegex.exec(stripped)) !== null) {
+    const blockContent = blockMatch[1];
+    const declRegex = /([\w]+(?:\s*,\s*[\w]+)*)\s*:\s*([\w]+)/g;
+    let declMatch;
+    while ((declMatch = declRegex.exec(blockContent)) !== null) {
+      const names = declMatch[1].split(",").map((n) => n.trim().toUpperCase());
+      const declType = declMatch[2].toUpperCase();
+      for (const n of names) {
+        if (n) vars.set(n, declType);
+      }
+    }
+  }
+  return vars;
 }
 
 // ---------------------------------------------------------------------------

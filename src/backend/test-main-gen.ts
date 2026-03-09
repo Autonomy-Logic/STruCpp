@@ -166,6 +166,7 @@ export function generateTestMain(
   // Includes
   lines.push(`#include "${options.headerFileName}"`);
   lines.push('#include "iec_test.hpp"');
+  lines.push("#include <cstring>");
   lines.push("");
   lines.push("using namespace strucpp;");
   lines.push("");
@@ -281,8 +282,15 @@ export function generateTestMain(
     }
   }
 
-  // Generate main()
-  lines.push("int main() {");
+  // Generate main() with --json flag support
+  lines.push("int main(int argc, char* argv[]) {");
+  lines.push("    bool json_mode = false;");
+  lines.push("    for (int i = 1; i < argc; i++) {");
+  lines.push(
+    '        if (strcmp(argv[i], "--json") == 0) { json_mode = true; break; }',
+  );
+  lines.push("    }");
+  lines.push("");
 
   // Group registrations by file
   const fileGroups = new Map<string, typeof registrations>();
@@ -297,6 +305,7 @@ export function generateTestMain(
     // Single file: simple runner
     const [fileName, regs] = [...fileGroups.entries()][0]!;
     lines.push(`    strucpp::TestRunner runner("${escapeString(fileName)}");`);
+    lines.push("    runner.set_json_mode(json_mode);");
     for (const reg of regs) {
       lines.push(
         `    runner.add("${escapeString(reg.name)}", ${reg.funcName});`,
@@ -311,6 +320,7 @@ export function generateTestMain(
       lines.push(
         `        strucpp::TestRunner runner("${escapeString(fileName)}");`,
       );
+      lines.push("        runner.set_json_mode(json_mode);");
       for (const reg of regs) {
         lines.push(
           `        runner.add("${escapeString(reg.name)}", ${reg.funcName});`,

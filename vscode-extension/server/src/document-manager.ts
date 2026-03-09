@@ -16,6 +16,7 @@ import type {
   CompileOptions,
   StlibArchive,
 } from "strucpp";
+import { isTestFile } from "../../shared/test-utils.js";
 
 export interface DocumentState {
   uri: string;
@@ -419,7 +420,16 @@ export class DocumentManager {
       ...libraryOption,
     };
 
-    state.analysisResult = this.analyzeFn(state.source, options);
+    // Test files use TEST/END_TEST syntax that the standard parser doesn't
+    // understand. Analyze with empty primary source so we still get symbol
+    // tables from workspace sources (for completions/hover of user types)
+    // without emitting parser errors for test syntax. The hover and
+    // completion providers handle test files via text-based word extraction.
+    if (isTestFile(state.source)) {
+      state.analysisResult = this.analyzeFn("", options);
+    } else {
+      state.analysisResult = this.analyzeFn(state.source, options);
+    }
 
     // Rebuild the workspace-wide case map from all sources we just read.
     // This runs on every analysis (~400ms debounced), reusing the sources
@@ -525,12 +535,3 @@ function addToCaseMap(map: Map<string, string>, source: string): void {
  * Detect whether source content is a test file (uses TEST/END_TEST syntax).
  * Checks if the first non-comment, non-whitespace code token is TEST or SETUP.
  */
-function isTestFile(source: string): boolean {
-  // Strip leading comments and whitespace, then check the first keyword
-  const stripped = source
-    .replace(/^\uFEFF/, "")             // strip UTF-8 BOM
-    .replace(/\/\/.*$/gm, "")           // remove line comments
-    .replace(/\(\*[\s\S]*?\*\)/g, "")   // remove block comments
-    .trimStart();
-  return /^(TEST|SETUP)\b/i.test(stripped);
-}

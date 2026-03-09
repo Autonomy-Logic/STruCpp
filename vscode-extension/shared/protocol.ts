@@ -152,3 +152,28 @@ export const GetLibrariesRequest = new RequestType0<
 export const LibrariesChangedNotification = new NotificationType0(
   "strucpp/librariesChanged",
 );
+
+// ---------------------------------------------------------------------------
+// strucpp/runTests — compile and execute test file, return JSON results
+// ---------------------------------------------------------------------------
+
+export interface RunTestsParams {
+  /** URI of the test file to run */
+  testFileUri: string;
+  /** Optional: specific test names to run (runs all if empty/omitted) */
+  testNames?: string[];
+}
+
+export interface RunTestsResponse {
+  success: boolean;
+  /** Parsed JSON output from test binary (when success=true) */
+  output?: import("./test-result.js").TestRunOutput;
+  /** Compilation or execution errors */
+  errors: CompileError[];
+}
+
+export const RunTestsRequest = new RequestType<
+  RunTestsParams,
+  RunTestsResponse,
+  void
+>("strucpp/runTests");

@@ -242,6 +242,26 @@ export function resolveSymbolAtPosition(
   }
 }
 
+/**
+ * Look up a symbol by name using the standard lookup order:
+ * type → function block → global scope (function, program, enum value, etc.)
+ */
+export function lookupSymbolByName(
+  name: string,
+  symbolTables: NonNullable<AnalysisResult["symbolTables"]>,
+): AnySymbol | null {
+  const typeSym = symbolTables.lookupType(name);
+  if (typeSym) return typeSym;
+
+  const fbSym = symbolTables.lookupFunctionBlock(name);
+  if (fbSym) return fbSym;
+
+  const globalSym = symbolTables.globalScope.lookup(name);
+  if (globalSym) return globalSym;
+
+  return null;
+}
+
 export function getScopeForContext(
   symbolTables: NonNullable<AnalysisResult["symbolTables"]>,
   scope: EnclosingScope,

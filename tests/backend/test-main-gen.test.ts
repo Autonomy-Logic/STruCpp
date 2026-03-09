@@ -120,8 +120,8 @@ describe("Test Main Generator", () => {
       expect(code).toContain('"Counter increments"');
       // Should register the test
       expect(code).toContain("runner.add");
-      // Should have main()
-      expect(code).toContain("int main()");
+      // Should have main() with argc/argv for --json support
+      expect(code).toContain("int main(int argc, char* argv[])");
       // Should call runner.run()
       expect(code).toContain("runner.run()");
     });

@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { analyze } from "strucpp";
 import {
   getSemanticTokens,
+  getTestFileSemanticTokens,
   TOKEN_TYPES,
   TOKEN_MODIFIERS,
 } from "../../server/src/semantic-tokens.js";
@@ -254,5 +255,138 @@ END_FUNCTION`;
     );
     // RED, GREEN, BLUE
     expect(enumMemberTokens.length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+describe("getTestFileSemanticTokens", () => {
+  const WORKSPACE_SOURCE = `TYPE TrafficState : (RED, GREEN, YELLOW); END_TYPE
+
+TYPE PhaseTiming :
+  STRUCT
+    greenDuration : TIME;
+    yellowDuration : TIME;
+    redDuration : TIME;
+  END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK PedestrianLight
+  VAR_INPUT enable : BOOL; END_VAR
+  VAR_OUTPUT active : BOOL; END_VAR
+END_FUNCTION_BLOCK
+`;
+
+  const TEST_SOURCE = `TEST 'TrafficState values'
+  VAR
+    s1 : TrafficState;
+    s2 : TrafficState;
+  END_VAR
+
+  s1 := TrafficState.RED;
+  s2 := TrafficState.GREEN;
+  ASSERT_NEQ(s1, s2);
+END_TEST
+`;
+
+  function getTestAnalysis(): AnalysisResult {
+    return analyze("", {
+      fileName: "test_traffic.st",
+      additionalSources: [{ source: WORKSPACE_SOURCE, fileName: "types.st" }],
+    });
+  }
+
+  function findTestToken(
+    decoded: Array<[number, number, number, number, number]>,
+    source: string,
+    text: string,
+    expectedType: number,
+  ): [number, number, number, number, number] | undefined {
+    const lines = source.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      let searchFrom = 0;
+      while (true) {
+        const idx = lines[i].indexOf(text, searchFrom);
+        if (idx < 0) break;
+        // Skip matches inside string literals (surrounded by quotes)
+        const before = lines[i].substring(0, idx);
+        const quoteCount = (before.match(/'/g) || []).length;
+        if (quoteCount % 2 === 1) {
+          searchFrom = idx + 1;
+          continue;
+        }
+        const match = decoded.find(
+          (t) => t[0] === i && t[1] === idx && t[3] === expectedType,
+        );
+        if (match) return match;
+        searchFrom = idx + 1;
+      }
+    }
+    return undefined;
+  }
+
+  it("emits type tokens for enum type names", () => {
+    const analysis = getTestAnalysis();
+    const data = getTestFileSemanticTokens(analysis, TEST_SOURCE);
+    const decoded = decodeTokens(data);
+    // TrafficState should be classified as enum type
+    const token = findTestToken(decoded, TEST_SOURCE, "TrafficState", TYPE_IDX.enum);
+    expect(token).toBeDefined();
+  });
+
+  it("emits class tokens for function block names", () => {
+    const analysis = getTestAnalysis();
+    // Test source referencing the FB
+    const testWithFB = `TEST 'fb test'
+  VAR pl : PedestrianLight; END_VAR
+  ASSERT_TRUE(TRUE);
+END_TEST
+`;
+    const data = getTestFileSemanticTokens(analysis, testWithFB);
+    const decoded = decodeTokens(data);
+    const lines = testWithFB.split("\n");
+    const fbLine = lines.findIndex((l) => l.includes("PedestrianLight"));
+    const fbCol = lines[fbLine].indexOf("PedestrianLight");
+    const token = decoded.find(
+      (t) => t[0] === fbLine && t[1] === fbCol && t[3] === TYPE_IDX.class,
+    );
+    expect(token).toBeDefined();
+  });
+
+  it("emits enumMember tokens for enum values", () => {
+    const analysis = getTestAnalysis();
+    const data = getTestFileSemanticTokens(analysis, TEST_SOURCE);
+    const decoded = decodeTokens(data);
+    // RED after the dot in TrafficState.RED
+    const lines = TEST_SOURCE.split("\n");
+    const redLine = lines.findIndex((l) => l.includes(".RED"));
+    const redCol = lines[redLine].indexOf("RED", lines[redLine].indexOf(".RED"));
+    const token = decoded.find(
+      (t) => t[0] === redLine && t[1] === redCol && t[3] === TYPE_IDX.enumMember,
+    );
+    expect(token).toBeDefined();
+  });
+
+  it("emits variable tokens for locally declared vars", () => {
+    const analysis = getTestAnalysis();
+    const data = getTestFileSemanticTokens(analysis, TEST_SOURCE);
+    const decoded = decodeTokens(data);
+    // s1 in the assignment line
+    const lines = TEST_SOURCE.split("\n");
+    const assignLine = lines.findIndex((l) => l.includes("s1 :="));
+    const s1Col = lines[assignLine].indexOf("s1");
+    const token = decoded.find(
+      (t) => t[0] === assignLine && t[1] === s1Col && t[3] === TYPE_IDX.variable,
+    );
+    expect(token).toBeDefined();
+  });
+
+  it("does not emit tokens for test framework keywords", () => {
+    const analysis = getTestAnalysis();
+    const data = getTestFileSemanticTokens(analysis, TEST_SOURCE);
+    const decoded = decodeTokens(data);
+    // TEST and ASSERT_NEQ should not have semantic tokens
+    const lines = TEST_SOURCE.split("\n");
+    const testLine = lines.findIndex((l) => l.startsWith("TEST"));
+    const testToken = decoded.find((t) => t[0] === testLine && t[1] === 0);
+    expect(testToken).toBeUndefined();
   });
 });
