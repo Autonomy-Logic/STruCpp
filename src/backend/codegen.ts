@@ -3945,6 +3945,12 @@ export class CodeGenerator {
       // Convert IEC BOOL literals to C++ bool literals
       if (upperInit === "TRUE") return "true";
       if (upperInit === "FALSE") return "false";
+      // Convert IEC string literals ('hello') to C++ string literals ("hello")
+      if (initialValue.startsWith("'") && initialValue.endsWith("'")) {
+        const inner = initialValue.slice(1, -1);
+        const escaped = this.translateIECString(inner);
+        return `"${escaped}"`;
+      }
       return initialValue;
     }
 

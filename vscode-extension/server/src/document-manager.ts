@@ -14,6 +14,7 @@ import { URI } from "vscode-uri";
 import type {
   AnalysisResult,
   CompileOptions,
+  StlibArchive,
 } from "strucpp";
 
 export interface DocumentState {
@@ -34,6 +35,12 @@ export class DocumentManager {
   private workspaceFolders = new Set<string>();
   private libraryPaths: string[] = [];
   private discoveryCache = new Map<string, string[]>();
+  /** Cached library sources keyed by library name, for analyzing strucpp-lib: documents. */
+  private librarySources = new Map<string, Array<{ fileName: string; source: string }>>();
+  /** Cached library archives keyed by library name, for passing as dependencies. */
+  private libraryArchives = new Map<string, StlibArchive>();
+  /** Cached file paths for library archives, keyed by library name. */
+  private libraryFilePaths = new Map<string, string>();
 
   /**
    * Case map: UPPERCASE identifier → first-seen original casing.
@@ -76,6 +83,127 @@ export class DocumentManager {
 
   setLibraryPaths(paths: string[]): void {
     this.libraryPaths = paths;
+  }
+
+  getLibraryPaths(): string[] {
+    return this.libraryPaths;
+  }
+
+  /** Cache a library's source files and archive for strucpp-lib: document analysis. */
+  setLibraryArchiveCache(libName: string, archive: StlibArchive, filePath?: string): void {
+    if (archive.sources && archive.sources.length > 0) {
+      this.librarySources.set(libName, archive.sources);
+    }
+    this.libraryArchives.set(libName, archive);
+    if (filePath) {
+      this.libraryFilePaths.set(libName, filePath);
+    }
+  }
+
+  clearLibraryArchiveCache(): void {
+    this.librarySources.clear();
+    this.libraryArchives.clear();
+    this.libraryFilePaths.clear();
+  }
+
+  /** Get all cached library archives with their file paths. */
+  getCachedLibraries(): Array<{ filePath: string; archive: StlibArchive }> {
+    const results: Array<{ filePath: string; archive: StlibArchive }> = [];
+    for (const [name, archive] of this.libraryArchives) {
+      results.push({
+        filePath: this.libraryFilePaths.get(name) ?? "",
+        archive,
+      });
+    }
+    return results;
+  }
+
+  getWorkspaceFolders(): ReadonlySet<string> {
+    return this.workspaceFolders;
+  }
+
+  /**
+   * Discover directories containing .stlib files anywhere in the workspace.
+   * Recursively walks workspace folders (same guards as .st discovery)
+   * and returns deduplicated parent directories of any .stlib files found.
+   */
+  discoverWorkspaceLibraries(): string[] {
+    const dirSet = new Set<string>();
+
+    for (const folder of this.workspaceFolders) {
+      for (const stlibPath of discoverFiles(folder, /\.stlib$/i)) {
+        dirSet.add(path.dirname(stlibPath));
+      }
+    }
+
+    return [...dirSet];
+  }
+
+  /**
+   * Build sources from ALL workspace .st files (open docs + disk).
+   * Used for library compilation where no file is excluded.
+   */
+  buildAllWorkspaceSources(): Array<{ source: string; fileName: string }> {
+    return this.collectWorkspaceSources();
+  }
+
+  /**
+   * Build additional sources from all workspace .st files (open docs + disk),
+   * excluding the given primary file URI.
+   */
+  buildWorkspaceSources(
+    excludeUri: string,
+  ): Array<{ source: string; fileName: string }> {
+    return this.collectWorkspaceSources(excludeUri);
+  }
+
+  /**
+   * Collect workspace .st sources from open documents and disk.
+   * If excludeUri is provided, that document and its disk path are skipped.
+   */
+  private collectWorkspaceSources(
+    excludeUri?: string,
+  ): Array<{ source: string; fileName: string }> {
+    const excludePath = excludeUri ? uriToFilePath(excludeUri) : undefined;
+    const sources: Array<{ source: string; fileName: string }> = [];
+    const includedPaths = new Set<string>();
+
+    // 1. Include open documents (they may have unsaved edits)
+    for (const [uri, state] of this.documents) {
+      if (uri === excludeUri) continue;
+      if (isTestFile(state.source)) continue;
+      const filePath = uriToFilePath(uri);
+      includedPaths.add(filePath);
+      sources.push({
+        source: state.source,
+        fileName: path.basename(filePath),
+      });
+    }
+
+    // 2. Discover .st files from workspace folders (read from disk, cached)
+    for (const folder of this.workspaceFolders) {
+      let discovered = this.discoveryCache.get(folder);
+      if (!discovered) {
+        discovered = discoverStFiles(folder);
+        this.discoveryCache.set(folder, discovered);
+      }
+      for (const filePath of discovered) {
+        if (filePath === excludePath || includedPaths.has(filePath)) continue;
+        includedPaths.add(filePath);
+        try {
+          const source = fs.readFileSync(filePath, "utf-8");
+          if (isTestFile(source)) continue;
+          sources.push({
+            source,
+            fileName: path.basename(filePath),
+          });
+        } catch {
+          // Skip unreadable files
+        }
+      }
+    }
+
+    return sources;
   }
 
   onDocumentOpen(uri: string, source: string): DocumentState {
@@ -132,6 +260,35 @@ export class DocumentManager {
   }
 
   /**
+   * Find the library source file and line where a symbol is declared.
+   * Searches all cached library sources for FUNCTION_BLOCK, FUNCTION,
+   * TYPE, or PROGRAM declarations matching the given symbol name.
+   */
+  findSymbolInLibrarySources(
+    symbolName: string,
+  ): { uri: string; line: number } | undefined {
+    const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const declPattern = new RegExp(
+      `^\\s*(?:FUNCTION_BLOCK|FUNCTION|TYPE|PROGRAM)\\s+${escaped}\\b`,
+      "im",
+    );
+    for (const [libName, sources] of this.librarySources) {
+      for (const src of sources) {
+        const lines = src.source.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (declPattern.test(lines[i])) {
+            return {
+              uri: `strucpp-lib:/${libName}/sources/${src.fileName}`,
+              line: i,
+            };
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Resolve a bare fileName (from compiler sourceSpan) to a file:// URI.
    * Searches open documents first, then discovered workspace files.
    */
@@ -150,6 +307,15 @@ export class DocumentManager {
       for (const filePath of discovered) {
         if (path.basename(filePath) === fileName) {
           return URI.file(filePath).toString();
+        }
+      }
+    }
+
+    // 3. Search library source files (strucpp-lib: virtual documents)
+    for (const [libName, sources] of this.librarySources) {
+      for (const src of sources) {
+        if (src.fileName === fileName) {
+          return `strucpp-lib:/${libName}/sources/${fileName}`;
         }
       }
     }
@@ -184,14 +350,30 @@ export class DocumentManager {
       // Skip test files — they use a separate parser
       if (isTestFile(otherState.source)) continue;
       const otherPath = uriToFilePath(otherUri);
+      const otherBaseName = path.basename(otherPath);
       includedPaths.add(otherPath);
+      includedPaths.add(otherBaseName);
       additionalSources.push({
         source: otherState.source,
-        fileName: path.basename(otherPath),
+        fileName: otherBaseName,
       });
     }
 
-    // 2. Discover .st files from workspace folders (read from disk, cached)
+    // 2. For strucpp-lib: documents, include sibling sources from the same library
+    const libMatch = state.uri.match(/^strucpp-lib:\/([^/]+)\//);
+    if (libMatch) {
+      const libSources = this.librarySources.get(libMatch[1]);
+      if (libSources) {
+        for (const src of libSources) {
+          if (src.fileName === currentFileName) continue;
+          if (includedPaths.has(src.fileName)) continue;
+          includedPaths.add(src.fileName);
+          additionalSources.push(src);
+        }
+      }
+    }
+
+    // 3. Discover .st files from workspace folders (read from disk, cached)
     for (const folder of this.workspaceFolders) {
       let discovered = this.discoveryCache.get(folder);
       if (!discovered) {
@@ -216,12 +398,25 @@ export class DocumentManager {
       }
     }
 
+    // For strucpp-lib: documents, pass pre-loaded archives excluding the
+    // current library to avoid duplicate symbol registration.
+    let libraryOption: Partial<CompileOptions> = {};
+    if (libMatch && this.libraryArchives.size > 0) {
+      const currentLib = libMatch[1];
+      const deps = [...this.libraryArchives.entries()]
+        .filter(([name]) => name !== currentLib)
+        .map(([, archive]) => archive);
+      if (deps.length > 0) {
+        libraryOption = { libraries: deps };
+      }
+    } else if (this.libraryPaths.length > 0) {
+      libraryOption = { libraryPaths: this.libraryPaths };
+    }
+
     const options: Partial<CompileOptions> = {
       fileName: currentFileName,
       ...(additionalSources.length > 0 ? { additionalSources } : {}),
-      ...(this.libraryPaths.length > 0
-        ? { libraryPaths: this.libraryPaths }
-        : {}),
+      ...libraryOption,
     };
 
     state.analysisResult = this.analyzeFn(state.source, options);
@@ -240,12 +435,16 @@ export class DocumentManager {
 /** Maximum recursion depth for file discovery */
 const MAX_DISCOVERY_DEPTH = 10;
 
+/** Pattern matching .st and .iecst source files */
+const ST_FILE_PATTERN = /\.(st|iecst)$/i;
+
 /**
- * Recursively discover all .st / .iecst files in a directory.
+ * Recursively discover files matching a pattern in a directory.
  * Guards against unbounded recursion (max depth), symlink cycles, and hidden dirs.
  */
-function discoverStFiles(
+function discoverFiles(
   dir: string,
+  pattern: RegExp,
   depth: number = 0,
   seenReal?: Set<string>,
 ): string[] {
@@ -281,8 +480,8 @@ function discoverStFiles(
         ) {
           continue;
         }
-        results.push(...discoverStFiles(fullPath, depth + 1, seen));
-      } else if (/\.(st|iecst)$/i.test(entry.name)) {
+        results.push(...discoverFiles(fullPath, pattern, depth + 1, seen));
+      } else if (pattern.test(entry.name)) {
         results.push(fullPath);
       }
     }
@@ -290,6 +489,11 @@ function discoverStFiles(
     // Skip unreadable directories
   }
   return results;
+}
+
+/** Discover all .st / .iecst files recursively. */
+function discoverStFiles(dir: string): string[] {
+  return discoverFiles(dir, ST_FILE_PATTERN);
 }
 
 function uriToFilePath(uri: string): string {
