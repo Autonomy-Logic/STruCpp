@@ -8,6 +8,7 @@
  */
 
 import type {
+  AssertCall,
   CompilationUnit,
   ElementaryType,
   EnumType,
@@ -15,6 +16,7 @@ import type {
   FunctionBlockDeclaration,
   FunctionCallExpression,
   MethodDeclaration,
+  MockFunctionStatement,
   TypeDefinition,
   TypeReference,
   VarBlock,
@@ -24,7 +26,7 @@ import type {
   TestStatement,
   Visibility,
 } from "../frontend/ast.js";
-import type { CompileError } from "../types.js";
+import type { CompileError, SourceSpan } from "../types.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
@@ -2645,6 +2647,7 @@ export class SemanticAnalyzer {
     for (const stmt of stmts) {
       switch (stmt.kind) {
         case "AssertCall":
+          this.validateAssertArgCount(stmt);
           for (const arg of stmt.args) {
             this.checkExpressionForUndeclaredVars(arg, scope, ctx);
           }
@@ -2653,20 +2656,97 @@ export class SemanticAnalyzer {
           this.checkExpressionForUndeclaredVars(stmt.duration, scope, ctx);
           break;
         case "MockFunctionStatement":
+          this.validateMockFunction(stmt);
           this.checkExpressionForUndeclaredVars(stmt.returnValue, scope, ctx);
           break;
         case "MockVerifyCallCountStatement":
+          this.validateMockInstancePath(
+            stmt.instancePath,
+            stmt.sourceSpan,
+            scope,
+          );
           this.checkExpressionForUndeclaredVars(stmt.expectedCount, scope, ctx);
           break;
         case "MockFBStatement":
+          this.validateMockInstancePath(
+            stmt.instancePath,
+            stmt.sourceSpan,
+            scope,
+          );
+          break;
         case "MockVerifyCalledStatement":
-          // instancePath is string[], not expressions — nothing to check
+          this.validateMockInstancePath(
+            stmt.instancePath,
+            stmt.sourceSpan,
+            scope,
+          );
           break;
         default:
           // Regular Statement — delegate to existing walker
           this.walkStatementsForUndeclaredVars([stmt as Statement], scope, ctx);
           break;
       }
+    }
+  }
+
+  /**
+   * Validate assert call argument count matches the expected count for each assert type.
+   */
+  private validateAssertArgCount(assert: AssertCall): void {
+    const expectedArgCounts: Record<string, number> = {
+      ASSERT_TRUE: 1,
+      ASSERT_FALSE: 1,
+      ASSERT_EQ: 2,
+      ASSERT_NEQ: 2,
+      ASSERT_GT: 2,
+      ASSERT_LT: 2,
+      ASSERT_GE: 2,
+      ASSERT_LE: 2,
+      ASSERT_NEAR: 3,
+    };
+    const expected = expectedArgCounts[assert.assertType];
+    if (expected !== undefined && assert.args.length !== expected) {
+      this.addError(
+        `${assert.assertType} expects ${expected} argument${expected !== 1 ? "s" : ""}, got ${assert.args.length}`,
+        assert.sourceSpan.startLine,
+        assert.sourceSpan.startCol,
+      );
+    }
+  }
+
+  /**
+   * Validate MOCK_FUNCTION target exists in global scope or std function registry.
+   */
+  private validateMockFunction(stmt: MockFunctionStatement): void {
+    const name = stmt.functionName.toUpperCase();
+    const inGlobal = this.symbolTables.globalScope.lookup(name);
+    const inStd = this.stdRegistry.isStandardFunction(name);
+    if (!inGlobal && !inStd) {
+      this.addWarning(
+        `Unknown function '${stmt.functionName}' in MOCK_FUNCTION statement`,
+        stmt.sourceSpan.startLine,
+        stmt.sourceSpan.startCol,
+      );
+    }
+  }
+
+  /**
+   * Validate that the first segment of a MOCK/MOCK_VERIFY instance path is a declared variable.
+   */
+  private validateMockInstancePath(
+    instancePath: string[],
+    span: SourceSpan,
+    scope: Scope,
+  ): void {
+    if (instancePath.length === 0) return;
+    const rootName = instancePath[0]!.toUpperCase();
+    const found = scope.lookup(rootName);
+    if (!found) {
+      this.addWarning(
+        `Unknown variable '${instancePath[0]}' in MOCK statement`,
+        span.startLine,
+        span.startCol,
+      );
     }
   }
 

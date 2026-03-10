@@ -230,6 +230,10 @@ export class StrucppTestController implements vscode.Disposable {
         if (!data) continue;
 
         if (data.kind === "file") {
+          // Ensure children are resolved (resolveHandler is lazy)
+          if (item.children.size === 0) {
+            this.parseAndUpdateFile(item, data.filePath);
+          }
           // Run all tests in file
           const tests: vscode.TestItem[] = [];
           item.children.forEach((child) => tests.push(child));
@@ -252,6 +256,10 @@ export class StrucppTestController implements vscode.Disposable {
       this.ctrl.items.forEach((fileItem) => {
         const data = this.metadata.get(fileItem);
         if (!data) return;
+        // Ensure children are resolved (resolveHandler is lazy)
+        if (fileItem.children.size === 0) {
+          this.parseAndUpdateFile(fileItem, data.filePath);
+        }
         const tests: vscode.TestItem[] = [];
         fileItem.children.forEach((child) => tests.push(child));
         testsByFile.set(data.filePath, { fileItem, tests });

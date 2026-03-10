@@ -37,6 +37,7 @@ await esbuild.build({
 const copies = [
   { src: path.resolve(__dirname, "..", "src", "runtime", "include"), dest: path.resolve(__dirname, "runtime", "include") },
   { src: path.resolve(__dirname, "..", "src", "runtime", "repl"), dest: path.resolve(__dirname, "runtime", "repl") },
+  { src: path.resolve(__dirname, "..", "src", "runtime", "test"), dest: path.resolve(__dirname, "runtime", "test") },
   { src: path.resolve(__dirname, "..", "libs"), dest: path.resolve(__dirname, "bundled-libs") },
 ];
 

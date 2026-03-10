@@ -16,6 +16,7 @@ import type {
   CompileOptions,
   StlibArchive,
 } from "strucpp";
+import { parseTestFile, analyzeTestFile } from "strucpp";
 import { isTestFile } from "../../shared/test-utils.js";
 
 export interface DocumentState {
@@ -427,6 +428,36 @@ export class DocumentManager {
     // completion providers handle test files via text-based word extraction.
     if (isTestFile(state.source)) {
       state.analysisResult = this.analyzeFn("", options);
+
+      // Parse the test file and run semantic validation (assert arg counts,
+      // mock targets, type refs, undeclared vars) to surface diagnostics
+      if (state.analysisResult?.symbolTables) {
+        const parseResult = parseTestFile(state.source, currentFileName);
+        if (parseResult.errors.length > 0) {
+          state.analysisResult.errors = [
+            ...state.analysisResult.errors,
+            ...parseResult.errors.map((e) => ({
+              message: (e as { message?: string }).message ?? String(e),
+              line: (e as { token?: { startLine?: number } }).token?.startLine ?? 1,
+              column: (e as { token?: { startColumn?: number } }).token?.startColumn ?? 1,
+              severity: "error" as const,
+            })),
+          ];
+        } else if (parseResult.testFile) {
+          const testDiags = analyzeTestFile(
+            parseResult.testFile,
+            state.analysisResult.symbolTables,
+          );
+          state.analysisResult.errors = [
+            ...state.analysisResult.errors,
+            ...testDiags.errors,
+          ];
+          state.analysisResult.warnings = [
+            ...state.analysisResult.warnings,
+            ...testDiags.warnings,
+          ];
+        }
+      }
     } else {
       state.analysisResult = this.analyzeFn(state.source, options);
     }
