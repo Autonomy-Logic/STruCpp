@@ -31,7 +31,20 @@ export interface TestRunOutput {
 /**
  * Parse JSON stdout from the test binary into typed results.
  * The test binary outputs JSON when invoked with --json flag.
+ * Validates the structure to provide clear errors on malformed output.
  */
 export function parseTestJson(stdout: string): TestRunOutput {
-  return JSON.parse(stdout) as TestRunOutput;
+  const parsed = JSON.parse(stdout);
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    !Array.isArray(parsed.results) ||
+    typeof parsed.summary !== "object" ||
+    typeof parsed.summary?.total !== "number"
+  ) {
+    throw new Error(
+      "Invalid test output: missing required fields (results, summary)",
+    );
+  }
+  return parsed as TestRunOutput;
 }

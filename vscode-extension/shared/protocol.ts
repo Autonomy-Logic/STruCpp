@@ -160,7 +160,8 @@ export const LibrariesChangedNotification = new NotificationType0(
 export interface RunTestsParams {
   /** URI of the test file to run */
   testFileUri: string;
-  /** Optional: specific test names to run (runs all if empty/omitted) */
+  /** Optional: specific test names to run (runs all if empty/omitted).
+   *  TODO: Not yet implemented server-side — currently all tests in the file are executed. */
   testNames?: string[];
 }
 

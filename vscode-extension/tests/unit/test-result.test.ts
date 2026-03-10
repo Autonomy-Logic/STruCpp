@@ -107,4 +107,16 @@ describe("parseTestJson", () => {
   it("throws on invalid JSON", () => {
     expect(() => parseTestJson("not json")).toThrow();
   });
+
+  it("throws on missing results array", () => {
+    expect(() => parseTestJson(JSON.stringify({ version: 1, summary: { total: 0 } }))).toThrow(
+      "Invalid test output",
+    );
+  });
+
+  it("throws on missing summary", () => {
+    expect(() => parseTestJson(JSON.stringify({ version: 1, results: [] }))).toThrow(
+      "Invalid test output",
+    );
+  });
 });

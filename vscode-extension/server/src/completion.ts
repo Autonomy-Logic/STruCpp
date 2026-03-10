@@ -25,7 +25,7 @@ import type {
 import { ELEMENTARY_TYPES, typeName } from "strucpp";
 import { getCursorContext } from "./cursor-context.js";
 import { getScopeForContext } from "./resolve-symbol.js";
-import { isTestFile } from "../../shared/test-utils.js";
+import { isTestFile, extractTestVarDeclarations } from "../../shared/test-utils.js";
 import { stripCommentsAndStrings } from "./lsp-utils.js";
 
 /**
@@ -219,7 +219,7 @@ function getDotAccessCompletions(
 
   // For test files, try resolving via locally declared variable types
   if (testSource) {
-    const testVars = extractTestVarDeclarations(testSource);
+    const testVars = extractTestVarDeclarations(stripCommentsAndStrings(testSource));
     const varType = testVars.get(segments[0].toUpperCase());
     if (varType) {
       // Walk remaining segments through type chain
@@ -563,7 +563,7 @@ function getBodyCompletions(
 
   // For test files, add locally declared variables from VAR blocks
   if (testSource) {
-    const testVars = extractTestVarDeclarations(testSource);
+    const testVars = extractTestVarDeclarations(stripCommentsAndStrings(testSource));
     for (const [name, varType] of testVars) {
       if (seen.has(name)) continue;
       seen.add(name);
@@ -833,29 +833,6 @@ function formatStdFunctionSignature(
   return `(${params}) : ${ret}`;
 }
 
-/**
- * Extract variable declarations from VAR blocks in test source.
- * Returns a map of uppercase variable name → uppercase type name.
- */
-function extractTestVarDeclarations(source: string): Map<string, string> {
-  const stripped = stripCommentsAndStrings(source);
-  const vars = new Map<string, string>();
-  const varBlockRegex = /\bVAR(?:_\w+)?\b([\s\S]*?)\bEND_VAR\b/gi;
-  let blockMatch;
-  while ((blockMatch = varBlockRegex.exec(stripped)) !== null) {
-    const blockContent = blockMatch[1];
-    const declRegex = /([\w]+(?:\s*,\s*[\w]+)*)\s*:\s*([\w]+)/g;
-    let declMatch;
-    while ((declMatch = declRegex.exec(blockContent)) !== null) {
-      const names = declMatch[1].split(",").map((n) => n.trim().toUpperCase());
-      const declType = declMatch[2].toUpperCase();
-      for (const n of names) {
-        if (n) vars.set(n, declType);
-      }
-    }
-  }
-  return vars;
-}
 
 // ---------------------------------------------------------------------------
 // Original-case restoration

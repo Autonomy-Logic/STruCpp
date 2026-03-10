@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Autonomy / OpenPLC Project
 import { describe, it, expect } from "vitest";
-import { isTestFile, getWordAt } from "../../shared/test-utils.js";
+import { isTestFile, getWordAt, extractTestVarDeclarations } from "../../shared/test-utils.js";
 
 describe("isTestFile", () => {
   it("detects file starting with TEST", () => {
@@ -83,5 +83,42 @@ describe("getWordAt", () => {
   it("returns undefined for empty line", () => {
     const result = getWordAt("  \nfoo", 1, 1);
     expect(result).toBeUndefined();
+  });
+});
+
+describe("extractTestVarDeclarations", () => {
+  it("extracts simple VAR declarations", () => {
+    const source = "VAR\n  x : INT;\n  y : REAL;\nEND_VAR";
+    const vars = extractTestVarDeclarations(source);
+    expect(vars.get("X")).toBe("INT");
+    expect(vars.get("Y")).toBe("REAL");
+    expect(vars.size).toBe(2);
+  });
+
+  it("extracts multi-name declarations", () => {
+    const source = "VAR\n  a, b, c : BOOL;\nEND_VAR";
+    const vars = extractTestVarDeclarations(source);
+    expect(vars.get("A")).toBe("BOOL");
+    expect(vars.get("B")).toBe("BOOL");
+    expect(vars.get("C")).toBe("BOOL");
+  });
+
+  it("handles VAR_TEMP and other VAR_ variants", () => {
+    const source = "VAR_TEMP\n  tmp : DINT;\nEND_VAR";
+    const vars = extractTestVarDeclarations(source);
+    expect(vars.get("TMP")).toBe("DINT");
+  });
+
+  it("returns empty map for source with no VAR blocks", () => {
+    const source = "TEST 'foo'\n  ASSERT_TRUE(TRUE);\nEND_TEST";
+    const vars = extractTestVarDeclarations(source);
+    expect(vars.size).toBe(0);
+  });
+
+  it("handles multiple VAR blocks", () => {
+    const source = "VAR\n  x : INT;\nEND_VAR\nVAR\n  y : REAL;\nEND_VAR";
+    const vars = extractTestVarDeclarations(source);
+    expect(vars.get("X")).toBe("INT");
+    expect(vars.get("Y")).toBe("REAL");
   });
 });

@@ -209,9 +209,13 @@ export class StrucppTestController implements vscode.Disposable {
   // ─────────────────────────────────────────────────────────────────────────
 
   private async runAllTests(): Promise<void> {
-    const request = new vscode.TestRunRequest();
-    const token = new vscode.CancellationTokenSource().token;
-    await this.runHandler(request, token);
+    const cts = new vscode.CancellationTokenSource();
+    try {
+      const request = new vscode.TestRunRequest();
+      await this.runHandler(request, cts.token);
+    } finally {
+      cts.dispose();
+    }
   }
 
   private async runHandler(
@@ -305,19 +309,26 @@ export class StrucppTestController implements vscode.Disposable {
       }
     }
 
-    // Handle watch mode
+    // Handle watch mode — only set up watcher on the initial continuous run,
+    // not on re-runs triggered by the watcher itself
     if (request.continuous) {
       const watcher = vscode.workspace.createFileSystemWatcher("**/*.{st,iecst,ST}");
-      const rerunDisposable = watcher.onDidChange(async (uri) => {
-        if (token.isCancellationRequested) return;
-        // Re-run all tests when any .st file changes
-        const rerunRequest = new vscode.TestRunRequest(
-          request.include,
-          request.exclude,
-          request.profile,
-          true,
-        );
-        await this.runHandler(rerunRequest, token);
+      let rerunInProgress = false;
+      const rerunDisposable = watcher.onDidChange(async () => {
+        if (token.isCancellationRequested || rerunInProgress) return;
+        rerunInProgress = true;
+        try {
+          // Re-run with continuous=false to avoid creating nested watchers
+          const rerunRequest = new vscode.TestRunRequest(
+            request.include,
+            request.exclude,
+            request.profile,
+            false,
+          );
+          await this.runHandler(rerunRequest, token);
+        } finally {
+          rerunInProgress = false;
+        }
       });
       token.onCancellationRequested(() => {
         watcher.dispose();

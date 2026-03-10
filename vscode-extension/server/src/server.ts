@@ -10,7 +10,9 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { execFileSync } from "node:child_process";
+import { execFile as execFileCb } from "node:child_process";
+import { promisify } from "node:util";
+const execFile = promisify(execFileCb);
 import { URI } from "vscode-uri";
 import {
   createConnection,
@@ -800,7 +802,7 @@ connection.onRequest(GetLibrariesRequest, (): LibraryArchiveInfo[] => {
 // strucpp/runTests — compile and execute test file
 // ---------------------------------------------------------------------------
 
-connection.onRequest(RunTestsRequest, (params: RunTestsParams): RunTestsResponse => {
+connection.onRequest(RunTestsRequest, async (params: RunTestsParams): Promise<RunTestsResponse> => {
   const testUri = params.testFileUri;
   const testFilePath = URI.parse(testUri).fsPath;
   const testFileName = path.basename(testFilePath);
@@ -927,7 +929,7 @@ connection.onRequest(RunTestsRequest, (params: RunTestsParams): RunTestsResponse
     const cxxFlags = currentSettings.cxxFlags || "";
 
     try {
-      execFileSync(gppPath, [
+      await execFile(gppPath, [
         "-std=c++17",
         `-I${runtimePaths.includeDir}`,
         `-I${testRuntimeDir}`,
@@ -937,12 +939,10 @@ connection.onRequest(RunTestsRequest, (params: RunTestsParams): RunTestsResponse
         path.join(tempDir, "generated.cpp"),
         "-o",
         binaryPath,
-      ], { stdio: ["pipe", "pipe", "pipe"], env: getCxxEnv() });
+      ], { env: getCxxEnv() });
     } catch (err: unknown) {
-      const execErr = err as { stderr?: Buffer | string };
-      const stderr = execErr.stderr
-        ? typeof execErr.stderr === "string" ? execErr.stderr : execErr.stderr.toString()
-        : "Unknown compilation error";
+      const execErr = err as { stderr?: string };
+      const stderr = execErr.stderr ?? "Unknown compilation error";
       return {
         success: false,
         errors: [{ message: `C++ compilation failed:\n${stderr}`, line: 0, column: 0, severity: "error" }],
@@ -952,19 +952,20 @@ connection.onRequest(RunTestsRequest, (params: RunTestsParams): RunTestsResponse
     // 10. Execute test binary with --json flag
     let stdout: string;
     try {
-      stdout = execFileSync(binaryPath, ["--json"], {
+      const result = await execFile(binaryPath, ["--json"], {
         encoding: "utf-8",
         timeout: 30000,
       });
+      stdout = result.stdout;
     } catch (err: unknown) {
-      const execErr = err as { stdout?: string; stderr?: string; signal?: string; status?: number };
+      const execErr = err as { stdout?: string; stderr?: string; signal?: string; code?: number };
       // Test binary returns exit code 1 when tests fail — that's normal, stdout still has JSON
       if (execErr.stdout) {
         stdout = execErr.stdout;
       } else {
         const detail = execErr.signal
           ? `Test binary crashed with signal ${execErr.signal}`
-          : `Test binary failed with exit code ${execErr.status ?? 1}`;
+          : `Test binary failed with exit code ${execErr.code ?? 1}`;
         return {
           success: false,
           errors: [{ message: detail, line: 0, column: 0, severity: "error" }],

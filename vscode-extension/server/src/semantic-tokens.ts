@@ -28,6 +28,7 @@ import type {
 import { walkAST, findEnclosingPOU, ELEMENTARY_TYPES } from "strucpp";
 import { getScopeForContext } from "./resolve-symbol.js";
 import { stripCommentsAndStrings } from "./lsp-utils.js";
+import { extractTestVarDeclarations } from "../../shared/test-utils.js";
 
 // ---------------------------------------------------------------------------
 // Token type & modifier legends (order must match server capabilities)
@@ -425,7 +426,8 @@ export function getTestFileSemanticTokens(
   const lines = stripped.split("\n");
 
   // Collect locally declared variables from VAR blocks
-  const localVars = extractTestVarNames(stripped);
+  const localVarMap = extractTestVarDeclarations(stripped);
+  const localVars = new Set(localVarMap.keys());
 
   // Build set of enum member names from type definitions (enum values
   // may not be in the global scope when primary source is empty).
@@ -520,25 +522,4 @@ export function getTestFileSemanticTokens(
   return deltaEncode(tokens);
 }
 
-/**
- * Extract variable names declared in VAR...END_VAR blocks from test source.
- * Works on comment/string-stripped text.
- */
-function extractTestVarNames(stripped: string): Set<string> {
-  const vars = new Set<string>();
-  const varBlockRegex = /\bVAR(?:_\w+)?\b([\s\S]*?)\bEND_VAR\b/gi;
-  let blockMatch;
-  while ((blockMatch = varBlockRegex.exec(stripped)) !== null) {
-    const blockContent = blockMatch[1];
-    const declRegex = /([\w]+(?:\s*,\s*[\w]+)*)\s*:/g;
-    let declMatch;
-    while ((declMatch = declRegex.exec(blockContent)) !== null) {
-      const names = declMatch[1].split(",").map((n) => n.trim().toUpperCase());
-      for (const n of names) {
-        if (n) vars.add(n);
-      }
-    }
-  }
-  return vars;
-}
 
