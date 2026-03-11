@@ -698,6 +698,7 @@ export class SemanticAnalyzer {
           `Located variable '${locVar.name}' at ${locVar.address} not allowed in FUNCTION_BLOCK '${locVar.scopeName}'. Located variables can only be declared in PROGRAM or VAR_GLOBAL scope.`,
           decl.sourceSpan.startLine,
           decl.sourceSpan.startCol,
+          "LOCATED_VAR_IN_FB",
         );
         continue;
       }
@@ -815,12 +816,18 @@ export class SemanticAnalyzer {
   /**
    * Add an error message.
    */
-  private addError(message: string, line: number, column: number): void {
+  private addError(
+    message: string,
+    line: number,
+    column: number,
+    code?: string,
+  ): void {
     this.errors.push({
       message,
       line,
       column,
       severity: "error",
+      ...(code !== undefined ? { code } : {}),
     });
   }
 
