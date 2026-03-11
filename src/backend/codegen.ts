@@ -4324,7 +4324,9 @@ export class CodeGenerator {
    */
   private emitLineDirective(stLine: number): void {
     if (this.options.lineDirectives) {
-      const fn = this.options.lineDirectiveFileName ?? this.options.fileName;
+      const fn = (
+        this.options.lineDirectiveFileName ?? this.options.fileName
+      ).replaceAll("\\", "/");
       this.emit(`#line ${stLine} "${fn}"`);
     }
   }
@@ -4334,7 +4336,9 @@ export class CodeGenerator {
    */
   private emitHeaderLineDirective(stLine: number): void {
     if (this.options.lineDirectives) {
-      const fn = this.options.lineDirectiveFileName ?? this.options.fileName;
+      const fn = (
+        this.options.lineDirectiveFileName ?? this.options.fileName
+      ).replaceAll("\\", "/");
       this.emitHeader(`#line ${stLine} "${fn}"`);
     }
   }
