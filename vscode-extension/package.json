@@ -330,9 +330,9 @@
     ]
   },
   "scripts": {
-    "build": "tsc -b",
-    "watch": "tsc -b --watch",
-    "bundle": "tsc -b && node esbuild.mjs",
+    "build": "node ./node_modules/typescript/bin/tsc -b",
+    "watch": "node ./node_modules/typescript/bin/tsc -b --watch",
+    "bundle": "node ./node_modules/typescript/bin/tsc -b && node esbuild.mjs",
     "vscode:prepublish": "node esbuild.mjs --production",
     "package": "vsce package",
     "lint": "eslint client/src server/src",
