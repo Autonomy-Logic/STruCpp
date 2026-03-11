@@ -330,9 +330,9 @@
     ]
   },
   "scripts": {
-    "build": "npx tsc -b",
-    "watch": "npx tsc -b --watch",
-    "bundle": "npx tsc -b && node esbuild.mjs",
+    "build": "tsc -b",
+    "watch": "tsc -b --watch",
+    "bundle": "tsc -b && node esbuild.mjs",
     "vscode:prepublish": "node esbuild.mjs --production",
     "package": "vsce package",
     "lint": "eslint client/src server/src",
