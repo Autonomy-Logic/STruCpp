@@ -3,14 +3,14 @@
   "tasks": [
     {
       "type": "shell",
-      "command": "npm run bundle",
+      "command": "cd .. && npm install && npm run build && cd vscode-extension && npm install && npm run bundle",
       "windows": {
-        "command": "if not exist \"%APPDATA%\\npm\" mkdir \"%APPDATA%\\npm\" & npm run bundle",
+        "command": "if not exist \"%APPDATA%\\npm\" mkdir \"%APPDATA%\\npm\" & cd .. & npm install & npm run build & cd vscode-extension & npm install & npm run bundle",
         "options": { "shell": { "executable": "cmd.exe", "args": ["/c"] } }
       },
       "group": "build",
       "label": "npm: bundle",
-      "detail": "TypeScript compile + esbuild bundle",
+      "detail": "Install all dependencies, build compiler, and bundle extension",
       "problemMatcher": ["$tsc"]
     }
   ]
