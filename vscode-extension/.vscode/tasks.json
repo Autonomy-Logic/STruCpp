@@ -2,8 +2,12 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "type": "npm",
-      "script": "bundle",
+      "type": "shell",
+      "command": "npm run bundle",
+      "windows": {
+        "command": "if not exist \"%APPDATA%\\npm\" mkdir \"%APPDATA%\\npm\" & npm run bundle",
+        "options": { "shell": { "executable": "cmd.exe", "args": ["/c"] } }
+      },
       "group": "build",
       "label": "npm: bundle",
       "detail": "TypeScript compile + esbuild bundle",
