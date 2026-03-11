@@ -3,11 +3,7 @@
   "tasks": [
     {
       "type": "shell",
-      "command": "cd .. && npm install && npm run build && cd vscode-extension && npm install && npm run bundle",
-      "windows": {
-        "command": "if not exist \"%APPDATA%\\npm\" mkdir \"%APPDATA%\\npm\" & cd .. & npm install & npm run build & cd vscode-extension & npm install & npm run bundle",
-        "options": { "shell": { "executable": "cmd.exe", "args": ["/c"] } }
-      },
+      "command": "node scripts/setup-and-bundle.js",
       "group": "build",
       "label": "npm: bundle",
       "detail": "Install all dependencies, build compiler, and bundle extension",
