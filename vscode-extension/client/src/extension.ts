@@ -20,6 +20,16 @@ import { registerCommands } from "./commands.js";
 import { StrucppTaskProvider } from "./task-provider.js";
 import { StlibExplorer, STLIB_URI_SCHEME } from "./stlib-explorer.js";
 import { StrucppTestController } from "./test-controller.js";
+import { StrucppDebugConfigProvider } from "./debug-config-provider.js";
+import { StrucppBreakpointProvider } from "./breakpoint-provider.js";
+import { StrucppEvalProvider } from "./debug-eval-provider.js";
+import { StrucppDebugTrackerFactory } from "./debug-adapter-tracker.js";
+import {
+  ForcedVariablesProvider,
+  forceVariableCommand,
+  unforceVariableCommand,
+  unforceAllCommand,
+} from "./force-variable.js";
 import { LibrariesChangedNotification } from "../../shared/protocol.js";
 
 let client: LanguageClient | undefined;
@@ -99,6 +109,45 @@ export function activate(context: ExtensionContext): void {
       updateStatusBar(statusBarItem, explorer);
     });
     explorer.refresh().then(() => updateStatusBar(statusBarItem, explorer));
+
+    // Debug configuration provider
+    const debugProvider = new StrucppDebugConfigProvider(client!);
+    context.subscriptions.push(
+      vscode.debug.registerDebugConfigurationProvider("strucpp", debugProvider),
+    );
+
+    // Breakpoint validation
+    const breakpointProvider = new StrucppBreakpointProvider();
+    context.subscriptions.push(breakpointProvider);
+
+    // Debug hover: uppercase ST identifiers for C++ debugger evaluation
+    const stSelector: vscode.DocumentSelector = { language: "structured-text" };
+    context.subscriptions.push(
+      vscode.languages.registerEvaluatableExpressionProvider(stSelector, new StrucppEvalProvider(client!)),
+    );
+
+    // Debug adapter tracker: intercept DAP responses to simplify IECVar display
+    const trackerFactory = new StrucppDebugTrackerFactory();
+    context.subscriptions.push(
+      vscode.debug.registerDebugAdapterTrackerFactory("cppdbg", trackerFactory),
+      vscode.debug.registerDebugAdapterTrackerFactory("lldb", trackerFactory),
+    );
+
+    // Forced variables panel and commands
+    const forcedProvider = new ForcedVariablesProvider();
+    context.subscriptions.push(
+      vscode.window.registerTreeDataProvider("strucpp.forcedVariables", forcedProvider),
+      vscode.commands.registerCommand("strucpp.forceVariable", (args) =>
+        forceVariableCommand(args, forcedProvider),
+      ),
+      vscode.commands.registerCommand("strucpp.unforceVariable", (args) =>
+        unforceVariableCommand(args, forcedProvider),
+      ),
+      vscode.commands.registerCommand("strucpp.unforceAll", () =>
+        unforceAllCommand(forcedProvider),
+      ),
+      forcedProvider,
+    );
 
     // Test Explorer integration
     const testController = new StrucppTestController(context, client!);

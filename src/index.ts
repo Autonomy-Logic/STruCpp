@@ -462,8 +462,12 @@ export function compile(
   // Pass semantic symbol tables to codegen so it can use type info from semantic analysis
   const codegen = new CodeGenerator(pipeline.symbolTables, {
     sourceComments: pipeline.mergedOptions.debug,
-    lineDirectives: pipeline.mergedOptions.lineMapping,
+    lineDirectives: pipeline.mergedOptions.lineDirectives ?? false,
     headerFileName: pipeline.mergedOptions.headerFileName ?? "generated.hpp",
+    fileName: pipeline.mergedOptions.fileName ?? "main.st",
+    ...(pipeline.mergedOptions.lineDirectiveFileName
+      ? { lineDirectiveFileName: pipeline.mergedOptions.lineDirectiveFileName }
+      : {}),
     libraryHeaders,
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
@@ -473,7 +477,10 @@ export function compile(
   // Single codegen injection loop for all libraries (stdlib + user)
   for (const archive of pipeline.allArchives) {
     codegen.registerLibraryFBTypes(
-      archive.manifest.functionBlocks.map((fb) => fb.name),
+      archive.manifest.functionBlocks.map((fb) => ({
+        name: fb.name,
+        inputNames: fb.inputs.map((i) => i.name),
+      })),
     );
     if (archive.headerCode) {
       codegen.addLibraryPreamble(

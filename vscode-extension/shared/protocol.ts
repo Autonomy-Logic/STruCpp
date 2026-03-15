@@ -178,3 +178,48 @@ export const RunTestsRequest = new RequestType<
   RunTestsResponse,
   void
 >("strucpp/runTests");
+
+// ---------------------------------------------------------------------------
+// strucpp/debugBuild — compile with #line directives and -g -O0 for debugging
+// ---------------------------------------------------------------------------
+
+export interface DebugBuildParams {
+  uri: string;
+}
+
+export interface DebugBuildLineMapEntry {
+  stLine: number;
+  cppStart: number;
+  cppEnd: number;
+}
+
+export interface DebugBuildResponse extends BuildResponse {
+  lineMap: DebugBuildLineMapEntry[];
+}
+
+export const DebugBuildRequest = new RequestType<
+  DebugBuildParams,
+  DebugBuildResponse,
+  void
+>("strucpp/debugBuild");
+
+// ---------------------------------------------------------------------------
+// strucpp/isWrappedType — check if variable at position is IECVar-wrapped
+// ---------------------------------------------------------------------------
+
+export interface IsWrappedTypeParams {
+  uri: string;
+  line: number;
+  character: number;
+}
+
+export interface IsWrappedTypeResponse {
+  /** True if the variable's C++ type has .value_ (IECVar/IECStringVar/IEC_ENUM) */
+  isWrapped: boolean;
+}
+
+export const IsWrappedTypeRequest = new RequestType<
+  IsWrappedTypeParams,
+  IsWrappedTypeResponse,
+  void
+>("strucpp/isWrappedType");

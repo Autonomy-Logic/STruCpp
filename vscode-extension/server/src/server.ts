@@ -36,18 +36,23 @@ import {
   buildPOUInfoFromAST,
   getCxxEnv,
   splitCxxFlags,
+  ELEMENTARY_TYPES,
+  typeName,
 } from "strucpp";
 import {
   CompileRequest,
   BuildRequest,
+  DebugBuildRequest,
   CompileLibRequest,
   GetSettingsRequest,
   GetLibrariesRequest,
   LibrariesChangedNotification,
   RunTestsRequest,
+  IsWrappedTypeRequest,
   type ExtensionSettings,
   type CompileResponse,
   type BuildResponse,
+  type DebugBuildResponse,
   type CompileLibResponse,
   type LibraryArchiveInfo,
   type RunTestsParams,
@@ -57,6 +62,7 @@ import { parseTestJson } from "../../shared/test-result.js";
 import { DocumentManager } from "./document-manager.js";
 import { toLspDiagnostics } from "./diagnostics.js";
 import { lspPositionToCompiler } from "./lsp-utils.js";
+import { resolveSymbolAtPosition as resolveSymbolAtPositionFn } from "./resolve-symbol.js";
 import { getDocumentSymbols, getWorkspaceSymbols } from "./symbols.js";
 import { getHover } from "./hover.js";
 import { getDefinition, getTypeDefinition } from "./definition.js";
@@ -720,8 +726,172 @@ connection.onRequest(BuildRequest, (params): BuildResponse => {
   };
 });
 
+// ---------------------------------------------------------------------------
+// strucpp/debugBuild — compile with #line directives for source-level debugging
+// ---------------------------------------------------------------------------
+connection.onRequest(DebugBuildRequest, (params): DebugBuildResponse => {
+  const uri = params.uri;
+  const state = docManager.getState(uri);
+  const source = state?.source;
+
+  const failResponse = (errors: DebugBuildResponse["errors"]): DebugBuildResponse => ({
+    success: false,
+    cppCode: "",
+    headerCode: "",
+    mainCppCode: "",
+    headerFileName: "",
+    runtimeIncludeDir: "",
+    replDir: "",
+    errors,
+    warnings: [],
+    primaryFileName: "",
+    lineMap: [],
+  });
+
+  if (!source) {
+    return failResponse([{ message: "No source available for debug build", line: 0, column: 0, severity: "error" }]);
+  }
+
+  const runtimePaths = findRuntimePaths();
+  if (!runtimePaths) {
+    return failResponse([{
+      message: "Could not locate STruC++ runtime directory. Ensure the strucpp package is installed correctly.",
+      line: 0, column: 0, severity: "error",
+    }]);
+  }
+
+  const fileName = docManager.getFileName(uri);
+  const headerFileName = fileName.replace(/\.(st|iecst)$/i, ".hpp");
+  const absolutePath = URI.parse(uri).fsPath;
+  const additionalSources = docManager.buildWorkspaceSources(uri);
+
+  const options: Partial<import("strucpp").CompileOptions> = {
+    fileName,
+    headerFileName,
+    lineDirectives: true,
+    lineDirectiveFileName: absolutePath,
+    lineMapping: true,
+    ...(additionalSources.length > 0 ? { additionalSources } : {}),
+    ...(docManager.getLibraryPaths().length > 0
+      ? { libraryPaths: docManager.getLibraryPaths() }
+      : {}),
+    ...(Object.keys(currentSettings.globalConstants).length > 0
+      ? { globalConstants: currentSettings.globalConstants }
+      : {}),
+  };
+
+  const result = compile(source, options);
+
+  const mapErrors = (errs: typeof result.errors) =>
+    errs.map((e) => ({
+      message: e.message,
+      line: e.line,
+      column: e.column,
+      severity: e.severity,
+      ...(e.file ? { file: e.file } : {}),
+    }));
+
+  if (!result.success || !result.ast || !result.projectModel) {
+    return {
+      success: false,
+      cppCode: result.cppCode,
+      headerCode: result.headerCode,
+      mainCppCode: "",
+      headerFileName,
+      runtimeIncludeDir: "",
+      replDir: "",
+      errors: mapErrors(result.errors),
+      warnings: mapErrors(result.warnings),
+      primaryFileName: fileName,
+      lineMap: [],
+    };
+  }
+
+  const mainCppCode = generateReplMain(result.ast, result.projectModel, {
+    headerFileName,
+    stSource: source,
+    cppCode: result.cppCode,
+    headerCode: result.headerCode,
+    lineMap: result.lineMap,
+    headerLineMap: result.headerLineMap,
+  });
+
+  // Serialize lineMap for breakpoint validation
+  const lineMap: DebugBuildResponse["lineMap"] = [];
+  for (const [stLine, entry] of result.lineMap) {
+    lineMap.push({ stLine, cppStart: entry.cppStartLine, cppEnd: entry.cppEndLine });
+  }
+
+  return {
+    success: true,
+    cppCode: result.cppCode,
+    headerCode: result.headerCode,
+    mainCppCode,
+    headerFileName,
+    runtimeIncludeDir: runtimePaths.includeDir,
+    replDir: runtimePaths.replDir,
+    errors: mapErrors(result.errors),
+    warnings: mapErrors(result.warnings),
+    primaryFileName: fileName,
+    lineMap,
+  };
+});
+
 connection.onRequest(GetSettingsRequest, (): ExtensionSettings => {
   return currentSettings;
+});
+
+connection.onRequest(IsWrappedTypeRequest, (params) => {
+  const state = docManager.getState(params.uri);
+  if (!state?.analysisResult?.symbolTables) {
+    return { isWrapped: true }; // Default: assume wrapped (most common)
+  }
+
+  const fileName = docManager.getFileName(params.uri);
+  const { line, column } = lspPositionToCompiler({ line: params.line, character: params.character });
+
+  const resolved = resolveSymbolAtPositionFn(state.analysisResult, fileName, line, column);
+
+  if (!resolved?.symbol || resolved.symbol.kind !== "variable") {
+    // Not a variable — could be an FB type name, program, etc.
+    // Check if it's a FB/program/interface definition
+    if (resolved?.symbol?.kind === "functionBlock" || resolved?.symbol?.kind === "program") {
+      return { isWrapped: false };
+    }
+    return { isWrapped: true };
+  }
+
+  // Get the type name from the variable declaration
+  const varTypeName = resolved.symbol.declaration?.type?.name;
+  if (!varTypeName) return { isWrapped: true };
+
+  const upper = varTypeName.toUpperCase();
+
+  // Elementary types (INT, BOOL, REAL, etc.) → IECVar-wrapped
+  if (ELEMENTARY_TYPES[upper]) return { isWrapped: true };
+
+  // STRING/WSTRING → IECStringVar-wrapped
+  if (upper === "STRING" || upper === "WSTRING") return { isWrapped: true };
+
+  // Check if it's an enum type → IEC_ENUM-wrapped
+  const typeSym = state.analysisResult.symbolTables.lookupType(varTypeName);
+  if (typeSym?.declaration?.definition?.kind === "EnumDefinition") {
+    return { isWrapped: true };
+  }
+
+  // Subrange types (e.g., TYPE Percent : INT (0..100); END_TYPE) → IEC_<base>-wrapped
+  if (typeSym?.declaration?.definition?.kind === "SubrangeDefinition") {
+    return { isWrapped: true };
+  }
+
+  // Type alias to a primitive (e.g., TYPE MyInt : INT; END_TYPE)
+  if (typeSym?.declaration?.definition?.kind === "TypeReference") {
+    const baseName = typeSym.declaration.definition.name?.toUpperCase();
+    if (baseName && ELEMENTARY_TYPES[baseName]) return { isWrapped: true };
+  }
+
+  // Everything else (FB, struct, array, interface) → NOT wrapped
+  return { isWrapped: false };
 });
 
 connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {

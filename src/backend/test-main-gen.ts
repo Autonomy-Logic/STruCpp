@@ -158,7 +158,12 @@ export function generateTestMain(
   if (options.libraryArchives) {
     for (const archive of options.libraryArchives) {
       testCodegen.registerLibraryFBTypes(
-        archive.manifest.functionBlocks.map((fb: { name: string }) => fb.name),
+        archive.manifest.functionBlocks.map(
+          (fb: { name: string; inputs: Array<{ name: string }> }) => ({
+            name: fb.name,
+            inputNames: fb.inputs.map((i) => i.name),
+          }),
+        ),
       );
     }
   }

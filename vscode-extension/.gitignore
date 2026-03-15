@@ -1,5 +1,12 @@
 out/
 node_modules/
 *.vsix
-runtime/
+runtime/*
+!runtime/strucpp-pretty-printers.py
 bundled-libs/
+
+# Override root .gitignore — track dev launch configs
+!.vscode/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
