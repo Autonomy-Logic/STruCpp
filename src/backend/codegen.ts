@@ -51,6 +51,7 @@ import {
   resolveFieldType as resolveFieldTypeUtil,
   typeName as typeNameUtil,
 } from "../semantic/type-utils.js";
+import type { StlibArchive } from "../library/library-manifest.js";
 
 // =============================================================================
 // Located Variable Support
@@ -259,6 +260,9 @@ export class CodeGenerator {
   /** Map of enum type name (upper case) → set of member names (upper case) for :: emission */
   protected enumTypeMembers: Map<string, Set<string>> = new Map();
 
+  /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
+  private libraryFBFieldTypes: Map<string, string> = new Map();
+
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
 
@@ -445,15 +449,70 @@ export class CodeGenerator {
    * codegen can distinguish FB invocations from regular function calls.
    */
   registerLibraryFBTypes(
-    fbs: Array<{ name: string; inputNames?: string[] }>,
+    fbs: Array<{
+      name: string;
+      inputNames?: string[];
+      fields?: Array<{ name: string; type: string }>;
+    }>,
   ): void {
     for (const fb of fbs) {
-      this.knownFBTypes.add(fb.name.toUpperCase());
+      const fbUpper = fb.name.toUpperCase();
+      this.knownFBTypes.add(fbUpper);
       if (fb.inputNames && fb.inputNames.length > 0) {
         this.fbInputParams.set(
-          fb.name.toUpperCase(),
+          fbUpper,
           fb.inputNames.map((n) => n.toUpperCase()),
         );
+      }
+      // Store field→type mapping for member type resolution (field mangling)
+      if (fb.fields) {
+        for (const f of fb.fields) {
+          this.libraryFBFieldTypes.set(
+            `${fbUpper}.${f.name.toUpperCase()}`,
+            f.type,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Register type info from library manifests (enum types for :: emission,
+   * struct types for known-type detection).
+   */
+  registerLibraryTypes(types: Array<{ name: string; kind: string }>): void {
+    for (const t of types) {
+      const nameUpper = t.name.toUpperCase();
+      if (t.kind === "enum") {
+        // Members are not available in the manifest, but we only need to
+        // know the type IS an enum for :: emission in generateVariableExpression
+        if (!this.enumTypeMembers.has(nameUpper)) {
+          this.enumTypeMembers.set(nameUpper, new Set());
+        }
+      }
+      this.knownStructTypes.add(nameUpper);
+    }
+  }
+
+  /**
+   * Register all type and FB metadata from library archives.
+   * Single entry point used by both compile() and generateTestMain().
+   */
+  registerLibraryArchives(archives: StlibArchive[]): void {
+    for (const archive of archives) {
+      this.registerLibraryFBTypes(
+        archive.manifest.functionBlocks.map((fb) => ({
+          name: fb.name,
+          inputNames: fb.inputs.map((i) => i.name),
+          fields: [
+            ...fb.inputs.map((v) => ({ name: v.name, type: v.type })),
+            ...fb.outputs.map((v) => ({ name: v.name, type: v.type })),
+            ...fb.inouts.map((v) => ({ name: v.name, type: v.type })),
+          ],
+        })),
+      );
+      if (archive.manifest.types) {
+        this.registerLibraryTypes(archive.manifest.types);
       }
     }
   }
@@ -3658,8 +3717,15 @@ export class CodeGenerator {
     typeName: string | undefined,
     memberName: string,
   ): string | undefined {
-    if (!typeName || !this.ast) return undefined;
-    return resolveFieldTypeUtil(typeName, memberName, this.ast);
+    if (!typeName) return undefined;
+    if (this.ast) {
+      const result = resolveFieldTypeUtil(typeName, memberName, this.ast);
+      if (result) return result;
+    }
+    // Fallback: check library FB field types
+    return this.libraryFBFieldTypes.get(
+      `${typeName.toUpperCase()}.${memberName.toUpperCase()}`,
+    );
   }
 
   /**

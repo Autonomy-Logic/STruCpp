@@ -1067,16 +1067,18 @@ connection.onRequest(RunTestsRequest, async (params: RunTestsParams): Promise<Ru
 
   // 6. Generate test_main.cpp
   const pous = compileResult.ast ? buildPOUInfoFromAST(compileResult.ast).pous : [];
-  const testMainCpp = generateTestMain([parseResult.testFile], {
+  const testMainOpts = {
     headerFileName: "generated.hpp",
     pous,
     isTestBuild: true,
     ...(compileResult.ast ? { ast: compileResult.ast } : {}),
     ...(compileResult.resolvedLibraries ? { libraryArchives: compileResult.resolvedLibraries } : {}),
-  });
+  };
+  const testMainCpp = generateTestMain([parseResult.testFile], testMainOpts);
 
   // 7. Write to temp directory
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-test-"));
+  let cleanupTemp = true;
   try {
     fs.writeFileSync(path.join(tempDir, "generated.hpp"), compileResult.headerCode, "utf-8");
     fs.writeFileSync(path.join(tempDir, "generated.cpp"), compileResult.cppCode, "utf-8");
@@ -1113,9 +1115,10 @@ connection.onRequest(RunTestsRequest, async (params: RunTestsParams): Promise<Ru
     } catch (err: unknown) {
       const execErr = err as { stderr?: string };
       const stderr = execErr.stderr ?? "Unknown compilation error";
+      cleanupTemp = false;
       return {
         success: false,
-        errors: [{ message: `C++ compilation failed:\n${stderr}`, line: 0, column: 0, severity: "error" }],
+        errors: [{ message: `C++ compilation failed (files at ${tempDir}):\n${stderr}`, line: 0, column: 0, severity: "error" }],
       };
     }
 
@@ -1154,11 +1157,13 @@ connection.onRequest(RunTestsRequest, async (params: RunTestsParams): Promise<Ru
       };
     }
   } finally {
-    // Cleanup temp directory
-    try {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
+    // Cleanup temp directory (preserve on compilation failure for debugging)
+    if (cleanupTemp) {
+      try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
     }
   }
 });

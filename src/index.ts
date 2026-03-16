@@ -474,14 +474,10 @@ export function compile(
   });
   codegen.setProjectModel(pipeline.projectModel!);
 
-  // Single codegen injection loop for all libraries (stdlib + user)
+  // Register all library metadata (FB types, field mappings, enum/struct types)
+  codegen.registerLibraryArchives(pipeline.allArchives);
+  // Inject compiled C++ preamble code from libraries
   for (const archive of pipeline.allArchives) {
-    codegen.registerLibraryFBTypes(
-      archive.manifest.functionBlocks.map((fb) => ({
-        name: fb.name,
-        inputNames: fb.inputs.map((i) => i.name),
-      })),
-    );
     if (archive.headerCode) {
       codegen.addLibraryPreamble(
         archive.manifest.name,

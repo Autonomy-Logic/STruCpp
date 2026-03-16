@@ -36,7 +36,12 @@ if (!fs.existsSync(path.join(repoDir, "node_modules"))) {
   console.log("\n> [strucpp] node_modules exists, skipping npm install");
 }
 
-// 2. Build compiler (tsc is incremental — fast when nothing changed)
+// 2. Build compiler (clean dist/ first to avoid stale JS from incremental builds)
+const distDir = path.join(repoDir, "dist");
+if (fs.existsSync(distDir)) {
+  fs.rmSync(distDir, { recursive: true });
+  console.log("> [strucpp] cleaned dist/");
+}
 run("npm run build", repoDir);
 
 // 3. Install extension dependencies if needed
@@ -46,5 +51,12 @@ if (!fs.existsSync(path.join(extDir, "node_modules"))) {
   console.log("> [vscode-extension] node_modules exists, skipping npm install");
 }
 
-// 4. Always bundle (fast enough to run every time)
+// 4. Clean extension build output (tsc -b uses incremental mode which may cache stale results)
+const outDir = path.join(extDir, "out");
+if (fs.existsSync(outDir)) {
+  fs.rmSync(outDir, { recursive: true });
+  console.log("> [vscode-extension] cleaned out/");
+}
+
+// 5. Always bundle (fast enough to run every time)
 run("npm run bundle", extDir);

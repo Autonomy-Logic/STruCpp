@@ -153,19 +153,9 @@ export function generateTestMain(
     testCodegen.initFromAST(options.ast);
   }
 
-  // Register library FB types (TON, CTU, R_TRIG, etc.) so they
-  // are recognized as user-defined types, not given the IEC_ prefix
+  // Register library metadata (FB types, field mappings, enum/struct types)
   if (options.libraryArchives) {
-    for (const archive of options.libraryArchives) {
-      testCodegen.registerLibraryFBTypes(
-        archive.manifest.functionBlocks.map(
-          (fb: { name: string; inputs: Array<{ name: string }> }) => ({
-            name: fb.name,
-            inputNames: fb.inputs.map((i) => i.name),
-          }),
-        ),
-      );
-    }
+    testCodegen.registerLibraryArchives(options.libraryArchives);
   }
 
   // Includes
