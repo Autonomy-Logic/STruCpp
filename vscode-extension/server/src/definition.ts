@@ -55,16 +55,30 @@ export function getDefinition(
   // Standard functions have no source location
   if (stdFunction && !symbol) return null;
 
-  // Method on a library FB — resolve via library sources (e.g., "VehicleDetector.Initialize")
-  if (methodContext && resolveLibrarySymbol) {
-    const result = resolveLibrarySymbol(
-      `${methodContext.fbName}.${methodContext.methodName}`,
-    );
-    if (result) {
-      return Location.create(
-        result.uri,
-        Range.create(result.line, 0, result.line, 0),
+  // Method call — resolve to the method's declaration
+  if (methodContext) {
+    // Try user-defined FB method first (from AST declaration)
+    if (analysis.symbolTables) {
+      const fbSym = analysis.symbolTables.lookupFunctionBlock(methodContext.fbName);
+      const methodDecl = (fbSym as FunctionBlockSymbol | undefined)?.declaration?.methods?.find(
+        (m) => m.name.toUpperCase() === methodContext.methodName.toUpperCase(),
       );
+      if (methodDecl?.sourceSpan && !isDefaultSpan(methodDecl.sourceSpan)) {
+        const targetUri = resolveUri(methodDecl.sourceSpan, uri, resolveFileName);
+        return Location.create(targetUri, sourceSpanToRange(methodDecl.sourceSpan));
+      }
+    }
+    // Fall back to library sources (e.g., "VehicleDetector.Initialize")
+    if (resolveLibrarySymbol) {
+      const result = resolveLibrarySymbol(
+        `${methodContext.fbName}.${methodContext.methodName}`,
+      );
+      if (result) {
+        return Location.create(
+          result.uri,
+          Range.create(result.line, 0, result.line, 0),
+        );
+      }
     }
   }
 

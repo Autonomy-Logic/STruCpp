@@ -168,10 +168,16 @@ export function resolveSymbolAtPosition(
           }
           // Cursor is on the method name — try to resolve method from FB type
           if (instanceVar.kind === "variable" && instanceVar.type) {
-            const fbName =
-              instanceVar.type.typeKind === "functionBlock"
-                ? (instanceVar.type as FunctionBlockType).name
-                : undefined;
+            let fbName: string | undefined;
+            if (instanceVar.type.typeKind === "functionBlock") {
+              fbName = (instanceVar.type as FunctionBlockType).name;
+            } else if ("name" in instanceVar.type) {
+              // Library FBs may have elementary type — check symbol tables
+              const possibleFB = symbolTables.lookupFunctionBlock(
+                (instanceVar.type as { name: string }).name,
+              );
+              if (possibleFB) fbName = possibleFB.name;
+            }
             if (fbName) {
               const fbScope = symbolTables.getFBScope(fbName);
               const methodSymbol = fbScope?.lookupLocal(methodName);
@@ -226,16 +232,27 @@ export function resolveSymbolAtPosition(
           (mce.object as VariableExpression).name,
         );
         if (objVar?.kind === "variable" && objVar.type) {
-          const fbName =
-            objVar.type.typeKind === "functionBlock"
-              ? (objVar.type as FunctionBlockType).name
-              : undefined;
+          let fbName: string | undefined;
+          if (objVar.type.typeKind === "functionBlock") {
+            fbName = (objVar.type as FunctionBlockType).name;
+          } else if ("name" in objVar.type) {
+            const possibleFB = symbolTables.lookupFunctionBlock(
+              (objVar.type as { name: string }).name,
+            );
+            if (possibleFB) fbName = possibleFB.name;
+          }
           if (fbName) {
             const fbScope = symbolTables.getFBScope(fbName);
             const methodSymbol = fbScope?.lookupLocal(mce.methodName);
             if (methodSymbol) {
               return { node, symbol: methodSymbol, scope };
             }
+            return {
+              node,
+              symbol: objVar,
+              scope,
+              methodContext: { fbName, methodName: mce.methodName },
+            };
           }
         }
       }
