@@ -28,6 +28,21 @@ import type {
 } from "strucpp";
 import { walkAST, findEnclosingPOU } from "strucpp";
 
+/** Extract FB type name from a variable's type, handling library FBs with elementary typeKind. */
+function resolveFBName(
+  type: { readonly typeKind: string },
+  symbolTables: NonNullable<AnalysisResult["symbolTables"]>,
+): string | undefined {
+  if (type.typeKind === "functionBlock") {
+    return (type as FunctionBlockType).name;
+  }
+  if ("name" in type) {
+    const fb = symbolTables.lookupFunctionBlock((type as { name: string }).name);
+    if (fb) return fb.name;
+  }
+  return undefined;
+}
+
 export interface ResolvedSymbol {
   node: ASTNode;
   symbol?: AnySymbol;
@@ -168,30 +183,13 @@ export function resolveSymbolAtPosition(
           }
           // Cursor is on the method name — try to resolve method from FB type
           if (instanceVar.kind === "variable" && instanceVar.type) {
-            let fbName: string | undefined;
-            if (instanceVar.type.typeKind === "functionBlock") {
-              fbName = (instanceVar.type as FunctionBlockType).name;
-            } else if ("name" in instanceVar.type) {
-              // Library FBs may have elementary type — check symbol tables
-              const possibleFB = symbolTables.lookupFunctionBlock(
-                (instanceVar.type as { name: string }).name,
-              );
-              if (possibleFB) fbName = possibleFB.name;
-            }
+            const fbName = resolveFBName(instanceVar.type, symbolTables);
             if (fbName) {
-              const fbScope = symbolTables.getFBScope(fbName);
-              const methodSymbol = fbScope?.lookupLocal(methodName);
+              const methodSymbol = symbolTables.getFBScope(fbName)?.lookupLocal(methodName);
               if (methodSymbol) {
                 return { node, symbol: methodSymbol, scope };
               }
-              // Method not in symbol tables (e.g., library FB) — provide
-              // context so definition.ts can resolve from library sources
-              return {
-                node,
-                symbol: instanceVar,
-                scope,
-                methodContext: { fbName, methodName },
-              };
+              return { node, symbol: instanceVar, scope, methodContext: { fbName, methodName } };
             }
           }
           // Fall back to the instance variable
@@ -232,27 +230,13 @@ export function resolveSymbolAtPosition(
           (mce.object as VariableExpression).name,
         );
         if (objVar?.kind === "variable" && objVar.type) {
-          let fbName: string | undefined;
-          if (objVar.type.typeKind === "functionBlock") {
-            fbName = (objVar.type as FunctionBlockType).name;
-          } else if ("name" in objVar.type) {
-            const possibleFB = symbolTables.lookupFunctionBlock(
-              (objVar.type as { name: string }).name,
-            );
-            if (possibleFB) fbName = possibleFB.name;
-          }
+          const fbName = resolveFBName(objVar.type, symbolTables);
           if (fbName) {
-            const fbScope = symbolTables.getFBScope(fbName);
-            const methodSymbol = fbScope?.lookupLocal(mce.methodName);
+            const methodSymbol = symbolTables.getFBScope(fbName)?.lookupLocal(mce.methodName);
             if (methodSymbol) {
               return { node, symbol: methodSymbol, scope };
             }
-            return {
-              node,
-              symbol: objVar,
-              scope,
-              methodContext: { fbName, methodName: mce.methodName },
-            };
+            return { node, symbol: objVar, scope, methodContext: { fbName, methodName: mce.methodName } };
           }
         }
       }

@@ -241,11 +241,6 @@ export class DocumentManager {
     return [...this.documents.values()];
   }
 
-  /** Get all document states as a Map (for cross-file lookups). */
-  getAllDocumentStates(): ReadonlyMap<string, DocumentState> {
-    return this.documents;
-  }
-
   /** Extract a bare fileName from a URI. */
   getFileName(uri: string): string {
     return path.basename(uriToFilePath(uri));
@@ -314,7 +309,7 @@ export class DocumentManager {
     );
     const methEsc = methodName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const methPattern = new RegExp(
-      `^\\s*METHOD\\s+(?:PUBLIC\\s+|PRIVATE\\s+|PROTECTED\\s+|INTERNAL\\s+)?${methEsc}\\b`,
+      `^\\s*METHOD\\s+(?:(?:PUBLIC|PRIVATE|PROTECTED)\\s+)?(?:(?:ABSTRACT|FINAL|OVERRIDE)\\s+)*${methEsc}\\b`,
       "im",
     );
 
@@ -614,8 +609,3 @@ function addToCaseMap(map: Map<string, string>, source: string): void {
     }
   }
 }
-
-/**
- * Detect whether source content is a test file (uses TEST/END_TEST syntax).
- * Checks if the first non-comment, non-whitespace code token is TEST or SETUP.
- */

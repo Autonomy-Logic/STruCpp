@@ -106,7 +106,7 @@ export function buildSetupCommands(
   if (prettyPrinterPath) {
     commands.push({
       description: "Load STruC++ pretty-printers",
-      text: `-interpreter-exec console "source ${prettyPrinterPath}"`,
+      text: `-interpreter-exec console "source \\"${prettyPrinterPath}\\""`,
       ignoreFailures: true,
     });
   }

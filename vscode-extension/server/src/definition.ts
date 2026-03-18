@@ -80,6 +80,8 @@ export function getDefinition(
         );
       }
     }
+    // If method couldn't be resolved, fall through to the instance variable's
+    // declaration as a reasonable fallback (symbol is set to the instance var).
   }
 
   if (!symbol) return null;

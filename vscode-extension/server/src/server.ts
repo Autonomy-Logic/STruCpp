@@ -37,7 +37,6 @@ import {
   getCxxEnv,
   splitCxxFlags,
   ELEMENTARY_TYPES,
-  typeName,
 } from "strucpp";
 import {
   CompileRequest,
