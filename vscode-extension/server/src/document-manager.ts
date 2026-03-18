@@ -241,11 +241,6 @@ export class DocumentManager {
     return [...this.documents.values()];
   }
 
-  /** Get all document states as a Map (for cross-file lookups). */
-  getAllDocumentStates(): ReadonlyMap<string, DocumentState> {
-    return this.documents;
-  }
-
   /** Extract a bare fileName from a URI. */
   getFileName(uri: string): string {
     return path.basename(uriToFilePath(uri));
@@ -269,6 +264,15 @@ export class DocumentManager {
   findSymbolInLibrarySources(
     symbolName: string,
   ): { uri: string; line: number } | undefined {
+    // Handle FBName.MethodName format for method resolution
+    const dotIndex = symbolName.indexOf(".");
+    if (dotIndex >= 0) {
+      return this.findMethodInLibrarySources(
+        symbolName.substring(0, dotIndex),
+        symbolName.substring(dotIndex + 1),
+      );
+    }
+
     const escaped = symbolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const declPattern = new RegExp(
       `^\\s*(?:FUNCTION_BLOCK|FUNCTION|TYPE|PROGRAM)\\s+${escaped}\\b`,
@@ -279,6 +283,50 @@ export class DocumentManager {
         const lines = src.source.split("\n");
         for (let i = 0; i < lines.length; i++) {
           if (declPattern.test(lines[i])) {
+            return {
+              uri: `strucpp-lib:/${libName}/sources/${src.fileName}`,
+              line: i,
+            };
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Find a METHOD declaration within a FUNCTION_BLOCK in library sources.
+   * First locates the FB, then searches for the METHOD within it.
+   */
+  private findMethodInLibrarySources(
+    fbName: string,
+    methodName: string,
+  ): { uri: string; line: number } | undefined {
+    const fbEsc = fbName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const fbPattern = new RegExp(
+      `^\\s*FUNCTION_BLOCK\\s+${fbEsc}\\b`,
+      "im",
+    );
+    const methEsc = methodName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const methPattern = new RegExp(
+      `^\\s*METHOD\\s+(?:(?:PUBLIC|PRIVATE|PROTECTED)\\s+)?(?:(?:ABSTRACT|FINAL|OVERRIDE)\\s+)*${methEsc}\\b`,
+      "im",
+    );
+
+    for (const [libName, sources] of this.librarySources) {
+      for (const src of sources) {
+        const lines = src.source.split("\n");
+        let inFB = false;
+        for (let i = 0; i < lines.length; i++) {
+          if (fbPattern.test(lines[i])) {
+            inFB = true;
+            continue;
+          }
+          if (inFB && /^\s*END_FUNCTION_BLOCK\b/i.test(lines[i])) {
+            inFB = false;
+            continue;
+          }
+          if (inFB && methPattern.test(lines[i])) {
             return {
               uri: `strucpp-lib:/${libName}/sources/${src.fileName}`,
               line: i,
@@ -561,8 +609,3 @@ function addToCaseMap(map: Map<string, string>, source: string): void {
     }
   }
 }
-
-/**
- * Detect whether source content is a test file (uses TEST/END_TEST syntax).
- * Checks if the first non-comment, non-whitespace code token is TEST or SETUP.
- */

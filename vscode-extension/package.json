@@ -66,6 +66,12 @@
         "enablement": "editorLangId == structured-text"
       },
       {
+        "command": "strucpp.debugBuild",
+        "title": "STruC++: Debug Program",
+        "icon": "$(debug-alt-small)",
+        "enablement": "editorLangId == structured-text"
+      },
+      {
         "command": "strucpp.compileLib",
         "title": "STruC++: Compile Library (.stlib)",
         "icon": "$(package)",
@@ -81,6 +87,23 @@
         "title": "STruC++: Run Tests",
         "icon": "$(testing-run-icon)",
         "enablement": "editorLangId == structured-text"
+      },
+      {
+        "command": "strucpp.forceVariable",
+        "title": "STruC++: Force Variable",
+        "icon": "$(lock)",
+        "enablement": "debugState == stopped"
+      },
+      {
+        "command": "strucpp.unforceVariable",
+        "title": "STruC++: Unforce Variable",
+        "icon": "$(unlock)",
+        "enablement": "debugState == stopped"
+      },
+      {
+        "command": "strucpp.unforceAll",
+        "title": "STruC++: Unforce All Variables",
+        "icon": "$(unlock)"
       }
     ],
     "views": {
@@ -90,12 +113,19 @@
           "name": "STruC++ Libraries",
           "when": "workspaceFolderCount > 0"
         }
+      ],
+      "debug": [
+        {
+          "id": "strucpp.forcedVariables",
+          "name": "Forced Variables",
+          "when": "inDebugMode"
+        }
       ]
     },
     "menus": {
       "editor/title/run": [
         {
-          "command": "strucpp.buildAndRunCyclic",
+          "command": "strucpp.debugBuild",
           "group": "navigation@1",
           "when": "editorLangId == structured-text"
         },
@@ -110,11 +140,35 @@
           "when": "editorLangId == structured-text"
         }
       ],
+      "debug/variables/context": [
+        {
+          "command": "strucpp.forceVariable",
+          "when": "debugState == stopped",
+          "group": "3_strucpp@1"
+        },
+        {
+          "command": "strucpp.unforceVariable",
+          "when": "debugState == stopped",
+          "group": "3_strucpp@2"
+        }
+      ],
       "view/title": [
         {
           "command": "strucpp.refreshLibraries",
           "when": "view == strucpp.libraryExplorer",
           "group": "navigation"
+        },
+        {
+          "command": "strucpp.unforceAll",
+          "when": "view == strucpp.forcedVariables",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "strucpp.unforceVariable",
+          "when": "view == strucpp.forcedVariables && viewItem == forcedVariable",
+          "group": "inline"
         }
       ]
     },
@@ -177,6 +231,67 @@
         }
       }
     },
+    "breakpoints": [
+      {
+        "language": "structured-text"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "strucpp",
+        "label": "STruC++ Debug",
+        "languages": ["structured-text"],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the debug binary (auto-filled by debug build)"
+              },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Arguments to pass to the program",
+                "default": ["--cyclic"]
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the program"
+              },
+              "env": {
+                "type": "object",
+                "description": "Environment variables"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at program entry point",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "strucpp",
+            "request": "launch",
+            "name": "Debug ST Program",
+            "args": ["--cyclic"]
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "STruC++: Debug ST Program",
+            "description": "Debug a Structured Text program with source-level debugging",
+            "body": {
+              "type": "strucpp",
+              "request": "launch",
+              "name": "Debug ST Program",
+              "args": ["--cyclic"]
+            }
+          }
+        ]
+      }
+    ],
     "taskDefinitions": [
       {
         "type": "strucpp",
@@ -215,9 +330,9 @@
     ]
   },
   "scripts": {
-    "build": "tsc -b",
-    "watch": "tsc -b --watch",
-    "bundle": "tsc -b && node esbuild.mjs",
+    "build": "node ./node_modules/typescript/bin/tsc -b",
+    "watch": "node ./node_modules/typescript/bin/tsc -b --watch",
+    "bundle": "node ./node_modules/typescript/bin/tsc -b && node esbuild.mjs",
     "vscode:prepublish": "node esbuild.mjs --production",
     "package": "vsce package",
     "lint": "eslint client/src server/src",

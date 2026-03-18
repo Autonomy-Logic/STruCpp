@@ -50,10 +50,39 @@ export function getDefinition(
     return null;
   }
 
-  const { symbol, stdFunction } = resolved;
+  const { symbol, stdFunction, methodContext } = resolved;
 
   // Standard functions have no source location
   if (stdFunction && !symbol) return null;
+
+  // Method call — resolve to the method's declaration
+  if (methodContext) {
+    // Try user-defined FB method first (from AST declaration)
+    if (analysis.symbolTables) {
+      const fbSym = analysis.symbolTables.lookupFunctionBlock(methodContext.fbName);
+      const methodDecl = (fbSym as FunctionBlockSymbol | undefined)?.declaration?.methods?.find(
+        (m) => m.name.toUpperCase() === methodContext.methodName.toUpperCase(),
+      );
+      if (methodDecl?.sourceSpan && !isDefaultSpan(methodDecl.sourceSpan)) {
+        const targetUri = resolveUri(methodDecl.sourceSpan, uri, resolveFileName);
+        return Location.create(targetUri, sourceSpanToRange(methodDecl.sourceSpan));
+      }
+    }
+    // Fall back to library sources (e.g., "VehicleDetector.Initialize")
+    if (resolveLibrarySymbol) {
+      const result = resolveLibrarySymbol(
+        `${methodContext.fbName}.${methodContext.methodName}`,
+      );
+      if (result) {
+        return Location.create(
+          result.uri,
+          Range.create(result.line, 0, result.line, 0),
+        );
+      }
+    }
+    // If method couldn't be resolved, fall through to the instance variable's
+    // declaration as a reasonable fallback (symbol is set to the instance var).
+  }
 
   if (!symbol) return null;
 

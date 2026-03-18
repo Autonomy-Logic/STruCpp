@@ -28,11 +28,28 @@ import type {
 } from "strucpp";
 import { walkAST, findEnclosingPOU } from "strucpp";
 
+/** Extract FB type name from a variable's type, handling library FBs with elementary typeKind. */
+function resolveFBName(
+  type: { readonly typeKind: string },
+  symbolTables: NonNullable<AnalysisResult["symbolTables"]>,
+): string | undefined {
+  if (type.typeKind === "functionBlock") {
+    return (type as FunctionBlockType).name;
+  }
+  if ("name" in type) {
+    const fb = symbolTables.lookupFunctionBlock((type as { name: string }).name);
+    if (fb) return fb.name;
+  }
+  return undefined;
+}
+
 export interface ResolvedSymbol {
   node: ASTNode;
   symbol?: AnySymbol;
   scope: EnclosingScope;
   stdFunction?: StdFunctionDescriptor;
+  /** Set when cursor is on a method name that couldn't be resolved from symbol tables. */
+  methodContext?: { fbName: string; methodName: string };
 }
 
 /** Node kinds we want to resolve symbols for, ordered by specificity. */
@@ -149,6 +166,37 @@ export function resolveSymbolAtPosition(
 
     case "FunctionCallExpression": {
       const fce = node as FunctionCallExpression;
+
+      // Handle dotted names: instance.method() — the parser represents
+      // simple method calls as FunctionCallExpression with dotted functionName
+      const dotIndex = fce.functionName.indexOf(".");
+      if (dotIndex >= 0) {
+        const instanceName = fce.functionName.substring(0, dotIndex);
+        const methodName = fce.functionName.substring(dotIndex + 1);
+        const instanceVar = lookupScope.lookup(instanceName);
+        if (instanceVar) {
+          // Determine if cursor is on instance or method part
+          const dotCol = (node.sourceSpan?.startCol ?? 0) + dotIndex;
+          if (column <= dotCol) {
+            // Cursor is on the instance name
+            return { node, symbol: instanceVar, scope };
+          }
+          // Cursor is on the method name — try to resolve method from FB type
+          if (instanceVar.kind === "variable" && instanceVar.type) {
+            const fbName = resolveFBName(instanceVar.type, symbolTables);
+            if (fbName) {
+              const methodSymbol = symbolTables.getFBScope(fbName)?.lookupLocal(methodName);
+              if (methodSymbol) {
+                return { node, symbol: methodSymbol, scope };
+              }
+              return { node, symbol: instanceVar, scope, methodContext: { fbName, methodName } };
+            }
+          }
+          // Fall back to the instance variable
+          return { node, symbol: instanceVar, scope };
+        }
+      }
+
       // Try user-defined function first
       const symbol = symbolTables.globalScope.lookup(fce.functionName);
       if (symbol) {
@@ -182,16 +230,13 @@ export function resolveSymbolAtPosition(
           (mce.object as VariableExpression).name,
         );
         if (objVar?.kind === "variable" && objVar.type) {
-          const fbName =
-            objVar.type.typeKind === "functionBlock"
-              ? (objVar.type as FunctionBlockType).name
-              : undefined;
+          const fbName = resolveFBName(objVar.type, symbolTables);
           if (fbName) {
-            const fbScope = symbolTables.getFBScope(fbName);
-            const methodSymbol = fbScope?.lookupLocal(mce.methodName);
+            const methodSymbol = symbolTables.getFBScope(fbName)?.lookupLocal(mce.methodName);
             if (methodSymbol) {
               return { node, symbol: methodSymbol, scope };
             }
+            return { node, symbol: objVar, scope, methodContext: { fbName, methodName: mce.methodName } };
           }
         }
       }

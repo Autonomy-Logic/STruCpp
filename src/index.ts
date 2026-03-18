@@ -462,19 +462,22 @@ export function compile(
   // Pass semantic symbol tables to codegen so it can use type info from semantic analysis
   const codegen = new CodeGenerator(pipeline.symbolTables, {
     sourceComments: pipeline.mergedOptions.debug,
-    lineDirectives: pipeline.mergedOptions.lineMapping,
+    lineDirectives: pipeline.mergedOptions.lineDirectives ?? false,
     headerFileName: pipeline.mergedOptions.headerFileName ?? "generated.hpp",
+    fileName: pipeline.mergedOptions.fileName ?? "main.st",
+    ...(pipeline.mergedOptions.lineDirectiveFileName
+      ? { lineDirectiveFileName: pipeline.mergedOptions.lineDirectiveFileName }
+      : {}),
     libraryHeaders,
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
   });
   codegen.setProjectModel(pipeline.projectModel!);
 
-  // Single codegen injection loop for all libraries (stdlib + user)
+  // Register all library metadata (FB types, field mappings, enum/struct types)
+  codegen.registerLibraryArchives(pipeline.allArchives);
+  // Inject compiled C++ preamble code from libraries
   for (const archive of pipeline.allArchives) {
-    codegen.registerLibraryFBTypes(
-      archive.manifest.functionBlocks.map((fb) => fb.name),
-    );
     if (archive.headerCode) {
       codegen.addLibraryPreamble(
         archive.manifest.name,

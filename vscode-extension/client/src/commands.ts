@@ -12,17 +12,34 @@ import type { LanguageClient } from "vscode-languageclient/node.js";
 import {
   CompileRequest,
   BuildRequest,
+  DebugBuildRequest,
   CompileLibRequest,
   type CompileResponse,
   type BuildResponse,
+  type DebugBuildResponse,
   type CompileLibResponse,
 } from "../../shared/protocol.js";
 import {
   getCxxEnv,
   splitCxxFlags,
 } from "strucpp";
+import { buildSetupCommands, buildDebugConfig } from "./debug-config-builder.js";
 
 const outputChannel = vscode.window.createOutputChannel("STruC++");
+
+/** Last debug build output — used by the debug configuration provider */
+export interface DebugBuildState {
+  binaryPath: string;
+  outputDir: string;
+  lineMap: Array<{ stLine: number; cppStart: number; cppEnd: number }>;
+  sourceUri: string;
+}
+
+let _lastDebugBuild: DebugBuildState | undefined;
+
+export function getLastDebugBuild(): DebugBuildState | undefined {
+  return _lastDebugBuild;
+}
 
 export function registerCommands(
   context: vscode.ExtensionContext,
@@ -47,6 +64,11 @@ export function registerCommands(
     vscode.commands.registerCommand("strucpp.compileLib", () =>
       compileLibCommand(client),
     ),
+    vscode.commands.registerCommand("strucpp.debugBuild", async () => {
+      const state = await debugBuildCommand(client);
+      if (!state) return;
+      await launchDebugSession(state);
+    }),
   );
 }
 
@@ -290,6 +312,181 @@ async function buildCommand(
       }
     },
   );
+}
+
+/**
+ * Debug build: compile with #line directives and -g -O0 for source-level debugging.
+ * Builds the binary but does NOT run it — the debug configuration provider launches it.
+ */
+export async function debugBuildCommand(
+  client: LanguageClient,
+): Promise<DebugBuildState | undefined> {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor || editor.document.languageId !== "structured-text") {
+    vscode.window.showWarningMessage("Open a Structured Text (.st) file first.");
+    return undefined;
+  }
+
+  if (editor.document.isDirty) {
+    await editor.document.save();
+  }
+
+  const uri = editor.document.uri.toString();
+  const config = vscode.workspace.getConfiguration("strucpp");
+  const outputDir = resolveOutputDirectory(
+    config.get<string>("outputDirectory", "./generated"),
+    editor.document.uri,
+  );
+  const gppPath = config.get<string>("gppPath", "g++");
+  const cxxFlags = config.get<string>("cxxFlags", "");
+
+  return vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "STruC++: Debug Build...",
+      cancellable: false,
+    },
+    async (progress) => {
+      // 1. Compile via server with lineDirectives: true
+      progress.report({ message: "Compiling ST to C++ (debug)..." });
+      const response: DebugBuildResponse = await client.sendRequest(
+        DebugBuildRequest,
+        { uri },
+      );
+
+      if (!response.success) {
+        showCompileErrors(response);
+        return undefined;
+      }
+
+      // 2. Write generated files
+      fs.mkdirSync(outputDir, { recursive: true });
+      const baseName = response.primaryFileName.replace(/\.(st|iecst)$/i, "");
+      const cppPath = path.join(outputDir, `${baseName}.cpp`);
+      const hppPath = path.join(outputDir, `${baseName}.hpp`);
+      const mainCppPath = path.join(outputDir, "main.cpp");
+
+      fs.writeFileSync(cppPath, response.cppCode, "utf-8");
+      fs.writeFileSync(hppPath, response.headerCode, "utf-8");
+      fs.writeFileSync(mainCppPath, response.mainCppCode, "utf-8");
+
+      // 3. Compile isocline.c (needed for the main binary)
+      progress.report({ message: "Compiling isocline..." });
+      outputChannel.clear();
+      outputChannel.show(true);
+
+      const runtimeIncludeDir = response.runtimeIncludeDir;
+      const replDir = response.replDir;
+      const ccDefault = process.platform === "win32" ? "gcc" : "cc";
+      const ccPath = config.get<string>("ccPath", "") || ccDefault;
+      const isoclineObjPath = path.join(outputDir, "isocline.o");
+
+      const ccResult = await execProcess(
+        ccPath,
+        ["-c", "-std=c11", `-I${replDir}`, path.join(replDir, "isocline.c"), "-o", isoclineObjPath],
+        outputDir,
+      );
+
+      if (ccResult.exitCode !== 0) {
+        outputChannel.appendLine(`C compilation failed (exit code ${ccResult.exitCode})`);
+        vscode.window.showErrorMessage("C compilation of isocline failed. See Output panel.");
+        return undefined;
+      }
+
+      // 4. Compile + link C++ with debug flags (-g -O0)
+      progress.report({ message: "Compiling C++ (debug)..." });
+      const binaryName = process.platform === "win32" ? `${baseName}_debug.exe` : `${baseName}_debug`;
+      const binaryPath = path.join(outputDir, binaryName);
+
+      // Filter out any -O flags from user cxxFlags, we force -O0 for debug
+      const userFlags = splitCxxFlags(cxxFlags).filter(f => !f.startsWith("-O"));
+
+      const gppArgs = [
+        "-std=c++17",
+        "-g",
+        "-O0",
+        `-I${runtimeIncludeDir}`,
+        `-I${replDir}`,
+        `-I${outputDir}`,
+        ...userFlags,
+        mainCppPath,
+        cppPath,
+        isoclineObjPath,
+        "-o",
+        binaryPath,
+      ];
+
+      const gppResult = await execProcess(
+        gppPath,
+        gppArgs,
+        outputDir,
+        getCxxEnv(),
+      );
+
+      if (gppResult.exitCode !== 0) {
+        outputChannel.appendLine(`g++ debug compilation failed (exit code ${gppResult.exitCode})`);
+        vscode.window.showErrorMessage("C++ debug compilation failed. See Output panel.");
+        return undefined;
+      }
+
+      showWarnings(response);
+      outputChannel.appendLine(`Debug binary built: ${binaryPath}`);
+
+      _lastDebugBuild = {
+        binaryPath,
+        outputDir,
+        lineMap: response.lineMap,
+        sourceUri: uri,
+      };
+
+      return _lastDebugBuild;
+    },
+  );
+}
+
+/**
+ * Launch a debug session using the output of a debug build.
+ * Detects installed C/C++ debug extensions and constructs the appropriate config.
+ */
+async function launchDebugSession(state: DebugBuildState): Promise<void> {
+  const sourceUri = vscode.Uri.parse(state.sourceUri);
+  const folder = vscode.workspace.getWorkspaceFolder(sourceUri);
+
+  const isMac = process.platform === "darwin";
+  const hasCodeLLDB = vscode.extensions.getExtension("vadimcn.vscode-lldb") != null;
+  const hasCppTools = vscode.extensions.getExtension("ms-vscode.cpptools") != null;
+
+  if (!hasCodeLLDB && !hasCppTools) {
+    const choice = await vscode.window.showErrorMessage(
+      "A C/C++ debug extension is required for source-level debugging.",
+      "Install C/C++ (Microsoft)",
+      "Install CodeLLDB",
+    );
+    if (choice === "Install C/C++ (Microsoft)") {
+      await vscode.commands.executeCommand(
+        "workbench.extensions.installExtension",
+        "ms-vscode.cpptools",
+      );
+    } else if (choice === "Install CodeLLDB") {
+      await vscode.commands.executeCommand(
+        "workbench.extensions.installExtension",
+        "vadimcn.vscode-lldb",
+      );
+    }
+    return;
+  }
+
+  const debugType = isMac && hasCodeLLDB ? "lldb" : "cppdbg";
+  const miMode: "lldb" | "gdb" = isMac ? "lldb" : "gdb";
+  const setupCommands = buildSetupCommands(miMode);
+  const debugConfig = buildDebugConfig(
+    { binaryPath: state.binaryPath, outputDir: state.outputDir },
+    debugType,
+    miMode,
+    setupCommands,
+  );
+
+  await vscode.debug.startDebugging(folder, debugConfig);
 }
 
 async function compileLibCommand(client: LanguageClient): Promise<void> {

@@ -51,6 +51,7 @@ import {
   resolveFieldType as resolveFieldTypeUtil,
   typeName as typeNameUtil,
 } from "../semantic/type-utils.js";
+import type { StlibArchive } from "../library/library-manifest.js";
 
 // =============================================================================
 // Located Variable Support
@@ -145,6 +146,13 @@ export interface CodeGenOptions {
 
   /** Global constants injected as constexpr into the header preamble (before namespace) */
   globalConstants: Record<string, number>;
+
+  /** ST source filename for #line directives (default: "main.st") */
+  fileName: string;
+
+  /** Override filename used in #line directives (absolute path for debugger).
+   *  Falls back to fileName when not set. */
+  lineDirectiveFileName?: string;
 }
 
 /**
@@ -159,6 +167,7 @@ export const defaultCodeGenOptions: CodeGenOptions = {
   libraryHeaders: [],
   isTestBuild: false,
   globalConstants: {},
+  fileName: "main.st",
 };
 
 // =============================================================================
@@ -251,6 +260,9 @@ export class CodeGenerator {
   /** Map of enum type name (upper case) → set of member names (upper case) for :: emission */
   protected enumTypeMembers: Map<string, Set<string>> = new Map();
 
+  /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
+  private libraryFBFieldTypes: Map<string, string> = new Map();
+
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
 
@@ -301,6 +313,10 @@ export class CodeGenerator {
     headerCode: string;
     cppCode: string;
   }> = [];
+
+  /** Map of UPPER(fbTypeName) → ordered VAR_INPUT parameter names (UPPER case).
+   *  Used to resolve positional arguments in FB invocations. */
+  private fbInputParams: Map<string, string[]> = new Map();
 
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
 
@@ -429,12 +445,74 @@ export class CodeGenerator {
   }
 
   /**
-   * Register additional FB type names (e.g. from libraries) so that
-   * codegen can distinguish FB invocations from regular function calls.
+   * Register FB type names from libraries so codegen can distinguish
+   * FB invocations from regular function calls. Private — use registerLibraryArchives().
    */
-  registerLibraryFBTypes(names: string[]): void {
-    for (const name of names) {
-      this.knownFBTypes.add(name.toUpperCase());
+  private registerLibraryFBTypes(
+    fbs: Array<{
+      name: string;
+      inputNames: string[];
+      fields: Array<{ name: string; type: string }>;
+    }>,
+  ): void {
+    for (const fb of fbs) {
+      const fbUpper = fb.name.toUpperCase();
+      this.knownFBTypes.add(fbUpper);
+      if (fb.inputNames.length > 0) {
+        this.fbInputParams.set(
+          fbUpper,
+          fb.inputNames.map((n) => n.toUpperCase()),
+        );
+      }
+      for (const f of fb.fields) {
+        this.libraryFBFieldTypes.set(
+          `${fbUpper}.${f.name.toUpperCase()}`,
+          f.type,
+        );
+      }
+    }
+  }
+
+  /**
+   * Register type info from library manifests (enum types for :: emission,
+   * struct types for known-type detection). Private — use registerLibraryArchives().
+   */
+  private registerLibraryTypes(
+    types: Array<{ name: string; kind: string }>,
+  ): void {
+    for (const t of types) {
+      const nameUpper = t.name.toUpperCase();
+      if (t.kind === "enum") {
+        // Members are not available in the manifest, but we only need to
+        // know the type IS an enum for :: emission in generateVariableExpression
+        if (!this.enumTypeMembers.has(nameUpper)) {
+          this.enumTypeMembers.set(nameUpper, new Set());
+        }
+      }
+      this.knownStructTypes.add(nameUpper);
+    }
+  }
+
+  /**
+   * Register all type and FB metadata from library archives.
+   * Single entry point used by both compile() and generateTestMain().
+   */
+  registerLibraryArchives(archives: StlibArchive[]): void {
+    for (const archive of archives) {
+      this.registerLibraryFBTypes(
+        archive.manifest.functionBlocks.map((fb) => ({
+          name: fb.name,
+          inputNames: fb.inputs.map((i) => i.name),
+          fields: [
+            ...fb.inputs.map((v) => ({ name: v.name, type: v.type })),
+            ...fb.outputs.map((v) => ({ name: v.name, type: v.type })),
+            ...fb.inouts.map((v) => ({ name: v.name, type: v.type })),
+          ],
+        })),
+      );
+      if (archive.manifest.types) {
+        this.registerLibraryTypes(archive.manifest.types);
+      }
     }
   }
 
@@ -465,6 +543,20 @@ export class CodeGenerator {
     // via registerLibraryFBTypes() before generate() is called)
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
+      // Build ordered input parameter names for positional argument resolution
+      const inputNames: string[] = [];
+      for (const block of fb.varBlocks) {
+        if (block.blockType === "VAR_INPUT") {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              inputNames.push(name.toUpperCase());
+            }
+          }
+        }
+      }
+      if (inputNames.length > 0) {
+        this.fbInputParams.set(fb.name.toUpperCase(), inputNames);
+      }
     }
 
     // Build set of known interface types, method name map, and per-interface method sets
@@ -803,8 +895,11 @@ export class CodeGenerator {
     const inheritance = bases.length > 0 ? ` : ${bases.join(", ")}` : "";
     const finalSpec = fb.isFinal ? " final" : "";
 
+    this.emitHeaderLineDirective(fb.sourceSpan.startLine);
+    const classLine = this.currentHeaderLine;
     this.emitHeader(`class ${fb.name}${finalSpec}${inheritance} {`);
     this.emitHeader("public:");
+    this.recordHeaderLineMapping(fb.sourceSpan.startLine, classLine);
 
     // Generate member variables
     for (const block of fb.varBlocks) {
@@ -826,7 +921,10 @@ export class CodeGenerator {
             cppType,
             decl.type.name,
           );
+          this.emitHeaderLineDirective(decl.sourceSpan.startLine);
+          const memberLine = this.currentHeaderLine;
           this.emitHeader(`    ${cppType} ${memberName};`);
+          this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
       }
     }
@@ -884,6 +982,7 @@ export class CodeGenerator {
   private generateProgramHeaderDeclaration(
     prog: CompilationUnit["programs"][0],
   ): void {
+    this.emitHeaderLineDirective(prog.sourceSpan.startLine);
     const classLine = this.currentHeaderLine;
     this.emitHeader(`class Program_${prog.name} : public ProgramBase {`);
     this.emitHeader("public:");
@@ -899,6 +998,7 @@ export class CodeGenerator {
             cppType,
             decl.type.name,
           );
+          this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
           if (decl.address) {
             // Generate variable with optional address comment
@@ -933,9 +1033,12 @@ export class CodeGenerator {
   ): void {
     const params = this.generateFunctionParams(func);
 
+    this.emitHeaderLineDirective(func.sourceSpan.startLine);
+    const declLine = this.currentHeaderLine;
     this.emitHeader(
       `${this.mapTypeRefToCpp(func.returnType)} ${func.name}(${params.join(", ")});`,
     );
+    this.recordHeaderLineMapping(func.sourceSpan.startLine, declLine);
   }
 
   /**
@@ -996,9 +1099,12 @@ export class CodeGenerator {
         ? ` : ${iface.extends.map((e) => `public ${e}`).join(", ")}`
         : "";
 
+    this.emitHeaderLineDirective(iface.sourceSpan.startLine);
+    const classLine = this.currentHeaderLine;
     this.emitHeader(`class ${iface.name}${extendsClause} {`);
     this.emitHeader("public:");
     this.emitHeader(`    virtual ~${iface.name}() = default;`);
+    this.recordHeaderLineMapping(iface.sourceSpan.startLine, classLine);
 
     for (const method of iface.methods) {
       const isIfaceReturn =
@@ -1007,9 +1113,18 @@ export class CodeGenerator {
         ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
         : "void";
       const params = this.generateMethodParamList(method);
-      this.emitHeader(
-        `    virtual ${returnType} ${method.name}(${params}) = 0;`,
-      );
+      if (method.sourceSpan) {
+        this.emitHeaderLineDirective(method.sourceSpan.startLine);
+        const methodLine = this.currentHeaderLine;
+        this.emitHeader(
+          `    virtual ${returnType} ${method.name}(${params}) = 0;`,
+        );
+        this.recordHeaderLineMapping(method.sourceSpan.startLine, methodLine);
+      } else {
+        this.emitHeader(
+          `    virtual ${returnType} ${method.name}(${params}) = 0;`,
+        );
+      }
     }
 
     this.emitHeader("};");
@@ -1094,9 +1209,12 @@ export class CodeGenerator {
           suffix = method.isFinal ? " final" : "";
         }
 
+        this.emitHeaderLineDirective(method.sourceSpan.startLine);
+        const methodLine = this.currentHeaderLine;
         this.emitHeader(
           `    ${prefix}${returnType} ${method.name}(${params})${suffix};`,
         );
+        this.recordHeaderLineMapping(method.sourceSpan.startLine, methodLine);
       }
     }
 
@@ -1150,6 +1268,8 @@ export class CodeGenerator {
     this.emitHeader("    // Properties");
     for (const prop of properties) {
       const type = this.mapTypeRefToCpp(prop.type);
+      this.emitHeaderLineDirective(prop.sourceSpan.startLine);
+      const propLine = this.currentHeaderLine;
       if (prop.getter) {
         this.emitHeader(`    virtual ${type} get_${prop.name}() const;`);
       }
@@ -1158,6 +1278,7 @@ export class CodeGenerator {
           `    virtual void set_${prop.name}(${type} ${prop.name});`,
         );
       }
+      this.recordHeaderLineMapping(prop.sourceSpan.startLine, propLine);
     }
   }
 
@@ -1176,6 +1297,8 @@ export class CodeGenerator {
       : "void";
     const params = this.generateMethodParamList(method);
 
+    this.emitLineDirective(method.sourceSpan.startLine);
+    const implLine = this.currentLine;
     this.emit(`${returnType} ${className}::${method.name}(${params}) {`);
 
     // Declare return variable if method has return type
@@ -1243,8 +1366,10 @@ export class CodeGenerator {
     this.exitScope();
     this.varInstMangledNames.clear();
 
+    this.emitLineDirective(method.sourceSpan.endLine);
     this.emit("}");
     this.emit("");
+    this.recordLineMapping(method.sourceSpan.startLine, implLine);
   }
 
   /**
@@ -1258,6 +1383,8 @@ export class CodeGenerator {
 
     // Getter
     if (prop.getter) {
+      this.emitLineDirective(prop.sourceSpan.startLine);
+      const getterLine = this.currentLine;
       this.emit(`${type} ${className}::get_${prop.name}() const {`);
       this.emit(`    ${type} ${prop.name}_result;`);
       this.currentFunctionName = prop.name;
@@ -1266,15 +1393,19 @@ export class CodeGenerator {
       this.currentFunctionName = undefined;
       this.emit("}");
       this.emit("");
+      this.recordLineMapping(prop.sourceSpan.startLine, getterLine);
     }
 
     // Setter
     if (prop.setter) {
+      this.emitLineDirective(prop.sourceSpan.startLine);
+      const setterLine = this.currentLine;
       this.emit(`void ${className}::set_${prop.name}(${type} ${prop.name}) {`);
       // In setter, prop.name refers to the input parameter (no redirection)
       this.generateStatements(prop.setter);
       this.emit("}");
       this.emit("");
+      this.recordLineMapping(prop.sourceSpan.startLine, setterLine);
     }
   }
 
@@ -1315,6 +1446,7 @@ export class CodeGenerator {
       this.emit("    // Empty program body");
     }
     this.exitScope();
+    this.emitLineDirective(prog.sourceSpan.endLine);
     const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
@@ -1362,6 +1494,8 @@ export class CodeGenerator {
     this.emit("");
 
     // Operator()
+    this.emitLineDirective(fb.sourceSpan.startLine);
+    const fbImplLine = this.currentLine;
     this.emit(`void ${fb.name}::operator()() {`);
     if (this.options.isTestBuild) {
       this.emit("    if (__mocked_) { __mock_state_.call_count++; return; }");
@@ -1373,8 +1507,10 @@ export class CodeGenerator {
       this.emit("    // Empty function block body");
     }
     this.exitScope();
+    this.emitLineDirective(fb.sourceSpan.endLine);
     this.emit("}");
     this.emit("");
+    this.recordLineMapping(fb.sourceSpan.startLine, fbImplLine);
 
     // Method implementations
     for (const method of fb.methods) {
@@ -1440,10 +1576,13 @@ export class CodeGenerator {
     if (this.options.isTestBuild) {
       // Test build: generate _real, dispatch pointer, and wrapper
       // 1. _real implementation (original body with renamed function)
+      this.emitLineDirective(func.sourceSpan.startLine);
+      const realLine = this.currentLine;
       this.emit(`${retType} ${func.name}_real(${params.join(", ")}) {`);
       emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");
+      this.recordLineMapping(func.sourceSpan.startLine, realLine);
 
       // 2. Dispatch pointer (defaults to real implementation)
       this.emit(
@@ -1459,10 +1598,13 @@ export class CodeGenerator {
       this.emit("");
     } else {
       // Production build: normal function
+      this.emitLineDirective(func.sourceSpan.startLine);
+      const funcImplLine = this.currentLine;
       this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
       emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");
+      this.recordLineMapping(func.sourceSpan.startLine, funcImplLine);
     }
   }
 
@@ -1501,6 +1643,9 @@ export class CodeGenerator {
       (p) => p.name.toUpperCase() === prog.name.toUpperCase(),
     );
 
+    if (astProg) {
+      this.emitHeaderLineDirective(astProg.sourceSpan.startLine);
+    }
     const classLine = this.currentHeaderLine;
     this.emitHeader(`class ${className} : public ProgramBase {`);
     this.emitHeader("public:");
@@ -1537,6 +1682,11 @@ export class CodeGenerator {
           cppType,
           decl.typeName,
         );
+        // Map variable ST line → header member line
+        const stLine = varSourceLines.get(decl.name);
+        if (stLine !== undefined) {
+          this.emitHeaderLineDirective(stLine);
+        }
         const memberLine = this.currentHeaderLine;
         if (decl.address) {
           this.emitHeader(
@@ -1548,8 +1698,6 @@ export class CodeGenerator {
           this.emitHeader(`    ${constQualifier}${cppType} ${memberName};`);
         }
 
-        // Map variable ST line → header member line
-        const stLine = varSourceLines.get(decl.name);
         if (stLine !== undefined) {
           this.recordHeaderLineMapping(stLine, memberLine);
         }
@@ -1685,6 +1833,7 @@ export class CodeGenerator {
     }
     if (astProg) {
       this.exitScope();
+      this.emitLineDirective(astProg.sourceSpan.endLine);
     }
     const closingBraceLine = this.currentLine;
     this.emit("}");
@@ -1967,6 +2116,7 @@ export class CodeGenerator {
    */
   protected generateStatement(stmt: Statement, indent: string = "    "): void {
     this.currentStatementIndent = indent;
+    this.emitLineDirective(stmt.sourceSpan.startLine);
     const cppStartLine = this.currentLine;
     // Compound statements handle their own line mappings internally
     let isCompound = false;
@@ -2157,6 +2307,7 @@ export class CodeGenerator {
     this.generateStatements(stmt.thenStatements, indent + this.options.indent);
 
     for (const elsif of stmt.elsifClauses) {
+      this.emitLineDirective(elsif.sourceSpan.startLine);
       const elsifLine = this.currentLine;
       this.emit(
         `${indent}} else if (${this.generateExpression(elsif.condition)}) {`,
@@ -2166,17 +2317,26 @@ export class CodeGenerator {
     }
 
     if (stmt.elseStatements.length > 0) {
-      const elseLine = this.currentLine;
-      this.emit(`${indent}} else {`);
       // Map ELSE to the `} else {` line. Use endLine-1 as an approximation
       // for the ELSE keyword line (one line before END_IF).
       // The ELSE doesn't have its own AST node, so we derive from context.
+      let elseStLine: number | undefined;
       if (stmt.elsifClauses.length > 0) {
-        const lastElsif = stmt.elsifClauses[stmt.elsifClauses.length - 1]!;
-        this.recordLineMapping(lastElsif.sourceSpan.endLine + 1, elseLine);
+        elseStLine =
+          stmt.elsifClauses[stmt.elsifClauses.length - 1]!.sourceSpan.endLine +
+          1;
       } else if (stmt.thenStatements.length > 0) {
-        const lastThen = stmt.thenStatements[stmt.thenStatements.length - 1]!;
-        this.recordLineMapping(lastThen.sourceSpan.endLine + 1, elseLine);
+        elseStLine =
+          stmt.thenStatements[stmt.thenStatements.length - 1]!.sourceSpan
+            .endLine + 1;
+      }
+      if (elseStLine !== undefined) {
+        this.emitLineDirective(elseStLine);
+      }
+      const elseLine = this.currentLine;
+      this.emit(`${indent}} else {`);
+      if (elseStLine !== undefined) {
+        this.recordLineMapping(elseStLine, elseLine);
       }
       this.generateStatements(
         stmt.elseStatements,
@@ -2184,6 +2344,7 @@ export class CodeGenerator {
       );
     }
 
+    this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
@@ -2201,6 +2362,7 @@ export class CodeGenerator {
     const bodyIndent = innerIndent + this.options.indent;
 
     for (const caseElement of stmt.cases) {
+      this.emitLineDirective(caseElement.sourceSpan.startLine);
       const caseLabelLine = this.currentLine;
       for (const label of caseElement.labels) {
         if (label.end) {
@@ -2234,6 +2396,7 @@ export class CodeGenerator {
       this.emit(`${bodyIndent}break;`);
     }
 
+    this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
@@ -2278,6 +2441,7 @@ export class CodeGenerator {
     this.recordLineMapping(stmt.sourceSpan.startLine, forLine);
 
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
@@ -2292,6 +2456,7 @@ export class CodeGenerator {
     this.emit(`${indent}while (${this.generateExpression(stmt.condition)}) {`);
     this.recordLineMapping(stmt.sourceSpan.startLine, whileLine);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
@@ -2306,6 +2471,7 @@ export class CodeGenerator {
     this.emit(`${indent}do {`);
     this.recordLineMapping(stmt.sourceSpan.startLine, doLine);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.emitLineDirective(stmt.sourceSpan.endLine);
     const untilLine = this.currentLine;
     this.emit(
       `${indent}} while (!(${this.generateExpression(stmt.condition)}));`,
@@ -3550,8 +3716,15 @@ export class CodeGenerator {
     typeName: string | undefined,
     memberName: string,
   ): string | undefined {
-    if (!typeName || !this.ast) return undefined;
-    return resolveFieldTypeUtil(typeName, memberName, this.ast);
+    if (!typeName) return undefined;
+    if (this.ast) {
+      const result = resolveFieldTypeUtil(typeName, memberName, this.ast);
+      if (result) return result;
+    }
+    // Fallback: check library FB field types
+    return this.libraryFBFieldTypes.get(
+      `${typeName.toUpperCase()}.${memberName.toUpperCase()}`,
+    );
   }
 
   /**
@@ -3801,12 +3974,35 @@ export class CodeGenerator {
     const instanceName =
       this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName;
 
-    // Assign each named input parameter
+    // Resolve FB type for positional argument mapping
+    const fbTypeName = this.currentScopeVarTypes.get(rawName.toUpperCase());
+    const inputParamNames = fbTypeName
+      ? this.fbInputParams.get(fbTypeName.toUpperCase())
+      : undefined;
+
+    // Assign input parameters (named or positional)
+    let positionalIndex = 0;
     for (const arg of call.arguments) {
-      if (arg.name && !arg.isOutput) {
+      if (arg.isOutput) continue;
+
+      if (arg.name) {
+        // Named argument: assign directly
         this.emit(
           `${indent}${instanceName}.${arg.name} = ${this.generateExpression(arg.value)};`,
         );
+      } else if (inputParamNames && positionalIndex < inputParamNames.length) {
+        // Positional argument: map to VAR_INPUT by position
+        const paramName = inputParamNames[positionalIndex];
+        this.emit(
+          `${indent}${instanceName}.${paramName} = ${this.generateExpression(arg.value)};`,
+        );
+        positionalIndex++;
+      } else {
+        // Positional argument without type info — emit as warning comment
+        this.emit(
+          `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
+        );
+        positionalIndex++;
       }
     }
 
@@ -4186,6 +4382,30 @@ export class CodeGenerator {
   private emitHeader(line: string): void {
     this.headerOutput.push(line);
     this.currentHeaderLine++;
+  }
+
+  /**
+   * Emit a #line directive before implementation code for source-level debugging.
+   */
+  private emitLineDirective(stLine: number): void {
+    if (this.options.lineDirectives) {
+      const fn = (
+        this.options.lineDirectiveFileName ?? this.options.fileName
+      ).replaceAll("\\", "/");
+      this.emit(`#line ${stLine} "${fn}"`);
+    }
+  }
+
+  /**
+   * Emit a #line directive before header code for source-level debugging.
+   */
+  private emitHeaderLineDirective(stLine: number): void {
+    if (this.options.lineDirectives) {
+      const fn = (
+        this.options.lineDirectiveFileName ?? this.options.fileName
+      ).replaceAll("\\", "/");
+      this.emitHeader(`#line ${stLine} "${fn}"`);
+    }
   }
 
   /**

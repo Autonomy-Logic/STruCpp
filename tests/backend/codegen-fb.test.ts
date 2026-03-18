@@ -292,5 +292,48 @@ describe("Codegen - Function Blocks", () => {
       expect(result.cppCode).toContain("FB.X = 10;");
       expect(result.cppCode).toContain("FB();");
     });
+
+    it("should resolve positional arguments in FB invocation", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK MyFB
+          VAR_INPUT
+            a : INT;
+            b : BOOL;
+          END_VAR
+          a := a + 1;
+        END_FUNCTION_BLOCK
+
+        PROGRAM Test
+          VAR fb : MyFB; END_VAR
+          fb(42, TRUE);
+        END_PROGRAM
+      `);
+
+      // Positional args should be mapped to VAR_INPUT by order
+      expect(result.cppCode).toContain("FB.A = 42;");
+      expect(result.cppCode).toContain("FB.B = true;");
+      expect(result.cppCode).toContain("FB();");
+    });
+
+    it("should handle mixed named and positional arguments", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK MyFB
+          VAR_INPUT
+            x : INT;
+            y : INT;
+          END_VAR
+          x := x + y;
+        END_FUNCTION_BLOCK
+
+        PROGRAM Test
+          VAR fb : MyFB; END_VAR
+          fb(y := 20);
+        END_PROGRAM
+      `);
+
+      // Named argument should work
+      expect(result.cppCode).toContain("FB.Y = 20;");
+      expect(result.cppCode).toContain("FB();");
+    });
   });
 });

@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "type": "shell",
+      "command": "node scripts/setup-and-bundle.js",
+      "group": "build",
+      "label": "npm: bundle",
+      "detail": "Install all dependencies, build compiler, and bundle extension",
+      "problemMatcher": ["$tsc"]
+    }
+  ]
+}

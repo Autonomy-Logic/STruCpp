@@ -25,6 +25,10 @@ export interface CompileOptions {
   /** Include #line directives in generated C++ */
   lineDirectives?: boolean;
 
+  /** Absolute source path used in #line directives (for debugger file resolution).
+   *  Falls back to fileName when not set. */
+  lineDirectiveFileName?: string;
+
   /** Include ST source as comments in generated C++ */
   sourceComments?: boolean;
 

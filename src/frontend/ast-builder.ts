@@ -107,22 +107,39 @@ function nodeToSourceSpan(node: CstNode): SourceSpan {
     for (const child of childArray) {
       if ("image" in child) {
         // It's a token
-        if (child.startLine !== undefined && child.startLine < startLine) {
-          startLine = child.startLine;
-          startCol = child.startColumn ?? 0;
+        const sl = child.startLine;
+        const sc = child.startColumn ?? 0;
+        if (
+          sl !== undefined &&
+          (sl < startLine || (sl === startLine && sc < startCol))
+        ) {
+          startLine = sl;
+          startCol = sc;
         }
-        if (child.endLine !== undefined && child.endLine > endLine) {
-          endLine = child.endLine;
-          endCol = child.endColumn ?? 0;
+        const el = child.endLine;
+        const ec = child.endColumn ?? 0;
+        if (
+          el !== undefined &&
+          (el > endLine || (el === endLine && ec > endCol))
+        ) {
+          endLine = el;
+          endCol = ec;
         }
       } else {
         // It's a CstNode — recurse to find nested tokens
         const subSpan = nodeToSourceSpan(child);
-        if (subSpan.startLine > 0 && subSpan.startLine < startLine) {
+        if (
+          subSpan.startLine > 0 &&
+          (subSpan.startLine < startLine ||
+            (subSpan.startLine === startLine && subSpan.startCol < startCol))
+        ) {
           startLine = subSpan.startLine;
           startCol = subSpan.startCol;
         }
-        if (subSpan.endLine > endLine) {
+        if (
+          subSpan.endLine > endLine ||
+          (subSpan.endLine === endLine && subSpan.endCol > endCol)
+        ) {
           endLine = subSpan.endLine;
           endCol = subSpan.endCol;
         }

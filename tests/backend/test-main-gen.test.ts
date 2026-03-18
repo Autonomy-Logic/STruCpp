@@ -546,6 +546,251 @@ describe("Test Main Generator", () => {
     });
   });
 
+  describe("enum qualified access", () => {
+    it("should emit :: for enum member access in assert expressions", () => {
+      const testFile = makeTestFile("test.st", [
+        {
+          name: "enum test",
+          varBlocks: [
+            {
+              kind: "VarBlock",
+              blockType: "VAR",
+              isConstant: false,
+              isRetain: false,
+              declarations: [
+                {
+                  kind: "VarDeclaration",
+                  names: ["uut"],
+                  type: {
+                    kind: "TypeReference",
+                    name: "LIGHT",
+                    isReference: false,
+                    referenceKind: "none",
+                    sourceSpan: span,
+                  },
+                  sourceSpan: span,
+                },
+              ],
+              sourceSpan: span,
+            },
+          ],
+          body: [
+            {
+              kind: "AssertCall",
+              assertType: "ASSERT_EQ",
+              args: [
+                {
+                  kind: "VariableExpression",
+                  name: "uut",
+                  subscripts: [],
+                  fieldAccess: ["CURRENTSTATE"],
+                  isDereference: false,
+                  sourceSpan: { ...span, startLine: 3 },
+                },
+                {
+                  kind: "VariableExpression",
+                  name: "TRAFFICSTATE",
+                  subscripts: [],
+                  fieldAccess: ["RED"],
+                  isDereference: false,
+                  sourceSpan: { ...span, startLine: 3 },
+                },
+              ],
+              sourceSpan: { ...span, startLine: 3 },
+            },
+          ],
+          sourceSpan: span,
+        },
+      ]);
+
+      const ast = {
+        kind: "CompilationUnit" as const,
+        programs: [],
+        functions: [],
+        functionBlocks: [
+          {
+            kind: "FunctionBlockDeclaration" as const,
+            name: "LIGHT",
+            varBlocks: [
+              {
+                kind: "VarBlock" as const,
+                blockType: "VAR" as const,
+                isConstant: false,
+                isRetain: false,
+                declarations: [
+                  {
+                    kind: "VarDeclaration" as const,
+                    names: ["CURRENTSTATE"],
+                    type: {
+                      kind: "TypeReference" as const,
+                      name: "TRAFFICSTATE",
+                      isReference: false,
+                      referenceKind: "none" as const,
+                      sourceSpan: span,
+                    },
+                    sourceSpan: span,
+                  },
+                ],
+                sourceSpan: span,
+              },
+            ],
+            methods: [],
+            properties: [],
+            body: [],
+            sourceSpan: span,
+          },
+        ],
+        interfaces: [],
+        types: [
+          {
+            kind: "TypeDeclaration" as const,
+            name: "TRAFFICSTATE",
+            definition: {
+              kind: "EnumDefinition" as const,
+              members: [
+                { name: "RED", sourceSpan: span },
+                { name: "YELLOW", sourceSpan: span },
+                { name: "GREEN", sourceSpan: span },
+              ],
+              sourceSpan: span,
+            },
+            sourceSpan: span,
+          },
+        ],
+        configurations: [],
+        sourceSpan: span,
+      };
+
+      const code = generateTestMain([testFile], {
+        headerFileName: "generated.hpp",
+        pous: [
+          {
+            name: "LIGHT",
+            kind: "functionBlock",
+            cppClassName: "LIGHT",
+            variables: new Map([["CURRENTSTATE", "TRAFFICSTATE"]]),
+          },
+        ],
+        ast: ast as any,
+      });
+
+      // C++ expression must use :: for scoped enum access
+      expect(code).toContain("TRAFFICSTATE::RED");
+      // Verify the C++ expression uses :: (not dot) before the string literal params
+      expect(code).toMatch(/TRAFFICSTATE::RED,\s*"uut\.CURRENTSTATE"/);
+    });
+
+    it("should emit :: for enum types from library archives (no AST types)", () => {
+      const testFile = makeTestFile("test.st", [
+        {
+          name: "lib enum test",
+          varBlocks: [
+            {
+              kind: "VarBlock",
+              blockType: "VAR",
+              isConstant: false,
+              isRetain: false,
+              declarations: [
+                {
+                  kind: "VarDeclaration",
+                  names: ["ped"],
+                  type: {
+                    kind: "TypeReference",
+                    name: "PEDESTRIANLIGHT",
+                    isReference: false,
+                    referenceKind: "none",
+                    sourceSpan: span,
+                  },
+                  sourceSpan: span,
+                },
+              ],
+              sourceSpan: span,
+            },
+          ],
+          body: [
+            {
+              kind: "AssertCall",
+              assertType: "ASSERT_EQ",
+              args: [
+                {
+                  kind: "VariableExpression",
+                  name: "ped",
+                  subscripts: [],
+                  fieldAccess: ["pedestrianState"],
+                  isDereference: false,
+                  sourceSpan: { ...span, startLine: 3 },
+                },
+                {
+                  kind: "VariableExpression",
+                  name: "PedestrianState",
+                  subscripts: [],
+                  fieldAccess: ["DONT_WALK"],
+                  isDereference: false,
+                  sourceSpan: { ...span, startLine: 3 },
+                },
+              ],
+              sourceSpan: { ...span, startLine: 3 },
+            },
+          ],
+          sourceSpan: span,
+        },
+      ]);
+
+      // Empty AST (no types defined in source) — enums come from library
+      const ast = {
+        kind: "CompilationUnit" as const,
+        programs: [],
+        functions: [],
+        functionBlocks: [],
+        interfaces: [],
+        types: [],
+        configurations: [],
+        sourceSpan: span,
+      };
+
+      const code = generateTestMain([testFile], {
+        headerFileName: "generated.hpp",
+        pous: [
+          {
+            name: "PEDESTRIANLIGHT",
+            kind: "functionBlock",
+            cppClassName: "PEDESTRIANLIGHT",
+            variables: new Map([["PEDESTRIANSTATE", "PEDESTRIANSTATE"]]),
+          },
+        ],
+        ast: ast as any,
+        libraryArchives: [
+          {
+            formatVersion: 1,
+            manifest: {
+              name: "semaphoreLib",
+              version: "1.0.0",
+              namespace: "semaphoreLib",
+              functions: [],
+              functionBlocks: [
+                { name: "PEDESTRIANLIGHT", inputs: [], outputs: [{ name: "PEDESTRIANSTATE", type: "PEDESTRIANSTATE" }], inouts: [] },
+              ],
+              types: [
+                { name: "TRAFFICSTATE", kind: "enum" },
+                { name: "PEDESTRIANSTATE", kind: "enum" },
+                { name: "PHASETIMING", kind: "struct" },
+              ],
+              headers: [],
+              isBuiltin: false,
+            },
+            headerCode: "",
+            cppCode: "",
+          } as any,
+        ],
+      });
+
+      // Enum from library must use :: scoped access (preserves original case from expression)
+      expect(code).toContain("PedestrianState::DONT_WALK");
+      // The dot form should only appear in the string literal (error message), not as a C++ expression
+      expect(code).toMatch(/PedestrianState::DONT_WALK,\s*"ped\.pedestrianState"/);
+    });
+  });
+
   describe("runner structure", () => {
     it("should generate TestRunner with file name", () => {
       const testFile = makeTestFile("test_counter.st", [
