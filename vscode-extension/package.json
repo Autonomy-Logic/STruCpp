@@ -1,10 +1,19 @@
 {
   "name": "strucpp-vscode",
-  "displayName": "STruC++ — Structured Text IDE",
-  "description": "IEC 61131-3 Structured Text language support powered by the STruC++ compiler",
-  "version": "0.1.0",
-  "publisher": "autonomy-logic",
+  "displayName": "STruC++ Structured Text Compiler",
+  "description": "IEC 61131-3 Structured Text to C++ compiler with full IDE support — diagnostics, autocomplete, debugging, and more",
+  "version": "0.0.0",
+  "publisher": "Autonomy",
   "license": "GPL-3.0-or-later",
+  "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Autonomy-Logic/STruCpp"
+  },
+  "homepage": "https://autonomylogic.com",
+  "bugs": {
+    "url": "https://github.com/Autonomy-Logic/STruCpp/issues"
+  },
   "engines": {
     "vscode": "^1.82.0"
   },
@@ -333,23 +342,22 @@
     "build": "node ./node_modules/typescript/bin/tsc -b",
     "watch": "node ./node_modules/typescript/bin/tsc -b --watch",
     "bundle": "node ./node_modules/typescript/bin/tsc -b && node esbuild.mjs",
-    "vscode:prepublish": "node esbuild.mjs --production",
-    "package": "vsce package",
+    "vscode:prepublish": "node ./node_modules/typescript/bin/tsc -b && node esbuild.mjs --production",
+    "package": "npx @vscode/vsce package --no-dependencies",
     "lint": "eslint client/src server/src",
     "test": "vitest run",
     "test:watch": "vitest"
   },
-  "dependencies": {
+  "devDependencies": {
+    "@types/vscode": "^1.82.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.24.0",
     "strucpp": "file:..",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0",
     "vscode-languageclient": "^9.0.1",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.12",
     "vscode-uri": "^3.1.0"
-  },
-  "devDependencies": {
-    "@types/vscode": "^1.82.0",
-    "esbuild": "^0.24.0",
-    "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
   }
 }

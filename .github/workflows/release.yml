@@ -286,6 +286,40 @@ jobs:
           path: strucpp-win32-x64.zip
 
   # ---------------------------------------------------------------------------
+  # VSCode Extension (.vsix)
+  # ---------------------------------------------------------------------------
+  build-vsix:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install compiler dependencies and build
+        run: npm ci && npm run build
+
+      - name: Install extension dependencies
+        run: cd vscode-extension && npm ci
+
+      - name: Inject version
+        run: cd vscode-extension && npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Package extension
+        run: cd vscode-extension && npx @vscode/vsce package --no-dependencies
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strucpp-vsix
+          path: vscode-extension/*.vsix
+
+  # ---------------------------------------------------------------------------
   # Create GitHub Release (only on tag push)
   # ---------------------------------------------------------------------------
   create-release:
@@ -297,6 +331,7 @@ jobs:
       - build-darwin-x64
       - build-darwin-arm64
       - build-windows-x64
+      - build-vsix
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -315,6 +350,7 @@ jobs:
           cp artifacts/strucpp-win32-x64/strucpp-win32-x64.zip release/
           # Windows ARM64 runs x64 binaries via emulation
           cp release/strucpp-win32-x64.zip release/strucpp-win32-arm64.zip
+          cp artifacts/strucpp-vsix/*.vsix release/
           ls -lh release/
 
       - name: Detect prerelease

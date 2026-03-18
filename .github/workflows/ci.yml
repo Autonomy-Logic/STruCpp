@@ -70,6 +70,31 @@ jobs:
       - name: Run tests with coverage
         run: npm run test:coverage -- --run
 
+  extension:
+    name: Extension Build & Test
+    runs-on: ubuntu-latest
+    needs: [lint, typecheck, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install compiler dependencies and build
+        run: npm ci && npm run build
+
+      - name: Install extension dependencies
+        run: cd vscode-extension && npm ci
+
+      - name: Run extension unit tests
+        run: cd vscode-extension && npx vitest run
+
+      - name: Verify extension bundle
+        run: cd vscode-extension && npm run bundle
+
   build:
     name: Build
     runs-on: ubuntu-latest

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Left curly brace { -->
+  <path d="
+    M 78 42
+    C 58 42 48 52 48 72
+    L 48 108
+    C 48 118 38 128 24 128
+    C 38 128 48 138 48 148
+    L 48 184
+    C 48 204 58 214 78 214
+  " fill="none" stroke="#0080FF" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- Right curly brace } -->
+  <path d="
+    M 178 42
+    C 198 42 208 52 208 72
+    L 208 108
+    C 208 118 218 128 232 128
+    C 218 128 208 138 208 148
+    L 208 184
+    C 208 204 198 214 178 214
+  " fill="none" stroke="#0080FF" stroke-width="14" stroke-linecap="round"/>
+
+  <!-- S -->
+  <path d="
+    M 136 82
+    L 86 82
+    C 70 82 60 92 60 106
+    C 60 120 70 130 86 130
+    L 114 130
+    C 126 130 132 137 132 146
+    C 132 155 126 162 114 162
+    L 64 162
+    L 64 178
+    L 114 178
+    C 134 178 146 165 146 146
+    C 146 127 134 118 114 118
+    L 86 118
+    C 78 118 74 113 74 106
+    C 74 99 78 94 86 94
+    L 136 94
+    Z
+  " fill="#0080FF"/>
+
+  <!-- T (crossbar starts at S top-right) -->
+  <path d="
+    M 136 82 L 136 94 L 158 94 L 158 178 L 174 178 L 174 94 L 196 94 L 196 82 Z
+  " fill="#0080FF"/>
+</svg>
