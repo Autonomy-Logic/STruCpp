@@ -372,3 +372,9 @@ jobs:
             --generate-notes \
             ${{ steps.prerelease.outputs.flag }} \
             release/*
+
+      - name: Publish extension to VSCode Marketplace
+        if: env.VSCE_PAT != ''
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish --packagePath release/*.vsix --pat "$VSCE_PAT"

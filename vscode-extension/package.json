@@ -3,7 +3,7 @@
   "displayName": "STruC++ Structured Text Compiler",
   "description": "IEC 61131-3 Structured Text to C++ compiler with full IDE support — diagnostics, autocomplete, debugging, and more",
   "version": "0.0.0",
-  "publisher": "Autonomy",
+  "publisher": "AutonomyLogic",
   "license": "GPL-3.0-or-later",
   "icon": "icon.png",
   "repository": {
