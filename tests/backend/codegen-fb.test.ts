@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../dist/index.js";
+import { compile } from "../../src/index.js";
 
 function compileAndCheck(source: string) {
   const result = compile(source);

@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../dist/index.js";
+import { compile } from "../../src/index.js";
 
 function compileST(source: string): {
   cppCode: string;
@@ -215,7 +215,8 @@ describe("Phase 3.5: Combined __NEW/__DELETE Usage", () => {
     expect(result.success).toBe(true);
     // Should have two iec_new calls and two iec_delete calls
     const newCount = (result.cppCode.match(/strucpp::iec_new</g) || []).length;
-    const deleteCount = (result.cppCode.match(/strucpp::iec_delete/g) || []).length;
+    const deleteCount = (result.cppCode.match(/strucpp::iec_delete/g) || [])
+      .length;
     expect(newCount).toBe(2);
     expect(deleteCount).toBe(2);
   });
