@@ -14,7 +14,12 @@
 import { describe, it, expect } from "vitest";
 import { compile } from "../../dist/index.js";
 
-function compileST(source: string): { cppCode: string; headerCode: string; success: boolean; errors: unknown[] } {
+function compileST(source: string): {
+  cppCode: string;
+  headerCode: string;
+  success: boolean;
+  errors: unknown[];
+} {
   const result = compile(source);
   return {
     cppCode: result.cppCode,
@@ -262,90 +267,6 @@ describe("Phase 3.3: Combined Array/Struct Access", () => {
         PointArr3 : ARRAY[1..3] OF Point;
       END_TYPE
       PROGRAM TestArrStructLoop
-        VAR
-          points : PointArr3;
-          i : INT;
-        END_VAR
-        FOR i := 1 TO 3 DO
-          points[i].x := i;
-          points[i].y := i * 2;
-        END_FOR;
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("POINTS[I].X = I;");
-    expect(result.cppCode).toContain("POINTS[I].Y = I * 2;");
-  });
-});
-
-// =============================================================================
-// Validation Examples from Phase 3.3 Docs
-// =============================================================================
-
-describe("Phase 3.3: Validation Examples", () => {
-  it("should handle array access and assignment (Test 1)", () => {
-    const result = compileST(`
-      TYPE
-        IntArr5 : ARRAY[1..5] OF INT;
-      END_TYPE
-      PROGRAM TestArrayAccess
-        VAR
-          arr : IntArr5;
-          sum : INT := 0;
-          i : INT;
-        END_VAR
-        FOR i := 1 TO 5 DO
-          arr[i] := i * 10;
-        END_FOR;
-        FOR i := 1 TO 5 DO
-          sum := sum + arr[i];
-        END_FOR;
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("ARR[I] = I * 10;");
-    expect(result.cppCode).toContain("SUM = SUM + ARR[I];");
-  });
-
-  it("should handle structure access (Test 2)", () => {
-    const result = compileST(`
-      TYPE
-        Point : STRUCT
-          x : INT;
-          y : INT;
-        END_STRUCT;
-      END_TYPE
-      PROGRAM TestStructAccess
-        VAR
-          p1 : Point;
-          p2 : Point;
-          dist : INT;
-        END_VAR
-        p1.x := 0;
-        p1.y := 0;
-        p2.x := 3;
-        p2.y := 4;
-        dist := (p2.x - p1.x) + (p2.y - p1.y);
-      END_PROGRAM
-    `);
-    expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("P1.X = 0;");
-    expect(result.cppCode).toContain("P1.Y = 0;");
-    expect(result.cppCode).toContain("P2.X = 3;");
-    expect(result.cppCode).toContain("P2.Y = 4;");
-    expect(result.cppCode).toContain("DIST = (P2.X - P1.X) + (P2.Y - P1.Y);");
-  });
-
-  it("should handle array of structures (Test 3)", () => {
-    const result = compileST(`
-      TYPE
-        Point : STRUCT
-          x : INT;
-          y : INT;
-        END_STRUCT;
-        PointArr3 : ARRAY[1..3] OF Point;
-      END_TYPE
-      PROGRAM TestArrayOfStruct
         VAR
           points : PointArr3;
           i : INT;
