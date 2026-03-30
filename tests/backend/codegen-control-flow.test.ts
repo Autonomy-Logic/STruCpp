@@ -284,6 +284,55 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.cppCode).toContain("TRAFFICSTATE::RED");
     expect(result.cppCode).toContain("PEDSTATE::WALK");
   });
+
+  it("should qualify bare enum members in assignments and expressions", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM TestBareEnum
+        VAR c : Color; matched : BOOL; END_VAR
+        c := RED;
+        matched := (c = GREEN);
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("COLOR::RED");
+    expect(result.cppCode).toContain("COLOR::GREEN");
+  });
+
+  it("should qualify bare enum members in CASE labels", () => {
+    const result = compileST(`
+      TYPE
+        TrafficState : (RED, YELLOW, GREEN);
+      END_TYPE
+      PROGRAM TestBareCase
+        VAR ts : TrafficState; r : INT; END_VAR
+        CASE ts OF
+          RED: r := 1;
+          GREEN: r := 2;
+          YELLOW: r := 3;
+        END_CASE;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("case TRAFFICSTATE::RED:");
+    expect(result.cppCode).toContain("case TRAFFICSTATE::GREEN:");
+    expect(result.cppCode).toContain("case TRAFFICSTATE::YELLOW:");
+  });
+
+  it("should qualify bare enum members in variable initializers", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM TestBareInit
+        VAR c : Color := GREEN; END_VAR
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("COLOR::GREEN");
+  });
 });
 
 // =============================================================================

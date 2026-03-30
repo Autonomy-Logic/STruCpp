@@ -466,3 +466,70 @@ describe("Undeclared Variables - Negative (must error)", () => {
     expect(errs[0]!.message).toContain("'NOTDECLARED'");
   });
 });
+
+// =============================================================================
+// Enum member resolution
+// =============================================================================
+
+describe("Undeclared Variables - Enum members", () => {
+  it("should accept bare enum members as valid identifiers", () => {
+    const result = analyzeSource(`
+      TYPE Color : (RED, GREEN, BLUE); END_TYPE
+      PROGRAM Main
+        VAR c : Color; END_VAR
+        c := RED;
+      END_PROGRAM
+    `);
+    expect(undeclaredErrors(result)).toHaveLength(0);
+  });
+
+  it("should accept qualified enum access", () => {
+    const result = analyzeSource(`
+      TYPE Color : (RED, GREEN, BLUE); END_TYPE
+      PROGRAM Main
+        VAR c : Color; END_VAR
+        c := Color.RED;
+      END_PROGRAM
+    `);
+    expect(undeclaredErrors(result)).toHaveLength(0);
+  });
+
+  it("should report ambiguous bare enum member", () => {
+    const result = analyzeSource(`
+      TYPE
+        State1 : (IDLE, RUNNING);
+        State2 : (IDLE, ACTIVE);
+      END_TYPE
+      PROGRAM Main
+        VAR x : State1; END_VAR
+        x := IDLE;
+      END_PROGRAM
+    `);
+    const ambiguousErrors = result.errors.filter((e) =>
+      e.message.includes("Ambiguous"),
+    );
+    expect(ambiguousErrors).toHaveLength(1);
+    expect(ambiguousErrors[0]!.message).toContain("IDLE");
+    expect(ambiguousErrors[0]!.message).toContain("STATE1");
+    expect(ambiguousErrors[0]!.message).toContain("STATE2");
+  });
+
+  it("should not report ambiguity for non-conflicting members", () => {
+    const result = analyzeSource(`
+      TYPE
+        State1 : (IDLE, RUNNING);
+        State2 : (IDLE, ACTIVE);
+      END_TYPE
+      PROGRAM Main
+        VAR x : State1; y : State2; END_VAR
+        x := RUNNING;
+        y := ACTIVE;
+      END_PROGRAM
+    `);
+    expect(undeclaredErrors(result)).toHaveLength(0);
+    const ambiguousErrors = result.errors.filter((e) =>
+      e.message.includes("Ambiguous"),
+    );
+    expect(ambiguousErrors).toHaveLength(0);
+  });
+});

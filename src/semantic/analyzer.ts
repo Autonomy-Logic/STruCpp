@@ -34,6 +34,8 @@ import {
   getBitAccessWidth,
   resolveFieldType,
   resolveArrayElementType,
+  buildEnumMemberMap,
+  type EnumMemberEntry,
 } from "./type-utils.js";
 
 // =============================================================================
@@ -161,6 +163,7 @@ export class SemanticAnalyzer {
   private symbolTables: SymbolTables;
   private typeChecker: TypeChecker;
   private stdRegistry = new StdFunctionRegistry();
+  private enumMemberMap: Map<string, EnumMemberEntry> = new Map();
   private errors: CompileError[] = [];
   private warnings: CompileError[] = [];
 
@@ -262,6 +265,19 @@ export class SemanticAnalyzer {
         }
       }
     }
+
+    // Build reverse lookup map: enum member name → owning enum type
+    this.enumMemberMap = buildEnumMemberMap(
+      ast.types
+        .filter((t) => t.definition.kind === "EnumDefinition")
+        .map((t) => ({
+          name: t.name,
+          members:
+            t.definition.kind === "EnumDefinition"
+              ? t.definition.members.map((m) => m.name)
+              : [],
+        })),
+    );
 
     // Register function declarations
     for (const funcDecl of ast.functions) {
@@ -2532,7 +2548,20 @@ export class SemanticAnalyzer {
     if (this.stdRegistry.isStandardFunction(name)) return;
 
     // 6. Enum member names (bare enum values like Stopped, Running, Manual)
-    if (this.isEnumMember(upper)) return;
+    const enumEntry = this.enumMemberMap.get(upper);
+    if (enumEntry) {
+      if (enumEntry.typeName === null) {
+        // Ambiguous — member exists in multiple enum types
+        const types = enumEntry.conflictingTypes.join("' or '");
+        this.addError(
+          `Ambiguous enum member '${name}' — qualify as '${types}'`,
+          sourceSpan.startLine,
+          sourceSpan.startCol,
+          sourceSpan.file,
+        );
+      }
+      return;
+    }
 
     // 7. Not found
     this.addError(
@@ -2541,21 +2570,6 @@ export class SemanticAnalyzer {
       sourceSpan.startCol,
       sourceSpan.file,
     );
-  }
-
-  /**
-   * Check if a name is a member of any registered enum type.
-   */
-  private isEnumMember(nameUpper: string): boolean {
-    for (const sym of this.symbolTables.globalScope.getAllSymbols()) {
-      if (sym.kind === "type" && sym.resolvedType?.typeKind === "enum") {
-        const enumType = sym.resolvedType as EnumType;
-        if (enumType.values.some((v) => v.toUpperCase() === nameUpper)) {
-          return true;
-        }
-      }
-    }
-    return false;
   }
 
   // =============================================================================
@@ -2574,6 +2588,16 @@ export class SemanticAnalyzer {
     this.errors = [];
     this.warnings = [];
     this.symbolTables = sourceSymbolTables;
+
+    // Build enum member map from source symbol tables for bare enum resolution
+    const enumDescriptors: Array<{ name: string; members: string[] }> = [];
+    for (const sym of sourceSymbolTables.globalScope.getAllSymbols()) {
+      if (sym.kind === "type" && sym.resolvedType?.typeKind === "enum") {
+        const enumType = sym.resolvedType as EnumType;
+        enumDescriptors.push({ name: enumType.name, members: enumType.values });
+      }
+    }
+    this.enumMemberMap = buildEnumMemberMap(enumDescriptors);
 
     // Validate type references in SETUP and TEST var blocks
     if (testFile.setup) {

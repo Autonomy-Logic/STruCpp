@@ -50,6 +50,8 @@ import {
   isImplicitlyConvertible,
   resolveFieldType as resolveFieldTypeUtil,
   typeName as typeNameUtil,
+  buildEnumMemberMap,
+  type EnumMemberEntry,
 } from "../semantic/type-utils.js";
 import type { StlibArchive } from "../library/library-manifest.js";
 
@@ -259,6 +261,9 @@ export class CodeGenerator {
 
   /** Map of enum type name (upper case) → set of member names (upper case) for :: emission */
   protected enumTypeMembers: Map<string, Set<string>> = new Map();
+
+  /** Reverse map: enum member name (upper case) → owning enum type (for bare enum qualification) */
+  protected enumMemberToType: Map<string, EnumMemberEntry> = new Map();
 
   /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
   private libraryFBFieldTypes: Map<string, string> = new Map();
@@ -598,15 +603,17 @@ export class CodeGenerator {
     }
 
     // Build set of known struct/UDT types and enum member maps
+    const enumDescriptors: Array<{ name: string; members: string[] }> = [];
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
       if (td.definition.kind === "EnumDefinition") {
-        const members = new Set(
-          td.definition.members.map((m) => m.name.toUpperCase()),
-        );
+        const memberNames = td.definition.members.map((m) => m.name);
+        const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
+        enumDescriptors.push({ name: td.name, members: memberNames });
       }
     }
+    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
     for (const prog of ast.programs) {
@@ -2811,6 +2818,16 @@ export class CodeGenerator {
       }
     }
 
+    // Bare enum member: Stopped → Irrigation_State::Stopped
+    const enumEntry = this.enumMemberToType.get(nameUpper);
+    if (
+      enumEntry?.typeName &&
+      expr.fieldAccess.length === 0 &&
+      (!expr.accessChain || expr.accessChain.length === 0)
+    ) {
+      return `${enumEntry.typeName}::${expr.name}`;
+    }
+
     // Enum qualified access: TrafficState.RED → TrafficState::RED
     if (this.enumTypeMembers.has(nameUpper)) {
       if (
@@ -4126,6 +4143,11 @@ export class CodeGenerator {
         if (this.enumTypeMembers.has(prefix)) {
           return initialValue.replace(".", "::");
         }
+      }
+      // Bare enum initializer: Stopped → Irrigation_State::Stopped
+      const bareEntry = this.enumMemberToType.get(initialValue.toUpperCase());
+      if (bareEntry?.typeName) {
+        return `${bareEntry.typeName}::${initialValue}`;
       }
       // Convert TIME/LTIME literals (T#30s, TIME#1m2s) to nanoseconds
       const upperInit = initialValue.toUpperCase();

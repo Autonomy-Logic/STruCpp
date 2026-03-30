@@ -21,6 +21,7 @@ import type {
 import type { POUInfo } from "./test-main-gen.js";
 import { CodeGenerator } from "./codegen.js";
 import type { CodeGenOptions } from "./codegen.js";
+import { buildEnumMemberMap } from "../semantic/type-utils.js";
 
 export class TestCodeGenerator extends CodeGenerator {
   private pouMap: Map<string, POUInfo>;
@@ -90,15 +91,17 @@ export class TestCodeGenerator extends CodeGenerator {
         this.fbInterfaceMethodNames.set(fb.name.toUpperCase(), ifaceMethods);
       }
     }
+    const enumDescriptors: Array<{ name: string; members: string[] }> = [];
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
       if (td.definition?.kind === "EnumDefinition") {
-        const members = new Set(
-          td.definition.members.map((m) => m.name.toUpperCase()),
-        );
+        const memberNames = td.definition.members.map((m) => m.name);
+        const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
+        enumDescriptors.push({ name: td.name, members: memberNames });
       }
     }
+    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
     for (const prog of ast.programs) {
       this.knownProgramTypes.add(prog.name.toUpperCase());
     }
