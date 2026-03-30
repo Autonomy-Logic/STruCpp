@@ -34,7 +34,6 @@ import {
   getBitAccessWidth,
   resolveFieldType,
   resolveArrayElementType,
-  ELEMENTARY_TYPES,
 } from "./type-utils.js";
 
 // =============================================================================
@@ -267,13 +266,9 @@ export class SemanticAnalyzer {
     // Register function declarations
     for (const funcDecl of ast.functions) {
       try {
-        const returnType: ElementaryType = ELEMENTARY_TYPES[
-          funcDecl.returnType.name.toUpperCase()
-        ] ?? {
-          typeKind: "elementary",
-          name: funcDecl.returnType.name,
-          sizeBits: 0,
-        };
+        const returnType = this.resolveVarType(
+          funcDecl.returnType.name.toUpperCase(),
+        );
         this.symbolTables.globalScope.defineOrReplace({
           name: funcDecl.name,
           kind: "function",
@@ -2536,6 +2531,9 @@ export class SemanticAnalyzer {
     // 5. Standard functions (safety net)
     if (this.stdRegistry.isStandardFunction(name)) return;
 
+    // 6. Enum member names (bare enum values like Stopped, Running, Manual)
+    if (this.isEnumMember(upper)) return;
+
     // 7. Not found
     this.addError(
       `Undeclared variable '${name}'`,
@@ -2543,6 +2541,21 @@ export class SemanticAnalyzer {
       sourceSpan.startCol,
       sourceSpan.file,
     );
+  }
+
+  /**
+   * Check if a name is a member of any registered enum type.
+   */
+  private isEnumMember(nameUpper: string): boolean {
+    for (const sym of this.symbolTables.globalScope.getAllSymbols()) {
+      if (sym.kind === "type" && sym.resolvedType?.typeKind === "enum") {
+        const enumType = sym.resolvedType as EnumType;
+        if (enumType.values.some((v) => v.toUpperCase() === nameUpper)) {
+          return true;
+        }
+      }
+    }
+    return false;
   }
 
   // =============================================================================
