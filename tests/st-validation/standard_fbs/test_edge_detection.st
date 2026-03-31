@@ -26,21 +26,25 @@ TEST 'R_TRIG no edge on repeated TRUE'
 END_TEST
 
 TEST 'F_TRIG detects falling edges'
-  VAR ft : F_TRIG; q1, q2, q3, q4 : BOOL; END_VAR
-  (* Initial: CLK=FALSE, M=FALSE. Q = NOT CLK AND NOT M = TRUE *)
+  VAR ft : F_TRIG; q1, q2, q3, q4, q5 : BOOL; END_VAR
+  (* Initial: CLK=FALSE, M=TRUE. Q = NOT CLK AND NOT M = TRUE AND FALSE = FALSE *)
   ft(CLK := FALSE);
   q1 := ft.Q;
-  (* CLK still FALSE, M now TRUE. Q = NOT FALSE AND NOT TRUE = FALSE *)
+  (* CLK still FALSE, M = NOT CLK = TRUE. Q = TRUE AND FALSE = FALSE *)
   ft(CLK := FALSE);
   q2 := ft.Q;
-  (* CLK goes TRUE. Q = NOT TRUE AND NOT TRUE = FALSE *)
+  (* CLK goes TRUE, M = TRUE. Q = FALSE AND FALSE = FALSE *)
   ft(CLK := TRUE);
   q3 := ft.Q;
-  (* CLK goes FALSE: falling edge. Q = NOT FALSE AND NOT FALSE = TRUE *)
-  ft(CLK := FALSE);
+  (* CLK still TRUE, M = NOT TRUE = FALSE. Q = FALSE AND TRUE = FALSE *)
+  ft(CLK := TRUE);
   q4 := ft.Q;
-  ASSERT_TRUE(q1);
+  (* CLK goes FALSE: falling edge. M = FALSE. Q = TRUE AND TRUE = TRUE *)
+  ft(CLK := FALSE);
+  q5 := ft.Q;
+  ASSERT_FALSE(q1);
   ASSERT_FALSE(q2);
   ASSERT_FALSE(q3);
-  ASSERT_TRUE(q4);
+  ASSERT_FALSE(q4);
+  ASSERT_TRUE(q5);
 END_TEST
