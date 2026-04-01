@@ -228,7 +228,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
   });
 
   describe('Logical Expressions', () => {
-    it('should generate AND operator (→ &&)', () => {
+    it('should generate AND operator (→ &)', () => {
       const source = `
         PROGRAM Test
           VAR a : BOOL; b : BOOL; result : BOOL; END_VAR
@@ -237,10 +237,10 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('RESULT = A && B;');
+      expect(result.cppCode).toContain('RESULT = (A) & (B);');
     });
 
-    it('should generate OR operator (→ ||)', () => {
+    it('should generate OR operator (→ |)', () => {
       const source = `
         PROGRAM Test
           VAR a : BOOL; b : BOOL; result : BOOL; END_VAR
@@ -249,7 +249,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('RESULT = A || B;');
+      expect(result.cppCode).toContain('RESULT = (A) | (B);');
     });
 
     it('should generate XOR operator (→ ^)', () => {
@@ -261,7 +261,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('RESULT = A ^ B;');
+      expect(result.cppCode).toContain('RESULT = (A) ^ (B);');
     });
 
     it('should generate NOT operator (→ !)', () => {
@@ -453,7 +453,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain('A = 10;');
       expect(result.cppCode).toContain('B = 20;');
-      expect(result.cppCode).toContain('RESULT = (A < B) && (B > 15);');
+      expect(result.cppCode).toContain('RESULT = ((A < B)) & ((B > 15));');
     });
 
     it('Test 3: Arithmetic Operations', () => {
@@ -538,7 +538,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('RESULT = (A && B) || C;');
+      expect(result.cppCode).toContain('(((A) & (B))) | (C);');
     });
   });
 

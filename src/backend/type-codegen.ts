@@ -23,6 +23,10 @@ import type {
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
 import { formatArrayType } from "./codegen-utils.js";
 import { parseTimeLiteral } from "../project-model.js";
+import {
+  buildEnumMemberMap,
+  type EnumMemberEntry,
+} from "../semantic/type-utils.js";
 
 /**
  * Options for type code generation
@@ -117,6 +121,8 @@ export class TypeCodeGenerator {
   private output: string[] = [];
   /** Track known enum type names (uppercase) so struct fields can use IEC_ wrapper */
   private knownEnumNames: Set<string> = new Set();
+  /** Reverse map: enum member name (upper case) → owning enum type */
+  private enumMemberToType: Map<string, EnumMemberEntry> = new Map();
 
   constructor(options: Partial<TypeCodeGenOptions> = {}) {
     this.options = { ...defaultTypeCodeGenOptions, ...options };
@@ -139,6 +145,18 @@ export class TypeCodeGenerator {
   generateTypes(types: TypeDeclaration[]): string {
     this.output = [];
     this.knownEnumNames = new Set();
+
+    // Build reverse map for bare enum member qualification
+    this.enumMemberToType = buildEnumMemberMap(
+      types
+        .filter((t) => t.definition.kind === "EnumDefinition")
+        .map((t) => ({
+          name: t.name,
+          members: (
+            t.definition as import("../frontend/ast.js").EnumDefinition
+          ).members.map((m) => m.name),
+        })),
+    );
 
     if (types.length === 0) {
       return "";
@@ -518,12 +536,16 @@ export class TypeCodeGenerator {
 
   private variableToCpp(expr: VariableExpression): string {
     let result = expr.name;
+    const nameUpper = expr.name.toUpperCase();
+
+    // Bare enum member: Stopped → Irrigation_State::Stopped
+    const enumEntry = this.enumMemberToType.get(nameUpper);
+    if (enumEntry?.typeName && expr.fieldAccess.length === 0) {
+      return `${enumEntry.typeName}::${expr.name}`;
+    }
 
     // Enum qualified access: TrafficState.RED → TrafficState::RED
-    if (
-      this.knownEnumNames.has(expr.name.toUpperCase()) &&
-      expr.fieldAccess.length === 1
-    ) {
+    if (this.knownEnumNames.has(nameUpper) && expr.fieldAccess.length === 1) {
       return `${expr.name}::${expr.fieldAccess[0]}`;
     }
 

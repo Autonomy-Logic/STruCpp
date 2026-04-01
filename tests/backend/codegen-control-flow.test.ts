@@ -14,13 +14,14 @@
 import { describe, it, expect } from "vitest";
 import { compile } from "../../dist/index.js";
 
-function compileST(source: string): { cppCode: string; headerCode: string; success: boolean; errors: unknown[] } {
+function compileST(source: string): { cppCode: string; headerCode: string; success: boolean; errors: unknown[]; warnings: unknown[] } {
   const result = compile(source);
   return {
     cppCode: result.cppCode,
     headerCode: result.headerCode,
     success: result.success,
     errors: result.errors,
+    warnings: result.warnings,
   };
 }
 
@@ -284,6 +285,74 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.cppCode).toContain("TRAFFICSTATE::RED");
     expect(result.cppCode).toContain("PEDSTATE::WALK");
   });
+
+  it("should qualify bare enum members in assignments and expressions", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM TestBareEnum
+        VAR c : Color; matched : BOOL; END_VAR
+        c := RED;
+        matched := (c = GREEN);
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("COLOR::RED");
+    expect(result.cppCode).toContain("COLOR::GREEN");
+  });
+
+  it("should qualify bare enum members in CASE labels", () => {
+    const result = compileST(`
+      TYPE
+        TrafficState : (RED, YELLOW, GREEN);
+      END_TYPE
+      PROGRAM TestBareCase
+        VAR ts : TrafficState; r : INT; END_VAR
+        CASE ts OF
+          RED: r := 1;
+          GREEN: r := 2;
+          YELLOW: r := 3;
+        END_CASE;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("case TRAFFICSTATE::RED:");
+    expect(result.cppCode).toContain("case TRAFFICSTATE::GREEN:");
+    expect(result.cppCode).toContain("case TRAFFICSTATE::YELLOW:");
+  });
+
+  it("should qualify bare enum members in variable initializers", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM TestBareInit
+        VAR c : Color := GREEN; END_VAR
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("COLOR::GREEN");
+  });
+
+  it("should not shadow local variables with bare enum members", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM TestNoShadow
+        VAR RED : INT; c : Color; END_VAR
+        RED := 42;
+        c := Color.RED;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    // Local variable RED should stay as RED, not become COLOR::RED
+    expect(result.cppCode).toContain("RED = 42;");
+    expect(result.cppCode).not.toContain("COLOR::RED = 42");
+    // Qualified access should still work
+    expect(result.cppCode).toContain("COLOR::RED");
+  });
 });
 
 // =============================================================================
@@ -375,7 +444,7 @@ describe("Phase 3.2: WHILE Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while ((X < 10) && (Y > 0)) {");
+    expect(result.cppCode).toContain("while (((X < 10)) & ((Y > 0))) {");
     expect(result.cppCode).toContain("X = X + 1;");
     expect(result.cppCode).toContain("Y = Y - 1;");
   });
@@ -656,7 +725,7 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_FUNCTION_BLOCK
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if (ENABLE && !PREV) {");
+    expect(result.cppCode).toContain("if ((ENABLE) & (!PREV)) {");
     expect(result.cppCode).toContain("COUNT = COUNT + 1;");
     expect(result.cppCode).toContain("PREV = ENABLE;");
   });
@@ -704,5 +773,124 @@ describe("Phase 3.2: Complex Control Flow", () => {
     expect(result.cppCode).toContain("case 2:");
     // Should NOT contain default:
     expect(result.cppCode).not.toContain("default:");
+  });
+});
+
+// =============================================================================
+// AND/OR/XOR Bitwise Operator Code Generation
+// =============================================================================
+
+describe("Bitwise AND/OR/XOR Code Generation", () => {
+  it("should generate bitwise & for AND on integer types", () => {
+    const result = compileST(`
+      PROGRAM Test
+        VAR a : INT; b : INT; r : INT; END_VAR
+        r := a AND b;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("(A) & (B)");
+    expect(result.cppCode).not.toContain("&&");
+  });
+
+  it("should generate bitwise | for OR on WORD types", () => {
+    const result = compileST(`
+      PROGRAM Test
+        VAR a : WORD; b : WORD; r : WORD; END_VAR
+        r := a OR b;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("(A) | (B)");
+    expect(result.cppCode).not.toContain("||");
+  });
+
+  it("should parenthesize to preserve precedence with comparisons", () => {
+    const result = compileST(`
+      PROGRAM Test
+        VAR a : INT; b : INT; r : BOOL; END_VAR
+        r := a = 1 OR b = 2;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("(A == 1) | (B == 2)");
+  });
+});
+
+// =============================================================================
+// EN/ENO Implicit Parameter Code Generation
+// =============================================================================
+
+describe("EN/ENO Implicit Parameter Code Generation", () => {
+  it("should generate if/else wrapper for function call with EN and ENO", () => {
+    const result = compileST(`
+      FUNCTION MyFunc : INT
+        VAR_INPUT x : INT; END_VAR
+        MyFunc := x * 2;
+      END_FUNCTION
+      PROGRAM Test
+        VAR r : INT; eno : BOOL; cond : BOOL; END_VAR
+        r := MyFunc(EN := cond, x := 5, ENO => eno);
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("if (COND) {");
+    expect(result.cppCode).toContain("R = MYFUNC(5);");
+    expect(result.cppCode).toContain("ENO = true;");
+    expect(result.cppCode).toContain("} else {");
+    expect(result.cppCode).toContain("ENO = false;");
+  });
+
+  it("should not generate EN/ENO warnings for named arguments", () => {
+    const result = compileST(`
+      FUNCTION MyFunc : INT
+        VAR_INPUT x : INT; END_VAR
+        MyFunc := x * 2;
+      END_FUNCTION
+      PROGRAM Test
+        VAR r : INT; eno : BOOL; END_VAR
+        r := MyFunc(EN := TRUE, x := 5, ENO => eno);
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.warnings).not.toContainEqual(
+      expect.objectContaining({ message: expect.stringContaining("EN") }),
+    );
+  });
+
+  it("should handle ENO only (no EN) — always execute, set ENO true", () => {
+    const result = compileST(`
+      FUNCTION MyFunc : INT
+        VAR_INPUT x : INT; END_VAR
+        MyFunc := x * 2;
+      END_FUNCTION
+      PROGRAM Test
+        VAR r : INT; eno : BOOL; END_VAR
+        r := MyFunc(x := 5, ENO => eno);
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("R = MYFUNC(5);");
+    expect(result.cppCode).toContain("ENO = true;");
+    expect(result.cppCode).not.toContain("if (");
+  });
+
+  it("should wrap FB invocation with EN/ENO", () => {
+    const result = compileST(`
+      FUNCTION_BLOCK MyFB
+        VAR_INPUT x : INT; END_VAR
+        VAR_OUTPUT y : INT; END_VAR
+        y := x + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Test
+        VAR fb : MyFB; r : INT; eno : BOOL; cond : BOOL; END_VAR
+        fb(EN := cond, x := 10, ENO => eno);
+        r := fb.y;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("if (COND) {");
+    expect(result.cppCode).toContain("ENO = true;");
+    expect(result.cppCode).toContain("ENO = false;");
   });
 });

@@ -531,3 +531,54 @@ export function typeName(type: IECType): string {
       return type.typeKind;
   }
 }
+
+// =============================================================================
+// Enum Member Reverse Lookup
+// =============================================================================
+
+/**
+ * Entry in the enum member reverse map.
+ * `typeName` is the owning enum's original-case name, or `null` when the
+ * member appears in more than one enum (ambiguous).
+ * `conflictingTypes` lists all enum types that define this member (only
+ * populated when ambiguous, for error messages).
+ */
+export interface EnumMemberEntry {
+  typeName: string | null;
+  conflictingTypes: string[];
+}
+
+/**
+ * Build a reverse lookup map from enum member names to their owning enum type.
+ * When a member name exists in multiple enum types the entry is marked
+ * ambiguous (`typeName: null`) and `conflictingTypes` lists all owners.
+ *
+ * @param enumTypes Iterable of `{ name, members }` descriptors.
+ *   `name` is the original-case enum type name; `members` are the
+ *   original-case member names.
+ * @returns Map keyed by uppercase member name.
+ */
+export function buildEnumMemberMap(
+  enumTypes: Iterable<{ name: string; members: string[] }>,
+): Map<string, EnumMemberEntry> {
+  const map = new Map<string, EnumMemberEntry>();
+  for (const enumType of enumTypes) {
+    for (const member of enumType.members) {
+      const key = member.toUpperCase();
+      const existing = map.get(key);
+      if (existing) {
+        // Mark ambiguous and track all conflicting types
+        existing.typeName = null;
+        if (!existing.conflictingTypes.includes(enumType.name)) {
+          existing.conflictingTypes.push(enumType.name);
+        }
+      } else {
+        map.set(key, {
+          typeName: enumType.name,
+          conflictingTypes: [enumType.name],
+        });
+      }
+    }
+  }
+  return map;
+}

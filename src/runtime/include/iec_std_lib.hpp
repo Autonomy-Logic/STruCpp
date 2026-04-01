@@ -750,10 +750,16 @@ inline T MOD(T a, T b) noexcept {
 /**
  * NOT - Bitwise NOT (one's complement)
  * Input: ANY_BIT, Output: ANY_BIT (same type)
+ * BOOL specialization uses logical negation so that NOT(TRUE) == FALSE.
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T NOT(T value) noexcept {
     return T(~iec_unwrap(value));
+}
+
+template<>
+inline IEC_BOOL NOT(IEC_BOOL value) noexcept {
+    return IEC_BOOL(!iec_unwrap(value));
 }
 
 /**

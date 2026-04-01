@@ -24,17 +24,35 @@ export interface LibraryFunctionEntry {
 }
 
 /**
+ * Variable type reference in a library manifest.
+ * Stores enough metadata for the codegen to reconstruct the full C++ type,
+ * including inline array dimensions and pointer/reference qualifiers.
+ */
+export interface LibraryVarType {
+  /** Type name */
+  name: string;
+  /** Type kind for the variable itself */
+  type: string;
+  /** Array dimensions for inline array types (e.g., ARRAY[0..255] OF BYTE) */
+  arrayDimensions?: Array<{ start: number; end: number }>;
+  /** Element type name for inline array types */
+  elementTypeName?: string;
+  /** Reference/pointer qualifier ("pointer_to" | "reference_to") */
+  referenceKind?: string;
+}
+
+/**
  * Library function block entry in a manifest.
  */
 export interface LibraryFBEntry {
   /** Function block name */
   name: string;
   /** Input variables */
-  inputs: Array<{ name: string; type: string }>;
+  inputs: LibraryVarType[];
   /** Output variables */
-  outputs: Array<{ name: string; type: string }>;
+  outputs: LibraryVarType[];
   /** In-out variables */
-  inouts: Array<{ name: string; type: string }>;
+  inouts: LibraryVarType[];
 }
 
 /**

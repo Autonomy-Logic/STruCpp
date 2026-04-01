@@ -20,6 +20,7 @@ import type {
   WhileStatement,
   RepeatStatement,
   FunctionCallExpression,
+  Argument,
   MethodCallExpression,
   BinaryExpression,
   UnaryExpression,
@@ -50,6 +51,8 @@ import {
   isImplicitlyConvertible,
   resolveFieldType as resolveFieldTypeUtil,
   typeName as typeNameUtil,
+  buildEnumMemberMap,
+  type EnumMemberEntry,
 } from "../semantic/type-utils.js";
 import type { StlibArchive } from "../library/library-manifest.js";
 
@@ -260,8 +263,21 @@ export class CodeGenerator {
   /** Map of enum type name (upper case) → set of member names (upper case) for :: emission */
   protected enumTypeMembers: Map<string, Set<string>> = new Map();
 
+  /** Reverse map: enum member name (upper case) → owning enum type (for bare enum qualification) */
+  protected enumMemberToType: Map<string, EnumMemberEntry> = new Map();
+
   /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
   private libraryFBFieldTypes: Map<string, string> = new Map();
+
+  /** Extended type metadata for library FB fields (array dims, reference kind) */
+  private libraryFBFieldTypeRefs: Map<
+    string,
+    {
+      arrayDimensions?: Array<{ start: number; end: number }>;
+      elementTypeName?: string;
+      referenceKind?: string;
+    }
+  > = new Map();
 
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
@@ -452,7 +468,13 @@ export class CodeGenerator {
     fbs: Array<{
       name: string;
       inputNames: string[];
-      fields: Array<{ name: string; type: string }>;
+      fields: Array<{
+        name: string;
+        type: string;
+        arrayDimensions?: Array<{ start: number; end: number }>;
+        elementTypeName?: string;
+        referenceKind?: string;
+      }>;
     }>,
   ): void {
     for (const fb of fbs) {
@@ -469,6 +491,21 @@ export class CodeGenerator {
           `${fbUpper}.${f.name.toUpperCase()}`,
           f.type,
         );
+        // Store array metadata for inline array type reconstruction
+        if (f.arrayDimensions || f.elementTypeName || f.referenceKind) {
+          const ref: {
+            arrayDimensions?: Array<{ start: number; end: number }>;
+            elementTypeName?: string;
+            referenceKind?: string;
+          } = {};
+          if (f.arrayDimensions) ref.arrayDimensions = f.arrayDimensions;
+          if (f.elementTypeName) ref.elementTypeName = f.elementTypeName;
+          if (f.referenceKind) ref.referenceKind = f.referenceKind;
+          this.libraryFBFieldTypeRefs.set(
+            `${fbUpper}.${f.name.toUpperCase()}`,
+            ref,
+          );
+        }
       }
     }
   }
@@ -500,15 +537,39 @@ export class CodeGenerator {
   registerLibraryArchives(archives: StlibArchive[]): void {
     for (const archive of archives) {
       this.registerLibraryFBTypes(
-        archive.manifest.functionBlocks.map((fb) => ({
-          name: fb.name,
-          inputNames: fb.inputs.map((i) => i.name),
-          fields: [
-            ...fb.inputs.map((v) => ({ name: v.name, type: v.type })),
-            ...fb.outputs.map((v) => ({ name: v.name, type: v.type })),
-            ...fb.inouts.map((v) => ({ name: v.name, type: v.type })),
-          ],
-        })),
+        archive.manifest.functionBlocks.map((fb) => {
+          const mapVar = (v: {
+            name: string;
+            type: string;
+            arrayDimensions?: Array<{ start: number; end: number }>;
+            elementTypeName?: string;
+            referenceKind?: string;
+          }) => {
+            const entry: {
+              name: string;
+              type: string;
+              arrayDimensions?: Array<{ start: number; end: number }>;
+              elementTypeName?: string;
+              referenceKind?: string;
+            } = {
+              name: v.name,
+              type: v.type,
+            };
+            if (v.arrayDimensions) entry.arrayDimensions = v.arrayDimensions;
+            if (v.elementTypeName) entry.elementTypeName = v.elementTypeName;
+            if (v.referenceKind) entry.referenceKind = v.referenceKind;
+            return entry;
+          };
+          return {
+            name: fb.name,
+            inputNames: fb.inputs.map((i) => i.name),
+            fields: [
+              ...fb.inputs.map(mapVar),
+              ...fb.outputs.map(mapVar),
+              ...fb.inouts.map(mapVar),
+            ],
+          };
+        }),
       );
       if (archive.manifest.types) {
         this.registerLibraryTypes(archive.manifest.types);
@@ -598,15 +659,17 @@ export class CodeGenerator {
     }
 
     // Build set of known struct/UDT types and enum member maps
+    const enumDescriptors: Array<{ name: string; members: string[] }> = [];
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
       if (td.definition.kind === "EnumDefinition") {
-        const members = new Set(
-          td.definition.members.map((m) => m.name.toUpperCase()),
-        );
+        const memberNames = td.definition.members.map((m) => m.name);
+        const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
+        enumDescriptors.push({ name: td.name, members: memberNames });
       }
     }
+    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
     for (const prog of ast.programs) {
@@ -2136,6 +2199,22 @@ export class CodeGenerator {
           const fbType = this.getFBInvocationType(stmt.call.functionName);
           if (fbType) {
             this.generateFBInvocation(stmt.call, indent);
+          } else if (
+            stmt.call.kind === "FunctionCallExpression" &&
+            this.hasEnEno(stmt.call.arguments)
+          ) {
+            // Non-FB function call statement with EN/ENO
+            const { enExpr, enoVar, filteredArgs } = this.extractEnEno(
+              stmt.call.arguments,
+            );
+            const modifiedCall: FunctionCallExpression = {
+              ...stmt.call,
+              arguments: filteredArgs,
+            };
+            const callExpr = this.generateFunctionCallExpression(modifiedCall);
+            this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+              this.emit(`${bi}${callExpr};`);
+            });
           } else {
             this.emit(`${indent}${this.generateExpression(stmt.call)};`);
           }
@@ -2239,6 +2318,28 @@ export class CodeGenerator {
       this.emit(
         `${indent}${baseCode} = (${baseCode} & ~(1ULL << ${bitIdx})) | ((${value} ? 1ULL : 0ULL) << ${bitIdx});`,
       );
+      return;
+    }
+
+    // EN/ENO on function call assignment:
+    // result := func(EN := cond, args..., ENO => eno_var);
+    // → if (cond) { result = func(args); eno_var = true; } else { eno_var = false; }
+    if (
+      stmt.value.kind === "FunctionCallExpression" &&
+      this.hasEnEno(stmt.value.arguments)
+    ) {
+      const { enExpr, enoVar, filteredArgs } = this.extractEnEno(
+        stmt.value.arguments,
+      );
+      const target = this.generateExpression(stmt.target);
+      const modifiedCall: FunctionCallExpression = {
+        ...stmt.value,
+        arguments: filteredArgs,
+      };
+      const callExpr = this.generateFunctionCallExpression(modifiedCall);
+      this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+        this.emit(`${bi}${target} = ${callExpr};`);
+      });
       return;
     }
 
@@ -2811,6 +2912,19 @@ export class CodeGenerator {
       }
     }
 
+    // Bare enum member: Stopped → Irrigation_State::Stopped
+    // Only qualify if the name is NOT a declared variable in the current scope
+    // (a local variable named RED should not be rewritten as Color::RED).
+    const enumEntry = this.enumMemberToType.get(nameUpper);
+    if (
+      enumEntry?.typeName &&
+      !this.currentScopeVarTypes.has(nameUpper) &&
+      expr.fieldAccess.length === 0 &&
+      (!expr.accessChain || expr.accessChain.length === 0)
+    ) {
+      return `${enumEntry.typeName}::${expr.name}`;
+    }
+
     // Enum qualified access: TrafficState.RED → TrafficState::RED
     if (this.enumTypeMembers.has(nameUpper)) {
       if (
@@ -2966,8 +3080,8 @@ export class CodeGenerator {
     "*": "*",
     "/": "/",
     MOD: "%",
-    AND: "&&",
-    OR: "||",
+    AND: "&",
+    OR: "|",
     XOR: "^",
     "=": "==",
     "<>": "!=",
@@ -2989,23 +3103,20 @@ export class CodeGenerator {
       return `std::pow(static_cast<double>(${left}), static_cast<double>(${right}))`;
     }
 
-    // AND/OR on non-BOOL ANY_BIT types must use bitwise operators (& |)
-    // not logical operators (&& ||). Infer from either operand.
-    if (expr.operator === "AND" || expr.operator === "OR") {
-      const leftType = this.inferExprType(expr.left);
-      const rightType = this.inferExprType(expr.right);
-      const isBitwise = [leftType, rightType].some((t) => {
-        if (!t) return false;
-        const cat = getTypeCategory(t.toUpperCase());
-        return cat === "BIT" && t.toUpperCase() !== "BOOL";
-      });
-      if (isBitwise) {
-        const op = expr.operator === "AND" ? "&" : "|";
-        return `${left} ${op} ${right}`;
-      }
+    const cppOp = CodeGenerator.BINARY_OP_MAP[expr.operator] ?? expr.operator;
+
+    // IEC 61131-3 AND/OR/XOR are always bitwise. C++ bitwise & | ^ have
+    // higher precedence than comparison operators (== != < >), unlike ST
+    // where AND/OR have lower precedence. Parenthesize operands to preserve
+    // the correct evaluation order.
+    if (
+      expr.operator === "AND" ||
+      expr.operator === "OR" ||
+      expr.operator === "XOR"
+    ) {
+      return `(${left}) ${cppOp} (${right})`;
     }
 
-    const cppOp = CodeGenerator.BINARY_OP_MAP[expr.operator] ?? expr.operator;
     return `${left} ${cppOp} ${right}`;
   }
 
@@ -3532,11 +3643,13 @@ export class CodeGenerator {
     }
 
     // Build set of parameter slots claimed by named arguments
+    // (skip implicit EN/ENO — handled separately by EN/ENO codegen logic)
     const namedArgs = new Map<string, { expr: string; isOutput: boolean }>();
     const claimedSlots = new Set<string>();
     for (const arg of expr.arguments) {
       if (arg.name !== undefined) {
         const upperName = arg.name.toUpperCase();
+        if (upperName === "EN" || upperName === "ENO") continue;
         namedArgs.set(upperName, {
           expr: this.generateExpression(arg.value),
           isOutput: arg.isOutput,
@@ -3966,6 +4079,75 @@ export class CodeGenerator {
    * Generate code for an FB invocation.
    * Pattern: assign inputs → call operator() → capture outputs
    */
+  /**
+   * Extract implicit EN/ENO arguments from a function/FB call.
+   * Returns the EN condition expression, ENO target variable, and the
+   * remaining arguments with EN/ENO stripped out.
+   */
+  private extractEnEno(args: Argument[]): {
+    enExpr: string | null;
+    enoVar: string | null;
+    filteredArgs: Argument[];
+  } {
+    let enExpr: string | null = null;
+    let enoVar: string | null = null;
+    const filteredArgs: Argument[] = [];
+
+    for (const arg of args) {
+      const nameUpper = arg.name?.toUpperCase();
+      if (nameUpper === "EN" && !arg.isOutput) {
+        enExpr = this.generateExpression(arg.value);
+      } else if (nameUpper === "ENO" && arg.isOutput) {
+        enoVar = this.generateExpression(arg.value);
+      } else {
+        filteredArgs.push(arg);
+      }
+    }
+
+    return { enExpr, enoVar, filteredArgs };
+  }
+
+  /**
+   * Check if a function call argument list contains EN or ENO implicit parameters.
+   */
+  private hasEnEno(args: Argument[]): boolean {
+    return args.some((a) => {
+      const n = a.name?.toUpperCase();
+      return (n === "EN" && !a.isOutput) || (n === "ENO" && a.isOutput);
+    });
+  }
+
+  /**
+   * Emit EN/ENO wrapper around a body emitter callback.
+   * When EN is present, wraps in `if (EN) { body; ENO=true; } else { ENO=false; }`.
+   * When only ENO is present, emits body then `ENO=true;`.
+   */
+  private emitEnEnoWrapper(
+    indent: string,
+    enExpr: string | null,
+    enoVar: string | null,
+    emitBody: (bodyIndent: string) => void,
+  ): void {
+    if (enExpr !== null) {
+      const bodyIndent = indent + this.options.indent;
+      this.emit(`${indent}if (${enExpr}) {`);
+      emitBody(bodyIndent);
+      if (enoVar !== null) {
+        this.emit(`${bodyIndent}${enoVar} = true;`);
+      }
+      this.emit(`${indent}} else {`);
+      if (enoVar !== null) {
+        this.emit(`${bodyIndent}${enoVar} = false;`);
+      }
+      this.emit(`${indent}}`);
+    } else {
+      emitBody(indent);
+      if (enoVar !== null) {
+        this.emit(`${indent}${enoVar} = true;`);
+      }
+    }
+  }
+
   private generateFBInvocation(
     call: FunctionCallExpression,
     indent: string,
@@ -3973,6 +4155,9 @@ export class CodeGenerator {
     const rawName = this.resolveVariableBaseName(call.functionName);
     const instanceName =
       this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName;
+
+    // Extract implicit EN/ENO parameters
+    const { enExpr, enoVar, filteredArgs } = this.extractEnEno(call.arguments);
 
     // Resolve FB type for positional argument mapping
     const fbTypeName = this.currentScopeVarTypes.get(rawName.toUpperCase());
@@ -3982,7 +4167,7 @@ export class CodeGenerator {
 
     // Assign input parameters (named or positional)
     let positionalIndex = 0;
-    for (const arg of call.arguments) {
+    for (const arg of filteredArgs) {
       if (arg.isOutput) continue;
 
       if (arg.name) {
@@ -4006,11 +4191,13 @@ export class CodeGenerator {
       }
     }
 
-    // Call the FB/program execution body
-    this.emitPOUCallLine(instanceName, call.functionName, indent);
+    // Call the FB/program execution body, wrapped with EN/ENO logic
+    this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+      this.emitPOUCallLine(instanceName, call.functionName, bi);
+    });
 
-    // Capture output arguments (=> syntax)
-    for (const arg of call.arguments) {
+    // Capture output arguments (=> syntax), excluding ENO (already handled)
+    for (const arg of filteredArgs) {
       if (arg.name && arg.isOutput) {
         this.emit(
           `${indent}${this.generateExpression(arg.value)} = ${instanceName}.${arg.name};`,
@@ -4126,6 +4313,11 @@ export class CodeGenerator {
         if (this.enumTypeMembers.has(prefix)) {
           return initialValue.replace(".", "::");
         }
+      }
+      // Bare enum initializer: Stopped → Irrigation_State::Stopped
+      const bareEntry = this.enumMemberToType.get(initialValue.toUpperCase());
+      if (bareEntry?.typeName) {
+        return `${bareEntry.typeName}::${initialValue}`;
       }
       // Convert TIME/LTIME literals (T#30s, TIME#1m2s) to nanoseconds
       const upperInit = initialValue.toUpperCase();

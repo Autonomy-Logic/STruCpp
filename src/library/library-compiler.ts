@@ -13,10 +13,33 @@ import type {
   StlibArchive,
 } from "./library-manifest.js";
 import { compile } from "../index.js";
+import type { LibraryVarType } from "./library-manifest.js";
 import {
   extractNamespaceBody,
   stripDependencyPreambles,
 } from "./library-utils.js";
+import type { TypeReference } from "../frontend/ast.js";
+
+/**
+ * Serialize a variable's type reference into the manifest format,
+ * preserving array dimensions and reference qualifiers.
+ */
+function serializeVarType(
+  name: string,
+  typeRef: TypeReference,
+): LibraryVarType {
+  const entry: LibraryVarType = { name, type: typeRef.name };
+  if (typeRef.arrayDimensions && typeRef.arrayDimensions.length > 0) {
+    entry.arrayDimensions = typeRef.arrayDimensions;
+  }
+  if (typeRef.elementTypeName) {
+    entry.elementTypeName = typeRef.elementTypeName;
+  }
+  if (typeRef.referenceKind && typeRef.referenceKind !== "none") {
+    entry.referenceKind = typeRef.referenceKind;
+  }
+  return entry;
+}
 
 /**
  * Compile ST source files into a library.
@@ -134,21 +157,21 @@ export function compileLibrary(
           .filter((b) => b.blockType === "VAR_INPUT")
           .flatMap((b) =>
             b.declarations.flatMap((d) =>
-              d.names.map((n) => ({ name: n, type: d.type.name })),
+              d.names.map((n) => serializeVarType(n, d.type)),
             ),
           ),
         outputs: fb.varBlocks
           .filter((b) => b.blockType === "VAR_OUTPUT")
           .flatMap((b) =>
             b.declarations.flatMap((d) =>
-              d.names.map((n) => ({ name: n, type: d.type.name })),
+              d.names.map((n) => serializeVarType(n, d.type)),
             ),
           ),
         inouts: fb.varBlocks
           .filter((b) => b.blockType === "VAR_IN_OUT")
           .flatMap((b) =>
             b.declarations.flatMap((d) =>
-              d.names.map((n) => ({ name: n, type: d.type.name })),
+              d.names.map((n) => serializeVarType(n, d.type)),
             ),
           ),
       })),
@@ -188,6 +211,8 @@ export function compileStlib(
     version: string;
     namespace: string;
     noSource?: boolean;
+    /** Mark this library as a built-in runtime library */
+    builtin?: boolean;
     /** Library archives this library depends on */
     dependencies?: StlibArchive[];
     /** Global constants available during compilation (e.g., STRING_LENGTH) */
@@ -195,6 +220,9 @@ export function compileStlib(
   },
 ): StlibCompileResult {
   const libResult = compileLibrary(sources, options);
+  if (options.builtin) {
+    libResult.manifest.isBuiltin = true;
+  }
 
   if (!libResult.success) {
     return {

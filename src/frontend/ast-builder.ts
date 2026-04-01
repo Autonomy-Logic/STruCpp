@@ -230,7 +230,19 @@ function getIdentifierOrKeywordImage(node: CstNode): string {
   const identToken = getFirstToken(children.Identifier);
   if (identToken) return identToken.image;
   // Check each contextual keyword token
-  for (const key of ["SET", "GET", "ON", "OVERRIDE", "ABSTRACT", "FINAL"]) {
+  for (const key of [
+    "SET",
+    "GET",
+    "ON",
+    "OVERRIDE",
+    "ABSTRACT",
+    "FINAL",
+    "AND",
+    "OR",
+    "XOR",
+    "NOT",
+    "MOD",
+  ]) {
     const kwToken = getFirstToken(children[key]);
     if (kwToken) return kwToken.image;
   }

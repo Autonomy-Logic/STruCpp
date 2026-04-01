@@ -81,6 +81,7 @@ interface CLIOptions {
   libVersion: string;
   libNamespace?: string;
   noSource: boolean;
+  builtin: boolean;
   decompileLib?: string;
   importLib?: string;
   test: string[];
@@ -106,6 +107,7 @@ function parseArgs(args: string[]): CLIOptions {
     compileLib: false,
     libVersion: "1.0.0",
     noSource: false,
+    builtin: false,
     test: [],
     defines: {},
   };
@@ -188,6 +190,8 @@ function parseArgs(args: string[]): CLIOptions {
       }
     } else if (arg === "--no-source") {
       options.noSource = true;
+    } else if (arg === "--builtin") {
+      options.builtin = true;
     } else if (arg === "--decompile-lib") {
       i++;
       const nextArg = args[i];
@@ -492,6 +496,7 @@ function compileLibraryMode(options: CLIOptions): void {
     version: options.libVersion,
     namespace: libNamespace,
     noSource: options.noSource,
+    builtin: options.builtin,
   };
   if (dependencies.length > 0) {
     stlibOpts.dependencies = dependencies;
