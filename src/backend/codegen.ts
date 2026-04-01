@@ -269,6 +269,16 @@ export class CodeGenerator {
   /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
   private libraryFBFieldTypes: Map<string, string> = new Map();
 
+  /** Extended type metadata for library FB fields (array dims, reference kind) */
+  private libraryFBFieldTypeRefs: Map<
+    string,
+    {
+      arrayDimensions?: Array<{ start: number; end: number }>;
+      elementTypeName?: string;
+      referenceKind?: string;
+    }
+  > = new Map();
+
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
 
@@ -458,7 +468,13 @@ export class CodeGenerator {
     fbs: Array<{
       name: string;
       inputNames: string[];
-      fields: Array<{ name: string; type: string }>;
+      fields: Array<{
+        name: string;
+        type: string;
+        arrayDimensions?: Array<{ start: number; end: number }>;
+        elementTypeName?: string;
+        referenceKind?: string;
+      }>;
     }>,
   ): void {
     for (const fb of fbs) {
@@ -475,6 +491,21 @@ export class CodeGenerator {
           `${fbUpper}.${f.name.toUpperCase()}`,
           f.type,
         );
+        // Store array metadata for inline array type reconstruction
+        if (f.arrayDimensions || f.elementTypeName || f.referenceKind) {
+          const ref: {
+            arrayDimensions?: Array<{ start: number; end: number }>;
+            elementTypeName?: string;
+            referenceKind?: string;
+          } = {};
+          if (f.arrayDimensions) ref.arrayDimensions = f.arrayDimensions;
+          if (f.elementTypeName) ref.elementTypeName = f.elementTypeName;
+          if (f.referenceKind) ref.referenceKind = f.referenceKind;
+          this.libraryFBFieldTypeRefs.set(
+            `${fbUpper}.${f.name.toUpperCase()}`,
+            ref,
+          );
+        }
       }
     }
   }
@@ -506,15 +537,39 @@ export class CodeGenerator {
   registerLibraryArchives(archives: StlibArchive[]): void {
     for (const archive of archives) {
       this.registerLibraryFBTypes(
-        archive.manifest.functionBlocks.map((fb) => ({
-          name: fb.name,
-          inputNames: fb.inputs.map((i) => i.name),
-          fields: [
-            ...fb.inputs.map((v) => ({ name: v.name, type: v.type })),
-            ...fb.outputs.map((v) => ({ name: v.name, type: v.type })),
-            ...fb.inouts.map((v) => ({ name: v.name, type: v.type })),
-          ],
-        })),
+        archive.manifest.functionBlocks.map((fb) => {
+          const mapVar = (v: {
+            name: string;
+            type: string;
+            arrayDimensions?: Array<{ start: number; end: number }>;
+            elementTypeName?: string;
+            referenceKind?: string;
+          }) => {
+            const entry: {
+              name: string;
+              type: string;
+              arrayDimensions?: Array<{ start: number; end: number }>;
+              elementTypeName?: string;
+              referenceKind?: string;
+            } = {
+              name: v.name,
+              type: v.type,
+            };
+            if (v.arrayDimensions) entry.arrayDimensions = v.arrayDimensions;
+            if (v.elementTypeName) entry.elementTypeName = v.elementTypeName;
+            if (v.referenceKind) entry.referenceKind = v.referenceKind;
+            return entry;
+          };
+          return {
+            name: fb.name,
+            inputNames: fb.inputs.map((i) => i.name),
+            fields: [
+              ...fb.inputs.map(mapVar),
+              ...fb.outputs.map(mapVar),
+              ...fb.inouts.map(mapVar),
+            ],
+          };
+        }),
       );
       if (archive.manifest.types) {
         this.registerLibraryTypes(archive.manifest.types);
