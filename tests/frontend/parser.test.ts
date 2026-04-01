@@ -98,6 +98,92 @@ describe('STParser', () => {
     });
   });
 
+  describe('operator keywords as function calls', () => {
+    it('should parse AND as a function call', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, b, c : BOOL; r : BOOL; END_VAR
+          r := AND(a, b, c);
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should parse OR as a function call', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, b : BOOL; r : BOOL; END_VAR
+          r := OR(a, b);
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should parse XOR as a function call', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, b : BOOL; r : BOOL; END_VAR
+          r := XOR(a, b);
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should parse NOT as a function call', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, r : BOOL; END_VAR
+          r := NOT(a);
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should parse MOD as a function call', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, b : INT; r : INT; END_VAR
+          r := MOD(a, b);
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should still parse infix AND/OR/XOR/MOD operators', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, b, c : BOOL; x, y, z : INT; END_VAR
+          a := b AND c;
+          a := b OR c;
+          a := b XOR c;
+          x := y MOD z;
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should still parse NOT as a unary operator', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, b : BOOL; END_VAR
+          a := NOT b;
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+
+    it('should parse mixed infix and function-call operators', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR a, b, c : BOOL; END_VAR
+          a := NOT(b) AND c;
+          a := AND(b, c) OR NOT(a);
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+    });
+  });
+
   describe('function blocks', () => {
     it('should parse a simple function block', () => {
       const source = `

@@ -364,6 +364,13 @@ export class STParser extends CstParser {
         { ALT: () => this.CONSUME(tokens.OVERRIDE) },
         { ALT: () => this.CONSUME(tokens.ABSTRACT) },
         { ALT: () => this.CONSUME(tokens.FINAL) },
+        // IEC 61131-3 operator keywords that can also be called as functions
+        // (e.g. AND(a, b, c), OR(x, y), NOT(z), MOD(a, b), XOR(a, b))
+        { ALT: () => this.CONSUME(tokens.AND) },
+        { ALT: () => this.CONSUME(tokens.OR) },
+        { ALT: () => this.CONSUME(tokens.XOR) },
+        { ALT: () => this.CONSUME(tokens.NOT) },
+        { ALT: () => this.CONSUME(tokens.MOD) },
       ],
       IGNORE_AMBIGUITIES: true,
     });
@@ -930,6 +937,12 @@ export class STParser extends CstParser {
     tokens.OVERRIDE,
     tokens.ABSTRACT,
     tokens.FINAL,
+    // IEC 61131-3 operator keywords usable as function names
+    tokens.AND,
+    tokens.OR,
+    tokens.XOR,
+    tokens.NOT,
+    tokens.MOD,
   ];
 
   /**
@@ -1368,12 +1381,19 @@ export class STParser extends CstParser {
    * Unary expression
    */
   public unaryExpression = this.RULE("unaryExpression", () => {
-    this.OPTION(() => {
-      this.OR([
-        { ALT: () => this.CONSUME(tokens.NOT) },
-        { ALT: () => this.CONSUME(tokens.Minus) },
-        { ALT: () => this.CONSUME(tokens.Plus) },
-      ]);
+    this.OPTION({
+      // When NOT is followed by '(', skip the unary prefix so it falls through
+      // to primaryExpression → functionCall, parsing NOT(x) as a function call.
+      GATE: () =>
+        this.LA(1).tokenType !== tokens.NOT ||
+        this.LA(2).tokenType !== tokens.LParen,
+      DEF: () => {
+        this.OR([
+          { ALT: () => this.CONSUME(tokens.NOT) },
+          { ALT: () => this.CONSUME(tokens.Minus) },
+          { ALT: () => this.CONSUME(tokens.Plus) },
+        ]);
+      },
     });
     this.SUBRULE(this.primaryExpression);
   });

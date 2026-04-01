@@ -183,6 +183,74 @@ describe("AST Builder - Function Calls", () => {
     });
   });
 
+  describe("operator keywords as function calls", () => {
+    it("should build AND as a FunctionCallExpression with correct name", () => {
+      const ast = parseAndBuild(`
+        PROGRAM Main
+          VAR a, b, c, r : BOOL; END_VAR
+          r := AND(a, b, c);
+        END_PROGRAM
+      `);
+      const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
+      const call = stmt.value as FunctionCallExpression;
+      expect(call.kind).toBe("FunctionCallExpression");
+      expect(call.functionName).toBe("AND");
+      expect(call.arguments).toHaveLength(3);
+    });
+
+    it("should build OR as a FunctionCallExpression", () => {
+      const ast = parseAndBuild(`
+        PROGRAM Main
+          VAR a, b, r : BOOL; END_VAR
+          r := OR(a, b);
+        END_PROGRAM
+      `);
+      const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
+      const call = stmt.value as FunctionCallExpression;
+      expect(call.functionName).toBe("OR");
+      expect(call.arguments).toHaveLength(2);
+    });
+
+    it("should build XOR as a FunctionCallExpression", () => {
+      const ast = parseAndBuild(`
+        PROGRAM Main
+          VAR a, b, r : BOOL; END_VAR
+          r := XOR(a, b);
+        END_PROGRAM
+      `);
+      const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
+      const call = stmt.value as FunctionCallExpression;
+      expect(call.functionName).toBe("XOR");
+      expect(call.arguments).toHaveLength(2);
+    });
+
+    it("should build NOT as a FunctionCallExpression", () => {
+      const ast = parseAndBuild(`
+        PROGRAM Main
+          VAR a, r : BOOL; END_VAR
+          r := NOT(a);
+        END_PROGRAM
+      `);
+      const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
+      const call = stmt.value as FunctionCallExpression;
+      expect(call.functionName).toBe("NOT");
+      expect(call.arguments).toHaveLength(1);
+    });
+
+    it("should build MOD as a FunctionCallExpression", () => {
+      const ast = parseAndBuild(`
+        PROGRAM Main
+          VAR a, b, r : INT; END_VAR
+          r := MOD(a, b);
+        END_PROGRAM
+      `);
+      const stmt = ast.programs[0]!.body[0] as AssignmentStatement;
+      const call = stmt.value as FunctionCallExpression;
+      expect(call.functionName).toBe("MOD");
+      expect(call.arguments).toHaveLength(2);
+    });
+  });
+
   describe("fileName propagation", () => {
     it("should set file on sourceSpan when fileName is provided", () => {
       const result = parse("PROGRAM Main END_PROGRAM");

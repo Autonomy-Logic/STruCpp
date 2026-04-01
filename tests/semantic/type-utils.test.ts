@@ -422,4 +422,51 @@ describe("type-utils", () => {
       expect(typeName(refType)).toBe("REF_TO INT");
     });
   });
+
+  describe("buildEnumMemberMap", () => {
+    // Import inline so existing test imports are untouched
+    let buildEnumMemberMap: typeof import("../../src/semantic/type-utils.js").buildEnumMemberMap;
+    beforeAll(async () => {
+      const mod = await import("../../src/semantic/type-utils.js");
+      buildEnumMemberMap = mod.buildEnumMemberMap;
+    });
+
+    it("should map unique members to their enum type", () => {
+      const map = buildEnumMemberMap([
+        { name: "Color", members: ["RED", "GREEN", "BLUE"] },
+        { name: "Size", members: ["SMALL", "MEDIUM", "LARGE"] },
+      ]);
+      expect(map.get("RED")?.typeName).toBe("Color");
+      expect(map.get("SMALL")?.typeName).toBe("Size");
+    });
+
+    it("should mark ambiguous members as null", () => {
+      const map = buildEnumMemberMap([
+        { name: "State1", members: ["IDLE", "RUNNING"] },
+        { name: "State2", members: ["IDLE", "ACTIVE"] },
+      ]);
+      const entry = map.get("IDLE");
+      expect(entry?.typeName).toBeNull();
+      expect(entry?.conflictingTypes).toContain("State1");
+      expect(entry?.conflictingTypes).toContain("State2");
+    });
+
+    it("should handle case-insensitive member names", () => {
+      const map = buildEnumMemberMap([
+        { name: "E1", members: ["Foo"] },
+        { name: "E2", members: ["foo"] },
+      ]);
+      expect(map.get("FOO")?.typeName).toBeNull();
+    });
+
+    it("should return non-ambiguous members alongside ambiguous ones", () => {
+      const map = buildEnumMemberMap([
+        { name: "State1", members: ["IDLE", "RUNNING"] },
+        { name: "State2", members: ["IDLE", "ACTIVE"] },
+      ]);
+      expect(map.get("RUNNING")?.typeName).toBe("State1");
+      expect(map.get("ACTIVE")?.typeName).toBe("State2");
+      expect(map.get("IDLE")?.typeName).toBeNull();
+    });
+  });
 });
