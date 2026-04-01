@@ -334,6 +334,25 @@ describe("Phase 3.2: CASE Statement Code Generation", () => {
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("COLOR::GREEN");
   });
+
+  it("should not shadow local variables with bare enum members", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM TestNoShadow
+        VAR RED : INT; c : Color; END_VAR
+        RED := 42;
+        c := Color.RED;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    // Local variable RED should stay as RED, not become COLOR::RED
+    expect(result.cppCode).toContain("RED = 42;");
+    expect(result.cppCode).not.toContain("COLOR::RED = 42");
+    // Qualified access should still work
+    expect(result.cppCode).toContain("COLOR::RED");
+  });
 });
 
 // =============================================================================

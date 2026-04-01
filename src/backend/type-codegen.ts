@@ -152,10 +152,9 @@ export class TypeCodeGenerator {
         .filter((t) => t.definition.kind === "EnumDefinition")
         .map((t) => ({
           name: t.name,
-          members:
-            t.definition.kind === "EnumDefinition"
-              ? t.definition.members.map((m) => m.name)
-              : [],
+          members: (
+            t.definition as import("../frontend/ast.js").EnumDefinition
+          ).members.map((m) => m.name),
         })),
     );
 

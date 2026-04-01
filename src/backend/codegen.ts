@@ -2212,25 +2212,9 @@ export class CodeGenerator {
               arguments: filteredArgs,
             };
             const callExpr = this.generateFunctionCallExpression(modifiedCall);
-
-            if (enExpr !== null) {
-              const bodyIndent = indent + this.options.indent;
-              this.emit(`${indent}if (${enExpr}) {`);
-              this.emit(`${bodyIndent}${callExpr};`);
-              if (enoVar !== null) {
-                this.emit(`${bodyIndent}${enoVar} = true;`);
-              }
-              this.emit(`${indent}} else {`);
-              if (enoVar !== null) {
-                this.emit(`${bodyIndent}${enoVar} = false;`);
-              }
-              this.emit(`${indent}}`);
-            } else {
-              this.emit(`${indent}${callExpr};`);
-              if (enoVar !== null) {
-                this.emit(`${indent}${enoVar} = true;`);
-              }
-            }
+            this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+              this.emit(`${bi}${callExpr};`);
+            });
           } else {
             this.emit(`${indent}${this.generateExpression(stmt.call)};`);
           }
@@ -2353,26 +2337,9 @@ export class CodeGenerator {
         arguments: filteredArgs,
       };
       const callExpr = this.generateFunctionCallExpression(modifiedCall);
-
-      if (enExpr !== null) {
-        const bodyIndent = indent + this.options.indent;
-        this.emit(`${indent}if (${enExpr}) {`);
-        this.emit(`${bodyIndent}${target} = ${callExpr};`);
-        if (enoVar !== null) {
-          this.emit(`${bodyIndent}${enoVar} = true;`);
-        }
-        this.emit(`${indent}} else {`);
-        if (enoVar !== null) {
-          this.emit(`${bodyIndent}${enoVar} = false;`);
-        }
-        this.emit(`${indent}}`);
-      } else {
-        // No EN, but ENO present: always execute, set ENO = true
-        this.emit(`${indent}${target} = ${callExpr};`);
-        if (enoVar !== null) {
-          this.emit(`${indent}${enoVar} = true;`);
-        }
-      }
+      this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+        this.emit(`${bi}${target} = ${callExpr};`);
+      });
       return;
     }
 
@@ -2946,9 +2913,12 @@ export class CodeGenerator {
     }
 
     // Bare enum member: Stopped → Irrigation_State::Stopped
+    // Only qualify if the name is NOT a declared variable in the current scope
+    // (a local variable named RED should not be rewritten as Color::RED).
     const enumEntry = this.enumMemberToType.get(nameUpper);
     if (
       enumEntry?.typeName &&
+      !this.currentScopeVarTypes.has(nameUpper) &&
       expr.fieldAccess.length === 0 &&
       (!expr.accessChain || expr.accessChain.length === 0)
     ) {
@@ -4147,6 +4117,37 @@ export class CodeGenerator {
     });
   }
 
+  /**
+   * Emit EN/ENO wrapper around a body emitter callback.
+   * When EN is present, wraps in `if (EN) { body; ENO=true; } else { ENO=false; }`.
+   * When only ENO is present, emits body then `ENO=true;`.
+   */
+  private emitEnEnoWrapper(
+    indent: string,
+    enExpr: string | null,
+    enoVar: string | null,
+    emitBody: (bodyIndent: string) => void,
+  ): void {
+    if (enExpr !== null) {
+      const bodyIndent = indent + this.options.indent;
+      this.emit(`${indent}if (${enExpr}) {`);
+      emitBody(bodyIndent);
+      if (enoVar !== null) {
+        this.emit(`${bodyIndent}${enoVar} = true;`);
+      }
+      this.emit(`${indent}} else {`);
+      if (enoVar !== null) {
+        this.emit(`${bodyIndent}${enoVar} = false;`);
+      }
+      this.emit(`${indent}}`);
+    } else {
+      emitBody(indent);
+      if (enoVar !== null) {
+        this.emit(`${indent}${enoVar} = true;`);
+      }
+    }
+  }
+
   private generateFBInvocation(
     call: FunctionCallExpression,
     indent: string,
@@ -4191,24 +4192,9 @@ export class CodeGenerator {
     }
 
     // Call the FB/program execution body, wrapped with EN/ENO logic
-    if (enExpr !== null) {
-      const bodyIndent = indent + this.options.indent;
-      this.emit(`${indent}if (${enExpr}) {`);
-      this.emitPOUCallLine(instanceName, call.functionName, bodyIndent);
-      if (enoVar !== null) {
-        this.emit(`${bodyIndent}${enoVar} = true;`);
-      }
-      this.emit(`${indent}} else {`);
-      if (enoVar !== null) {
-        this.emit(`${bodyIndent}${enoVar} = false;`);
-      }
-      this.emit(`${indent}}`);
-    } else {
-      this.emitPOUCallLine(instanceName, call.functionName, indent);
-      if (enoVar !== null) {
-        this.emit(`${indent}${enoVar} = true;`);
-      }
-    }
+    this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+      this.emitPOUCallLine(instanceName, call.functionName, bi);
+    });
 
     // Capture output arguments (=> syntax), excluding ENO (already handled)
     for (const arg of filteredArgs) {
