@@ -120,6 +120,8 @@ export function generateReplMain(
   lines.push(`#include "${options.headerFileName}"`);
   lines.push('#include "iec_repl.hpp"');
   lines.push('#include "iec_cyclic.hpp"');
+  lines.push('#include "iec_command_server.hpp"');
+  lines.push("#include <memory>");
   lines.push("");
   lines.push(`using namespace ${ns};`);
   lines.push("using strucpp::VarTypeTag;");
@@ -277,12 +279,26 @@ function emitProgramDescriptorsAndMain(
   lines.push("int main(int argc, char* argv[]) {");
   lines.push("    bool cyclic = false;");
   lines.push("    bool print_vars = false;");
+  lines.push("    std::string cmd_pipe_path;");
   lines.push("    for (int i = 1; i < argc; ++i) {");
   lines.push('        if (std::string(argv[i]) == "--cyclic") cyclic = true;');
   lines.push(
     '        if (std::string(argv[i]) == "--print-vars") print_vars = true;',
   );
+  lines.push(
+    '        if (std::string(argv[i]) == "--cmd-pipe" && i + 1 < argc) cmd_pipe_path = argv[++i];',
+  );
   lines.push("    }");
+  lines.push("");
+  lines.push("    // Start IPC command server if pipe path provided");
+  lines.push("    std::unique_ptr<strucpp::CommandServer> cmd_server;");
+  lines.push("    if (!cmd_pipe_path.empty()) {");
+  lines.push(
+    `        cmd_server = std::make_unique<strucpp::CommandServer>(cmd_pipe_path, programs, ${programs.length});`,
+  );
+  lines.push("        cmd_server->start();");
+  lines.push("    }");
+  lines.push("");
   lines.push("    if (cyclic) {");
   lines.push(
     `        strucpp::cyclic_run(programs, ${programs.length}, print_vars);`,

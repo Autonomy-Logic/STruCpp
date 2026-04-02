@@ -30,6 +30,7 @@ import {
   unforceVariableCommand,
   unforceAllCommand,
 } from "./force-variable.js";
+import { ReplClient } from "./repl-client.js";
 import { LibrariesChangedNotification } from "../../shared/protocol.js";
 
 let client: LanguageClient | undefined;
@@ -133,20 +134,52 @@ export function activate(context: ExtensionContext): void {
       vscode.debug.registerDebugAdapterTrackerFactory("lldb", trackerFactory),
     );
 
+    // ReplClient for IPC with the running debug binary
+    const replClient = new ReplClient();
+
     // Forced variables panel and commands
     const forcedProvider = new ForcedVariablesProvider();
     context.subscriptions.push(
       vscode.window.registerTreeDataProvider("strucpp.forcedVariables", forcedProvider),
       vscode.commands.registerCommand("strucpp.forceVariable", (args) =>
-        forceVariableCommand(args, forcedProvider),
+        forceVariableCommand(args, forcedProvider, replClient),
       ),
       vscode.commands.registerCommand("strucpp.unforceVariable", (args) =>
-        unforceVariableCommand(args, forcedProvider),
+        unforceVariableCommand(args, forcedProvider, replClient),
       ),
       vscode.commands.registerCommand("strucpp.unforceAll", () =>
-        unforceAllCommand(forcedProvider),
+        unforceAllCommand(forcedProvider, replClient),
       ),
       forcedProvider,
+    );
+
+    // Connect/disconnect ReplClient with debug session lifecycle
+    context.subscriptions.push(
+      vscode.debug.onDidStartDebugSession(async (session) => {
+        const config = session.configuration as Record<string, unknown>;
+        if (!config.__strucpp) return;
+        const pipePath = config.__cmdPipePath as string | undefined;
+        if (pipePath) {
+          // Delay slightly to let the binary start and create the pipe
+          setTimeout(async () => {
+            try {
+              await replClient.connect(pipePath);
+            } catch (err) {
+              console.warn("[strucpp] Failed to connect to command server:", err);
+            }
+          }, 500);
+        }
+      }),
+      vscode.debug.onDidTerminateDebugSession((session) => {
+        const config = session.configuration as Record<string, unknown>;
+        if (!config.__strucpp) return;
+        replClient.disconnect();
+        // Clean up pipe file
+        const pipePath = config.__cmdPipePath as string | undefined;
+        if (pipePath) {
+          try { require("fs").unlinkSync(pipePath); } catch { /* already cleaned up */ }
+        }
+      }),
     );
 
     // Test Explorer integration

@@ -152,12 +152,12 @@
       "debug/variables/context": [
         {
           "command": "strucpp.forceVariable",
-          "when": "debugState == stopped",
+          "when": "inDebugMode",
           "group": "3_strucpp@1"
         },
         {
           "command": "strucpp.unforceVariable",
-          "when": "debugState == stopped",
+          "when": "inDebugMode",
           "group": "3_strucpp@2"
         }
       ],

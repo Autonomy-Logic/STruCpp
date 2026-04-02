@@ -6,6 +6,7 @@
 
 import * as vscode from "vscode";
 import * as path from "node:path";
+import * as os from "node:os";
 import * as fs from "node:fs";
 import { execFile } from "node:child_process";
 import type { LanguageClient } from "vscode-languageclient/node.js";
@@ -33,6 +34,8 @@ export interface DebugBuildState {
   outputDir: string;
   lineMap: Array<{ stLine: number; cppStart: number; cppEnd: number }>;
   sourceUri: string;
+  /** Path for the IPC command pipe (for variable forcing) */
+  cmdPipePath: string;
 }
 
 let _lastDebugBuild: DebugBuildState | undefined;
@@ -432,11 +435,17 @@ export async function debugBuildCommand(
       showWarnings(response);
       outputChannel.appendLine(`Debug binary built: ${binaryPath}`);
 
+      // Generate unique pipe path for IPC command server
+      const cmdPipePath = process.platform === "win32"
+        ? `\\\\.\\pipe\\strucpp-cmd-${process.pid}-${Date.now()}`
+        : path.join(os.tmpdir(), `strucpp-cmd-${process.pid}-${Date.now()}.sock`);
+
       _lastDebugBuild = {
         binaryPath,
         outputDir,
         lineMap: response.lineMap,
         sourceUri: uri,
+        cmdPipePath,
       };
 
       return _lastDebugBuild;
@@ -480,7 +489,7 @@ async function launchDebugSession(state: DebugBuildState): Promise<void> {
   const miMode: "lldb" | "gdb" = isMac ? "lldb" : "gdb";
   const setupCommands = buildSetupCommands(miMode);
   const debugConfig = buildDebugConfig(
-    { binaryPath: state.binaryPath, outputDir: state.outputDir },
+    { binaryPath: state.binaryPath, outputDir: state.outputDir, cmdPipePath: state.cmdPipePath },
     debugType,
     miMode,
     setupCommands,
