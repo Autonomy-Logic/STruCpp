@@ -52,7 +52,12 @@ export class ReplClient {
 
   private tryConnect(pipePath: string): Promise<void> {
     return new Promise((resolve, reject) => {
+      let settled = false;
+
       const sock = net.createConnection({ path: pipePath }, () => {
+        settled = true;
+        // Disable the connection timeout now that we're connected
+        sock.setTimeout(0);
         this.socket = sock;
         this.connected = true;
         this.responseBuffer = "";
@@ -82,12 +87,19 @@ export class ReplClient {
           this.pendingResolve = null;
           this.pendingReject = null;
         }
-        reject(err);
+        if (!settled) {
+          settled = true;
+          reject(err);
+        }
       });
 
+      // Timeout only for the initial connection attempt
       sock.setTimeout(5000, () => {
-        sock.destroy();
-        reject(new Error("Connection timeout"));
+        if (!settled) {
+          settled = true;
+          sock.destroy();
+          reject(new Error("Connection timeout"));
+        }
       });
     });
   }

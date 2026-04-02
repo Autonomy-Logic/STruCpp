@@ -152,12 +152,22 @@ private:
     }
 
     void handle_client(int client_fd) {
+        // Set read timeout so a dead client doesn't block the server forever
+        struct timeval tv{};
+        tv.tv_sec = 1;
+        tv.tv_usec = 0;
+        setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
         std::string buffer;
         char chunk[1024];
 
         while (running_.load()) {
             ssize_t n = read(client_fd, chunk, sizeof(chunk));
-            if (n <= 0) break; // client disconnected or error
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue; // read timeout, check running_
+                break; // real error
+            }
+            if (n == 0) break; // client disconnected
 
             buffer.append(chunk, static_cast<size_t>(n));
 
