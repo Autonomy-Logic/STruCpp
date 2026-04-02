@@ -34,17 +34,24 @@ export class ReplClient {
    * binary time to start and create the pipe.
    */
   async connect(pipePath: string): Promise<void> {
-    const maxRetries = 6;
-    const baseDelay = 100; // ms
+    const maxRetries = 8;
+    const baseDelay = 250; // ms
+    const fs = await import("node:fs");
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        await this.tryConnect(pipePath);
-        return;
-      } catch {
-        if (attempt < maxRetries - 1) {
-          await new Promise((r) => setTimeout(r, baseDelay * Math.pow(2, attempt)));
+      const exists = fs.existsSync(pipePath);
+      console.log(`[repl-client] connect attempt ${attempt + 1}/${maxRetries}, socket exists: ${exists}`);
+      if (exists) {
+        try {
+          await this.tryConnect(pipePath);
+          return;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          console.log(`[repl-client] attempt ${attempt + 1} failed: ${msg}`);
         }
+      }
+      if (attempt < maxRetries - 1) {
+        await new Promise((r) => setTimeout(r, baseDelay * Math.pow(2, attempt)));
       }
     }
     throw new Error(`Failed to connect to command server at ${pipePath}`);
