@@ -439,6 +439,7 @@ export async function debugBuildCommand(
       const cmdPipePath = process.platform === "win32"
         ? `\\\\.\\pipe\\strucpp-cmd-${process.pid}-${Date.now()}`
         : path.join(os.tmpdir(), `strucpp-cmd-${process.pid}-${Date.now()}.sock`);
+      outputChannel.appendLine(`[repl-client] Generated cmd pipe path: ${cmdPipePath}`);
 
       _lastDebugBuild = {
         binaryPath,

@@ -143,6 +143,7 @@ export function buildDebugConfig(
   if (build.cmdPipePath) {
     args.push("--cmd-pipe", build.cmdPipePath);
   }
+  console.log(`[strucpp:debug-config] buildDebugConfig: cmdPipePath=${build.cmdPipePath ?? "NONE"}, args=${JSON.stringify(args)}`);
 
   if (debugType === "lldb") {
     return {

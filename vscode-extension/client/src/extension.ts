@@ -35,6 +35,7 @@ import { LibrariesChangedNotification } from "../../shared/protocol.js";
 
 let client: LanguageClient | undefined;
 let statusBarItem: vscode.StatusBarItem;
+const outputChannel = vscode.window.createOutputChannel("STruC++ Debug");
 
 function updateStatusBar(item: vscode.StatusBarItem, explorer: StlibExplorer): void {
   const count = explorer.libraryCount;
@@ -157,23 +158,29 @@ export function activate(context: ExtensionContext): void {
     context.subscriptions.push(
       vscode.debug.onDidStartDebugSession(async (session) => {
         const config = session.configuration as Record<string, unknown>;
-        if (!config.__strucpp) return;
-        const pipePath = config.__cmdPipePath as string | undefined;
-        if (pipePath) {
-          // Delay to let the binary start and create the command pipe
-          setTimeout(async () => {
-            try {
-              await replClient.connect(pipePath);
-              console.log("[strucpp] Connected to command server at", pipePath);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              console.error("[strucpp] Failed to connect to command server:", msg);
-              vscode.window.showWarningMessage(
-                `STruC++: Could not connect to debug binary for variable forcing. ${msg}`,
-              );
-            }
-          }, 1000);
+        outputChannel.appendLine(`[repl-client] Debug session started. type=${config.type} __strucpp=${config.__strucpp} __cmdPipePath=${config.__cmdPipePath}`);
+        if (!config.__strucpp) {
+          outputChannel.appendLine("[repl-client] Not a STruC++ session, skipping pipe connect.");
+          return;
         }
+        const pipePath = config.__cmdPipePath as string | undefined;
+        if (!pipePath) {
+          outputChannel.appendLine("[repl-client] No __cmdPipePath in debug config — command server will not be available.");
+          return;
+        }
+        outputChannel.appendLine(`[repl-client] Will connect to ${pipePath} in 1s...`);
+        setTimeout(async () => {
+          try {
+            await replClient.connect(pipePath);
+            outputChannel.appendLine(`[repl-client] Connected to command server at ${pipePath}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            outputChannel.appendLine(`[repl-client] FAILED to connect: ${msg}`);
+            vscode.window.showWarningMessage(
+              `STruC++: Could not connect to debug binary for variable forcing. ${msg}`,
+            );
+          }
+        }, 1000);
       }),
       vscode.debug.onDidTerminateDebugSession((session) => {
         const config = session.configuration as Record<string, unknown>;

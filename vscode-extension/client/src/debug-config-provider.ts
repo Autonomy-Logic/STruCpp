@@ -62,6 +62,8 @@ export class StrucppDebugConfigProvider
       return undefined;
     }
 
+    console.log(`[strucpp:debug-provider] debugState.cmdPipePath=${debugState.cmdPipePath}`);
+
     const isMac = process.platform === "darwin";
     const hasCodeLLDB = vscode.extensions.getExtension("vadimcn.vscode-lldb") != null;
     const debugType = isMac && hasCodeLLDB ? "lldb" : "cppdbg";
