@@ -160,14 +160,19 @@ export function activate(context: ExtensionContext): void {
         if (!config.__strucpp) return;
         const pipePath = config.__cmdPipePath as string | undefined;
         if (pipePath) {
-          // Delay slightly to let the binary start and create the pipe
+          // Delay to let the binary start and create the command pipe
           setTimeout(async () => {
             try {
               await replClient.connect(pipePath);
+              console.log("[strucpp] Connected to command server at", pipePath);
             } catch (err) {
-              console.warn("[strucpp] Failed to connect to command server:", err);
+              const msg = err instanceof Error ? err.message : String(err);
+              console.error("[strucpp] Failed to connect to command server:", msg);
+              vscode.window.showWarningMessage(
+                `STruC++: Could not connect to debug binary for variable forcing. ${msg}`,
+              );
             }
-          }, 500);
+          }, 1000);
         }
       }),
       vscode.debug.onDidTerminateDebugSession((session) => {

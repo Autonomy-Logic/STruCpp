@@ -70,7 +70,7 @@ export class StrucppDebugConfigProvider
     const setupCommands = buildSetupCommands(miMode, prettyPrinterPath);
 
     return buildDebugConfig(
-      { binaryPath: debugState.binaryPath, outputDir: debugState.outputDir },
+      { binaryPath: debugState.binaryPath, outputDir: debugState.outputDir, cmdPipePath: debugState.cmdPipePath },
       debugType,
       miMode,
       setupCommands,
