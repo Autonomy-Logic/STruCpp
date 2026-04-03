@@ -76,16 +76,9 @@ async function forceViaDebugger(
   value: string,
 ): Promise<void> {
   // Write all three fields — GDB ignores C++ access specifiers
-  const r1 = await debugEvaluate(session, `${evaluateName}.forced_ = true`);
-  const r2 = await debugEvaluate(session, `${evaluateName}.forced_value_ = ${value}`);
-  const r3 = await debugEvaluate(session, `${evaluateName}.value_ = ${value}`);
-  console.log(`[strucpp:force] evaluateName=${evaluateName}`);
-  console.log(`[strucpp:force] forced_=true → ${r1}`);
-  console.log(`[strucpp:force] forced_value_=${value} → ${r2}`);
-  console.log(`[strucpp:force] value_=${value} → ${r3}`);
-  // Verify: read back the value
-  const verify = await debugEvaluate(session, `${evaluateName}.forced_`);
-  console.log(`[strucpp:force] verify forced_=${verify}`);
+  await debugEvaluate(session, `${evaluateName}.forced_ = true`);
+  await debugEvaluate(session, `${evaluateName}.forced_value_ = ${value}`);
+  await debugEvaluate(session, `${evaluateName}.value_ = ${value}`);
 }
 
 /**
