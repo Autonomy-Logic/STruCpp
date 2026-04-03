@@ -55,9 +55,12 @@ async function debugEvaluate(
     // If we can't get a frame, try without one
   }
 
+  // Use context "variables" to bypass the debug adapter tracker's
+  // ST-to-C++ expression transformation (which uppercases identifiers
+  // and would break C++ namespace resolution like strucpp::).
   const result = await session.customRequest("evaluate", {
     expression,
-    context: "repl",
+    context: "variables",
     ...(frameId !== undefined ? { frameId } : {}),
   });
   return result?.result ?? "";
