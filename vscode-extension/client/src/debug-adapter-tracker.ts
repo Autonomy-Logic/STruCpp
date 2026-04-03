@@ -47,23 +47,27 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
     const msg = message as {
       type?: string;
       command?: string;
-      arguments?: {
-        expression?: string;
-        context?: string;
-      };
+      seq?: number;
+      arguments?: Record<string, unknown>;
     };
+
+    // Log all requests for debugging
+    if (msg.type === "request") {
+      const args = msg.arguments ? JSON.stringify(msg.arguments).substring(0, 200) : "{}";
+      log.appendLine(`[tracker] → ${msg.command} (seq=${msg.seq}) args=${args}`);
+    }
 
     if (
       msg.type === "request" &&
       msg.command === "evaluate" &&
       msg.arguments?.expression
     ) {
-      const ctx = msg.arguments.context;
+      const ctx = msg.arguments.context as string | undefined;
       // Transform watch and REPL expressions.
       // Skip "hover" — handled by EvaluatableExpressionProvider which
       // also consults the language server for type-aware .value_ appending.
       if (ctx === "watch" || ctx === "repl") {
-        const original = msg.arguments.expression;
+        const original = msg.arguments.expression as string;
         const transformed = transformStExpression(original);
         if (transformed !== original) {
           log.appendLine(`[tracker] ${ctx}: "${original}" → "${transformed}"`);
@@ -73,38 +77,27 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
     }
 
     // Intercept "Set Value" (setVariable/setExpression) for IECVar types.
-    // VSCode sends these when the user edits a value in the Variables or
-    // Watch pane. For IECVar-wrapped variables, rewrite as a .value_ field
-    // assignment since the debug adapter can't assign to the wrapper directly.
-    const setMsg = message as {
-      type?: string;
-      command?: string;
-      arguments?: {
-        name?: string;
-        value?: string;
-        variablesReference?: number;
-        expression?: string;
-        frameId?: number;
-      };
-    };
     if (
-      setMsg.type === "request" &&
-      (setMsg.command === "setVariable" || setMsg.command === "setExpression") &&
-      setMsg.arguments?.value !== undefined
+      msg.type === "request" &&
+      (msg.command === "setVariable" || msg.command === "setExpression")
     ) {
-      // We can't easily detect if the target is an IECVar from here,
-      // so rewrite setExpression to an evaluate that sets value_ directly.
-      // For setVariable, the adapter handles it; for setExpression (watch pane),
-      // we convert to an evaluate request.
-      if (setMsg.command === "setExpression" && setMsg.arguments.expression) {
-        const expr = setMsg.arguments.expression;
-        const val = setMsg.arguments.value;
+      log.appendLine(`[tracker] Intercepted ${msg.command}: ${JSON.stringify(msg.arguments)}`);
+
+      if (msg.command === "setExpression" && msg.arguments?.expression && msg.arguments?.value !== undefined) {
+        const expr = msg.arguments.expression as string;
+        const val = msg.arguments.value as string;
         // Rewrite: setExpression → evaluate with .value_ assignment
-        setMsg.command = "evaluate";
-        (setMsg.arguments as Record<string, unknown>).expression = `${expr}.value_ = ${val}`;
-        (setMsg.arguments as Record<string, unknown>).context = "variables";
-        delete (setMsg.arguments as Record<string, unknown>).value;
-        log.appendLine(`[tracker] setExpression → evaluate: ${expr}.value_ = ${val}`);
+        msg.command = "evaluate";
+        msg.arguments.expression = `${expr}.value_ = ${val}`;
+        msg.arguments.context = "variables";
+        delete msg.arguments.value;
+        log.appendLine(`[tracker] Rewrote to evaluate: ${msg.arguments.expression}`);
+      }
+
+      if (msg.command === "setVariable" && msg.arguments?.name && msg.arguments?.value !== undefined) {
+        log.appendLine(`[tracker] setVariable for "${msg.arguments.name}" = "${msg.arguments.value}" (variablesReference=${msg.arguments.variablesReference})`);
+        // TODO: setVariable uses variablesReference IDs, not expression paths.
+        // Can't easily rewrite without knowing the evaluateName.
       }
     }
   }
