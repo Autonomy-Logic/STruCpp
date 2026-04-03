@@ -94,8 +94,14 @@ inline void cyclic_run(ProgramDescriptor* programs, size_t program_count,
             fflush(stdout);
         }
 
-        // Sleep until next tick (drift-free)
+        // Sleep until next tick.
+        // If we've fallen behind (e.g., resumed from a debugger breakpoint),
+        // reset to now to prevent a burst of catch-up cycles.
         next_tick += std::chrono::nanoseconds(common_ticktime);
+        auto now = std::chrono::steady_clock::now();
+        if (next_tick < now) {
+            next_tick = now;
+        }
         std::this_thread::sleep_until(next_tick);
     }
 
