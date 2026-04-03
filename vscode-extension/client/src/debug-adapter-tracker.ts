@@ -84,20 +84,22 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
       log.appendLine(`[tracker] Intercepted ${msg.command}: ${JSON.stringify(msg.arguments)}`);
 
       if (msg.command === "setExpression" && msg.arguments?.expression && msg.arguments?.value !== undefined) {
-        const expr = msg.arguments.expression as string;
+        const expr = transformStExpression(msg.arguments.expression as string);
         const val = msg.arguments.value as string;
         // Rewrite: setExpression → evaluate with .value_ assignment
+        // Use uppercase C++ name and "variables" context to bypass further transformation
         msg.command = "evaluate";
         msg.arguments.expression = `${expr}.value_ = ${val}`;
         msg.arguments.context = "variables";
         delete msg.arguments.value;
-        log.appendLine(`[tracker] Rewrote to evaluate: ${msg.arguments.expression}`);
+        log.appendLine(`[tracker] setExpression → evaluate: ${msg.arguments.expression}`);
       }
 
       if (msg.command === "setVariable" && msg.arguments?.name && msg.arguments?.value !== undefined) {
         log.appendLine(`[tracker] setVariable for "${msg.arguments.name}" = "${msg.arguments.value}" (variablesReference=${msg.arguments.variablesReference})`);
-        // TODO: setVariable uses variablesReference IDs, not expression paths.
-        // Can't easily rewrite without knowing the evaluateName.
+        // setVariable uses variablesReference IDs. We can't easily rewrite
+        // without the evaluateName. Let cppdbg attempt it — it may work for
+        // simple types or fail gracefully for IECVar wrappers.
       }
     }
   }

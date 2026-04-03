@@ -80,15 +80,12 @@ async function forceViaDebugger(
   await debugEvaluate(session, `${evaluateName}.forced_value_ = ${value}`);
   await debugEvaluate(session, `${evaluateName}.value_ = ${value}`);
 
-  // Trigger a Variables pane refresh so the new value is visible immediately.
+  // Trigger a Variables pane refresh by re-reading the value we just set.
+  // This causes cppdbg to invalidate its cached variable display.
   try {
-    const refreshResult = await session.customRequest("evaluate", {
-      expression: "0",
-      context: "repl",
-    });
-    console.log("[strucpp:force] refresh evaluate result:", JSON.stringify(refreshResult));
-  } catch (err) {
-    console.log("[strucpp:force] refresh evaluate failed:", err instanceof Error ? err.message : String(err));
+    await debugEvaluate(session, `${evaluateName}.value_`);
+  } catch {
+    // Best-effort — the force already succeeded
   }
 }
 
