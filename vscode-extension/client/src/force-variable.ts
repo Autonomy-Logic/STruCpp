@@ -29,15 +29,36 @@ export interface ForcedVariableEntry {
 
 /**
  * Execute a GDB/LLDB expression via the debug adapter.
+ * Uses the topmost stack frame of the active thread for context.
  * Returns the result string, or throws on failure.
  */
 async function debugEvaluate(
   session: vscode.DebugSession,
   expression: string,
 ): Promise<string> {
+  // Get the active thread's topmost stack frame for evaluation context
+  let frameId: number | undefined;
+  try {
+    const threads = await session.customRequest("threads");
+    if (threads?.threads?.length > 0) {
+      const threadId = threads.threads[0].id;
+      const stack = await session.customRequest("stackTrace", {
+        threadId,
+        startFrame: 0,
+        levels: 1,
+      });
+      if (stack?.stackFrames?.length > 0) {
+        frameId = stack.stackFrames[0].id;
+      }
+    }
+  } catch {
+    // If we can't get a frame, try without one
+  }
+
   const result = await session.customRequest("evaluate", {
     expression,
     context: "repl",
+    ...(frameId !== undefined ? { frameId } : {}),
   });
   return result?.result ?? "";
 }
