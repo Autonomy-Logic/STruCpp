@@ -53,10 +53,10 @@ export async function forceVariableCommand(
   provider: ForcedVariablesProvider,
   replClient?: ReplClient,
 ): Promise<void> {
-  console.log("[strucpp:force] forceVariableCommand called. replClient exists:", !!replClient, "connected:", replClient?.isConnected(), "args:", JSON.stringify(args?.variable));
   if (!replClient?.isConnected()) {
     vscode.window.showWarningMessage(
-      "Not connected to the running program. Start a debug session first.",
+      "Cannot force variable — not connected to the running program. " +
+      "If the program is paused at a breakpoint, resume it first (F5) and try again.",
     );
     return;
   }

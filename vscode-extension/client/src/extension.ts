@@ -142,57 +142,65 @@ export function activate(context: ExtensionContext): void {
     const forcedProvider = new ForcedVariablesProvider();
     context.subscriptions.push(
       vscode.window.registerTreeDataProvider("strucpp.forcedVariables", forcedProvider),
-      vscode.commands.registerCommand("strucpp.forceVariable", (args) =>
-        forceVariableCommand(args, forcedProvider, replClient),
-      ),
-      vscode.commands.registerCommand("strucpp.unforceVariable", (args) =>
-        unforceVariableCommand(args, forcedProvider, replClient),
-      ),
-      vscode.commands.registerCommand("strucpp.unforceAll", () =>
-        unforceAllCommand(forcedProvider, replClient),
-      ),
+      vscode.commands.registerCommand("strucpp.forceVariable", async (args) => {
+        await ensureConnected();
+        return forceVariableCommand(args, forcedProvider, replClient);
+      }),
+      vscode.commands.registerCommand("strucpp.unforceVariable", async (args) => {
+        await ensureConnected();
+        return unforceVariableCommand(args, forcedProvider, replClient);
+      }),
+      vscode.commands.registerCommand("strucpp.unforceAll", async () => {
+        await ensureConnected();
+        return unforceAllCommand(forcedProvider, replClient);
+      }),
       forcedProvider,
     );
 
-    // Connect/disconnect ReplClient with debug session lifecycle
+    // Track the command pipe path for the active debug session.
+    // Connection is lazy — established on first force/unforce command,
+    // not at session start. This avoids races with GDB pausing all
+    // threads during startup.
+    let activePipePath: string | undefined;
+
     context.subscriptions.push(
-      vscode.debug.onDidStartDebugSession(async (session) => {
+      vscode.debug.onDidStartDebugSession((session) => {
         const config = session.configuration as Record<string, unknown>;
-        outputChannel.appendLine(`[repl-client] Debug session started. type=${config.type} __strucpp=${config.__strucpp} __cmdPipePath=${config.__cmdPipePath}`);
-        if (!config.__strucpp) {
-          outputChannel.appendLine("[repl-client] Not a STruC++ session, skipping pipe connect.");
-          return;
-        }
-        const pipePath = config.__cmdPipePath as string | undefined;
-        if (!pipePath) {
-          outputChannel.appendLine("[repl-client] No __cmdPipePath in debug config — command server will not be available.");
-          return;
-        }
-        outputChannel.appendLine(`[repl-client] Will connect to ${pipePath} in 1s...`);
-        setTimeout(async () => {
-          try {
-            await replClient.connect(pipePath);
-            outputChannel.appendLine(`[repl-client] Connected to command server at ${pipePath}`);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            outputChannel.appendLine(`[repl-client] FAILED to connect: ${msg}`);
-            vscode.window.showWarningMessage(
-              `STruC++: Could not connect to debug binary for variable forcing. ${msg}`,
-            );
-          }
-        }, 1000);
+        if (!config.__strucpp) return;
+        activePipePath = config.__cmdPipePath as string | undefined;
+        outputChannel.appendLine(`[repl-client] Debug session started. pipePath=${activePipePath ?? "NONE"}`);
       }),
       vscode.debug.onDidTerminateDebugSession((session) => {
         const config = session.configuration as Record<string, unknown>;
         if (!config.__strucpp) return;
         replClient.disconnect();
         // Clean up pipe file
-        const pipePath = config.__cmdPipePath as string | undefined;
-        if (pipePath) {
-          try { require("fs").unlinkSync(pipePath); } catch { /* already cleaned up */ }
+        if (activePipePath) {
+          try { require("fs").unlinkSync(activePipePath); } catch { /* already cleaned up */ }
         }
+        activePipePath = undefined;
       }),
     );
+
+    /**
+     * Ensure the ReplClient is connected. Called lazily before each
+     * force/unforce command. This avoids the race condition where GDB
+     * pauses all threads (including the command server) during startup.
+     */
+    async function ensureConnected(): Promise<boolean> {
+      if (replClient.isConnected()) return true;
+      if (!activePipePath) return false;
+      try {
+        outputChannel.appendLine(`[repl-client] Connecting to ${activePipePath}...`);
+        await replClient.connect(activePipePath);
+        outputChannel.appendLine(`[repl-client] Connected.`);
+        return true;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        outputChannel.appendLine(`[repl-client] Connection failed: ${msg}`);
+        return false;
+      }
+    }
 
     // Test Explorer integration
     const testController = new StrucppTestController(context, client!);
