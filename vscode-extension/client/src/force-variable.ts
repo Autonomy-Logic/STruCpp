@@ -3,17 +3,24 @@
 /**
  * Force/Unforce variable commands and Forced Variables panel.
  *
- * Routes all force/unforce operations through the ReplClient IPC pipe,
- * which calls the same process_command() used by the interactive REPL.
+ * Forces variables by writing directly to IECVar internal fields via
+ * the debug adapter's evaluate request. GDB/LLDB can set struct fields
+ * without needing to call template methods:
+ *
+ *   evaluateName.forced_ = true
+ *   evaluateName.forced_value_ = <value>
+ *   evaluateName.value_ = <value>
+ *
+ * This works when stopped at a breakpoint (the primary use case) because
+ * GDB has full access to process memory and ignores C++ access specifiers.
  */
 
 import * as vscode from "vscode";
-import { ReplClient } from "./repl-client.js";
 
 /** A variable that has been forced to a specific value. */
 export interface ForcedVariableEntry {
-  /** REPL path (e.g. "instance0.STATE") */
-  replPath: string;
+  /** GDB evaluateName for the variable */
+  evaluateName: string;
   /** Display name shown in the panel */
   displayName: string;
   /** The value the variable is forced to */
@@ -21,27 +28,43 @@ export interface ForcedVariableEntry {
 }
 
 /**
- * Convert a C++ evaluateName from the debugger to a REPL variable path.
- *
- * Patterns:
- *   "config_Config0.instance0.STATE" → "instance0.STATE"
- *   "prog_Main.COUNTER"             → "Main.COUNTER"
+ * Execute a GDB/LLDB expression via the debug adapter.
+ * Returns the result string, or throws on failure.
  */
-function evaluateNameToReplPath(evaluateName: string): string {
-  const parts = evaluateName.split(".");
+async function debugEvaluate(
+  session: vscode.DebugSession,
+  expression: string,
+): Promise<string> {
+  const result = await session.customRequest("evaluate", {
+    expression,
+    context: "repl",
+  });
+  return result?.result ?? "";
+}
 
-  if (parts.length >= 3 && parts[0]!.startsWith("config_")) {
-    // Configuration mode: config_X.instanceName.VAR → instanceName.VAR
-    return parts.slice(1).join(".");
-  }
+/**
+ * Force a variable by writing to its IECVar internal fields via GDB.
+ * Sets forced_ = true, forced_value_ = value, value_ = value.
+ */
+async function forceViaDebugger(
+  session: vscode.DebugSession,
+  evaluateName: string,
+  value: string,
+): Promise<void> {
+  // Write all three fields — GDB ignores C++ access specifiers
+  await debugEvaluate(session, `${evaluateName}.forced_ = true`);
+  await debugEvaluate(session, `${evaluateName}.forced_value_ = ${value}`);
+  await debugEvaluate(session, `${evaluateName}.value_ = ${value}`);
+}
 
-  if (parts.length >= 2 && parts[0]!.startsWith("prog_")) {
-    // Standalone mode: prog_Name.VAR → Name.VAR
-    return parts[0]!.substring(5) + "." + parts.slice(1).join(".");
-  }
-
-  // Fallback: use as-is
-  return evaluateName;
+/**
+ * Unforce a variable by clearing its IECVar forced_ flag via GDB.
+ */
+async function unforceViaDebugger(
+  session: vscode.DebugSession,
+  evaluateName: string,
+): Promise<void> {
+  await debugEvaluate(session, `${evaluateName}.forced_ = false`);
 }
 
 /**
@@ -51,13 +74,10 @@ function evaluateNameToReplPath(evaluateName: string): string {
 export async function forceVariableCommand(
   args: { variable?: { evaluateName?: string; name?: string; value?: string } },
   provider: ForcedVariablesProvider,
-  replClient?: ReplClient,
 ): Promise<void> {
-  if (!replClient?.isConnected()) {
-    vscode.window.showWarningMessage(
-      "Cannot force variable — not connected to the running program. " +
-      "If the program is paused at a breakpoint, resume it first (F5) and try again.",
-    );
+  const session = vscode.debug.activeDebugSession;
+  if (!session) {
+    vscode.window.showWarningMessage("No active debug session.");
     return;
   }
 
@@ -76,18 +96,11 @@ export async function forceVariableCommand(
 
   if (value === undefined) return; // cancelled
 
-  const replPath = evaluateNameToReplPath(evaluateName);
-
   try {
-    const response = await replClient.sendCommand(`force ${replPath} ${value}`);
-    const result = ReplClient.parseResponse(response);
-    if (!result.ok) {
-      vscode.window.showErrorMessage(`Failed to force variable: ${result.message}`);
-      return;
-    }
+    await forceViaDebugger(session, evaluateName, value);
 
     provider.addForced({
-      replPath,
+      evaluateName,
       displayName: args.variable?.name ?? evaluateName,
       forcedValue: value,
     });
@@ -105,29 +118,22 @@ export async function forceVariableCommand(
 export async function unforceVariableCommand(
   args: { variable?: { evaluateName?: string }; entry?: ForcedVariableEntry },
   provider: ForcedVariablesProvider,
-  replClient?: ReplClient,
 ): Promise<void> {
-  if (!replClient?.isConnected()) {
-    vscode.window.showWarningMessage("Not connected to the running program.");
+  const session = vscode.debug.activeDebugSession;
+  if (!session) {
+    vscode.window.showWarningMessage("No active debug session.");
     return;
   }
 
-  const replPath = args?.entry?.replPath
-    ?? (args?.variable?.evaluateName ? evaluateNameToReplPath(args.variable.evaluateName) : undefined);
-  if (!replPath) {
-    vscode.window.showWarningMessage("Cannot unforce this variable — no path available.");
+  const evaluateName = args?.entry?.evaluateName ?? args?.variable?.evaluateName;
+  if (!evaluateName) {
+    vscode.window.showWarningMessage("Cannot unforce this variable — no evaluate path available.");
     return;
   }
 
   try {
-    const response = await replClient.sendCommand(`unforce ${replPath}`);
-    const result = ReplClient.parseResponse(response);
-    if (!result.ok) {
-      vscode.window.showErrorMessage(`Failed to unforce variable: ${result.message}`);
-      return;
-    }
-
-    provider.removeForced(replPath);
+    await unforceViaDebugger(session, evaluateName);
+    provider.removeForced(evaluateName);
   } catch (err) {
     vscode.window.showErrorMessage(
       `Failed to unforce variable: ${err instanceof Error ? err.message : String(err)}`,
@@ -140,26 +146,31 @@ export async function unforceVariableCommand(
  */
 export async function unforceAllCommand(
   provider: ForcedVariablesProvider,
-  replClient?: ReplClient,
 ): Promise<void> {
-  if (!replClient?.isConnected()) {
-    vscode.window.showWarningMessage("Not connected to the running program.");
+  const session = vscode.debug.activeDebugSession;
+  if (!session) {
+    vscode.window.showWarningMessage("No active debug session.");
     return;
   }
 
-  try {
-    const response = await replClient.sendCommand("unforce_all");
-    const result = ReplClient.parseResponse(response);
-    if (!result.ok) {
-      vscode.window.showWarningMessage(`Failed to unforce all: ${result.message}`);
+  const entries = provider.getEntries();
+  const errors: string[] = [];
+
+  for (const entry of entries) {
+    try {
+      await unforceViaDebugger(session, entry.evaluateName);
+    } catch (err) {
+      errors.push(`${entry.displayName}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  } catch (err) {
-    vscode.window.showWarningMessage(
-      `Some variables could not be unforced: ${err instanceof Error ? err.message : String(err)}`,
-    );
   }
 
   provider.clearAll();
+
+  if (errors.length > 0) {
+    vscode.window.showWarningMessage(
+      `Some variables could not be unforced:\n${errors.join("\n")}`,
+    );
+  }
 }
 
 /**
@@ -192,7 +203,7 @@ export class ForcedVariablesProvider
       vscode.TreeItemCollapsibleState.None,
     );
     item.iconPath = new vscode.ThemeIcon("lock");
-    item.tooltip = `${element.replPath} forced to ${element.forcedValue}`;
+    item.tooltip = `Forced to ${element.forcedValue}`;
     item.contextValue = "forcedVariable";
     return item;
   }
@@ -202,9 +213,14 @@ export class ForcedVariablesProvider
     return this.entries;
   }
 
+  /** Get all entries (used by unforce all). */
+  getEntries(): readonly ForcedVariableEntry[] {
+    return this.entries;
+  }
+
   addForced(entry: ForcedVariableEntry): void {
     // Update existing or add new
-    const idx = this.entries.findIndex((e) => e.replPath === entry.replPath);
+    const idx = this.entries.findIndex((e) => e.evaluateName === entry.evaluateName);
     if (idx >= 0) {
       this.entries[idx] = entry;
     } else {
@@ -213,8 +229,8 @@ export class ForcedVariablesProvider
     this._onDidChangeTreeData.fire();
   }
 
-  removeForced(replPath: string): void {
-    const idx = this.entries.findIndex((e) => e.replPath === replPath);
+  removeForced(evaluateName: string): void {
+    const idx = this.entries.findIndex((e) => e.evaluateName === evaluateName);
     if (idx >= 0) {
       this.entries.splice(idx, 1);
       this._onDidChangeTreeData.fire();
