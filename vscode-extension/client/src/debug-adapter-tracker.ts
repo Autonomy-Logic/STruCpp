@@ -71,6 +71,42 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
         }
       }
     }
+
+    // Intercept "Set Value" (setVariable/setExpression) for IECVar types.
+    // VSCode sends these when the user edits a value in the Variables or
+    // Watch pane. For IECVar-wrapped variables, rewrite as a .value_ field
+    // assignment since the debug adapter can't assign to the wrapper directly.
+    const setMsg = message as {
+      type?: string;
+      command?: string;
+      arguments?: {
+        name?: string;
+        value?: string;
+        variablesReference?: number;
+        expression?: string;
+        frameId?: number;
+      };
+    };
+    if (
+      setMsg.type === "request" &&
+      (setMsg.command === "setVariable" || setMsg.command === "setExpression") &&
+      setMsg.arguments?.value !== undefined
+    ) {
+      // We can't easily detect if the target is an IECVar from here,
+      // so rewrite setExpression to an evaluate that sets value_ directly.
+      // For setVariable, the adapter handles it; for setExpression (watch pane),
+      // we convert to an evaluate request.
+      if (setMsg.command === "setExpression" && setMsg.arguments.expression) {
+        const expr = setMsg.arguments.expression;
+        const val = setMsg.arguments.value;
+        // Rewrite: setExpression → evaluate with .value_ assignment
+        setMsg.command = "evaluate";
+        (setMsg.arguments as Record<string, unknown>).expression = `${expr}.value_ = ${val}`;
+        (setMsg.arguments as Record<string, unknown>).context = "variables";
+        delete (setMsg.arguments as Record<string, unknown>).value;
+        log.appendLine(`[tracker] setExpression → evaluate: ${expr}.value_ = ${val}`);
+      }
+    }
   }
 
   /**

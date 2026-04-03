@@ -79,6 +79,18 @@ async function forceViaDebugger(
   await debugEvaluate(session, `${evaluateName}.forced_ = true`);
   await debugEvaluate(session, `${evaluateName}.forced_value_ = ${value}`);
   await debugEvaluate(session, `${evaluateName}.value_ = ${value}`);
+
+  // Trigger a Variables pane refresh so the new value is visible immediately.
+  // cppdbg invalidates its variable cache after any evaluate in "repl" context.
+  // Issue a harmless read expression to force the refresh.
+  try {
+    await session.customRequest("evaluate", {
+      expression: "0",
+      context: "repl",
+    });
+  } catch {
+    // Best-effort — the force already succeeded
+  }
 }
 
 /**
