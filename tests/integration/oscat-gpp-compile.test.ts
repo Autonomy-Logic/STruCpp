@@ -75,12 +75,14 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
     it(
       "transpiles OSCAT library to C++ via .stlib",
       () => {
-        // Compile a minimal dummy program with the OSCAT library loaded
+        // Compile a minimal dummy program with the OSCAT library loaded.
+        // isTestBuild disables library tree-shaking so all library code is emitted.
         const dummyST = "PROGRAM _Dummy\nEND_PROGRAM\n";
         const result = compile(dummyST, {
           headerFileName: "oscat_all.hpp",
           fileName: "_dummy.st",
           libraryPaths: [LIBS_DIR],
+          isTestBuild: true,
         });
 
         if (!result.success) {
@@ -154,6 +156,7 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
           headerFileName: "oscat_all.hpp",
           fileName: "_dummy.st",
           libraryPaths: [LIBS_DIR],
+          isTestBuild: true,
         });
         const { pous } = dummyResult.ast
           ? buildPOUInfoFromAST(dummyResult.ast)

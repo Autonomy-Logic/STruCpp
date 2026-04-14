@@ -1237,4 +1237,222 @@ describe("Library System", () => {
       expect(result.cppCode).toContain("INLINEFUNC");
     });
   });
+
+  describe("conditional library inclusion (tree-shaking)", () => {
+    it("excludes unused libraries from generated code", () => {
+      const libResult = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION UnusedFunc : INT
+                VAR_INPUT x : INT; END_VAR
+                UnusedFunc := x * 2;
+              END_FUNCTION
+            `,
+            fileName: "unused.st",
+          },
+        ],
+        { name: "unused-lib", version: "1.0.0", namespace: "unused" },
+      );
+      expect(libResult.success).toBe(true);
+
+      const source = `
+        PROGRAM Main
+          VAR a : INT; END_VAR
+          a := 42;
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraries: [libResult.archive],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.headerCode).not.toContain("Library: unused-lib");
+      expect(result.cppCode).not.toContain("Library: unused-lib");
+    });
+
+    it("includes libraries whose functions are called", () => {
+      const libResult = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION UsedFunc : INT
+                VAR_INPUT x : INT; END_VAR
+                UsedFunc := x + 1;
+              END_FUNCTION
+            `,
+            fileName: "used.st",
+          },
+        ],
+        { name: "used-lib", version: "1.0.0", namespace: "used" },
+      );
+      expect(libResult.success).toBe(true);
+
+      const source = `
+        PROGRAM Main
+          VAR a : INT; END_VAR
+          a := UsedFunc(x := 5);
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraries: [libResult.archive],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain("Library: used-lib");
+      expect(result.cppCode).toContain("Library: used-lib");
+    });
+
+    it("includes libraries whose function blocks are instantiated", () => {
+      const libResult = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION_BLOCK MyFB
+                VAR_INPUT x : INT; END_VAR
+                VAR_OUTPUT y : INT; END_VAR
+                y := x + 1;
+              END_FUNCTION_BLOCK
+            `,
+            fileName: "myfb.st",
+          },
+        ],
+        { name: "fb-lib", version: "1.0.0", namespace: "fblib" },
+      );
+      expect(libResult.success).toBe(true);
+
+      const source = `
+        PROGRAM Main
+          VAR fb : MyFB; END_VAR
+          fb(x := 10);
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraries: [libResult.archive],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain("Library: fb-lib");
+      expect(result.cppCode).toContain("Library: fb-lib");
+    });
+
+    it("includes libraries whose types are used", () => {
+      const libResult = compileStlib(
+        [
+          {
+            source: `
+              TYPE
+                MyStruct : STRUCT
+                  a : INT;
+                  b : INT;
+                END_STRUCT;
+              END_TYPE
+              FUNCTION DummyFn : INT
+                VAR_INPUT x : INT; END_VAR
+                DummyFn := x;
+              END_FUNCTION
+            `,
+            fileName: "types.st",
+          },
+        ],
+        { name: "type-lib", version: "1.0.0", namespace: "typelib" },
+      );
+      expect(libResult.success).toBe(true);
+
+      const source = `
+        PROGRAM Main
+          VAR s : MyStruct; END_VAR
+          s.a := 1;
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraries: [libResult.archive],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain("Library: type-lib");
+    });
+
+    it("excludes one library but includes another when only one is used", () => {
+      const usedLib = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION Alpha : INT
+                VAR_INPUT x : INT; END_VAR
+                Alpha := x;
+              END_FUNCTION
+            `,
+            fileName: "alpha.st",
+          },
+        ],
+        { name: "alpha-lib", version: "1.0.0", namespace: "alpha" },
+      );
+      const unusedLib = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION Beta : INT
+                VAR_INPUT x : INT; END_VAR
+                Beta := x;
+              END_FUNCTION
+            `,
+            fileName: "beta.st",
+          },
+        ],
+        { name: "beta-lib", version: "1.0.0", namespace: "beta" },
+      );
+      expect(usedLib.success).toBe(true);
+      expect(unusedLib.success).toBe(true);
+
+      const source = `
+        PROGRAM Main
+          VAR a : INT; END_VAR
+          a := Alpha(x := 1);
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraries: [usedLib.archive, unusedLib.archive],
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain("Library: alpha-lib");
+      expect(result.headerCode).not.toContain("Library: beta-lib");
+      expect(result.cppCode).toContain("Library: alpha-lib");
+      expect(result.cppCode).not.toContain("Library: beta-lib");
+    });
+
+    it("includes all libraries when isTestBuild is true", () => {
+      const libResult = compileStlib(
+        [
+          {
+            source: `
+              FUNCTION UnreferencedFunc : INT
+                VAR_INPUT x : INT; END_VAR
+                UnreferencedFunc := x;
+              END_FUNCTION
+            `,
+            fileName: "unreferenced.st",
+          },
+        ],
+        { name: "unreferenced-lib", version: "1.0.0", namespace: "unref" },
+      );
+      expect(libResult.success).toBe(true);
+
+      const source = `
+        PROGRAM Main
+          VAR a : INT; END_VAR
+          a := 1;
+        END_PROGRAM
+      `;
+      const result = compile(source, {
+        libraries: [libResult.archive],
+        isTestBuild: true,
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain("Library: unreferenced-lib");
+      expect(result.cppCode).toContain("Library: unreferenced-lib");
+    });
+  });
 });
