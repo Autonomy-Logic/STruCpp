@@ -43,10 +43,6 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
    * Cache: maps (variablesReference, name) → evaluateName.
    * Populated from variables responses, used to resolve setVariable requests.
    */
-  /**
-   * Cache: maps (variablesReference, name) → evaluateName.
-   * Populated from variables responses, used to resolve setVariable requests.
-   */
   private varEvalNameCache = new Map<string, string>();
   /** Track pending variables requests: seq → variablesReference */
   private pendingVarRequests = new Map<number, number>();
@@ -68,12 +64,6 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
       seq?: number;
       arguments?: Record<string, unknown>;
     };
-
-    // Log all requests for debugging
-    if (msg.type === "request") {
-      const args = msg.arguments ? JSON.stringify(msg.arguments).substring(0, 200) : "{}";
-      log.appendLine(`[tracker] → ${msg.command} (seq=${msg.seq}) args=${args}`);
-    }
 
     // Track variables requests so we can cache evaluateNames from responses
     if (msg.type === "request" && msg.command === "variables" && msg.seq !== undefined) {
@@ -162,6 +152,14 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
         indexedVariables?: number;
       };
     };
+
+    // Clear caches when the target resumes — cached references become stale.
+    const evt = message as { type?: string; event?: string };
+    if (evt.type === "event" && evt.event === "continued") {
+      this.varEvalNameCache.clear();
+      this.pendingVarRequests.clear();
+      return;
+    }
 
     if (msg.type !== "response" || !msg.body) return;
 

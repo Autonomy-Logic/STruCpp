@@ -14,8 +14,6 @@ import type * as vscode from "vscode";
 export interface DebugBuildInfo {
   binaryPath: string;
   outputDir: string;
-  /** Path for the IPC command pipe (Unix socket or Win32 named pipe) */
-  cmdPipePath?: string;
 }
 
 /** Optional user overrides from launch.json or debug config provider. */
@@ -140,10 +138,6 @@ export function buildDebugConfig(
 ): vscode.DebugConfiguration {
   const name = overrides?.name || "Debug ST Program";
   const args = ["--cyclic"];
-  if (build.cmdPipePath) {
-    args.push("--cmd-pipe", build.cmdPipePath);
-  }
-  console.log(`[strucpp:debug-config] buildDebugConfig: cmdPipePath=${build.cmdPipePath ?? "NONE"}, args=${JSON.stringify(args)}`);
 
   if (debugType === "lldb") {
     return {
@@ -154,7 +148,6 @@ export function buildDebugConfig(
       args,
       cwd: build.outputDir,
       __strucpp: true,
-      __cmdPipePath: build.cmdPipePath,
       initCommands: getLLDBInitCommands(),
       ...(overrides?.env ? { env: overrides.env } : {}),
       ...(overrides?.stopOnEntry ? { stopOnEntry: true } : {}),
@@ -169,7 +162,6 @@ export function buildDebugConfig(
     args,
     cwd: build.outputDir,
     __strucpp: true,
-    __cmdPipePath: build.cmdPipePath,
     MIMode: miMode,
     setupCommands,
     ...(overrides?.env
