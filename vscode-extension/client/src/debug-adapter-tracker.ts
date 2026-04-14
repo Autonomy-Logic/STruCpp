@@ -40,6 +40,24 @@ export class StrucppDebugTrackerFactory
 
 class StrucppDebugTracker implements vscode.DebugAdapterTracker {
   /**
+   * Cache: maps (variablesReference, name) → evaluateName.
+   * Populated from variables responses, used to resolve setVariable requests.
+   */
+  /**
+   * Cache: maps (variablesReference, name) → evaluateName.
+   * Populated from variables responses, used to resolve setVariable requests.
+   */
+  private varEvalNameCache = new Map<string, string>();
+  /** Track pending variables requests: seq → variablesReference */
+  private pendingVarRequests = new Map<number, number>();
+  /** Last seen top frame ID (for evaluate requests that need a frame context) */
+  private lastFrameId: number | undefined;
+
+  private cacheKey(variablesReference: number, name: string): string {
+    return `${variablesReference}:${name}`;
+  }
+
+  /**
    * Intercept requests FROM VSCode TO the debug adapter.
    * Transform watch/REPL expressions from ST naming to C++ naming.
    */
@@ -55,6 +73,14 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
     if (msg.type === "request") {
       const args = msg.arguments ? JSON.stringify(msg.arguments).substring(0, 200) : "{}";
       log.appendLine(`[tracker] → ${msg.command} (seq=${msg.seq}) args=${args}`);
+    }
+
+    // Track variables requests so we can cache evaluateNames from responses
+    if (msg.type === "request" && msg.command === "variables" && msg.seq !== undefined) {
+      const varRef = msg.arguments?.variablesReference as number | undefined;
+      if (varRef !== undefined) {
+        this.pendingVarRequests.set(msg.seq, varRef);
+      }
     }
 
     if (
@@ -96,10 +122,23 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
       }
 
       if (msg.command === "setVariable" && msg.arguments?.name && msg.arguments?.value !== undefined) {
-        log.appendLine(`[tracker] setVariable for "${msg.arguments.name}" = "${msg.arguments.value}" (variablesReference=${msg.arguments.variablesReference})`);
-        // setVariable uses variablesReference IDs. We can't easily rewrite
-        // without the evaluateName. Let cppdbg attempt it — it may work for
-        // simple types or fail gracefully for IECVar wrappers.
+        const varRef = msg.arguments.variablesReference as number | undefined;
+        const name = msg.arguments.name as string;
+        const val = msg.arguments.value as string;
+        const evalName = varRef !== undefined
+          ? this.varEvalNameCache.get(this.cacheKey(varRef, name))
+          : undefined;
+        log.appendLine(`[tracker] setVariable for "${name}" = "${val}" (ref=${varRef}, evalName=${evalName ?? "NOT CACHED"})`);
+        if (evalName) {
+          // Rewrite: setVariable → evaluate with .value_ field assignment
+          msg.command = "evaluate";
+          msg.arguments = {
+            expression: `${evalName}.value_ = ${val}`,
+            context: "variables",
+            ...(this.lastFrameId !== undefined ? { frameId: this.lastFrameId } : {}),
+          };
+          log.appendLine(`[tracker] Rewrote to evaluate: ${msg.arguments.expression} (frameId=${this.lastFrameId})`);
+        }
       }
     }
   }
@@ -112,6 +151,7 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
     const msg = message as {
       type?: string;
       command?: string;
+      request_seq?: number;
       body?: {
         variables?: DAPVariable[];
         // evaluate response fields
@@ -125,8 +165,28 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
 
     if (msg.type !== "response" || !msg.body) return;
 
+    // Cache the top frame ID from stackTrace responses
+    if (msg.command === "stackTrace") {
+      const frames = (msg.body as Record<string, unknown>)?.stackFrames as Array<{ id: number }> | undefined;
+      if (frames && frames.length > 0) {
+        this.lastFrameId = frames[0].id;
+      }
+    }
+
     // Handle variables responses (Variables pane)
     if (msg.command === "variables" && msg.body.variables) {
+      // Cache evaluateNames for setVariable rewriting
+      const varRef = msg.request_seq !== undefined
+        ? this.pendingVarRequests.get(msg.request_seq)
+        : undefined;
+      if (varRef !== undefined) {
+        this.pendingVarRequests.delete(msg.request_seq!);
+        for (const v of msg.body.variables) {
+          if (v.evaluateName) {
+            this.varEvalNameCache.set(this.cacheKey(varRef, v.name), v.evaluateName);
+          }
+        }
+      }
       this.transformVariables(msg.body.variables);
     }
 
