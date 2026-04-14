@@ -312,14 +312,12 @@ jobs:
         run: npm run build
 
       - name: Create npm tarball
-        run: |
-          npm pack
-          mv strucpp-*.tgz "strucpp-${VERSION}.tgz"
+        run: npm pack
 
       - uses: actions/upload-artifact@v4
         with:
           name: strucpp-npm
-          path: strucpp-${{ needs.prepare.outputs.version }}.tgz
+          path: strucpp-*.tgz
 
   # ---------------------------------------------------------------------------
   # VSCode Extension (.vsix)
