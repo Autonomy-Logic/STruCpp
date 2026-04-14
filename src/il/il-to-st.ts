@@ -135,6 +135,22 @@ function convertStraightLine(elements: ILElement[]): ILConvertResult {
         }
         break;
 
+      // Implicit FB invocation: assign accumulator to named input, then call FB
+      // e.g., IN CMD_TMR → CMD_TMR.IN := expr; CMD_TMR();
+      case "S1":
+      case "R1":
+      case "CLK":
+      case "CU":
+      case "CD":
+      case "PV":
+      case "IN":
+      case "PT":
+        if (operand) {
+          lines.push(`  ${operand}.${op} := ${expr};`);
+          lines.push(`  ${operand}();`);
+        }
+        break;
+
       case "CAL":
       case "CALC":
       case "CALCN": {
@@ -427,6 +443,19 @@ function convertBlockInstructions(instructions: ILInstruction[]): {
         break;
       case "R":
         if (operand) lines.push(`IF ${expr} THEN ${operand} := FALSE; END_IF;`);
+        break;
+      case "S1":
+      case "R1":
+      case "CLK":
+      case "CU":
+      case "CD":
+      case "PV":
+      case "IN":
+      case "PT":
+        if (operand) {
+          lines.push(`${operand}.${op} := ${expr};`);
+          lines.push(`${operand}();`);
+        }
         break;
       case "CAL":
       case "CALC":

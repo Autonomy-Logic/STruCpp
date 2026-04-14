@@ -48,7 +48,16 @@ export type ILOperator =
   | "CALCN"
   // Set / Reset
   | "S"
-  | "R";
+  | "R"
+  // Implicit FB invocation operators (assign accumulator to named input, call FB)
+  | "S1"
+  | "R1"
+  | "CLK"
+  | "CU"
+  | "CD"
+  | "PV"
+  | "IN"
+  | "PT";
 
 /** Set of all valid IL operator strings for quick lookup. */
 export const IL_OPERATORS = new Set<string>([
@@ -85,6 +94,14 @@ export const IL_OPERATORS = new Set<string>([
   "CALCN",
   "S",
   "R",
+  "S1",
+  "R1",
+  "CLK",
+  "CU",
+  "CD",
+  "PV",
+  "IN",
+  "PT",
 ]);
 
 /** A single parsed IL instruction. */

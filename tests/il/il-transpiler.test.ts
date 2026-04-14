@@ -171,6 +171,50 @@ END_PROGRAM
     expect(result.stSource).toContain("IF cond THEN flag := TRUE; END_IF;");
   });
 
+  it("should convert implicit FB invocation operators", () => {
+    const result = transpileILSource(`
+PROGRAM Test
+  VAR x : BOOL; fb1 : TON; END_VAR
+LD x
+IN fb1
+END_PROGRAM
+    `);
+    expect(result.hasIL).toBe(true);
+    expect(result.stSource).toContain("fb1.IN := x;");
+    expect(result.stSource).toContain("fb1();");
+  });
+
+  it("should convert parenthesized expressions", () => {
+    const result = transpileILSource(`
+PROGRAM Test
+  VAR a : BOOL; b : BOOL; c : BOOL; d : BOOL; r : BOOL; END_VAR
+LD a
+AND b
+OR( c
+ANDN d
+)
+ST r
+END_PROGRAM
+    `);
+    expect(result.hasIL).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    // Should produce nested expression with correct grouping
+    expect(result.stSource).toContain("OR");
+    expect(result.stSource).toContain("AND NOT d");
+    expect(result.stSource).toContain("r :=");
+  });
+
+  it("should convert CAL with parameters", () => {
+    const result = transpileILSource(`
+PROGRAM Test
+  VAR tmr : TON; END_VAR
+CAL tmr(IN := TRUE, PT := T#5s)
+END_PROGRAM
+    `);
+    expect(result.hasIL).toBe(true);
+    expect(result.stSource).toContain("tmr(IN := TRUE, PT := T#5s);");
+  });
+
   it("should not transpile ST bodies", () => {
     const source = `
 PROGRAM Test
