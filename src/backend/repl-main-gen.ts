@@ -283,6 +283,7 @@ function emitProgramDescriptorsAndMain(
     '        if (std::string(argv[i]) == "--print-vars") print_vars = true;',
   );
   lines.push("    }");
+  lines.push("");
   lines.push("    if (cyclic) {");
   lines.push(
     `        strucpp::cyclic_run(programs, ${programs.length}, print_vars);`,

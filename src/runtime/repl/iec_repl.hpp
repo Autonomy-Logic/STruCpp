@@ -324,6 +324,161 @@ inline bool parse_qualified_name(const std::string& input, std::string& prog_nam
 }
 
 // =============================================================================
+// Shared Command Processor
+// =============================================================================
+// Processes force/unforce/get/set/list commands and returns a plain-text response.
+// Used by both the interactive REPL loop and the IPC command server.
+// Returns "OK: <message>" on success or "ERR: <message>" on failure.
+
+inline std::string process_command(
+    const std::string& cmd_line,
+    ProgramDescriptor* programs,
+    size_t program_count)
+{
+    // Parse command and arguments
+    std::string line = cmd_line;
+    size_t start = line.find_first_not_of(" \t\r\n");
+    if (start == std::string::npos) return "ERR: Empty command";
+    size_t end = line.find_last_not_of(" \t\r\n");
+    line = line.substr(start, end - start + 1);
+    if (line.empty()) return "ERR: Empty command";
+
+    size_t sp = line.find(' ');
+    std::string cmd = (sp == std::string::npos) ? line : line.substr(0, sp);
+    std::string args_str = (sp == std::string::npos) ? "" : line.substr(sp + 1);
+    size_t astart = args_str.find_first_not_of(" \t");
+    if (astart != std::string::npos) args_str = args_str.substr(astart);
+    else args_str.clear();
+
+    // --- get <program>.<var> ---
+    if (cmd == "get") {
+        if (args_str.empty()) return "ERR: Usage: get <program>.<var>";
+        std::string pn, vn;
+        if (!parse_qualified_name(args_str, pn, vn)) return "ERR: Invalid format. Use: program.variable";
+        auto* prog = find_program(programs, program_count, pn);
+        if (!prog) return "ERR: Unknown program: " + pn;
+        auto* var = find_var(prog, vn);
+        if (!var) return "ERR: Unknown variable: " + vn + " in " + pn;
+        bool forced = var_is_forced(var->type, var->var_ptr);
+        std::string val = var_value_to_string(var->type, var->var_ptr);
+        return std::string("OK: ") + pn + "." + vn + " : " +
+            var_type_name(var->type) + " = " + val + (forced ? " [FORCED]" : "");
+    }
+
+    // --- set <program>.<var> <value> ---
+    if (cmd == "set") {
+        size_t vsp = args_str.find(' ');
+        if (vsp == std::string::npos) return "ERR: Usage: set <program>.<var> <value>";
+        std::string qname = args_str.substr(0, vsp);
+        std::string val = args_str.substr(vsp + 1);
+        size_t vs = val.find_first_not_of(" \t");
+        if (vs != std::string::npos) val = val.substr(vs);
+        std::string pn, vn;
+        if (!parse_qualified_name(qname, pn, vn)) return "ERR: Invalid format. Use: program.variable";
+        auto* prog = find_program(programs, program_count, pn);
+        if (!prog) return "ERR: Unknown program: " + pn;
+        auto* var = find_var(prog, vn);
+        if (!var) return "ERR: Unknown variable: " + vn + " in " + pn;
+        if (var_set_value(var->type, var->var_ptr, val)) {
+            return std::string("OK: ") + pn + "." + vn + " = " + var_value_to_string(var->type, var->var_ptr);
+        }
+        return std::string("ERR: Invalid value for ") + var_type_name(var->type) + ": " + val;
+    }
+
+    // --- force <program>.<var> <value> ---
+    if (cmd == "force") {
+        size_t vsp = args_str.find(' ');
+        if (vsp == std::string::npos) return "ERR: Usage: force <program>.<var> <value>";
+        std::string qname = args_str.substr(0, vsp);
+        std::string val = args_str.substr(vsp + 1);
+        size_t vs = val.find_first_not_of(" \t");
+        if (vs != std::string::npos) val = val.substr(vs);
+        std::string pn, vn;
+        if (!parse_qualified_name(qname, pn, vn)) return "ERR: Invalid format. Use: program.variable";
+        auto* prog = find_program(programs, program_count, pn);
+        if (!prog) return "ERR: Unknown program: " + pn;
+        auto* var = find_var(prog, vn);
+        if (!var) return "ERR: Unknown variable: " + vn + " in " + pn;
+        if (var_force_value(var->type, var->var_ptr, val)) {
+            return std::string("OK: ") + pn + "." + vn + " FORCED = " + var_value_to_string(var->type, var->var_ptr);
+        }
+        return std::string("ERR: Invalid value for ") + var_type_name(var->type) + ": " + val;
+    }
+
+    // --- unforce <program>.<var> ---
+    if (cmd == "unforce") {
+        if (args_str.empty()) return "ERR: Usage: unforce <program>.<var>";
+        std::string pn, vn;
+        if (!parse_qualified_name(args_str, pn, vn)) return "ERR: Invalid format. Use: program.variable";
+        auto* prog = find_program(programs, program_count, pn);
+        if (!prog) return "ERR: Unknown program: " + pn;
+        auto* var = find_var(prog, vn);
+        if (!var) return "ERR: Unknown variable: " + vn + " in " + pn;
+        var_unforce(var->type, var->var_ptr);
+        return std::string("OK: ") + pn + "." + vn + " unforced. Value: " + var_value_to_string(var->type, var->var_ptr);
+    }
+
+    // --- unforce_all ---
+    if (cmd == "unforce_all") {
+        int count = 0;
+        for (size_t p = 0; p < program_count; ++p) {
+            for (size_t i = 0; i < programs[p].var_count; ++i) {
+                if (var_is_forced(programs[p].vars[i].type, programs[p].vars[i].var_ptr)) {
+                    var_unforce(programs[p].vars[i].type, programs[p].vars[i].var_ptr);
+                    ++count;
+                }
+            }
+        }
+        return "OK: Unforced " + std::to_string(count) + " variable(s)";
+    }
+
+    // --- list_vars [program] ---
+    if (cmd == "list_vars") {
+        std::string result = "OK:";
+        for (size_t p = 0; p < program_count; ++p) {
+            if (!args_str.empty() && args_str != programs[p].name) continue;
+            for (size_t i = 0; i < programs[p].var_count; ++i) {
+                auto& v = programs[p].vars[i];
+                bool forced = var_is_forced(v.type, v.var_ptr);
+                result += std::string("\n") + programs[p].name + "." + v.name +
+                    " : " + var_type_name(v.type) + " = " +
+                    var_value_to_string(v.type, v.var_ptr) +
+                    (forced ? " [FORCED]" : "");
+            }
+        }
+        return result;
+    }
+
+    // --- list_forced ---
+    if (cmd == "list_forced") {
+        std::string result = "OK:";
+        for (size_t p = 0; p < program_count; ++p) {
+            for (size_t i = 0; i < programs[p].var_count; ++i) {
+                auto& v = programs[p].vars[i];
+                if (var_is_forced(v.type, v.var_ptr)) {
+                    result += std::string("\n") + programs[p].name + "." + v.name +
+                        " : " + var_type_name(v.type) + " = " +
+                        var_value_to_string(v.type, v.var_ptr);
+                }
+            }
+        }
+        return result;
+    }
+
+    // --- programs ---
+    if (cmd == "programs") {
+        std::string result = "OK:";
+        for (size_t p = 0; p < program_count; ++p) {
+            result += std::string("\n") + programs[p].name +
+                " (" + std::to_string(programs[p].var_count) + " vars)";
+        }
+        return result;
+    }
+
+    return "ERR: Unknown command: " + cmd;
+}
+
+// =============================================================================
 // Colored Output Helpers
 // =============================================================================
 
@@ -702,97 +857,31 @@ inline void repl_run(ProgramDescriptor* programs, size_t program_count,
             continue;
         }
 
-        // --- vars [program] ---
-        if (cmd == "vars") {
-            if (!args_str.empty()) {
-                auto* prog = find_program(programs, program_count, args_str);
-                if (!prog) { ic_printf("[red]Unknown program: %s[/]\n", args_str.c_str()); continue; }
-                for (size_t i = 0; i < prog->var_count; ++i) {
-                    print_var_line(*prog, prog->vars[i]);
+        // --- vars, get, set, force, unforce, programs ---
+        // Delegate to shared process_command() for data commands
+        if (cmd == "vars" || cmd == "get" || cmd == "set" ||
+            cmd == "force" || cmd == "unforce" || cmd == "programs" ||
+            cmd == "list_vars" || cmd == "list_forced" || cmd == "unforce_all") {
+            // For interactive "vars", map to "list_vars" to use the shared processor
+            std::string effective_line = line;
+            if (cmd == "vars") {
+                effective_line = "list_vars" + (args_str.empty() ? "" : " " + args_str);
+            }
+            std::string result = process_command(effective_line, programs, program_count);
+            // Display with isocline coloring
+            if (result.substr(0, 3) == "OK:") {
+                std::string msg = result.substr(3);
+                if (!msg.empty() && msg[0] == ' ') msg = msg.substr(1);
+                if (!msg.empty()) {
+                    ic_printf("[green]%s[/]\n", msg.c_str());
                 }
+            } else if (result.substr(0, 4) == "ERR:") {
+                std::string msg = result.substr(4);
+                if (!msg.empty() && msg[0] == ' ') msg = msg.substr(1);
+                ic_printf("[red]%s[/]\n", msg.c_str());
             } else {
-                for (size_t p = 0; p < program_count; ++p) {
-                    for (size_t i = 0; i < programs[p].var_count; ++i) {
-                        print_var_line(programs[p], programs[p].vars[i]);
-                    }
-                }
+                ic_println(result.c_str());
             }
-            continue;
-        }
-
-        // --- get <program>.<var> ---
-        if (cmd == "get") {
-            if (args_str.empty()) { ic_println("[red]Usage: get <program>.<var>[/]"); continue; }
-            std::string pn, vn;
-            if (!parse_qualified_name(args_str, pn, vn)) { ic_println("[red]Invalid format. Use: program.variable[/]"); continue; }
-            auto* prog = find_program(programs, program_count, pn);
-            if (!prog) { ic_printf("[red]Unknown program: %s[/]\n", pn.c_str()); continue; }
-            auto* var = find_var(prog, vn);
-            if (!var) { ic_printf("[red]Unknown variable: %s in %s[/]\n", vn.c_str(), pn.c_str()); continue; }
-            print_var_line(*prog, *var);
-            continue;
-        }
-
-        // --- set <program>.<var> <value> ---
-        if (cmd == "set") {
-            size_t vsp = args_str.find(' ');
-            if (vsp == std::string::npos) { ic_println("[red]Usage: set <program>.<var> <value>[/]"); continue; }
-            std::string qname = args_str.substr(0, vsp);
-            std::string val = args_str.substr(vsp + 1);
-            // Trim val
-            size_t vs = val.find_first_not_of(" \t");
-            if (vs != std::string::npos) val = val.substr(vs);
-
-            std::string pn, vn;
-            if (!parse_qualified_name(qname, pn, vn)) { ic_println("[red]Invalid format. Use: program.variable[/]"); continue; }
-            auto* prog = find_program(programs, program_count, pn);
-            if (!prog) { ic_printf("[red]Unknown program: %s[/]\n", pn.c_str()); continue; }
-            auto* var = find_var(prog, vn);
-            if (!var) { ic_printf("[red]Unknown variable: %s in %s[/]\n", vn.c_str(), pn.c_str()); continue; }
-            if (var_set_value(var->type, var->var_ptr, val)) {
-                ic_printf("  [b]%s[/].%s = [green]%s[/]\n", pn.c_str(), vn.c_str(), var_value_to_string(var->type, var->var_ptr).c_str());
-            } else {
-                ic_printf("[red]Invalid value for %s: %s[/]\n", var_type_name(var->type), val.c_str());
-            }
-            continue;
-        }
-
-        // --- force <program>.<var> <value> ---
-        if (cmd == "force") {
-            size_t vsp = args_str.find(' ');
-            if (vsp == std::string::npos) { ic_println("[red]Usage: force <program>.<var> <value>[/]"); continue; }
-            std::string qname = args_str.substr(0, vsp);
-            std::string val = args_str.substr(vsp + 1);
-            size_t vs = val.find_first_not_of(" \t");
-            if (vs != std::string::npos) val = val.substr(vs);
-
-            std::string pn, vn;
-            if (!parse_qualified_name(qname, pn, vn)) { ic_println("[red]Invalid format. Use: program.variable[/]"); continue; }
-            auto* prog = find_program(programs, program_count, pn);
-            if (!prog) { ic_printf("[red]Unknown program: %s[/]\n", pn.c_str()); continue; }
-            auto* var = find_var(prog, vn);
-            if (!var) { ic_printf("[red]Unknown variable: %s in %s[/]\n", vn.c_str(), pn.c_str()); continue; }
-            if (var_force_value(var->type, var->var_ptr, val)) {
-                ic_printf("  [b]%s[/].%s [yellow b]FORCED[/] = [green]%s[/]\n",
-                    pn.c_str(), vn.c_str(), var_value_to_string(var->type, var->var_ptr).c_str());
-            } else {
-                ic_printf("[red]Invalid value for %s: %s[/]\n", var_type_name(var->type), val.c_str());
-            }
-            continue;
-        }
-
-        // --- unforce <program>.<var> ---
-        if (cmd == "unforce") {
-            if (args_str.empty()) { ic_println("[red]Usage: unforce <program>.<var>[/]"); continue; }
-            std::string pn, vn;
-            if (!parse_qualified_name(args_str, pn, vn)) { ic_println("[red]Invalid format. Use: program.variable[/]"); continue; }
-            auto* prog = find_program(programs, program_count, pn);
-            if (!prog) { ic_printf("[red]Unknown program: %s[/]\n", pn.c_str()); continue; }
-            auto* var = find_var(prog, vn);
-            if (!var) { ic_printf("[red]Unknown variable: %s in %s[/]\n", vn.c_str(), pn.c_str()); continue; }
-            var_unforce(var->type, var->var_ptr);
-            ic_printf("  [b]%s[/].%s [green]unforced[/]. Value: [green]%s[/]\n",
-                pn.c_str(), vn.c_str(), var_value_to_string(var->type, var->var_ptr).c_str());
             continue;
         }
 
