@@ -40,6 +40,20 @@ export class StrucppDebugTrackerFactory
 
 class StrucppDebugTracker implements vscode.DebugAdapterTracker {
   /**
+   * Cache: maps (variablesReference, name) → evaluateName.
+   * Populated from variables responses, used to resolve setVariable requests.
+   */
+  private varEvalNameCache = new Map<string, string>();
+  /** Track pending variables requests: seq → variablesReference */
+  private pendingVarRequests = new Map<number, number>();
+  /** Last seen top frame ID (for evaluate requests that need a frame context) */
+  private lastFrameId: number | undefined;
+
+  private cacheKey(variablesReference: number, name: string): string {
+    return `${variablesReference}:${name}`;
+  }
+
+  /**
    * Intercept requests FROM VSCode TO the debug adapter.
    * Transform watch/REPL expressions from ST naming to C++ naming.
    */
@@ -47,27 +61,73 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
     const msg = message as {
       type?: string;
       command?: string;
-      arguments?: {
-        expression?: string;
-        context?: string;
-      };
+      seq?: number;
+      arguments?: Record<string, unknown>;
     };
+
+    // Track variables requests so we can cache evaluateNames from responses
+    if (msg.type === "request" && msg.command === "variables" && msg.seq !== undefined) {
+      const varRef = msg.arguments?.variablesReference as number | undefined;
+      if (varRef !== undefined) {
+        this.pendingVarRequests.set(msg.seq, varRef);
+      }
+    }
 
     if (
       msg.type === "request" &&
       msg.command === "evaluate" &&
       msg.arguments?.expression
     ) {
-      const ctx = msg.arguments.context;
+      const ctx = msg.arguments.context as string | undefined;
       // Transform watch and REPL expressions.
       // Skip "hover" — handled by EvaluatableExpressionProvider which
       // also consults the language server for type-aware .value_ appending.
       if (ctx === "watch" || ctx === "repl") {
-        const original = msg.arguments.expression;
+        const original = msg.arguments.expression as string;
         const transformed = transformStExpression(original);
         if (transformed !== original) {
           log.appendLine(`[tracker] ${ctx}: "${original}" → "${transformed}"`);
           msg.arguments.expression = transformed;
+        }
+      }
+    }
+
+    // Intercept "Set Value" (setVariable/setExpression) for IECVar types.
+    if (
+      msg.type === "request" &&
+      (msg.command === "setVariable" || msg.command === "setExpression")
+    ) {
+      log.appendLine(`[tracker] Intercepted ${msg.command}: ${JSON.stringify(msg.arguments)}`);
+
+      if (msg.command === "setExpression" && msg.arguments?.expression && msg.arguments?.value !== undefined) {
+        const expr = transformStExpression(msg.arguments.expression as string);
+        const val = msg.arguments.value as string;
+        // Rewrite: setExpression → evaluate with .value_ assignment
+        // Use uppercase C++ name and "variables" context to bypass further transformation
+        msg.command = "evaluate";
+        msg.arguments.expression = `${expr}.value_ = ${val}`;
+        msg.arguments.context = "variables";
+        delete msg.arguments.value;
+        log.appendLine(`[tracker] setExpression → evaluate: ${msg.arguments.expression}`);
+      }
+
+      if (msg.command === "setVariable" && msg.arguments?.name && msg.arguments?.value !== undefined) {
+        const varRef = msg.arguments.variablesReference as number | undefined;
+        const name = msg.arguments.name as string;
+        const val = msg.arguments.value as string;
+        const evalName = varRef !== undefined
+          ? this.varEvalNameCache.get(this.cacheKey(varRef, name))
+          : undefined;
+        log.appendLine(`[tracker] setVariable for "${name}" = "${val}" (ref=${varRef}, evalName=${evalName ?? "NOT CACHED"})`);
+        if (evalName) {
+          // Rewrite: setVariable → evaluate with .value_ field assignment
+          msg.command = "evaluate";
+          msg.arguments = {
+            expression: `${evalName}.value_ = ${val}`,
+            context: "variables",
+            ...(this.lastFrameId !== undefined ? { frameId: this.lastFrameId } : {}),
+          };
+          log.appendLine(`[tracker] Rewrote to evaluate: ${msg.arguments.expression} (frameId=${this.lastFrameId})`);
         }
       }
     }
@@ -81,6 +141,7 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
     const msg = message as {
       type?: string;
       command?: string;
+      request_seq?: number;
       body?: {
         variables?: DAPVariable[];
         // evaluate response fields
@@ -92,10 +153,38 @@ class StrucppDebugTracker implements vscode.DebugAdapterTracker {
       };
     };
 
+    // Clear caches when the target resumes — cached references become stale.
+    const evt = message as { type?: string; event?: string };
+    if (evt.type === "event" && evt.event === "continued") {
+      this.varEvalNameCache.clear();
+      this.pendingVarRequests.clear();
+      return;
+    }
+
     if (msg.type !== "response" || !msg.body) return;
+
+    // Cache the top frame ID from stackTrace responses
+    if (msg.command === "stackTrace") {
+      const frames = (msg.body as Record<string, unknown>)?.stackFrames as Array<{ id: number }> | undefined;
+      if (frames && frames.length > 0) {
+        this.lastFrameId = frames[0].id;
+      }
+    }
 
     // Handle variables responses (Variables pane)
     if (msg.command === "variables" && msg.body.variables) {
+      // Cache evaluateNames for setVariable rewriting
+      const varRef = msg.request_seq !== undefined
+        ? this.pendingVarRequests.get(msg.request_seq)
+        : undefined;
+      if (varRef !== undefined) {
+        this.pendingVarRequests.delete(msg.request_seq!);
+        for (const v of msg.body.variables) {
+          if (v.evaluateName) {
+            this.varEvalNameCache.set(this.cacheKey(varRef, v.name), v.evaluateName);
+          }
+        }
+      }
       this.transformVariables(msg.body.variables);
     }
 

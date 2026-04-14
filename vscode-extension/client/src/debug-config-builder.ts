@@ -137,6 +137,7 @@ export function buildDebugConfig(
   overrides?: DebugConfigOverrides,
 ): vscode.DebugConfiguration {
   const name = overrides?.name || "Debug ST Program";
+  const args = ["--cyclic"];
 
   if (debugType === "lldb") {
     return {
@@ -144,7 +145,7 @@ export function buildDebugConfig(
       request: "launch",
       name,
       program: build.binaryPath,
-      args: ["--cyclic"],
+      args,
       cwd: build.outputDir,
       __strucpp: true,
       initCommands: getLLDBInitCommands(),
@@ -158,7 +159,7 @@ export function buildDebugConfig(
     request: "launch",
     name,
     program: build.binaryPath,
-    args: ["--cyclic"],
+    args,
     cwd: build.outputDir,
     __strucpp: true,
     MIMode: miMode,

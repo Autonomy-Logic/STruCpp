@@ -3,22 +3,100 @@
 /**
  * Force/Unforce variable commands and Forced Variables panel.
  *
- * Uses IECVar<T>::force(value) and IECVar<T>::unforce() C++ methods
- * via the debug adapter's evaluate request.
+ * Forces variables by writing directly to IECVar internal fields via
+ * the debug adapter's evaluate request. GDB/LLDB can set struct fields
+ * without needing to call template methods:
+ *
+ *   evaluateName.forced_ = true
+ *   evaluateName.forced_value_ = <value>
+ *   evaluateName.value_ = <value>
+ *
+ * This works when stopped at a breakpoint (the primary use case) because
+ * GDB has full access to process memory and ignores C++ access specifiers.
  */
 
 import * as vscode from "vscode";
 
 /** A variable that has been forced to a specific value. */
 export interface ForcedVariableEntry {
-  /** C++ evaluate path (e.g. "TICK_TIMER.IN") */
+  /** GDB evaluateName for the variable */
   evaluateName: string;
   /** Display name shown in the panel */
   displayName: string;
   /** The value the variable is forced to */
   forcedValue: string;
-  /** C++ type (for display) */
-  type?: string;
+}
+
+/**
+ * Execute a GDB/LLDB expression via the debug adapter.
+ * Uses the topmost stack frame of the active thread for context.
+ * Returns the result string, or throws on failure.
+ */
+async function debugEvaluate(
+  session: vscode.DebugSession,
+  expression: string,
+): Promise<string> {
+  // Get the active thread's topmost stack frame for evaluation context
+  let frameId: number | undefined;
+  try {
+    const threads = await session.customRequest("threads");
+    if (threads?.threads?.length > 0) {
+      const threadId = threads.threads[0].id;
+      const stack = await session.customRequest("stackTrace", {
+        threadId,
+        startFrame: 0,
+        levels: 1,
+      });
+      if (stack?.stackFrames?.length > 0) {
+        frameId = stack.stackFrames[0].id;
+      }
+    }
+  } catch {
+    // If we can't get a frame, try without one
+  }
+
+  // Use context "variables" to bypass the debug adapter tracker's
+  // ST-to-C++ expression transformation (which uppercases identifiers
+  // and would break C++ namespace resolution like strucpp::).
+  const result = await session.customRequest("evaluate", {
+    expression,
+    context: "variables",
+    ...(frameId !== undefined ? { frameId } : {}),
+  });
+  return result?.result ?? "";
+}
+
+/**
+ * Force a variable by writing to its IECVar internal fields via GDB.
+ * Sets forced_ = true, forced_value_ = value, value_ = value.
+ */
+async function forceViaDebugger(
+  session: vscode.DebugSession,
+  evaluateName: string,
+  value: string,
+): Promise<void> {
+  // Write all three fields — GDB ignores C++ access specifiers
+  await debugEvaluate(session, `${evaluateName}.forced_ = true`);
+  await debugEvaluate(session, `${evaluateName}.forced_value_ = ${value}`);
+  await debugEvaluate(session, `${evaluateName}.value_ = ${value}`);
+
+  // Trigger a Variables pane refresh by re-reading the value we just set.
+  // This causes cppdbg to invalidate its cached variable display.
+  try {
+    await debugEvaluate(session, `${evaluateName}.value_`);
+  } catch {
+    // Best-effort — the force already succeeded
+  }
+}
+
+/**
+ * Unforce a variable by clearing its IECVar forced_ flag via GDB.
+ */
+async function unforceViaDebugger(
+  session: vscode.DebugSession,
+  evaluateName: string,
+): Promise<void> {
+  await debugEvaluate(session, `${evaluateName}.forced_ = false`);
 }
 
 /**
@@ -51,10 +129,7 @@ export async function forceVariableCommand(
   if (value === undefined) return; // cancelled
 
   try {
-    await session.customRequest("evaluate", {
-      expression: `${evaluateName}.force(${value})`,
-      context: "repl",
-    });
+    await forceViaDebugger(session, evaluateName, value);
 
     provider.addForced({
       evaluateName,
@@ -82,7 +157,6 @@ export async function unforceVariableCommand(
     return;
   }
 
-  // From Forced Variables panel (TreeItem) or Variables pane context menu
   const evaluateName = args?.entry?.evaluateName ?? args?.variable?.evaluateName;
   if (!evaluateName) {
     vscode.window.showWarningMessage("Cannot unforce this variable — no evaluate path available.");
@@ -90,11 +164,7 @@ export async function unforceVariableCommand(
   }
 
   try {
-    await session.customRequest("evaluate", {
-      expression: `${evaluateName}.unforce()`,
-      context: "repl",
-    });
-
+    await unforceViaDebugger(session, evaluateName);
     provider.removeForced(evaluateName);
   } catch (err) {
     vscode.window.showErrorMessage(
@@ -120,10 +190,7 @@ export async function unforceAllCommand(
 
   for (const entry of entries) {
     try {
-      await session.customRequest("evaluate", {
-        expression: `${entry.evaluateName}.unforce()`,
-        context: "repl",
-      });
+      await unforceViaDebugger(session, entry.evaluateName);
     } catch (err) {
       errors.push(`${entry.displayName}: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -168,21 +235,14 @@ export class ForcedVariablesProvider
       vscode.TreeItemCollapsibleState.None,
     );
     item.iconPath = new vscode.ThemeIcon("lock");
-    item.tooltip = `${element.evaluateName} forced to ${element.forcedValue}`;
+    item.tooltip = `Forced to ${element.forcedValue}`;
     item.contextValue = "forcedVariable";
-    // Pass the entry as command argument for inline unforce button
-    item.command = undefined;
     return item;
   }
 
   getChildren(element?: ForcedVariableEntry): ForcedVariableEntry[] {
     if (element) return []; // flat list
     return this.entries;
-  }
-
-  /** Get the entry for a tree item (used by unforce command). */
-  getEntryByEvaluateName(evaluateName: string): ForcedVariableEntry | undefined {
-    return this.entries.find((e) => e.evaluateName === evaluateName);
   }
 
   /** Get all entries (used by unforce all). */
