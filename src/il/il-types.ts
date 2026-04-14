@@ -57,7 +57,9 @@ export type ILOperator =
   | "CD"
   | "PV"
   | "IN"
-  | "PT";
+  | "PT"
+  // Inline function call: function name as operator, applies to accumulator
+  | "FUNC_CALL";
 
 /** Set of all valid IL operator strings for quick lookup. */
 export const IL_OPERATORS = new Set<string>([
@@ -116,6 +118,8 @@ export interface ILInstruction {
   callParams?: Array<{ name: string; value: string; isOutput: boolean }>;
   /** Opening parenthesis after operator: e.g., AND( */
   openParen?: boolean | undefined;
+  /** For FUNC_CALL: the original function name (e.g., "BCD_TO_INT") */
+  functionName?: string | undefined;
   /** Line number in the original IL source */
   sourceLine: number;
 }

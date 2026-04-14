@@ -86,10 +86,13 @@ describe("IL Parser", () => {
     expect(result.instructions).toHaveLength(2);
   });
 
-  it("should report unknown operators", () => {
-    const result = parseILBody("FOO x\n");
-    expect(result.errors).toHaveLength(1);
-    expect(result.errors[0]!.message).toContain("Unknown IL operator");
+  it("should treat unknown identifiers as function calls", () => {
+    const result = parseILBody("BCD_TO_INT\n");
+    expect(result.errors).toHaveLength(0);
+    expect(result.instructions).toHaveLength(1);
+    const instr = result.instructions[0] as { operator: string; functionName?: string };
+    expect(instr.operator).toBe("FUNC_CALL");
+    expect(instr.functionName).toBe("BCD_TO_INT");
   });
 });
 
@@ -225,6 +228,58 @@ END_PROGRAM
     const result = transpileILSource(source);
     expect(result.hasIL).toBe(false);
     expect(result.stSource).toBe(source);
+  });
+
+  it("should convert inline function calls in IL", () => {
+    const result = transpileILSource(`
+FUNCTION Convert : INT
+  VAR_INPUT raw : WORD; tare : INT; END_VAR
+LD raw
+BCD_TO_INT
+SUB tare
+ST Convert
+END_FUNCTION
+    `);
+    expect(result.hasIL).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    expect(result.stSource).toContain("BCD_TO_INT(raw)");
+    expect(result.stSource).toContain("- tare");
+  });
+
+  it("should handle mixed IL and ST POUs in same file", () => {
+    const result = transpileILSource(`
+PROGRAM STProgram
+  VAR x : INT; END_VAR
+  x := x + 1;
+END_PROGRAM
+
+FUNCTION_BLOCK ILBlock
+  VAR_INPUT a : BOOL; END_VAR
+  VAR_OUTPUT b : BOOL; END_VAR
+LD a
+NOT
+ST b
+END_FUNCTION_BLOCK
+    `);
+    expect(result.hasIL).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    // ST program should be unchanged
+    expect(result.stSource).toContain("x := x + 1;");
+    // IL block should be transpiled
+    expect(result.stSource).toContain("b := NOT (a);");
+  });
+
+  it("should convert FUNCTION with IL body", () => {
+    const result = transpileILSource(`
+FUNCTION AddOne : INT
+  VAR_INPUT x : INT; END_VAR
+LD x
+ADD 1
+ST AddOne
+END_FUNCTION
+    `);
+    expect(result.hasIL).toBe(true);
+    expect(result.stSource).toContain("AddOne := (x + 1);");
   });
 });
 

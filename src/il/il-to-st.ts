@@ -181,6 +181,14 @@ function convertStraightLine(elements: ILElement[]): ILConvertResult {
         lines.push(`  IF NOT (${expr}) THEN RETURN; END_IF;`);
         break;
 
+      case "FUNC_CALL":
+        // Inline function call: applies function to accumulator
+        // e.g., BCD_TO_INT → expr = BCD_TO_INT(expr)
+        if (instr.functionName) {
+          expr = `${instr.functionName}(${expr})`;
+        }
+        break;
+
       default: {
         // Binary operators: AND, OR, XOR, ADD, SUB, etc.
         const stOp = BINARY_OP_MAP[op];
@@ -470,6 +478,11 @@ function convertBlockInstructions(instructions: ILInstruction[]): {
         }
         break;
       }
+      case "FUNC_CALL":
+        if (instr.functionName) {
+          expr = `${instr.functionName}(${expr})`;
+        }
+        break;
       default: {
         const stOp = BINARY_OP_MAP[op];
         if (stOp && operand) {

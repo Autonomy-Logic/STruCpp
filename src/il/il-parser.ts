@@ -122,16 +122,18 @@ export function parseILBody(
     const operatorStr = tokenMatch[1]!.toUpperCase();
     const openParen = tokenMatch[2] === "(";
 
-    if (!IL_OPERATORS.has(operatorStr)) {
-      errors.push({
-        message: `Unknown IL operator: ${tokenMatch[1]}`,
-        line: sourceLine,
-        column: 1,
-      });
-      continue;
-    }
+    let operator: ILOperator;
+    let funcCallName: string | undefined;
 
-    const operator = operatorStr as ILOperator;
+    if (IL_OPERATORS.has(operatorStr)) {
+      operator = operatorStr as ILOperator;
+    } else {
+      // Treat unrecognized identifiers as inline function calls.
+      // In IL, a function name in operator position applies the function
+      // to the accumulator: e.g., BCD_TO_INT → acc = BCD_TO_INT(acc)
+      operator = "FUNC_CALL";
+      funcCallName = tokenMatch[1]!; // preserve original case
+    }
 
     // Track control flow operators
     if (
@@ -182,13 +184,15 @@ export function parseILBody(
     // Standard operator with operand
     const operand = rest.length > 0 ? rest : undefined;
 
-    instructions.push({
-      label,
+    const instr: ILInstruction = {
       operator,
       operand,
-      openParen: openParen || undefined,
       sourceLine,
-    });
+    };
+    if (label) instr.label = label;
+    if (openParen) instr.openParen = true;
+    if (funcCallName) instr.functionName = funcCallName;
+    instructions.push(instr);
   }
 
   // Post-process: attach labels from label-only lines to the next instruction
