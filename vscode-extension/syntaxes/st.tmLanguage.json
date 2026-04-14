@@ -307,23 +307,16 @@
     "il-operators": {
       "patterns": [
         {
+          "comment": "IL operators at the start of a line (with optional leading whitespace)",
           "name": "keyword.operator.il.st",
-          "match": "(?i)\\b(?:LD[N]?|ST[N]?|JMP[C]?[N]?|RET[C]?[N]?|CAL[C]?[N]?)\\b"
+          "match": "(?i)^\\s*(?:LD[N]?|ST[N]?|JMP[C]?[N]?|RET[C]?[N]?|CAL[C]?[N]?|EQ|NE|GT|GE|LT|LE|ADD|SUB|MUL|DIV|AND[N]?|OR[N]?|XOR[N]?|S1|R1|CLK|CU|CD|PV|PT)\\b"
         },
         {
-          "name": "keyword.operator.il.comparison.st",
-          "match": "(?i)\\b(?:EQ|NE|GT|GE|LT|LE)\\b"
-        },
-        {
-          "name": "keyword.operator.il.fb.st",
-          "match": "(?i)\\b(?:S1|R1|CLK|CU|CD|PV|PT)\\b"
-        },
-        {
-          "comment": "IL labels: identifier followed by colon at start of line",
-          "name": "entity.name.label.il.st",
-          "match": "^\\s*(\\w+)\\s*:",
+          "comment": "IL labels: identifier followed by colon at start of line, no assignment operator after",
+          "match": "^(\\s*)(\\w+)(\\s*:)\\s*$",
           "captures": {
-            "1": { "name": "entity.name.label.il.st" }
+            "2": { "name": "entity.name.label.il.st" },
+            "3": { "name": "punctuation.definition.label.il.st" }
           }
         }
       ]
