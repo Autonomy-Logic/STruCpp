@@ -382,11 +382,11 @@ template<typename T> struct is_iec_array : std::false_type {};
 template<typename T, typename B>
 struct is_iec_array<IEC_ARRAY_1D<T, B>> : std::true_type {};
 
-template<typename T, typename B1, typename B2>
-struct is_iec_array<IEC_ARRAY_2D<T, B1, B2>> : std::true_type {};
+template<typename T, typename Bnd1, typename Bnd2>
+struct is_iec_array<IEC_ARRAY_2D<T, Bnd1, Bnd2>> : std::true_type {};
 
-template<typename T, typename B1, typename B2, typename B3>
-struct is_iec_array<IEC_ARRAY_3D<T, B1, B2, B3>> : std::true_type {};
+template<typename T, typename Bnd1, typename Bnd2, typename Bnd3>
+struct is_iec_array<IEC_ARRAY_3D<T, Bnd1, Bnd2, Bnd3>> : std::true_type {};
 
 template<typename T>
 inline constexpr bool is_iec_array_v = is_iec_array<T>::value;

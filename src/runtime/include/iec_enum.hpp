@@ -13,7 +13,9 @@
 #pragma once
 
 #include <cstdint>
+#ifndef __AVR__
 #include <ostream>
+#endif
 #include <type_traits>
 #include "iec_var.hpp"
 
@@ -213,12 +215,14 @@ public:
 template<typename EnumType>
 using IEC_ENUM = IEC_ENUM_Var<EnumType>;
 
+#ifndef __AVR__
 // Stream output for IEC_ENUM_Var — outputs underlying integer value
 template<typename EnumType>
 inline std::ostream& operator<<(std::ostream& os, const IEC_ENUM_Var<EnumType>& v) {
     return os << static_cast<typename std::underlying_type<EnumType>::type>(
         static_cast<EnumType>(v));
 }
+#endif
 
 /*
  * Example generated enumeration:

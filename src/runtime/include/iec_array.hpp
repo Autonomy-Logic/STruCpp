@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cstdint>
+#include <initializer_list>
 #ifndef __AVR__
 #include <stdexcept>
 #endif
