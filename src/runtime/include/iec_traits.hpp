@@ -12,9 +12,9 @@
 
 #pragma once
 
-#include "iec_platform.hpp"
-
 #include <type_traits>
+#include <cstdint>
+#include <cstddef>
 #include "iec_types.hpp"
 
 namespace strucpp {

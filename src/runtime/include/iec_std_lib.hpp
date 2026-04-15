@@ -20,13 +20,14 @@
 
 #pragma once
 
-#include "iec_platform.hpp"
-
 #include "iec_var.hpp"
 #include "iec_traits.hpp"
 #include "iec_retain.hpp"
 #include "iec_ptr.hpp"
+#include <cmath>
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
 #include <type_traits>
 
 namespace strucpp {
