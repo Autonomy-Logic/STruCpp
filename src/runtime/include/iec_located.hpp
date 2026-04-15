@@ -16,7 +16,9 @@
 #pragma once
 
 #include <cstdint>
+#ifndef __AVR__
 #include <stdexcept>
+#endif
 
 namespace strucpp {
 
@@ -137,7 +139,11 @@ inline LocatedArea parse_area(char c) {
         case 'I': case 'i': return LocatedArea::Input;
         case 'Q': case 'q': return LocatedArea::Output;
         case 'M': case 'm': return LocatedArea::Memory;
+#ifdef __AVR__
+        default: for(;;);
+#else
         default: throw std::invalid_argument("Invalid area character");
+#endif
     }
 }
 
@@ -154,7 +160,11 @@ inline LocatedSize parse_size(char c) {
         case 'W': case 'w': return LocatedSize::Word;
         case 'D': case 'd': return LocatedSize::DWord;
         case 'L': case 'l': return LocatedSize::LWord;
+#ifdef __AVR__
+        default: for(;;);
+#else
         default: throw std::invalid_argument("Invalid size character");
+#endif
     }
 }
 
