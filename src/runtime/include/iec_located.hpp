@@ -120,9 +120,11 @@ struct LocatedVar {
     }
 };
 
-// Verify expected layout
-static_assert(sizeof(LocatedVar) == 16, "LocatedVar should be 16 bytes");
-static_assert(alignof(LocatedVar) == 8, "LocatedVar should be 8-byte aligned");
+// Verify expected layout (size varies by platform: 16 bytes on 64-bit, 8 on 32-bit, 6 on AVR)
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(LocatedVar) == 16, "LocatedVar should be 16 bytes on 64-bit");
+static_assert(alignof(LocatedVar) == 8, "LocatedVar should be 8-byte aligned on 64-bit");
+#endif
 
 // =============================================================================
 // Helper Functions for Address Parsing
