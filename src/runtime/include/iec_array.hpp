@@ -12,8 +12,9 @@
 
 #pragma once
 
+#include "iec_platform.hpp"
+
 #include <array>
-#include <cstdint>
 #include <stdexcept>
 #include "iec_var.hpp"
 

@@ -13,8 +13,8 @@
 
 #pragma once
 
-#include <cstdint>
-#include <cstring>
+#include "iec_platform.hpp"
+
 #include <algorithm>
 #include "iec_types.hpp"
 

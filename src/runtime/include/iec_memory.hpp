@@ -14,8 +14,8 @@
 
 #pragma once
 
-#include <cstdlib>
-#include <cstddef>
+#include "iec_platform.hpp"
+
 #include <new>
 #include "iec_ptr.hpp"
 
