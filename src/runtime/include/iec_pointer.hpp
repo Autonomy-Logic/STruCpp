@@ -45,7 +45,8 @@
 
 #pragma once
 
-#include <cstddef>
+#include "iec_platform.hpp"
+
 #include <stdexcept>
 #include <string>
 #include "iec_var.hpp"
