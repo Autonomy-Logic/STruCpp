@@ -12,8 +12,8 @@
 
 #pragma once
 
-#include "iec_platform.hpp"
-
+#include <cstdint>
+#include <cmath>
 #include "iec_types.hpp"
 
 namespace strucpp {

@@ -12,8 +12,7 @@
 
 #pragma once
 
-#include "iec_platform.hpp"
-
+#include <cstdint>
 #include <ostream>
 #include <type_traits>
 #include "iec_var.hpp"

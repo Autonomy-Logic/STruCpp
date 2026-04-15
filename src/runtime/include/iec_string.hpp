@@ -12,9 +12,10 @@
 
 #pragma once
 
-#include "iec_platform.hpp"
-
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <cstdlib>
 #include <algorithm>
 #include <type_traits>
 #include "iec_types.hpp"
