@@ -277,3 +277,55 @@ inline uint16_t handle_elem_count(uint8_t arr) noexcept {
 }
 
 } } // namespace strucpp::debug
+
+// ---------------------------------------------------------------------------
+// C-linkage shims for the OpenPLC Runtime v4 .so interface.
+//
+// The runtime dlopen()s a libplc_<hash>.so and dlsym()s these symbols to
+// speak the debug protocol without needing the C++ strucpp::debug namespace.
+//
+// Usage: in the .so's packaging step (Phase 5), compile ONE .cpp with
+//
+//     #define STRUCPP_V4_DEBUG_EXPORTS_DEFINE
+//     #include "debug_dispatch.hpp"
+//
+// The symbols use `attribute((used, visibility("default")))` so they're
+// retained even under LTO and appear in the dynamic symbol table.
+//
+// Embedded targets (Arduino) should NOT define the macro — the Flash cost
+// of these extra symbols is unnecessary there (the ModbusSlave calls
+// handle_* directly via C++ linkage).
+// ---------------------------------------------------------------------------
+#ifdef STRUCPP_V4_DEBUG_EXPORTS_DEFINE
+#define STRUCPP_V4_EXPORT __attribute__((used, visibility("default")))
+
+extern "C" {
+
+STRUCPP_V4_EXPORT uint8_t strucpp_debug_array_count(void) {
+    return strucpp::debug::handle_array_count();
+}
+
+STRUCPP_V4_EXPORT uint16_t strucpp_debug_elem_count(uint8_t arr) {
+    return strucpp::debug::handle_elem_count(arr);
+}
+
+STRUCPP_V4_EXPORT uint16_t strucpp_debug_size(uint8_t arr, uint16_t elem) {
+    return strucpp::debug::handle_size(arr, elem);
+}
+
+STRUCPP_V4_EXPORT uint8_t strucpp_debug_set(uint8_t arr, uint16_t elem,
+                                             bool forcing,
+                                             const uint8_t *bytes,
+                                             uint16_t len) {
+    return strucpp::debug::handle_set(arr, elem, forcing, bytes, len);
+}
+
+STRUCPP_V4_EXPORT uint16_t strucpp_debug_read(uint8_t arr, uint16_t elem,
+                                               uint8_t *dest) {
+    return strucpp::debug::handle_read(arr, elem, dest);
+}
+
+} // extern "C"
+
+#undef STRUCPP_V4_EXPORT
+#endif // STRUCPP_V4_DEBUG_EXPORTS_DEFINE
