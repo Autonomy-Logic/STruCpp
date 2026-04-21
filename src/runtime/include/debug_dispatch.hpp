@@ -99,6 +99,15 @@ inline void force_impl(void* p, const uint8_t* bytes) noexcept {
     static_cast<IECVar<T>*>(p)->force(v);
 }
 
+// Specialization: memcpy-into-bool is technically UB for non-{0,1} byte
+// values, and some AVR GCC versions have optimizer behavior around bool
+// that can surprise. Normalize explicitly.
+template <>
+inline void force_impl<bool>(void* p, const uint8_t* bytes) noexcept {
+    const bool v = bytes[0] != 0;
+    static_cast<IECVar<bool>*>(p)->force(v);
+}
+
 template <typename T>
 inline void unforce_impl(void* p) noexcept {
     static_cast<IECVar<T>*>(p)->unforce();

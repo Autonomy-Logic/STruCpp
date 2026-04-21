@@ -63,17 +63,33 @@ public:
     IECVar(const IECVar<U>& other) noexcept
         : value_{static_cast<T>(other.get())}, forced_{false}, forced_value_{} {}
 
-    /** Copy constructor */
-    IECVar(const IECVar&) = default;
+    /** Copy constructor — fresh IECVar starts unforced regardless of source. */
+    IECVar(const IECVar& other) noexcept
+        : value_{other.get()}, forced_{false}, forced_value_{} {}
 
-    /** Move constructor */
-    IECVar(IECVar&&) = default;
+    /** Move constructor — same semantics as copy. */
+    IECVar(IECVar&& other) noexcept
+        : value_{other.get()}, forced_{false}, forced_value_{} {}
 
-    /** Copy assignment */
-    IECVar& operator=(const IECVar&) = default;
+    /**
+     * Copy assignment.
+     *
+     * Assigning FROM another IECVar must go through `set()` so forcing
+     * state is preserved on the destination. A memberwise copy would
+     * clobber `forced_` / `forced_value_`, silently unforcing variables
+     * that the debugger is holding — precisely what generated PLC code
+     * does every scan cycle with `BLINK := TOF0.Q`.
+     */
+    IECVar& operator=(const IECVar& other) noexcept {
+        set(other.get());
+        return *this;
+    }
 
-    /** Move assignment */
-    IECVar& operator=(IECVar&&) = default;
+    /** Move assignment — same semantics as copy. */
+    IECVar& operator=(IECVar&& other) noexcept {
+        set(other.get());
+        return *this;
+    }
 
     // =========================================================================
     // Value Access
