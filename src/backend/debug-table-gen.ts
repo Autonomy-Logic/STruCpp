@@ -31,6 +31,9 @@ import type {
 } from "../frontend/ast.js";
 import type { ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
+import type { StlibArchive } from "../library/library-manifest.js";
+import { parse } from "../frontend/parser.js";
+import { buildAST } from "../frontend/ast-builder.js";
 
 // ---------------------------------------------------------------------------
 // Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
@@ -198,6 +201,7 @@ export function generateDebugTable(
   ast: CompilationUnit,
   projectModel: ProjectModel,
   _symbolTables: SymbolTables,
+  archives: StlibArchive[] = [],
   opts: DebugTableGenOptions = {},
 ): DebugTableResult {
   const maxEntries = opts.maxEntriesPerArray ?? DEFAULTS.maxEntriesPerArray;
@@ -213,6 +217,38 @@ export function generateDebugTable(
 
   const typeByName = new Map<string, TypeDeclaration>();
   for (const td of ast.types) typeByName.set(td.name.toUpperCase(), td);
+
+  // Fold in library FBs (TON, TOF, CTU, …) by parsing the library's ST
+  // sources. Libraries ship only their public interface in the manifest,
+  // but the debugger wants to surface locals (STATE, PREV_IN, …) too —
+  // so we walk the full AST. Types and FBs from libraries augment the
+  // main AST's indexes without overriding user-defined names.
+  for (const archive of archives) {
+    const sources = (
+      archive as StlibArchive & {
+        sources?: Array<{ fileName: string; source: string }>;
+      }
+    ).sources;
+    if (!sources) continue;
+    for (const src of sources) {
+      try {
+        const parsed = parse(src.source);
+        if (!parsed.cst) continue;
+        const libAst = buildAST(parsed.cst, src.fileName);
+        for (const fb of libAst.functionBlocks) {
+          const key = fb.name.toUpperCase();
+          if (!fbByName.has(key)) fbByName.set(key, fb);
+        }
+        for (const td of libAst.types) {
+          const key = td.name.toUpperCase();
+          if (!typeByName.has(key)) typeByName.set(key, td);
+        }
+      } catch {
+        // Best-effort — a bad library source shouldn't kill the debug
+        // table. FB lookups that fail fall through to the `skipped` list.
+      }
+    }
+  }
 
   // Buckets of entries — grown in order, flushed at program boundary or size cap.
   const arrays: Entry[][] = [[]];
