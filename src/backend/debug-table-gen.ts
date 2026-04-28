@@ -165,6 +165,17 @@ export interface DebugTableResult {
 // Options
 // ---------------------------------------------------------------------------
 
+export interface DebugLeafSpec {
+  /** Fully-qualified path under the configuration instance, e.g.
+   *  "INSTANCE0.TON0.Q" or "INSTANCE0.SPEEDS[5]". The path is appended to
+   *  `g_config.` to produce a C++ address-of expression — the C++ compiler
+   *  validates that each segment resolves to a real member, so the caller
+   *  doesn't need to verify struct layout itself. */
+  path: string;
+  /** IEC type tag — one of the TAG_* enum names (BOOL, INT, REAL, …). */
+  type: string;
+}
+
 export interface DebugTableGenOptions {
   /** Max entries per debug array. Default 8000 — safe under AVR's 32767-byte
    *  per-object limit assuming sizeof(Entry) == 4. */
@@ -175,9 +186,22 @@ export interface DebugTableGenOptions {
   /** MD5 to embed in the debug map. Caller computes over (program.st,
    *  strucpp version, projectModel) so the editor can detect staleness. */
   md5?: string;
+  /**
+   * Caller-supplied leaf list. When provided, debug-table-gen emits one
+   * pointer entry per leaf in the given order, skipping its built-in
+   * AST walk. This is the editor-driven mode: the editor's library is
+   * the source of truth for which fields exist, strucpp just materializes
+   * the pointers and lets the C++ compiler validate them.
+   *
+   * When omitted, the generator falls back to walking ast.functionBlocks
+   * and projectModel — useful for the REPL and the strucpp test suite,
+   * but limited to top-level vars + user-defined FBs (library FB internals
+   * like TON.STATE aren't visible from the AST alone).
+   */
+  debugLeaves?: DebugLeafSpec[];
 }
 
-const DEFAULTS: Required<Omit<DebugTableGenOptions, "md5">> = {
+const DEFAULTS: Required<Omit<DebugTableGenOptions, "md5" | "debugLeaves">> = {
   maxEntriesPerArray: 8000,
   configGlobalName: "g_config",
 };
@@ -203,6 +227,16 @@ export function generateDebugTable(
   const maxEntries = opts.maxEntriesPerArray ?? DEFAULTS.maxEntriesPerArray;
   const configGlobal = opts.configGlobalName ?? DEFAULTS.configGlobalName;
   const md5 = opts.md5 ?? "";
+
+  // Editor-driven mode: caller supplied the exact leaf list. Just materialize
+  // pointer entries and pack them. No AST walk needed.
+  if (opts.debugLeaves) {
+    return renderFromLeaves(opts.debugLeaves, projectModel, {
+      maxEntries,
+      configGlobal,
+      md5,
+    });
+  }
 
   // Index the AST for fast lookup.
   const programByName = new Map<string, ProgramDeclaration>();
@@ -476,6 +510,76 @@ export function generateDebugTable(
     leaves,
   };
 
+  return { debugTableCpp, debugMap, skipped };
+}
+
+// ---------------------------------------------------------------------------
+// Editor-driven path: caller supplies the leaves verbatim
+// ---------------------------------------------------------------------------
+
+function renderFromLeaves(
+  specs: DebugLeafSpec[],
+  projectModel: ProjectModel,
+  opts: { maxEntries: number; configGlobal: string; md5: string },
+): DebugTableResult {
+  const arrays: Entry[][] = [[]];
+  const leaves: DebugLeaf[] = [];
+  const skipped: Array<{ path: string; reason: string }> = [];
+  const tail = (): Entry[] => arrays[arrays.length - 1]!;
+
+  for (const spec of specs) {
+    const upperType = spec.type.toUpperCase();
+    const tagName =
+      (TAG as Record<string, number>)[upperType] !== undefined
+        ? (upperType as TagName)
+        : undefined;
+    if (!tagName) {
+      skipped.push({
+        path: spec.path,
+        reason: `unknown type tag: ${spec.type}`,
+      });
+      continue;
+    }
+    if (tagName === "STRING" || tagName === "WSTRING") {
+      skipped.push({
+        path: spec.path,
+        reason: `string types deferred to Phase 4b`,
+      });
+      continue;
+    }
+    const size = IEC_NAME_TO_SIZE[upperType] ?? 0;
+    if (size === 0) {
+      skipped.push({ path: spec.path, reason: `zero-size type: ${spec.type}` });
+      continue;
+    }
+
+    if (tail().length >= opts.maxEntries) arrays.push([]);
+    const bucket = tail();
+    const arrIdx = arrays.length - 1;
+    const elemIdx = bucket.length;
+    const cppExpr = `${opts.configGlobal}.${spec.path}`;
+    bucket.push({ cppExpr, tagName, path: spec.path, type: tagName, size });
+    leaves.push({
+      arrayIdx: arrIdx,
+      elemIdx,
+      path: spec.path,
+      type: tagName,
+      size,
+    });
+  }
+
+  if (arrays.length > 0 && tail().length === 0) arrays.pop();
+  if (arrays.length === 0) arrays.push([]);
+
+  const configName = projectModel.configurations[0]?.name ?? "CONFIG0";
+  const debugTableCpp = renderCpp(arrays, opts.configGlobal, configName);
+  const debugMap: DebugMapV2 = {
+    version: 2,
+    md5: opts.md5,
+    typeTags: { ...TAG },
+    arrays: arrays.map((a, i) => ({ index: i, count: a.length })),
+    leaves,
+  };
   return { debugTableCpp, debugMap, skipped };
 }
 

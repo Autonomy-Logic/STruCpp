@@ -165,4 +165,51 @@ END_CONFIGURATION
     const result = compile(simpleBlinkSource, { md5: "deadbeef" });
     expect(result.debugMap!.md5).toBe("deadbeef");
   });
+
+  it("uses caller-supplied debugLeaves verbatim, including library FB internals", () => {
+    const tonSource = `
+PROGRAM main
+  VAR
+    TON0 : TON;
+    blink AT %QX0.0 : BOOL;
+  END_VAR
+  TON0(IN := NOT(blink), PT := T#500ms);
+  blink := TON0.Q;
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM instance0 WITH task0 : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+    // Editor walked its own library and decided these are the leaves it
+    // wants to debug. strucpp doesn't need to know what TON's fields are —
+    // the caller does, and the C++ compiler validates the resulting
+    // address-of expressions.
+    const leaves = [
+      { path: "INSTANCE0.BLINK", type: "BOOL" },
+      { path: "INSTANCE0.TON0.IN", type: "BOOL" },
+      { path: "INSTANCE0.TON0.PT", type: "TIME" },
+      { path: "INSTANCE0.TON0.Q", type: "BOOL" },
+      { path: "INSTANCE0.TON0.ET", type: "TIME" },
+      { path: "INSTANCE0.TON0.STATE", type: "SINT" },
+    ];
+    const result = compile(tonSource, {
+      libraryPaths: ["libs"],
+      debugLeaves: leaves,
+    });
+    expect(result.success).toBe(true);
+
+    const map = result.debugMap!;
+    expect(map.leaves.map((l) => l.path)).toEqual(leaves.map((l) => l.path));
+    expect(map.leaves.find((l) => l.path === "INSTANCE0.TON0.STATE")?.type).toBe("SINT");
+
+    // C++ output should reference each path verbatim under g_config.
+    const cpp = result.debugTableCpp!;
+    expect(cpp).toContain("&g_config.INSTANCE0.TON0.STATE");
+    expect(cpp).toContain("&g_config.INSTANCE0.TON0.Q");
+    expect(cpp).toContain("&g_config.INSTANCE0.BLINK");
+  });
 });

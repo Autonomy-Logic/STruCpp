@@ -641,7 +641,12 @@ export function compile(
       pipeline.ast,
       pipeline.projectModel,
       pipeline.symbolTables,
-      { md5: pipeline.mergedOptions.md5 ?? "" },
+      {
+        md5: pipeline.mergedOptions.md5 ?? "",
+        ...(pipeline.mergedOptions.debugLeaves
+          ? { debugLeaves: pipeline.mergedOptions.debugLeaves }
+          : {}),
+      },
     );
     debugTableCpp = dbg.debugTableCpp;
     debugMap = dbg.debugMap;
