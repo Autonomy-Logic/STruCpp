@@ -641,7 +641,6 @@ export function compile(
       pipeline.ast,
       pipeline.projectModel,
       pipeline.symbolTables,
-      pipeline.allArchives,
       { md5: pipeline.mergedOptions.md5 ?? "" },
     );
     debugTableCpp = dbg.debugTableCpp;

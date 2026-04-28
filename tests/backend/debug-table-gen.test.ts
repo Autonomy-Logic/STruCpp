@@ -165,48 +165,4 @@ END_CONFIGURATION
     const result = compile(simpleBlinkSource, { md5: "deadbeef" });
     expect(result.debugMap!.md5).toBe("deadbeef");
   });
-
-  it("expands library FB internals (TON/TOF) into debug leaves", () => {
-    const tonSource = `
-PROGRAM main
-  VAR
-    TON0 : TON;
-    TOF0 : TOF;
-    blink AT %QX0.0 : BOOL;
-  END_VAR
-  TON0(IN := NOT(blink), PT := T#500ms);
-  TOF0(IN := TON0.Q, PT := T#500ms);
-  blink := TOF0.Q;
-END_PROGRAM
-
-CONFIGURATION Config0
-  RESOURCE Res0 ON PLC
-    TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
-    PROGRAM instance0 WITH task0 : main;
-  END_RESOURCE
-END_CONFIGURATION
-`;
-    // iec-standard-fb ships with the editor/strucpp bundle; point at the
-    // repo's libs dir so `compile()` discovers TON/TOF.
-    const result = compile(tonSource, { libraryPaths: ["libs"] });
-    expect(result.success).toBe(true);
-
-    const paths = result.debugMap!.leaves.map((l) => l.path);
-
-    // TON0 should surface both the public interface and the locals that
-    // STruC++ generates into the C++ class (STATE, PREV_IN, …).
-    expect(paths).toContain("INSTANCE0.TON0.IN");
-    expect(paths).toContain("INSTANCE0.TON0.PT");
-    expect(paths).toContain("INSTANCE0.TON0.Q");
-    expect(paths).toContain("INSTANCE0.TON0.ET");
-    expect(paths).toContain("INSTANCE0.TON0.STATE");
-    expect(paths).toContain("INSTANCE0.TON0.PREV_IN");
-
-    // TOF0 same shape
-    expect(paths).toContain("INSTANCE0.TOF0.Q");
-    expect(paths).toContain("INSTANCE0.TOF0.ET");
-
-    // The located scalar BLINK is still present alongside the FB fields.
-    expect(paths).toContain("INSTANCE0.BLINK");
-  });
 });
