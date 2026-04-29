@@ -45,10 +45,10 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Implementation: method bodies
       expect(result.cppCode).toContain("void MOTOR::START() {");
-      expect(result.cppCode).toContain("__assign(_SPEED, 100);");
+      expect(result.cppCode).toContain("_SPEED = 100;");
       expect(result.cppCode).toContain("IEC_INT MOTOR::GETSPEED() {");
       expect(result.cppCode).toContain("IEC_INT GETSPEED_result;");
-      expect(result.cppCode).toContain("__assign(GETSPEED_result, _SPEED);");
+      expect(result.cppCode).toContain("GETSPEED_result = _SPEED;");
       expect(result.cppCode).toContain("return GETSPEED_result;");
     });
 
@@ -388,7 +388,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("__assign(this->_SPEED, 100);");
+      expect(result.cppCode).toContain("this->_SPEED = 100;");
     });
 
     it("should translate THIS in expressions", () => {
@@ -434,14 +434,14 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Implementation: getter body
       expect(result.cppCode).toContain("IEC_INT MOTOR::get_SPEED() const {");
-      expect(result.cppCode).toContain("__assign(SPEED_result, _SPEED);");
+      expect(result.cppCode).toContain("SPEED_result = _SPEED;");
       expect(result.cppCode).toContain("return SPEED_result;");
 
       // Implementation: setter body
       expect(result.cppCode).toContain(
         "void MOTOR::set_SPEED(IEC_INT SPEED) {",
       );
-      expect(result.cppCode).toContain("__assign(_SPEED, SPEED);");
+      expect(result.cppCode).toContain("_SPEED = SPEED;");
     });
 
     it("should generate read-only property (GET only)", () => {
@@ -509,10 +509,10 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Implementation: references use mangled names
       expect(result.cppCode).toContain(
-        "__assign(__GETAVG__SUM, __GETAVG__SUM + NEWVALUE);",
+        "__GETAVG__SUM = __GETAVG__SUM + NEWVALUE;",
       );
       expect(result.cppCode).toContain(
-        "__assign(__GETAVG__COUNT, __GETAVG__COUNT + 1);",
+        "__GETAVG__COUNT = __GETAVG__COUNT + 1;",
       );
     });
 
@@ -765,10 +765,10 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       expect(result.cppCode).toContain("IEC_INT TEMP;");
 
       // Method body
-      expect(result.cppCode).toContain("__assign(TEMP, A + B);");
+      expect(result.cppCode).toContain("TEMP = A + B;");
 
       // Return value
-      expect(result.cppCode).toContain("__assign(COMPUTE_result, TEMP);");
+      expect(result.cppCode).toContain("COMPUTE_result = TEMP;");
       expect(result.cppCode).toContain("return COMPUTE_result;");
     });
 
@@ -1063,7 +1063,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("__assign(X, M.get_SPEED());");
+      expect(result.cppCode).toContain("X = M.get_SPEED()");
     });
 
     it("should generate setter call for property write", () => {
@@ -1110,7 +1110,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("__assign(X, CTRL.MOTOR_.get_SPEED());");
+      expect(result.cppCode).toContain("X = CTRL.MOTOR_.get_SPEED()");
     });
 
     it("should generate setter for chained field + property write", () => {
@@ -1156,7 +1156,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Regular field access should remain direct, not get_RESULT()
-      expect(result.cppCode).toContain("__assign(X, M.RESULT);");
+      expect(result.cppCode).toContain("X = M.RESULT");
       expect(result.cppCode).not.toContain("get_RESULT");
     });
 

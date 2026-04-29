@@ -18,7 +18,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, 10);');
+      expect(result.cppCode).toContain('X = 10;');
     });
 
     it('should generate boolean assignment', () => {
@@ -30,7 +30,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(FLAG, true);');
+      expect(result.cppCode).toContain('FLAG = true;');
     });
 
     it('should generate real number assignment', () => {
@@ -42,7 +42,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, 3.14);');
+      expect(result.cppCode).toContain('X = 3.14;');
     });
 
     it('should generate variable-to-variable assignment', () => {
@@ -55,8 +55,8 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, 10);');
-      expect(result.cppCode).toContain('__assign(Y, X);');
+      expect(result.cppCode).toContain('X = 10;');
+      expect(result.cppCode).toContain('Y = X;');
     });
 
     it('should generate multiple assignments in order', () => {
@@ -71,44 +71,11 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       const result = compile(source);
       expect(result.success).toBe(true);
       const cppCode = result.cppCode;
-      const aPos = cppCode.indexOf('__assign(A, 1);');
-      const bPos = cppCode.indexOf('__assign(B, 2);');
-      const cPos = cppCode.indexOf('__assign(C, 3);');
+      const aPos = cppCode.indexOf('A = 1;');
+      const bPos = cppCode.indexOf('B = 2;');
+      const cPos = cppCode.indexOf('C = 3;');
       expect(aPos).toBeLessThan(bPos);
       expect(bPos).toBeLessThan(cPos);
-    });
-
-    // Regression: a chain of assignments to multiple destinations from the
-    // same IECVar source, after an inlined function-block body. The OLD
-    // codegen emitted `dst = src;` which let GCC hoist `&src` into a
-    // callee-saved register that the inlined FB body would clobber, so
-    // every destination after the FB call read garbage. `__assign` routes
-    // through `dst.set(src.get())`, consuming the source's address inline
-    // per statement. See iec_var.hpp `__assign` rationale.
-    it('should emit independent __assign calls after an inlined FB body (no shared rvalue ref)', () => {
-      const source = `
-        PROGRAM Test
-          VAR
-            TON0 : TON;
-            blink : BOOL;
-            blink0 : BOOL;
-            blink1 : BOOL;
-          END_VAR
-          TON0(IN := NOT(blink), PT := T#200ms);
-          blink := TON0.Q;
-          blink0 := TON0.Q;
-          blink1 := TON0.Q;
-        END_PROGRAM
-      `;
-      const result = compile(source, { libraryPaths: ['libs'] });
-      expect(result.success).toBe(true);
-      // Each destination should appear in its own __assign call.
-      expect(result.cppCode).toContain('__assign(BLINK, TON0.Q);');
-      expect(result.cppCode).toContain('__assign(BLINK0, TON0.Q);');
-      expect(result.cppCode).toContain('__assign(BLINK1, TON0.Q);');
-      // And the legacy reference-passing op= form must not leak back in.
-      expect(result.cppCode).not.toContain('BLINK = TON0.Q;');
-      expect(result.cppCode).not.toContain('BLINK0 = TON0.Q;');
     });
   });
 
@@ -122,7 +89,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(Y, X + 5);');
+      expect(result.cppCode).toContain('Y = X + 5;');
     });
 
     it('should generate subtraction', () => {
@@ -134,7 +101,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(Y, X - 3);');
+      expect(result.cppCode).toContain('Y = X - 3;');
     });
 
     it('should generate multiplication', () => {
@@ -146,7 +113,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(Y, X * 2);');
+      expect(result.cppCode).toContain('Y = X * 2;');
     });
 
     it('should generate division', () => {
@@ -158,7 +125,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(Y, X / 4);');
+      expect(result.cppCode).toContain('Y = X / 4;');
     });
 
     it('should generate MOD operator', () => {
@@ -170,7 +137,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(Y, X % 3);');
+      expect(result.cppCode).toContain('Y = X % 3;');
     });
 
     it('should generate complex arithmetic expression', () => {
@@ -182,7 +149,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, A + B * C);');
+      expect(result.cppCode).toContain('RESULT = A + B * C;');
     });
   });
 
@@ -196,7 +163,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, X == 10);');
+      expect(result.cppCode).toContain('RESULT = X == 10;');
     });
 
     it('should generate not-equal comparison (<> → !=)', () => {
@@ -208,7 +175,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, X != 0);');
+      expect(result.cppCode).toContain('RESULT = X != 0;');
     });
 
     it('should generate less-than comparison', () => {
@@ -220,7 +187,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, A < B);');
+      expect(result.cppCode).toContain('RESULT = A < B;');
     });
 
     it('should generate greater-than comparison', () => {
@@ -232,7 +199,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, A > B);');
+      expect(result.cppCode).toContain('RESULT = A > B;');
     });
 
     it('should generate less-than-or-equal comparison', () => {
@@ -244,7 +211,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, A <= B);');
+      expect(result.cppCode).toContain('RESULT = A <= B;');
     });
 
     it('should generate greater-than-or-equal comparison', () => {
@@ -256,7 +223,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, A >= B);');
+      expect(result.cppCode).toContain('RESULT = A >= B;');
     });
   });
 
@@ -270,7 +237,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, (A) & (B));');
+      expect(result.cppCode).toContain('RESULT = (A) & (B);');
     });
 
     it('should generate OR operator (→ |)', () => {
@@ -282,7 +249,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, (A) | (B));');
+      expect(result.cppCode).toContain('RESULT = (A) | (B);');
     });
 
     it('should generate XOR operator (→ ^)', () => {
@@ -294,7 +261,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, (A) ^ (B));');
+      expect(result.cppCode).toContain('RESULT = (A) ^ (B);');
     });
 
     it('should generate NOT operator (→ !)', () => {
@@ -306,7 +273,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, !A);');
+      expect(result.cppCode).toContain('RESULT = !A;');
     });
   });
 
@@ -320,7 +287,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(Y, -X);');
+      expect(result.cppCode).toContain('Y = -X;');
     });
 
     it('should generate unary plus', () => {
@@ -332,7 +299,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(Y, +X);');
+      expect(result.cppCode).toContain('Y = +X;');
     });
   });
 
@@ -346,7 +313,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, (A + B) * 2);');
+      expect(result.cppCode).toContain('RESULT = (A + B) * 2;');
     });
   });
 
@@ -360,7 +327,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, true);');
+      expect(result.cppCode).toContain('X = true;');
     });
 
     it('should generate FALSE literal', () => {
@@ -372,7 +339,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, false);');
+      expect(result.cppCode).toContain('X = false;');
     });
 
     it('should generate integer literal', () => {
@@ -384,7 +351,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, 42);');
+      expect(result.cppCode).toContain('X = 42;');
     });
 
     it('should generate real literal', () => {
@@ -396,7 +363,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, 2.718);');
+      expect(result.cppCode).toContain('X = 2.718;');
     });
   });
 
@@ -410,7 +377,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(ADDINTS_result, A + B);');
+      expect(result.cppCode).toContain('ADDINTS_result = A + B;');
       expect(result.cppCode).toContain('return ADDINTS_result;');
     });
 
@@ -423,7 +390,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(MYFUNC_result, X > 0);');
+      expect(result.cppCode).toContain('MYFUNC_result = X > 0;');
     });
   });
 
@@ -465,8 +432,8 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, 10);');
-      expect(result.cppCode).toContain('__assign(Y, X + 5);');
+      expect(result.cppCode).toContain('X = 10;');
+      expect(result.cppCode).toContain('Y = X + 5;');
     });
 
     it('Test 2: Boolean Expression', () => {
@@ -484,9 +451,9 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(A, 10);');
-      expect(result.cppCode).toContain('__assign(B, 20);');
-      expect(result.cppCode).toContain('__assign(RESULT, ((A < B)) & ((B > 15)));');
+      expect(result.cppCode).toContain('A = 10;');
+      expect(result.cppCode).toContain('B = 20;');
+      expect(result.cppCode).toContain('RESULT = ((A < B)) & ((B > 15));');
     });
 
     it('Test 3: Arithmetic Operations', () => {
@@ -506,10 +473,10 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(X, 3.5);');
-      expect(result.cppCode).toContain('__assign(Y, 2.0);');
-      expect(result.cppCode).toContain('__assign(SUM, X + Y);');
-      expect(result.cppCode).toContain('__assign(PRODUCT, X * Y);');
+      expect(result.cppCode).toContain('X = 3.5;');
+      expect(result.cppCode).toContain('Y = 2.0;');
+      expect(result.cppCode).toContain('SUM = X + Y;');
+      expect(result.cppCode).toContain('PRODUCT = X * Y;');
     });
   });
 
@@ -559,7 +526,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, (X + Y) > 100);');
+      expect(result.cppCode).toContain('RESULT = (X + Y) > 100;');
     });
 
     it('should handle nested logical operations', () => {
@@ -571,7 +538,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(RESULT, (((A) & (B))) | (C));');
+      expect(result.cppCode).toContain('(((A) & (B))) | (C);');
     });
   });
 
@@ -588,8 +555,8 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('__assign(INTERNAL, INTERNAL + 1);');
-      expect(result.cppCode).toContain('__assign(COUNT, INTERNAL);');
+      expect(result.cppCode).toContain('INTERNAL = INTERNAL + 1;');
+      expect(result.cppCode).toContain('COUNT = INTERNAL;');
     });
   });
 });

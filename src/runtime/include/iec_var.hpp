@@ -498,46 +498,4 @@ using IEC_DATE_AND_TIME = IEC_DT;
 using IEC_LONG_TIME_OF_DAY = IEC_LTOD;
 using IEC_LONG_DATE_AND_TIME = IEC_LDT;
 
-// =============================================================================
-// ST `:=` assignment helper
-// =============================================================================
-//
-// Generated code uses `__assign(dst, src)` for every ST `:=` statement.
-// This helper dispatches once on the destination type:
-//
-//   • IECVar destination → `dst.set(src)`. Forcing semantics are preserved
-//     (set() respects forced_), and `src` is consumed as a primitive value
-//     via the implicit `IECVar<T>::operator T()` conversion. Critically,
-//     the source's address is NOT held in a callee-saved register across
-//     subsequent statements — which the IECVar→IECVar `operator=` overload
-//     would let the compiler do, with disastrous results when the next
-//     few statements come after an inlined function-block body that
-//     happens to clobber that register.
-//
-//   • Non-IECVar destination (e.g. raw type aliases like `using MyInt =
-//     INT_t;`) → plain `dst = src`.
-//
-// `if constexpr` makes both branches compile-time-only; the unused branch
-// is fully discarded so there's no runtime overhead vs. an inlined `=`.
-
-template <typename T> struct __is_iecvar : std::false_type {};
-template <typename T> struct __is_iecvar<IECVar<T>> : std::true_type {};
-
-template <typename Dst, typename Src>
-inline void __assign(Dst& dst, Src&& src) noexcept {
-    using SrcDecay = std::decay_t<Src>;
-    if constexpr (__is_iecvar<Dst>::value && __is_iecvar<SrcDecay>::value) {
-        // Both sides IECVar — the bug-prone case. Route through set(T)
-        // with a primitive value so the source's address is consumed
-        // immediately and never has to survive across other code.
-        dst.set(src.get());
-    } else {
-        // Everything else (primitive source, IEC_Ptr source, non-IECVar
-        // destination via type alias) goes through the existing op=
-        // overloads — IECVar::operator=(T), operator=(IEC_Ptr<U>&), or
-        // built-in primitive assignment.
-        dst = std::forward<Src>(src);
-    }
-}
-
 } // namespace strucpp

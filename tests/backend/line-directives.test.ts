@@ -82,7 +82,7 @@ END_PROGRAM
 
       const lines = result.cppCode.split('\n');
       // Find the assignment line
-      const assignIdx = lines.findIndex(l => l.includes('__assign(X, 42);'));
+      const assignIdx = lines.findIndex(l => l.includes('X = 42;'));
       expect(assignIdx).toBeGreaterThan(0);
 
       // There should be a #line directive before it

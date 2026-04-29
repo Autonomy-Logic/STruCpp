@@ -1486,7 +1486,7 @@ export class CodeGenerator {
         if (decl.initialValue !== undefined) {
           const initExpr = this.generateExpression(decl.initialValue);
           for (const name of decl.names) {
-            this.emit(`    __assign(${name}, ${initExpr});`);
+            this.emit(`    ${name} = ${initExpr};`);
           }
         }
       }
@@ -2272,28 +2272,7 @@ export class CodeGenerator {
 
   /**
    * Generate code for an assignment statement.
-   *
-   * ST: target := value;  →  C++: target.set(value);
-   *
-   * Targets are always IECVar<T> (the analyzer guarantees this for any ST
-   * variable; functions/methods that return values are routed through the
-   * `_result` slot below before reaching this point).
-   *
-   * We emit `set(value)` rather than `target = value` for two reasons:
-   *
-   *   1. The implicit `IECVar<T>::operator T()` discharges any IECVar
-   *      source into a primitive T at the call site, so the source's
-   *      address never needs to survive across other code. The `op=`
-   *      overload that takes `const IECVar&` lets the compiler hoist
-   *      `&source` into a callee-saved register, which gets clobbered by
-   *      inlined function-block bodies (`TON()`, `TOF()`, …). Routing
-   *      through a value parameter dodges that whole class of bug.
-   *
-   *   2. set() is the same code op= eventually calls — `if (!forced_)
-   *      value_ = v;` — so forcing semantics are preserved unchanged.
-   *
-   * Property writes, bit writes, EN/ENO calls, and `_result` returns are
-   * each handled by their own branches above and don't reach this point.
+   * ST: target := value;  →  C++: target = value;
    */
   private generateAssignmentStatement(
     stmt: AssignmentStatement,
@@ -2359,7 +2338,7 @@ export class CodeGenerator {
       };
       const callExpr = this.generateFunctionCallExpression(modifiedCall);
       this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
-        this.emit(`${bi}__assign(${target}, ${callExpr});`);
+        this.emit(`${bi}${target} = ${callExpr};`);
       });
       return;
     }
@@ -2377,7 +2356,7 @@ export class CodeGenerator {
       return;
     }
 
-    this.emit(`${indent}__assign(${target}, ${value});`);
+    this.emit(`${indent}${target} = ${value};`);
   }
 
   /**
@@ -4154,17 +4133,17 @@ export class CodeGenerator {
       this.emit(`${indent}if (${enExpr}) {`);
       emitBody(bodyIndent);
       if (enoVar !== null) {
-        this.emit(`${bodyIndent}__assign(${enoVar}, true);`);
+        this.emit(`${bodyIndent}${enoVar} = true;`);
       }
       this.emit(`${indent}} else {`);
       if (enoVar !== null) {
-        this.emit(`${bodyIndent}__assign(${enoVar}, false);`);
+        this.emit(`${bodyIndent}${enoVar} = false;`);
       }
       this.emit(`${indent}}`);
     } else {
       emitBody(indent);
       if (enoVar !== null) {
-        this.emit(`${indent}__assign(${enoVar}, true);`);
+        this.emit(`${indent}${enoVar} = true;`);
       }
     }
   }
@@ -4194,13 +4173,13 @@ export class CodeGenerator {
       if (arg.name) {
         // Named argument: assign directly
         this.emit(
-          `${indent}__assign(${instanceName}.${arg.name}, ${this.generateExpression(arg.value)});`,
+          `${indent}${instanceName}.${arg.name} = ${this.generateExpression(arg.value)};`,
         );
       } else if (inputParamNames && positionalIndex < inputParamNames.length) {
         // Positional argument: map to VAR_INPUT by position
         const paramName = inputParamNames[positionalIndex];
         this.emit(
-          `${indent}__assign(${instanceName}.${paramName}, ${this.generateExpression(arg.value)});`,
+          `${indent}${instanceName}.${paramName} = ${this.generateExpression(arg.value)};`,
         );
         positionalIndex++;
       } else {
@@ -4221,7 +4200,7 @@ export class CodeGenerator {
     for (const arg of filteredArgs) {
       if (arg.name && arg.isOutput) {
         this.emit(
-          `${indent}__assign(${this.generateExpression(arg.value)}, ${instanceName}.${arg.name});`,
+          `${indent}${this.generateExpression(arg.value)} = ${instanceName}.${arg.name};`,
         );
       }
     }
