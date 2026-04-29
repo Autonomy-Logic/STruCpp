@@ -306,6 +306,38 @@ END_FUNCTION_BLOCK
     expect(result.stSource).toContain("CASE __IL_STATE OF");
     expect(result.stSource).toContain("UNTIL FALSE END_REPEAT");
   });
+
+  it("should reset __IL_STATE at the top of each invocation", () => {
+    // Regression: __IL_STATE is a class member (persistent across calls),
+    // so without an explicit reset the state machine sees the previous
+    // call's exit state and skips the entire body on every call after the
+    // first. Output stays frozen at whatever the first invocation set.
+    const result = transpileILSource(`
+FUNCTION_BLOCK StateRouter
+  VAR_INPUT s : INT; END_VAR
+  VAR_OUTPUT a : BOOL; b : BOOL; END_VAR
+LD s
+EQ 0
+JMPC label_a
+JMP label_b
+label_a:
+LD TRUE
+ST a
+JMP done
+label_b:
+LD TRUE
+ST b
+done:
+END_FUNCTION_BLOCK
+    `);
+    expect(result.hasIL).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    // Reset must come BEFORE the REPEAT, not inside the CASE.
+    const stateInit = result.stSource.indexOf("__IL_STATE := 0;");
+    const repeatStart = result.stSource.indexOf("REPEAT");
+    expect(stateInit).toBeGreaterThanOrEqual(0);
+    expect(repeatStart).toBeGreaterThan(stateInit);
+  });
 });
 
 describe("IL End-to-End Compilation", () => {

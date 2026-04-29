@@ -336,8 +336,14 @@ function convertWithStateMachine(elements: ILElement[]): ILConvertResult {
   // Add an exit block
   const exitId = nextId;
 
-  // Generate CASE statement
+  // Generate CASE statement.
+  //
+  // __IL_STATE is declared as a VAR (persistent class member) because IEC ST
+  // doesn't support stack-local declarations inside a body. We must reset it
+  // to 0 at the top of each invocation; otherwise the second call sees the
+  // exit state from the first call and skips the entire state machine.
   const lines: string[] = [];
+  lines.push("  __IL_STATE := 0;");
   lines.push("  REPEAT");
   lines.push("    CASE __IL_STATE OF");
 

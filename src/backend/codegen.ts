@@ -248,6 +248,16 @@ export class CodeGenerator {
   /** Counter for generating unique temporary variable names */
   private tempVarCounter = 0;
 
+  /**
+   * Stack of loop exit labels for EXIT codegen. C++ `break` only escapes the
+   * innermost switch/loop, so `EXIT` inside a `CASE` nested in a loop must
+   * goto past the loop instead. Each loop pushes a fresh label; an inner
+   * `EXIT` records `used=true` so the closing emitter only writes the label
+   * when something jumps to it.
+   */
+  private loopExitLabelStack: Array<{ name: string; used: boolean }> = [];
+  private loopExitLabelCounter = 0;
+
   /** Current statement indent level (set by generateStatement before expression generation) */
   private currentStatementIndent = "    ";
 
@@ -2241,9 +2251,18 @@ export class CodeGenerator {
         this.generateRepeatStatement(stmt, indent);
         isCompound = true;
         break;
-      case "ExitStatement":
-        this.emit(`${indent}break;`);
+      case "ExitStatement": {
+        const top = this.loopExitLabelStack[this.loopExitLabelStack.length - 1];
+        if (top) {
+          top.used = true;
+          this.emit(`${indent}goto ${top.name};`);
+        } else {
+          // EXIT outside a loop is invalid IEC ST; emit defensive break
+          // rather than crash codegen.
+          this.emit(`${indent}break;`);
+        }
         break;
+      }
       case "ReturnStatement":
         this.generateReturnStatement(indent);
         break;
@@ -2541,10 +2560,17 @@ export class CodeGenerator {
     }
     this.recordLineMapping(stmt.sourceSpan.startLine, forLine);
 
+    const exitLabel = {
+      name: `__strucpp_loop_exit_${this.loopExitLabelCounter++}`,
+      used: false,
+    };
+    this.loopExitLabelStack.push(exitLabel);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.loopExitLabelStack.pop();
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    if (exitLabel.used) this.emit(`${indent}${exitLabel.name}: ;`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
@@ -2556,10 +2582,17 @@ export class CodeGenerator {
     const whileLine = this.currentLine;
     this.emit(`${indent}while (${this.generateExpression(stmt.condition)}) {`);
     this.recordLineMapping(stmt.sourceSpan.startLine, whileLine);
+    const exitLabel = {
+      name: `__strucpp_loop_exit_${this.loopExitLabelCounter++}`,
+      used: false,
+    };
+    this.loopExitLabelStack.push(exitLabel);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.loopExitLabelStack.pop();
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    if (exitLabel.used) this.emit(`${indent}${exitLabel.name}: ;`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
@@ -2571,12 +2604,19 @@ export class CodeGenerator {
     const doLine = this.currentLine;
     this.emit(`${indent}do {`);
     this.recordLineMapping(stmt.sourceSpan.startLine, doLine);
+    const exitLabel = {
+      name: `__strucpp_loop_exit_${this.loopExitLabelCounter++}`,
+      used: false,
+    };
+    this.loopExitLabelStack.push(exitLabel);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.loopExitLabelStack.pop();
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const untilLine = this.currentLine;
     this.emit(
       `${indent}} while (!(${this.generateExpression(stmt.condition)}));`,
     );
+    if (exitLabel.used) this.emit(`${indent}${exitLabel.name}: ;`);
     this.recordLineMapping(stmt.sourceSpan.endLine, untilLine);
   }
 
