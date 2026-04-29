@@ -23,8 +23,6 @@
 import type {
   CompilationUnit,
   ProgramDeclaration,
-  FunctionBlockDeclaration,
-  TypeDeclaration,
   TypeReference,
   StructDefinition,
   VarDeclaration,
@@ -165,17 +163,6 @@ export interface DebugTableResult {
 // Options
 // ---------------------------------------------------------------------------
 
-export interface DebugLeafSpec {
-  /** Fully-qualified path under the configuration instance, e.g.
-   *  "INSTANCE0.TON0.Q" or "INSTANCE0.SPEEDS[5]". The path is appended to
-   *  `g_config.` to produce a C++ address-of expression — the C++ compiler
-   *  validates that each segment resolves to a real member, so the caller
-   *  doesn't need to verify struct layout itself. */
-  path: string;
-  /** IEC type tag — one of the TAG_* enum names (BOOL, INT, REAL, …). */
-  type: string;
-}
-
 export interface DebugTableGenOptions {
   /** Max entries per debug array. Default 8000 — safe under AVR's 32767-byte
    *  per-object limit assuming sizeof(Entry) == 4. */
@@ -186,22 +173,9 @@ export interface DebugTableGenOptions {
   /** MD5 to embed in the debug map. Caller computes over (program.st,
    *  strucpp version, projectModel) so the editor can detect staleness. */
   md5?: string;
-  /**
-   * Caller-supplied leaf list. When provided, debug-table-gen emits one
-   * pointer entry per leaf in the given order, skipping its built-in
-   * AST walk. This is the editor-driven mode: the editor's library is
-   * the source of truth for which fields exist, strucpp just materializes
-   * the pointers and lets the C++ compiler validate them.
-   *
-   * When omitted, the generator falls back to walking ast.functionBlocks
-   * and projectModel — useful for the REPL and the strucpp test suite,
-   * but limited to top-level vars + user-defined FBs (library FB internals
-   * like TON.STATE aren't visible from the AST alone).
-   */
-  debugLeaves?: DebugLeafSpec[];
 }
 
-const DEFAULTS: Required<Omit<DebugTableGenOptions, "md5" | "debugLeaves">> = {
+const DEFAULTS: Required<Omit<DebugTableGenOptions, "md5">> = {
   maxEntriesPerArray: 8000,
   configGlobalName: "g_config",
 };
@@ -221,32 +195,19 @@ interface Entry {
 export function generateDebugTable(
   ast: CompilationUnit,
   projectModel: ProjectModel,
-  _symbolTables: SymbolTables,
+  symbolTables: SymbolTables,
   opts: DebugTableGenOptions = {},
 ): DebugTableResult {
   const maxEntries = opts.maxEntriesPerArray ?? DEFAULTS.maxEntriesPerArray;
   const configGlobal = opts.configGlobalName ?? DEFAULTS.configGlobalName;
   const md5 = opts.md5 ?? "";
 
-  // Editor-driven mode: caller supplied the exact leaf list. Just materialize
-  // pointer entries and pack them. No AST walk needed.
-  if (opts.debugLeaves) {
-    return renderFromLeaves(opts.debugLeaves, projectModel, {
-      maxEntries,
-      configGlobal,
-      md5,
-    });
-  }
-
-  // Index the AST for fast lookup.
+  // Programs only live in the user AST (libraries don't ship PROGRAM blocks),
+  // so we index them locally. Types and function blocks come from the symbol
+  // table — that's the unified source covering both user-defined declarations
+  // and library-loaded entries.
   const programByName = new Map<string, ProgramDeclaration>();
   for (const p of ast.programs) programByName.set(p.name.toUpperCase(), p);
-
-  const fbByName = new Map<string, FunctionBlockDeclaration>();
-  for (const fb of ast.functionBlocks) fbByName.set(fb.name.toUpperCase(), fb);
-
-  const typeByName = new Map<string, TypeDeclaration>();
-  for (const td of ast.types) typeByName.set(td.name.toUpperCase(), td);
 
   // Buckets of entries — grown in order, flushed at program boundary or size cap.
   const arrays: Entry[][] = [[]];
@@ -308,10 +269,11 @@ export function generateDebugTable(
       return;
     }
 
-    // User-defined type (TYPE...END_TYPE).
-    const td = typeByName.get(name);
-    if (td) {
-      const def = td.definition;
+    // Named type — covers user-defined TYPE..END_TYPE and library-registered
+    // types (struct/enum/alias). The symbol table is the unified source.
+    const ts = symbolTables.lookupType(name);
+    if (ts) {
+      const def = ts.declaration.definition;
       if (def.kind === "StructDefinition") {
         visitStructFields(path, cppExpr, def);
         return;
@@ -357,8 +319,21 @@ export function generateDebugTable(
         skipped.push({ path, reason: `subrange base ${baseName} unknown` });
         return;
       }
-      // TypeReference alias
+      // TypeReference alias. The library loader registers library types
+      // with `definition: TypeReference{ name: baseType ?? typeName }` —
+      // an alias points at its base, but a struct with no baseType points
+      // at itself (the manifest doesn't expose struct fields, so the
+      // symbol carries only the type name). Treat self-referential
+      // aliases as opaque library types: the debugger doesn't recurse
+      // into them, just like it doesn't recurse into library FB locals.
       if (def.kind === "TypeReference") {
+        if (def.name.toUpperCase() === name) {
+          skipped.push({
+            path,
+            reason: `library type ${typeRef.name} is opaque to the debugger`,
+          });
+          return;
+        }
         visitTypeRef(path, cppExpr, def);
         return;
       }
@@ -369,25 +344,56 @@ export function generateDebugTable(
       return;
     }
 
-    // Function block instance: recurse into VAR / VAR_INPUT / VAR_OUTPUT /
-    // VAR_IN_OUT blocks. Temp/external vars are intentionally skipped —
-    // those aren't persistent state the debugger addresses.
-    const fb = fbByName.get(name);
-    if (fb) {
-      for (const block of fb.varBlocks) {
-        if (
-          block.blockType === "VAR" ||
-          block.blockType === "VAR_INPUT" ||
-          block.blockType === "VAR_OUTPUT" ||
-          block.blockType === "VAR_IN_OUT"
-        ) {
-          for (const fieldDecl of block.declarations) {
-            for (const fieldName of fieldDecl.names) {
-              visitTypeRef(
-                `${path}.${fieldName.toUpperCase()}`,
-                `${cppExpr}.${fieldName}`,
-                fieldDecl.type,
-              );
+    // Function block instance. The symbol table holds both user-defined
+    // FBs (populated by the semantic analyzer from `ast.functionBlocks`)
+    // and library FBs (populated by `registerLibrarySymbols` from the
+    // .stlib manifest). The two paths intentionally surface different
+    // amounts of state:
+    //
+    //   • Library FBs — only the public interface (inputs/outputs/inouts).
+    //     Locals are implementation details that stay inside the
+    //     compiled archive; the debugger treats library FBs as black
+    //     boxes. The library loader leaves `locals` empty for this
+    //     reason, so iterating the flat arrays gives just the
+    //     interface.
+    //
+    //   • User-defined FBs — every persistent member, including VAR
+    //     locals. The analyzer leaves the symbol's flat arrays empty
+    //     and keeps the declarations in `declaration.varBlocks`, so we
+    //     fall through to the AST walk and surface VAR alongside the
+    //     interface blocks. VAR_TEMP / VAR_EXTERNAL are excluded —
+    //     those are not persistent state.
+    const fbSym = symbolTables.lookupFunctionBlock(name);
+    if (fbSym) {
+      const interfaceVars = [
+        ...fbSym.inputs,
+        ...fbSym.outputs,
+        ...fbSym.inouts,
+      ];
+      if (interfaceVars.length > 0) {
+        for (const v of interfaceVars) {
+          visitTypeRef(
+            `${path}.${v.name.toUpperCase()}`,
+            `${cppExpr}.${v.name}`,
+            v.declaration.type,
+          );
+        }
+      } else {
+        for (const block of fbSym.declaration.varBlocks) {
+          if (
+            block.blockType === "VAR" ||
+            block.blockType === "VAR_INPUT" ||
+            block.blockType === "VAR_OUTPUT" ||
+            block.blockType === "VAR_IN_OUT"
+          ) {
+            for (const fieldDecl of block.declarations) {
+              for (const fieldName of fieldDecl.names) {
+                visitTypeRef(
+                  `${path}.${fieldName.toUpperCase()}`,
+                  `${cppExpr}.${fieldName}`,
+                  fieldDecl.type,
+                );
+              }
             }
           }
         }
@@ -510,76 +516,6 @@ export function generateDebugTable(
     leaves,
   };
 
-  return { debugTableCpp, debugMap, skipped };
-}
-
-// ---------------------------------------------------------------------------
-// Editor-driven path: caller supplies the leaves verbatim
-// ---------------------------------------------------------------------------
-
-function renderFromLeaves(
-  specs: DebugLeafSpec[],
-  projectModel: ProjectModel,
-  opts: { maxEntries: number; configGlobal: string; md5: string },
-): DebugTableResult {
-  const arrays: Entry[][] = [[]];
-  const leaves: DebugLeaf[] = [];
-  const skipped: Array<{ path: string; reason: string }> = [];
-  const tail = (): Entry[] => arrays[arrays.length - 1]!;
-
-  for (const spec of specs) {
-    const upperType = spec.type.toUpperCase();
-    const tagName =
-      (TAG as Record<string, number>)[upperType] !== undefined
-        ? (upperType as TagName)
-        : undefined;
-    if (!tagName) {
-      skipped.push({
-        path: spec.path,
-        reason: `unknown type tag: ${spec.type}`,
-      });
-      continue;
-    }
-    if (tagName === "STRING" || tagName === "WSTRING") {
-      skipped.push({
-        path: spec.path,
-        reason: `string types deferred to Phase 4b`,
-      });
-      continue;
-    }
-    const size = IEC_NAME_TO_SIZE[upperType] ?? 0;
-    if (size === 0) {
-      skipped.push({ path: spec.path, reason: `zero-size type: ${spec.type}` });
-      continue;
-    }
-
-    if (tail().length >= opts.maxEntries) arrays.push([]);
-    const bucket = tail();
-    const arrIdx = arrays.length - 1;
-    const elemIdx = bucket.length;
-    const cppExpr = `${opts.configGlobal}.${spec.path}`;
-    bucket.push({ cppExpr, tagName, path: spec.path, type: tagName, size });
-    leaves.push({
-      arrayIdx: arrIdx,
-      elemIdx,
-      path: spec.path,
-      type: tagName,
-      size,
-    });
-  }
-
-  if (arrays.length > 0 && tail().length === 0) arrays.pop();
-  if (arrays.length === 0) arrays.push([]);
-
-  const configName = projectModel.configurations[0]?.name ?? "CONFIG0";
-  const debugTableCpp = renderCpp(arrays, opts.configGlobal, configName);
-  const debugMap: DebugMapV2 = {
-    version: 2,
-    md5: opts.md5,
-    typeTags: { ...TAG },
-    arrays: arrays.map((a, i) => ({ index: i, count: a.length })),
-    leaves,
-  };
   return { debugTableCpp, debugMap, skipped };
 }
 

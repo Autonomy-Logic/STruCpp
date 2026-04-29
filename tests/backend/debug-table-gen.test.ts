@@ -166,7 +166,11 @@ END_CONFIGURATION
     expect(result.debugMap!.md5).toBe("deadbeef");
   });
 
-  it("uses caller-supplied debugLeaves verbatim, including library FB internals", () => {
+  // Library FBs (TON, TOF, …) ship only their public interface in the
+  // .stlib manifest. Locals like STATE / PREV_IN are implementation
+  // details — the debugger treats library FBs as black boxes and surfaces
+  // only the interface members the manifest exposes.
+  it("exposes the public interface of library FBs (no locals)", () => {
     const tonSource = `
 PROGRAM main
   VAR
@@ -184,32 +188,25 @@ CONFIGURATION Config0
   END_RESOURCE
 END_CONFIGURATION
 `;
-    // Editor walked its own library and decided these are the leaves it
-    // wants to debug. strucpp doesn't need to know what TON's fields are —
-    // the caller does, and the C++ compiler validates the resulting
-    // address-of expressions.
-    const leaves = [
-      { path: "INSTANCE0.BLINK", type: "BOOL" },
-      { path: "INSTANCE0.TON0.IN", type: "BOOL" },
-      { path: "INSTANCE0.TON0.PT", type: "TIME" },
-      { path: "INSTANCE0.TON0.Q", type: "BOOL" },
-      { path: "INSTANCE0.TON0.ET", type: "TIME" },
-      { path: "INSTANCE0.TON0.STATE", type: "SINT" },
-    ];
-    const result = compile(tonSource, {
-      libraryPaths: ["libs"],
-      debugLeaves: leaves,
-    });
+    const result = compile(tonSource, { libraryPaths: ["libs"] });
     expect(result.success).toBe(true);
 
-    const map = result.debugMap!;
-    expect(map.leaves.map((l) => l.path)).toEqual(leaves.map((l) => l.path));
-    expect(map.leaves.find((l) => l.path === "INSTANCE0.TON0.STATE")?.type).toBe("SINT");
+    const paths = result.debugMap!.leaves.map((l) => l.path);
+    // Top-level program var
+    expect(paths).toContain("INSTANCE0.BLINK");
+    // FB public interface — inputs and outputs only
+    expect(paths).toContain("INSTANCE0.TON0.IN");
+    expect(paths).toContain("INSTANCE0.TON0.PT");
+    expect(paths).toContain("INSTANCE0.TON0.Q");
+    expect(paths).toContain("INSTANCE0.TON0.ET");
+    // FB locals must NOT leak into the debug map.
+    expect(paths).not.toContain("INSTANCE0.TON0.STATE");
+    expect(paths).not.toContain("INSTANCE0.TON0.PREV_IN");
+    expect(paths).not.toContain("INSTANCE0.TON0.CURRENT_TIME");
+    expect(paths).not.toContain("INSTANCE0.TON0.START_TIME");
 
-    // C++ output should reference each path verbatim under g_config.
     const cpp = result.debugTableCpp!;
-    expect(cpp).toContain("&g_config.INSTANCE0.TON0.STATE");
     expect(cpp).toContain("&g_config.INSTANCE0.TON0.Q");
-    expect(cpp).toContain("&g_config.INSTANCE0.BLINK");
+    expect(cpp).not.toContain("&g_config.INSTANCE0.TON0.STATE");
   });
 });

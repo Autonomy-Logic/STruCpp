@@ -67,21 +67,6 @@ export interface CompileOptions {
    * the debug map's md5 field is left empty.
    */
   md5?: string;
-
-  /**
-   * Caller-supplied list of debugger leaves. When provided, the debug-map
-   * generator emits one pointer entry per leaf in the given order, instead
-   * of walking the AST itself. This is the editor-driven path: the editor
-   * walks its own library + project structure to decide which fields are
-   * debuggable, then hands the list to strucpp. strucpp materializes
-   * `&g_config.<path>` for each entry; the C++ compiler validates that
-   * every path resolves to a real member of the runtime layout.
-   *
-   * When omitted, the generator falls back to walking ast.functionBlocks
-   * + projectModel — useful for the REPL and the strucpp test suite, but
-   * limited to top-level vars + user-defined FBs.
-   */
-  debugLeaves?: Array<{ path: string; type: string }>;
 }
 
 /**
