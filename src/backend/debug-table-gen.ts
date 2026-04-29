@@ -23,8 +23,6 @@
 import type {
   CompilationUnit,
   ProgramDeclaration,
-  FunctionBlockDeclaration,
-  TypeDeclaration,
   TypeReference,
   StructDefinition,
   VarDeclaration,
@@ -197,22 +195,19 @@ interface Entry {
 export function generateDebugTable(
   ast: CompilationUnit,
   projectModel: ProjectModel,
-  _symbolTables: SymbolTables,
+  symbolTables: SymbolTables,
   opts: DebugTableGenOptions = {},
 ): DebugTableResult {
   const maxEntries = opts.maxEntriesPerArray ?? DEFAULTS.maxEntriesPerArray;
   const configGlobal = opts.configGlobalName ?? DEFAULTS.configGlobalName;
   const md5 = opts.md5 ?? "";
 
-  // Index the AST for fast lookup.
+  // Programs only live in the user AST (libraries don't ship PROGRAM blocks),
+  // so we index them locally. Types and function blocks come from the symbol
+  // table — that's the unified source covering both user-defined declarations
+  // and library-loaded entries.
   const programByName = new Map<string, ProgramDeclaration>();
   for (const p of ast.programs) programByName.set(p.name.toUpperCase(), p);
-
-  const fbByName = new Map<string, FunctionBlockDeclaration>();
-  for (const fb of ast.functionBlocks) fbByName.set(fb.name.toUpperCase(), fb);
-
-  const typeByName = new Map<string, TypeDeclaration>();
-  for (const td of ast.types) typeByName.set(td.name.toUpperCase(), td);
 
   // Buckets of entries — grown in order, flushed at program boundary or size cap.
   const arrays: Entry[][] = [[]];
@@ -274,10 +269,11 @@ export function generateDebugTable(
       return;
     }
 
-    // User-defined type (TYPE...END_TYPE).
-    const td = typeByName.get(name);
-    if (td) {
-      const def = td.definition;
+    // Named type — covers user-defined TYPE..END_TYPE and library-registered
+    // types (struct/enum/alias). The symbol table is the unified source.
+    const ts = symbolTables.lookupType(name);
+    if (ts) {
+      const def = ts.declaration.definition;
       if (def.kind === "StructDefinition") {
         visitStructFields(path, cppExpr, def);
         return;
@@ -323,8 +319,21 @@ export function generateDebugTable(
         skipped.push({ path, reason: `subrange base ${baseName} unknown` });
         return;
       }
-      // TypeReference alias
+      // TypeReference alias. The library loader registers library types
+      // with `definition: TypeReference{ name: baseType ?? typeName }` —
+      // an alias points at its base, but a struct with no baseType points
+      // at itself (the manifest doesn't expose struct fields, so the
+      // symbol carries only the type name). Treat self-referential
+      // aliases as opaque library types: the debugger doesn't recurse
+      // into them, just like it doesn't recurse into library FB locals.
       if (def.kind === "TypeReference") {
+        if (def.name.toUpperCase() === name) {
+          skipped.push({
+            path,
+            reason: `library type ${typeRef.name} is opaque to the debugger`,
+          });
+          return;
+        }
         visitTypeRef(path, cppExpr, def);
         return;
       }
@@ -335,25 +344,56 @@ export function generateDebugTable(
       return;
     }
 
-    // Function block instance: recurse into VAR / VAR_INPUT / VAR_OUTPUT /
-    // VAR_IN_OUT blocks. Temp/external vars are intentionally skipped —
-    // those aren't persistent state the debugger addresses.
-    const fb = fbByName.get(name);
-    if (fb) {
-      for (const block of fb.varBlocks) {
-        if (
-          block.blockType === "VAR" ||
-          block.blockType === "VAR_INPUT" ||
-          block.blockType === "VAR_OUTPUT" ||
-          block.blockType === "VAR_IN_OUT"
-        ) {
-          for (const fieldDecl of block.declarations) {
-            for (const fieldName of fieldDecl.names) {
-              visitTypeRef(
-                `${path}.${fieldName.toUpperCase()}`,
-                `${cppExpr}.${fieldName}`,
-                fieldDecl.type,
-              );
+    // Function block instance. The symbol table holds both user-defined
+    // FBs (populated by the semantic analyzer from `ast.functionBlocks`)
+    // and library FBs (populated by `registerLibrarySymbols` from the
+    // .stlib manifest). The two paths intentionally surface different
+    // amounts of state:
+    //
+    //   • Library FBs — only the public interface (inputs/outputs/inouts).
+    //     Locals are implementation details that stay inside the
+    //     compiled archive; the debugger treats library FBs as black
+    //     boxes. The library loader leaves `locals` empty for this
+    //     reason, so iterating the flat arrays gives just the
+    //     interface.
+    //
+    //   • User-defined FBs — every persistent member, including VAR
+    //     locals. The analyzer leaves the symbol's flat arrays empty
+    //     and keeps the declarations in `declaration.varBlocks`, so we
+    //     fall through to the AST walk and surface VAR alongside the
+    //     interface blocks. VAR_TEMP / VAR_EXTERNAL are excluded —
+    //     those are not persistent state.
+    const fbSym = symbolTables.lookupFunctionBlock(name);
+    if (fbSym) {
+      const interfaceVars = [
+        ...fbSym.inputs,
+        ...fbSym.outputs,
+        ...fbSym.inouts,
+      ];
+      if (interfaceVars.length > 0) {
+        for (const v of interfaceVars) {
+          visitTypeRef(
+            `${path}.${v.name.toUpperCase()}`,
+            `${cppExpr}.${v.name}`,
+            v.declaration.type,
+          );
+        }
+      } else {
+        for (const block of fbSym.declaration.varBlocks) {
+          if (
+            block.blockType === "VAR" ||
+            block.blockType === "VAR_INPUT" ||
+            block.blockType === "VAR_OUTPUT" ||
+            block.blockType === "VAR_IN_OUT"
+          ) {
+            for (const fieldDecl of block.declarations) {
+              for (const fieldName of fieldDecl.names) {
+                visitTypeRef(
+                  `${path}.${fieldName.toUpperCase()}`,
+                  `${cppExpr}.${fieldName}`,
+                  fieldDecl.type,
+                );
+              }
             }
           }
         }

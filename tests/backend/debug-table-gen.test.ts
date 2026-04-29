@@ -165,4 +165,48 @@ END_CONFIGURATION
     const result = compile(simpleBlinkSource, { md5: "deadbeef" });
     expect(result.debugMap!.md5).toBe("deadbeef");
   });
+
+  // Library FBs (TON, TOF, …) ship only their public interface in the
+  // .stlib manifest. Locals like STATE / PREV_IN are implementation
+  // details — the debugger treats library FBs as black boxes and surfaces
+  // only the interface members the manifest exposes.
+  it("exposes the public interface of library FBs (no locals)", () => {
+    const tonSource = `
+PROGRAM main
+  VAR
+    TON0 : TON;
+    blink AT %QX0.0 : BOOL;
+  END_VAR
+  TON0(IN := NOT(blink), PT := T#500ms);
+  blink := TON0.Q;
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM instance0 WITH task0 : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+    const result = compile(tonSource, { libraryPaths: ["libs"] });
+    expect(result.success).toBe(true);
+
+    const paths = result.debugMap!.leaves.map((l) => l.path);
+    // Top-level program var
+    expect(paths).toContain("INSTANCE0.BLINK");
+    // FB public interface — inputs and outputs only
+    expect(paths).toContain("INSTANCE0.TON0.IN");
+    expect(paths).toContain("INSTANCE0.TON0.PT");
+    expect(paths).toContain("INSTANCE0.TON0.Q");
+    expect(paths).toContain("INSTANCE0.TON0.ET");
+    // FB locals must NOT leak into the debug map.
+    expect(paths).not.toContain("INSTANCE0.TON0.STATE");
+    expect(paths).not.toContain("INSTANCE0.TON0.PREV_IN");
+    expect(paths).not.toContain("INSTANCE0.TON0.CURRENT_TIME");
+    expect(paths).not.toContain("INSTANCE0.TON0.START_TIME");
+
+    const cpp = result.debugTableCpp!;
+    expect(cpp).toContain("&g_config.INSTANCE0.TON0.Q");
+    expect(cpp).not.toContain("&g_config.INSTANCE0.TON0.STATE");
+  });
 });
