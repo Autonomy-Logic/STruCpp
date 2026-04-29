@@ -1007,7 +1007,14 @@ export class CodeGenerator {
     this.emitHeader(`    ${fb.name}();`);
     this.emitHeader("");
     this.emitHeader("    // Execute function block");
-    this.emitHeader("    void operator()();");
+    // [[gnu::noinline]]: keep operator() as a real function call rather than
+    // letting GCC inline its body into every caller. Inlining FB bodies into
+    // a long PROGRAM::run() lets GCC reuse callee-saved registers across the
+    // body and the caller's surrounding code, which produces wrong values
+    // when the surrounding code expected those registers to survive (e.g.
+    // chained `BLINKn := TOF0.Q` after `TOF0()`). A real function-call
+    // boundary forces ABI-mandated callee-save preservation across the call.
+    this.emitHeader("    [[gnu::noinline]] void operator()();");
 
     // Generate method declarations (grouped by visibility)
     if (fb.methods.length > 0) {
@@ -1556,10 +1563,10 @@ export class CodeGenerator {
     this.emit("}");
     this.emit("");
 
-    // Operator()
+    // Operator() — see noinline rationale on the header declaration.
     this.emitLineDirective(fb.sourceSpan.startLine);
     const fbImplLine = this.currentLine;
-    this.emit(`void ${fb.name}::operator()() {`);
+    this.emit(`[[gnu::noinline]] void ${fb.name}::operator()() {`);
     if (this.options.isTestBuild) {
       this.emit("    if (__mocked_) { __mock_state_.call_count++; return; }");
     }
