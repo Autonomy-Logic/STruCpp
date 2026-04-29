@@ -23,9 +23,21 @@ import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
 import { SemanticAnalyzer } from "./semantic/analyzer.js";
 import { CodeGenerator } from "./backend/codegen.js";
+import {
+  generateDebugTable,
+  type DebugMapV2,
+} from "./backend/debug-table-gen.js";
 import { StdFunctionRegistry } from "./semantic/std-function-registry.js";
-import type { CompilationUnit } from "./frontend/ast.js";
+import type {
+  CompilationUnit,
+  FunctionCallExpression,
+  FunctionBlockDeclaration,
+  InterfaceDeclaration,
+  TypeReference,
+  ASTNode,
+} from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
+import { walkAST } from "./ast-utils.js";
 import {
   registerLibrarySymbols,
   discoverStlibs,
@@ -41,6 +53,110 @@ export const defaultOptions: CompileOptions = {
   lineMapping: true,
   optimizationLevel: 0,
 };
+
+// ---------------------------------------------------------------------------
+// Library tree-shaking: only include libraries whose symbols are referenced
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine which libraries are actually used by the user program.
+ * Walks the AST to collect all referenced symbol names, then matches them
+ * against library manifests to find which libraries are needed.
+ * Includes transitive dependencies.
+ */
+function collectUsedLibraries(
+  ast: CompilationUnit,
+  archives: StlibArchive[],
+): Set<string> {
+  // Build symbol→library name map (uppercase keys for case-insensitive match)
+  const symbolToLib = new Map<string, string>();
+  for (const archive of archives) {
+    const libName = archive.manifest.name;
+    for (const fn of archive.manifest.functions) {
+      symbolToLib.set(fn.name.toUpperCase(), libName);
+    }
+    for (const fb of archive.manifest.functionBlocks) {
+      symbolToLib.set(fb.name.toUpperCase(), libName);
+    }
+    for (const t of archive.manifest.types) {
+      symbolToLib.set(t.name.toUpperCase(), libName);
+    }
+  }
+
+  // Collect all symbol names referenced in the AST
+  const referencedNames = new Set<string>();
+
+  walkAST(ast, (node: ASTNode): void => {
+    switch (node.kind) {
+      case "FunctionCallExpression": {
+        const fc = node as FunctionCallExpression;
+        referencedNames.add(fc.functionName.toUpperCase());
+        break;
+      }
+      case "TypeReference": {
+        const tr = node as TypeReference;
+        referencedNames.add(tr.name.toUpperCase());
+        if (tr.elementTypeName) {
+          referencedNames.add(tr.elementTypeName.toUpperCase());
+        }
+        break;
+      }
+      case "FunctionBlockDeclaration": {
+        const fbd = node as FunctionBlockDeclaration;
+        if (fbd.extends) referencedNames.add(fbd.extends.toUpperCase());
+        if (fbd.implements) {
+          for (const iface of fbd.implements) {
+            referencedNames.add(iface.toUpperCase());
+          }
+        }
+        break;
+      }
+      case "InterfaceDeclaration": {
+        const id = node as InterfaceDeclaration;
+        if (id.extends) {
+          for (const base of id.extends) {
+            referencedNames.add(base.toUpperCase());
+          }
+        }
+        break;
+      }
+    }
+  });
+
+  // Match referenced names to libraries
+  const usedLibs = new Set<string>();
+  for (const name of referencedNames) {
+    const lib = symbolToLib.get(name);
+    if (lib) usedLibs.add(lib);
+  }
+
+  // Add transitive dependencies
+  const depMap = new Map<string, string[]>();
+  for (const archive of archives) {
+    depMap.set(
+      archive.manifest.name,
+      archive.dependencies.map((d) => d.name),
+    );
+  }
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const lib of usedLibs) {
+      const deps = depMap.get(lib);
+      if (deps) {
+        for (const dep of deps) {
+          if (!usedLibs.has(dep)) {
+            usedLibs.add(dep);
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  return usedLibs;
+}
 
 // ---------------------------------------------------------------------------
 // Shared pipeline
@@ -507,9 +623,21 @@ export function compile(
 
   // Register all library metadata (FB types, field mappings, enum/struct types)
   codegen.registerLibraryArchives(pipeline.allArchives);
+
+  // Tree-shake: only include libraries whose symbols are referenced by the
+  // program.  Skip for test builds — the test harness (test_main.cpp) may
+  // reference library symbols that aren't in the source AST.
+  const isTestBuild = pipeline.mergedOptions.isTestBuild ?? false;
+  const usedLibs = isTestBuild
+    ? null
+    : collectUsedLibraries(pipeline.ast, pipeline.allArchives);
+
   // Inject compiled C++ preamble code from libraries
   for (const archive of pipeline.allArchives) {
-    if (archive.headerCode) {
+    if (
+      archive.headerCode &&
+      (usedLibs === null || usedLibs.has(archive.manifest.name))
+    ) {
       codegen.addLibraryPreamble(
         archive.manifest.name,
         archive.headerCode,
@@ -534,6 +662,22 @@ export function compile(
     pipeline.warnings.push(entry);
   }
 
+  // Emit debugger pointer tables + editor manifest. This is best-effort:
+  // if projectModel or symbolTables are missing (malformed input), we still
+  // return the primary compile output; the debug artifacts are just omitted.
+  let debugTableCpp: string | undefined;
+  let debugMap: DebugMapV2 | undefined;
+  if (pipeline.projectModel && pipeline.symbolTables) {
+    const dbg = generateDebugTable(
+      pipeline.ast,
+      pipeline.projectModel,
+      pipeline.symbolTables,
+      { md5: pipeline.mergedOptions.md5 ?? "" },
+    );
+    debugTableCpp = dbg.debugTableCpp;
+    debugMap = dbg.debugMap;
+  }
+
   return {
     success: true,
     cppCode: codeResult.cppCode,
@@ -548,6 +692,8 @@ export function compile(
     ...(pipeline.allArchives.length > 0
       ? { resolvedLibraries: pipeline.allArchives }
       : {}),
+    ...(debugTableCpp !== undefined ? { debugTableCpp } : {}),
+    ...(debugMap !== undefined ? { debugMap } : {}),
   };
 }
 

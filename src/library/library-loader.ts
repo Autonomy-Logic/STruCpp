@@ -9,10 +9,18 @@
 
 import { readFileSync, readdirSync } from "fs";
 import { resolve, join } from "path";
-import type { LibraryManifest, StlibArchive } from "./library-manifest.js";
+import type {
+  LibraryManifest,
+  LibraryVarType,
+  StlibArchive,
+} from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
-import type { ElementaryType, VarDeclaration } from "../frontend/ast.js";
+import type {
+  ElementaryType,
+  TypeReference,
+  VarDeclaration,
+} from "../frontend/ast.js";
 import { createDefaultSourceSpan } from "../frontend/ast.js";
 import { ELEMENTARY_TYPES } from "../semantic/type-utils.js";
 
@@ -26,38 +34,52 @@ export class LibraryManifestError extends Error {
   }
 }
 
-/** Dummy VarDeclaration for library-registered symbols. */
-function dummyDecl(): VarDeclaration {
-  return {
-    kind: "VarDeclaration",
+/** Build a TypeReference AST node from a manifest variable entry. The
+ *  reference preserves the metadata downstream consumers (codegen,
+ *  debug-table-gen) need to recurse into nested types. */
+function makeTypeRef(v: LibraryVarType): TypeReference {
+  const ref: TypeReference = {
+    kind: "TypeReference",
     sourceSpan: createDefaultSourceSpan(),
-    names: [],
-    type: {
-      kind: "TypeReference",
-      sourceSpan: createDefaultSourceSpan(),
-      name: "INT",
-      isReference: false,
-      referenceKind: "none",
-    },
+    name: v.type,
+    isReference:
+      v.referenceKind === "pointer_to" || v.referenceKind === "reference_to",
+    referenceKind:
+      v.referenceKind === "pointer_to"
+        ? "pointer_to"
+        : v.referenceKind === "reference_to"
+          ? "reference_to"
+          : "none",
   };
+  if (v.arrayDimensions) ref.arrayDimensions = v.arrayDimensions;
+  if (v.elementTypeName) ref.elementTypeName = v.elementTypeName;
+  return ref;
 }
 
-/** Create a VariableSymbol from a library parameter entry. */
+/** Create a VariableSymbol from a library variable entry. The synthesized
+ *  VarDeclaration carries the real TypeReference so AST-walking consumers
+ *  (debug-table-gen) can recurse uniformly across user-defined and
+ *  library-defined function blocks. */
 function makeVarSymbol(
-  name: string,
-  typeName: string,
+  v: LibraryVarType,
   direction: "input" | "output" | "inout",
 ): VariableSymbol {
-  const varType: ElementaryType = ELEMENTARY_TYPES[typeName.toUpperCase()] ?? {
+  const varType: ElementaryType = ELEMENTARY_TYPES[v.type.toUpperCase()] ?? {
     typeKind: "elementary",
-    name: typeName,
+    name: v.type,
     sizeBits: 0,
   };
+  const declaration: VarDeclaration = {
+    kind: "VarDeclaration",
+    sourceSpan: createDefaultSourceSpan(),
+    names: [v.name],
+    type: makeTypeRef(v),
+  };
   return {
-    name,
+    name: v.name,
     kind: "variable",
     type: varType,
-    declaration: dummyDecl(),
+    declaration,
     isInput: direction === "input",
     isOutput: direction === "output",
     isInOut: direction === "inout",
@@ -295,7 +317,7 @@ export function registerLibrarySymbols(
         },
         returnType,
         parameters: fn.parameters.map((p) =>
-          makeVarSymbol(p.name, p.type, p.direction),
+          makeVarSymbol({ name: p.name, type: p.type }, p.direction),
         ),
       });
     } catch (e) {
@@ -337,7 +359,10 @@ export function registerLibrarySymbols(
     }
   }
 
-  // Register function blocks
+  // Register function blocks. The library only ships its public interface
+  // (inputs/outputs/inouts) — locals are implementation details and stay
+  // inside the compiled archive. The debugger treats library FBs as
+  // black boxes for the same reason: only the user-facing API is exposed.
   for (const fb of manifest.functionBlocks) {
     try {
       symbolTables.globalScope.define({
@@ -354,9 +379,9 @@ export function registerLibrarySymbols(
           properties: [],
           body: [],
         },
-        inputs: fb.inputs.map((i) => makeVarSymbol(i.name, i.type, "input")),
-        outputs: fb.outputs.map((o) => makeVarSymbol(o.name, o.type, "output")),
-        inouts: fb.inouts.map((io) => makeVarSymbol(io.name, io.type, "inout")),
+        inputs: fb.inputs.map((i) => makeVarSymbol(i, "input")),
+        outputs: fb.outputs.map((o) => makeVarSymbol(o, "output")),
+        inouts: fb.inouts.map((io) => makeVarSymbol(io, "inout")),
         locals: [],
       });
     } catch (e) {

@@ -16,7 +16,9 @@
 #pragma once
 
 #include <cstdint>
+#ifndef __AVR__
 #include <stdexcept>
+#endif
 
 namespace strucpp {
 
@@ -118,9 +120,11 @@ struct LocatedVar {
     }
 };
 
-// Verify expected layout
-static_assert(sizeof(LocatedVar) == 16, "LocatedVar should be 16 bytes");
-static_assert(alignof(LocatedVar) == 8, "LocatedVar should be 8-byte aligned");
+// Verify expected layout (size varies by platform: 16 bytes on 64-bit, 8 on 32-bit, 6 on AVR)
+#if INTPTR_MAX == INT64_MAX
+static_assert(sizeof(LocatedVar) == 16, "LocatedVar should be 16 bytes on 64-bit");
+static_assert(alignof(LocatedVar) == 8, "LocatedVar should be 8-byte aligned on 64-bit");
+#endif
 
 // =============================================================================
 // Helper Functions for Address Parsing
@@ -137,7 +141,11 @@ inline LocatedArea parse_area(char c) {
         case 'I': case 'i': return LocatedArea::Input;
         case 'Q': case 'q': return LocatedArea::Output;
         case 'M': case 'm': return LocatedArea::Memory;
+#ifdef __AVR__
+        default: for(;;);
+#else
         default: throw std::invalid_argument("Invalid area character");
+#endif
     }
 }
 
@@ -154,7 +162,11 @@ inline LocatedSize parse_size(char c) {
         case 'W': case 'w': return LocatedSize::Word;
         case 'D': case 'd': return LocatedSize::DWord;
         case 'L': case 'l': return LocatedSize::LWord;
+#ifdef __AVR__
+        default: for(;;);
+#else
         default: throw std::invalid_argument("Invalid size character");
+#endif
     }
 }
 

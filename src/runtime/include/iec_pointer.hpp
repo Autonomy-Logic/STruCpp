@@ -46,8 +46,10 @@
 #pragma once
 
 #include <cstddef>
+#ifndef __AVR__
 #include <stdexcept>
 #include <string>
+#endif
 #include "iec_var.hpp"
 
 namespace strucpp {
@@ -56,6 +58,7 @@ namespace strucpp {
 // Null Reference Exception
 // =============================================================================
 
+#ifndef __AVR__
 /**
  * Exception thrown when dereferencing a NULL reference.
  * The runtime catches this and stops execution of the affected POU.
@@ -71,6 +74,7 @@ public:
     explicit NullReferenceException(const std::string& context)
         : std::runtime_error("Null reference dereference in " + context) {}
 };
+#endif
 
 // =============================================================================
 // IEC NULL Constant
@@ -147,14 +151,22 @@ public:
      */
     IECVar<T>& deref() {
         if (ptr_ == nullptr) {
+#ifdef __AVR__
+            for(;;);
+#else
             throw NullReferenceException();
+#endif
         }
         return *ptr_;
     }
 
     const IECVar<T>& deref() const {
         if (ptr_ == nullptr) {
+#ifdef __AVR__
+            for(;;);
+#else
             throw NullReferenceException();
+#endif
         }
         return *ptr_;
     }
@@ -164,14 +176,22 @@ public:
      */
     IECVar<T>& deref(const char* context) {
         if (ptr_ == nullptr) {
+#ifdef __AVR__
+            for(;;);
+#else
             throw NullReferenceException(context);
+#endif
         }
         return *ptr_;
     }
 
     const IECVar<T>& deref(const char* context) const {
         if (ptr_ == nullptr) {
+#ifdef __AVR__
+            for(;;);
+#else
             throw NullReferenceException(context);
+#endif
         }
         return *ptr_;
     }
@@ -213,14 +233,22 @@ public:
      */
     pointer_type operator->() {
         if (ptr_ == nullptr) {
+#ifdef __AVR__
+            for(;;);
+#else
             throw NullReferenceException();
+#endif
         }
         return ptr_;
     }
 
     const pointer_type operator->() const {
         if (ptr_ == nullptr) {
+#ifdef __AVR__
+            for(;;);
+#else
             throw NullReferenceException();
+#endif
         }
         return ptr_;
     }

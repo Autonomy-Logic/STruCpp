@@ -286,6 +286,40 @@ jobs:
           path: strucpp-win32-x64.zip
 
   # ---------------------------------------------------------------------------
+  # npm tarball (platform-independent — used by OpenPLC Editor)
+  # ---------------------------------------------------------------------------
+  build-npm:
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Inject version
+        run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Build
+        run: npm run build
+
+      - name: Create npm tarball
+        run: npm pack
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: strucpp-npm
+          path: strucpp-*.tgz
+
+  # ---------------------------------------------------------------------------
   # VSCode Extension (.vsix)
   # ---------------------------------------------------------------------------
   build-vsix:
@@ -331,6 +365,7 @@ jobs:
       - build-darwin-x64
       - build-darwin-arm64
       - build-windows-x64
+      - build-npm
       - build-vsix
     runs-on: ubuntu-latest
     steps:
@@ -350,6 +385,8 @@ jobs:
           cp artifacts/strucpp-win32-x64/strucpp-win32-x64.zip release/
           # Windows ARM64 runs x64 binaries via emulation
           cp release/strucpp-win32-x64.zip release/strucpp-win32-arm64.zip
+          # npm tarball (platform-independent, used by OpenPLC Editor)
+          cp artifacts/strucpp-npm/strucpp-*.tgz release/
           cp artifacts/strucpp-vsix/*.vsix release/
           ls -lh release/
 

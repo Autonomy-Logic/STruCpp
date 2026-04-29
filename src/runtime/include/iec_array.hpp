@@ -14,7 +14,10 @@
 
 #include <array>
 #include <cstdint>
+#include <initializer_list>
+#ifndef __AVR__
 #include <stdexcept>
+#endif
 #include "iec_var.hpp"
 
 namespace strucpp {
@@ -77,14 +80,22 @@ public:
     // Bounds-checked access - throws std::out_of_range on invalid index
     var_type& at(int64_t index) {
         if (!Bounds::in_bounds(index)) {
+#ifdef __AVR__
+            for(;;); // halt on bounds error (no exceptions on AVR)
+#else
             throw std::out_of_range("Array index out of bounds");
+#endif
         }
         return data_[to_internal_index(index)];
     }
     
     const var_type& at(int64_t index) const {
         if (!Bounds::in_bounds(index)) {
+#ifdef __AVR__
+            for(;;); // halt on bounds error (no exceptions on AVR)
+#else
             throw std::out_of_range("Array index out of bounds");
+#endif
         }
         return data_[to_internal_index(index)];
     }
@@ -140,14 +151,22 @@ public:
     // Bounds-checked access - throws std::out_of_range on invalid index
     var_type& at(int64_t i, int64_t j) {
         if (!Bounds1::in_bounds(i) || !Bounds2::in_bounds(j)) {
+#ifdef __AVR__
+            for(;;); // halt on bounds error (no exceptions on AVR)
+#else
             throw std::out_of_range("Array index out of bounds");
+#endif
         }
         return data_[to_linear_index(i, j)];
     }
     
     const var_type& at(int64_t i, int64_t j) const {
         if (!Bounds1::in_bounds(i) || !Bounds2::in_bounds(j)) {
+#ifdef __AVR__
+            for(;;); // halt on bounds error (no exceptions on AVR)
+#else
             throw std::out_of_range("Array index out of bounds");
+#endif
         }
         return data_[to_linear_index(i, j)];
     }
