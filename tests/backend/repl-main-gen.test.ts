@@ -157,7 +157,7 @@ describe('Phase 3.6 - REPL Main Generator', () => {
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
       expect(mainCpp).toContain('Program_EMPTY');
-      expect(mainCpp).toContain('prog_EMPTY_vars = nullptr');
+      expect(mainCpp).toContain('prog_EMPTY_vars = nullptr;');
       expect(mainCpp).toContain('"EMPTY", &prog_EMPTY, prog_EMPTY_vars, 0, 0LL');
     });
 
@@ -243,7 +243,7 @@ END_PROGRAM`;
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('g_st_source = nullptr');
+      expect(mainCpp).toContain('g_st_source = nullptr;');
       expect(mainCpp).toContain('repl_run(programs, 1, g_st_source, g_cpp_source, g_line_map, g_line_map_count)');
     });
 
@@ -309,7 +309,7 @@ END_PROGRAM`;
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('g_cpp_source = nullptr');
+      expect(mainCpp).toContain('g_cpp_source = nullptr;');
     });
 
     it('should emit line map as STLineMap array when provided', () => {
@@ -345,8 +345,8 @@ END_PROGRAM`;
 
       const mainCpp = generateReplMain(result.ast!, result.projectModel!);
 
-      expect(mainCpp).toContain('g_line_map = nullptr');
-      expect(mainCpp).toContain('g_line_map_count = 0');
+      expect(mainCpp).toContain('g_line_map = nullptr;');
+      expect(mainCpp).toContain('g_line_map_count = 0;');
     });
 
     it('should use STLineMap type in using declarations', () => {

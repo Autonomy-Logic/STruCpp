@@ -731,7 +731,7 @@ describe("Library System", () => {
       });
 
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("P.X = 10");
+      expect(result.cppCode).toContain("__assign(P.X, 10);");
     });
 
     it("should inject library C++ code into output when using StlibArchive", () => {
@@ -794,7 +794,7 @@ describe("Library System", () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("X = 42");
+      expect(result.cppCode).toContain("__assign(X, 42);");
     });
 
     it("should inject multiple library preambles", () => {

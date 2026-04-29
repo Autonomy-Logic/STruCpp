@@ -43,7 +43,7 @@ describe("Codegen - Function Blocks", () => {
       // Implementation should contain constructor and operator()
       expect(result.cppCode).toContain("ADDER::ADDER()");
       expect(result.cppCode).toContain("void ADDER::operator()()");
-      expect(result.cppCode).toContain("RESULT = A + B;");
+      expect(result.cppCode).toContain("__assign(RESULT, A + B);");
     });
   });
 
@@ -114,12 +114,12 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // FB invocation should assign inputs then call operator()
-      expect(result.cppCode).toContain("ADD.A = 5;");
-      expect(result.cppCode).toContain("ADD.B = 3;");
+      expect(result.cppCode).toContain("__assign(ADD.A, 5);");
+      expect(result.cppCode).toContain("__assign(ADD.B, 3);");
       expect(result.cppCode).toContain("ADD();");
 
       // Member access should be direct property access
-      expect(result.cppCode).toContain("SUM = ADD.RESULT;");
+      expect(result.cppCode).toContain("__assign(SUM, ADD.RESULT);");
     });
 
     it("should generate FB output capture with => syntax", () => {
@@ -140,11 +140,11 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Input assignment
-      expect(result.cppCode).toContain("FB.X = 10;");
+      expect(result.cppCode).toContain("__assign(FB.X, 10);");
       // Call
       expect(result.cppCode).toContain("FB();");
       // Output capture
-      expect(result.cppCode).toContain("OUTPUT = FB.Y;");
+      expect(result.cppCode).toContain("__assign(OUTPUT, FB.Y);");
     });
 
     it("should generate FB member access as direct property access", () => {
@@ -165,7 +165,7 @@ describe("Codegen - Function Blocks", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("VAL = S.CALIBRATED;");
+      expect(result.cppCode).toContain("__assign(VAL, S.CALIBRATED);");
     });
 
     it("should generate FB input write as direct property assignment", () => {
@@ -182,7 +182,7 @@ describe("Codegen - Function Blocks", () => {
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("FB.X = 42;");
+      expect(result.cppCode).toContain("__assign(FB.X, 42);");
     });
   });
 
@@ -230,11 +230,11 @@ describe("Codegen - Function Blocks", () => {
       expect(result.headerCode).toMatch(/INNER EDGE;/);
 
       // Outer body should invoke Inner
-      expect(result.cppCode).toContain("EDGE.CLK = SIGNAL;");
+      expect(result.cppCode).toContain("__assign(EDGE.CLK, SIGNAL);");
       expect(result.cppCode).toContain("EDGE();");
 
       // Program should invoke Outer
-      expect(result.cppCode).toContain("CTRL.SIGNAL = true;");
+      expect(result.cppCode).toContain("__assign(CTRL.SIGNAL, true);");
       expect(result.cppCode).toContain("CTRL();");
     });
   });
@@ -287,9 +287,9 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Function call should remain as regular call
-      expect(result.cppCode).toContain("R = MYFUNC(5);");
+      expect(result.cppCode).toContain("__assign(R, MYFUNC(5));");
       // FB invocation should use assign+call pattern
-      expect(result.cppCode).toContain("FB.X = 10;");
+      expect(result.cppCode).toContain("__assign(FB.X, 10);");
       expect(result.cppCode).toContain("FB();");
     });
 
@@ -310,8 +310,8 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Positional args should be mapped to VAR_INPUT by order
-      expect(result.cppCode).toContain("FB.A = 42;");
-      expect(result.cppCode).toContain("FB.B = true;");
+      expect(result.cppCode).toContain("__assign(FB.A, 42);");
+      expect(result.cppCode).toContain("__assign(FB.B, true);");
       expect(result.cppCode).toContain("FB();");
     });
 
@@ -332,7 +332,7 @@ describe("Codegen - Function Blocks", () => {
       `);
 
       // Named argument should work
-      expect(result.cppCode).toContain("FB.Y = 20;");
+      expect(result.cppCode).toContain("__assign(FB.Y, 20);");
       expect(result.cppCode).toContain("FB();");
     });
   });
