@@ -4506,7 +4506,22 @@ export class CodeGenerator {
    * Generate the located variables descriptor array in the header.
    */
   private generateLocatedVarsDeclaration(): void {
-    if (this.locatedVars.length === 0) return;
+    // Library compilations (no PROGRAM, no CONFIGURATION — only FBs /
+    // functions / types) must NOT emit these symbols, otherwise the
+    // consumer's program would see two definitions when its preamble
+    // includes the library. Top-level program builds always emit them so
+    // the runtime sketch can reference `locatedVars` / `locatedVarsCount`
+    // unconditionally — including when the user has zero `AT %...`
+    // declarations (then we emit a 1-element placeholder array because
+    // C++ disallows zero-length arrays at namespace scope; the sketch's
+    // binding loop iterates `i < locatedVarsCount` so the placeholder is
+    // never accessed at runtime).
+    const hasPrograms =
+      !!this.projectModel && this.projectModel.programs.size > 0;
+    if (!hasPrograms) return;
+
+    const isEmpty = this.locatedVars.length === 0;
+    const arrayLen = isEmpty ? 1 : this.locatedVars.length;
 
     this.emitHeader(
       "// =============================================================================",
@@ -4530,13 +4545,14 @@ export class CodeGenerator {
         `// Forward: ${locVar.varName} AT ${locVar.address} in Program_${locVar.programName}`,
       );
     }
+    if (isEmpty) {
+      this.emitHeader("// (no located variables — placeholder entry only)");
+    }
     this.emitHeader("");
 
     // The actual array will be defined in the implementation file
     // and initialized in the constructor
-    this.emitHeader(
-      `extern LocatedVar locatedVars[${this.locatedVars.length}];`,
-    );
+    this.emitHeader(`extern LocatedVar locatedVars[${arrayLen}];`);
     this.emitHeader(
       `constexpr uint32_t locatedVarsCount = ${this.locatedVars.length};`,
     );
@@ -4547,7 +4563,13 @@ export class CodeGenerator {
    * Generate the located variables array definition in the implementation.
    */
   private generateLocatedVarsDefinition(): void {
-    if (this.locatedVars.length === 0) return;
+    // Mirror the declaration's library-skip + placeholder logic.
+    const hasPrograms =
+      !!this.projectModel && this.projectModel.programs.size > 0;
+    if (!hasPrograms) return;
+
+    const isEmpty = this.locatedVars.length === 0;
+    const arrayLen = isEmpty ? 1 : this.locatedVars.length;
 
     this.emit(
       "// =============================================================================",
@@ -4557,15 +4579,21 @@ export class CodeGenerator {
       "// =============================================================================",
     );
     this.emit("");
-    this.emit(`LocatedVar locatedVars[${this.locatedVars.length}] = {`);
+    this.emit(`LocatedVar locatedVars[${arrayLen}] = {`);
 
-    for (let i = 0; i < this.locatedVars.length; i++) {
-      const locVar = this.locatedVars[i]!;
-      const comma = i < this.locatedVars.length - 1 ? "," : "";
+    if (isEmpty) {
       this.emit(
-        `    { LocatedArea::${locVar.area}, LocatedSize::${locVar.size}, ` +
-          `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
+        `    { LocatedArea::Input, LocatedSize::Bit, 0, 0, {0, 0, 0}, nullptr }  // placeholder; locatedVarsCount is 0`,
       );
+    } else {
+      for (let i = 0; i < this.locatedVars.length; i++) {
+        const locVar = this.locatedVars[i]!;
+        const comma = i < this.locatedVars.length - 1 ? "," : "";
+        this.emit(
+          `    { LocatedArea::${locVar.area}, LocatedSize::${locVar.size}, ` +
+            `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
+        );
+      }
     }
 
     this.emit("};");

@@ -379,7 +379,10 @@ describe('Phase 2.3 - Located Variables', () => {
       expect(result.cppCode).toContain('raw_ptr()');
     });
 
-    it('should not generate descriptor for non-located variables', () => {
+    it('should not include any real located-variable descriptors when none exist', () => {
+      // The runtime sketch references locatedVars/locatedVarsCount
+      // unconditionally, so the codegen must always emit those symbols —
+      // but the count must be 0 and no real address comments should appear.
       const source = `
         PROGRAM Main
           VAR
@@ -389,7 +392,9 @@ describe('Phase 2.3 - Located Variables', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.headerCode).not.toContain('locatedVars');
+      expect(result.headerCode).toContain('locatedVarsCount = 0');
+      // No "Forward: ... AT %..." entry should appear since no var is located.
+      expect(result.headerCode).not.toMatch(/Forward:.*AT %/);
     });
 
     it('should include address comment in variable declaration', () => {
@@ -461,6 +466,27 @@ describe('Phase 2.3 - Located Variables', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
+    });
+
+    it('should still emit locatedVars and locatedVarsCount when no variables are located', () => {
+      // The runtime sketch references both symbols unconditionally. When
+      // a project has zero located variables, the codegen must still emit
+      // a placeholder array (size 1) and a count of 0 — anything else
+      // breaks the firmware link step.
+      const source = `
+        PROGRAM Main
+          VAR
+            x : INT;
+          END_VAR
+          x := x + 1;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain('extern LocatedVar locatedVars[1];');
+      expect(result.headerCode).toContain('constexpr uint32_t locatedVarsCount = 0;');
+      expect(result.cppCode).toContain('LocatedVar locatedVars[1] = {');
+      expect(result.cppCode).toMatch(/placeholder.*locatedVarsCount is 0/);
     });
   });
 });
