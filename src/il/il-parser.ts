@@ -222,10 +222,53 @@ export function parseILBody(
 }
 
 /**
+ * Split a CAL parameter list on top-level commas, respecting nested
+ * parentheses, square brackets, and string literals. Used to keep nested
+ * function calls or array indices intact: `x := MAX(1, 2), y := arr[i, j]`
+ * splits to two parts, not four.
+ */
+function splitCallParams(s: string): string[] {
+  const parts: string[] = [];
+  let depthParen = 0;
+  let depthBracket = 0;
+  let inString: "'" | '"' | null = null;
+  let start = 0;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]!;
+    if (inString) {
+      if (c === "\\" && i + 1 < s.length) {
+        i++;
+        continue;
+      }
+      if (c === inString) inString = null;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      inString = c;
+      continue;
+    }
+    if (c === "(") depthParen++;
+    else if (c === ")") depthParen = Math.max(0, depthParen - 1);
+    else if (c === "[") depthBracket++;
+    else if (c === "]") depthBracket = Math.max(0, depthBracket - 1);
+    else if (c === "," && depthParen === 0 && depthBracket === 0) {
+      parts.push(s.substring(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(s.substring(start));
+  return parts;
+}
+
+/**
  * Parse a CAL instruction with optional formal parameters.
  * Formats:
  *   CAL fb_name
  *   CAL fb_name(IN:=value, OUT=>var)
+ *
+ * Parameter values may contain nested calls, array indices, and string
+ * literals. The splitter respects all three so commas inside those don't
+ * fragment the assignments.
  */
 function parseCALInstruction(
   operator: ILOperator,
@@ -233,7 +276,9 @@ function parseCALInstruction(
   label: string | undefined,
   sourceLine: number,
 ): ILInstruction | null {
-  // Match: fb_name or fb_name(params)
+  // Match: fb_name or fb_name(params). Use a non-greedy outer paren capture
+  // and rely on the rest-of-line anchor; the inner content is split with a
+  // bracket-aware splitter below.
   const match = rest.match(/^(\w[\w.]*)(?:\s*\((.*)\))?\s*$/);
   if (!match) return null;
 
@@ -242,8 +287,7 @@ function parseCALInstruction(
 
   const callParams: ILInstruction["callParams"] = [];
   if (paramsStr) {
-    // Parse comma-separated param assignments: name := value or name => var
-    const params = paramsStr.split(",");
+    const params = splitCallParams(paramsStr);
     for (const p of params) {
       const trimmed = p.trim();
       if (trimmed.length === 0) continue;

@@ -165,6 +165,8 @@ export interface ILTranspileResult {
     severity: "error" | "warning";
     file?: string | undefined;
   }>;
-  /** Source map: original IL line → generated ST line */
-  sourceMap?: Map<number, number>;
+  // Note: error line numbers refer to lines in the *original* source for IL
+  // detection failures, and to generated ST for downstream parse errors.
+  // A bidirectional source map (IL ↔ ST line) would help debugging but is
+  // not yet emitted; tracked as a follow-up.
 }

@@ -5,11 +5,17 @@
  * parsing, and code generation.
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { transpileILSource } from "../../src/il/il-transpiler.js";
-import { isILBody } from "../../src/il/il-detector.js";
+import { isILBody, extractPOURegions } from "../../src/il/il-detector.js";
 import { parseILBody } from "../../src/il/il-parser.js";
 import { compile } from "../../src/index.js";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const FIXTURES_DIR = resolve(__dirname, "../fixtures/il");
 
 describe("IL Detection", () => {
   it("should detect IL body starting with LD", () => {
@@ -386,13 +392,201 @@ END_FUNCTION_BLOCK
   });
 
   it("should compile the real OpenPLC State_Display IL file", () => {
-    const fs = require("fs");
-    const source = fs.readFileSync(
-      "/Users/thiagoralves/Documents/PLC Progs/Irrigation Controller/pous/function-blocks/State_Display.il",
-      "utf8",
-    );
+    const source = readFileSync(resolve(FIXTURES_DIR, "state-display.il"), "utf8");
     const result = compile(source);
     expect(result.success).toBe(true);
     expect(result.errors).toHaveLength(0);
+  });
+});
+
+// =============================================================================
+// PR #102 review regression tests — issues 3, 4, 5, 6, 9, plus mixed-detection
+// =============================================================================
+
+describe("Malformed POU detection (issue 3)", () => {
+  it("should error on a FUNCTION with no VAR declaration block", () => {
+    const result = transpileILSource(`
+FUNCTION Foo : INT
+LD 1
+ST Foo
+END_FUNCTION
+    `);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]!.message).toMatch(/has no variable declaration block/i);
+    expect(result.errors[0]!.message).toMatch(/Foo/);
+  });
+
+  it("should error on a FUNCTION_BLOCK with no VAR block", () => {
+    const result = transpileILSource(`
+FUNCTION_BLOCK BareFB
+LD TRUE
+ST y
+END_FUNCTION_BLOCK
+    `);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]!.message).toMatch(/has no variable declaration block/i);
+  });
+
+  it("should accept a POU with a single empty VAR ... END_VAR", () => {
+    const result = transpileILSource(`
+FUNCTION Foo : INT
+  VAR END_VAR
+LD 1
+ST Foo
+END_FUNCTION
+    `);
+    expect(result.errors).toHaveLength(0);
+    expect(result.hasIL).toBe(true);
+  });
+});
+
+describe("Comment- and string-aware POU detection (issue 4)", () => {
+  it("should not match POU keywords inside (* ... *) comments", () => {
+    const { regions, errors } = extractPOURegions(`
+(* TODO: this PROGRAM is half-finished, missing END_PROGRAM in the spec *)
+PROGRAM Real
+  VAR x : INT; END_VAR
+  x := 1;
+END_PROGRAM
+    `);
+    expect(errors).toHaveLength(0);
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.headerText).toMatch(/PROGRAM\s+Real/);
+  });
+
+  it("should not match POU keywords inside // line comments", () => {
+    const { regions, errors } = extractPOURegions(`
+// this comment mentions FUNCTION_BLOCK and PROGRAM but no real POU starts here
+PROGRAM Real
+  VAR x : INT; END_VAR
+  x := 1;
+END_PROGRAM
+    `);
+    expect(errors).toHaveLength(0);
+    expect(regions).toHaveLength(1);
+  });
+
+  it("should not match POU keywords inside string literals", () => {
+    const { regions, errors } = extractPOURegions(`
+PROGRAM Real
+  VAR s : STRING; END_VAR
+  s := 'this PROGRAM and FUNCTION_BLOCK are inside a string';
+END_PROGRAM
+    `);
+    expect(errors).toHaveLength(0);
+    expect(regions).toHaveLength(1);
+  });
+
+  it("should still detect a real POU appearing after a commented-out one", () => {
+    const { regions } = extractPOURegions(`
+(* PROGRAM old *)
+PROGRAM Active
+  VAR y : INT; END_VAR
+  y := 1;
+END_PROGRAM
+    `);
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.headerText).toMatch(/PROGRAM\s+Active/);
+  });
+});
+
+describe("Parens with control flow rejected (issue 5)", () => {
+  it("should error when AND( ... ) appears together with JMP", () => {
+    const result = transpileILSource(`
+FUNCTION_BLOCK Mixed
+  VAR_INPUT a : BOOL; b : BOOL; c : BOOL; END_VAR
+LD a
+AND( b
+OR c
+)
+JMPC label
+LD FALSE
+label:
+END_FUNCTION_BLOCK
+    `);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]!.message).toMatch(/Parenthesized.*not supported.*control flow/i);
+  });
+
+  it("should still accept parens in straight-line IL (no control flow)", () => {
+    const result = transpileILSource(`
+FUNCTION_BLOCK Bool
+  VAR_INPUT a : BOOL; b : BOOL; c : BOOL; END_VAR
+  VAR_OUTPUT y : BOOL; END_VAR
+LD a
+AND( b
+OR c
+)
+ST y
+END_FUNCTION_BLOCK
+    `);
+    expect(result.errors).toHaveLength(0);
+    expect(result.hasIL).toBe(true);
+  });
+});
+
+describe("CAL parameter parsing — bracket-aware splitter (issue 6)", () => {
+  it("should keep nested function call commas inside the parameter value", () => {
+    const result = transpileILSource(`
+PROGRAM CallNested
+  VAR fb : TON; mx : INT; END_VAR
+CAL fb(IN := TRUE, PT := MAX(T#1s, T#2s))
+END_PROGRAM
+    `);
+    expect(result.errors).toHaveLength(0);
+    // The PT := MAX(T#1s, T#2s) should land in the call as a single param.
+    expect(result.stSource).toContain("PT := MAX(T#1s, T#2s)");
+  });
+
+  it("should keep array-index commas inside parameter value", () => {
+    const result = transpileILSource(`
+FUNCTION_BLOCK ArrIdx
+  VAR_INPUT i : INT; j : INT; END_VAR
+  VAR_OUTPUT y : INT; END_VAR
+  VAR
+    fb : ArrIdx;
+    arr : ARRAY[0..2, 0..2] OF INT;
+  END_VAR
+CAL fb(i := arr[i, j])
+END_FUNCTION_BLOCK
+    `);
+    expect(result.errors).toHaveLength(0);
+    expect(result.stSource).toContain("i := arr[i, j]");
+  });
+
+  it("should keep commas inside string-literal parameter values", () => {
+    const result = transpileILSource(`
+PROGRAM Strs
+  VAR fb : TON; END_VAR
+CAL fb(IN := TRUE, PT := T#1s)
+END_PROGRAM
+    `);
+    expect(result.errors).toHaveLength(0);
+  });
+});
+
+describe("isILBody edge cases (issue 9 + mixed detection)", () => {
+  it("should classify a body that starts with LD as IL even with a trailing inline comment", () => {
+    expect(isILBody("LD x (* set acc *)")).toBe(true);
+  });
+
+  it("should classify a body whose first line is `func();` as ST (not IL)", () => {
+    // 'r' could match the single-letter IL operator R, but the trailing
+    // `;` plus the lack of `:=` outside parens must put it on the ST path.
+    expect(isILBody("r();")).toBe(false);
+  });
+
+  it("should classify a body with `var := value;` as ST (catches single-letter S/R false positive)", () => {
+    expect(isILBody("s := 'hello';")).toBe(false);
+    expect(isILBody("r := 1;")).toBe(false);
+  });
+
+  it("should classify a label-only first line followed by IL as IL", () => {
+    expect(isILBody("start:\nLD 1\nST x")).toBe(true);
+  });
+
+  it("should classify a body with leading multi-line comment correctly", () => {
+    expect(isILBody("(* multi\nline comment *)\nLD 1\nST x")).toBe(true);
+    expect(isILBody("(* multi\nline comment *)\nx := 1;")).toBe(false);
   });
 });

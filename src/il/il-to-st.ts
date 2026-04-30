@@ -241,6 +241,37 @@ interface BasicBlock {
 function convertWithStateMachine(elements: ILElement[]): ILConvertResult {
   const errors: ILConvertError[] = [];
 
+  // Reject parenthesized expressions when control flow is also present.
+  // The straight-line converter handles parens via an expression stack, but
+  // that stack does not survive a basic-block boundary — propagating it
+  // through the state machine is non-trivial and a separate enhancement.
+  // Detect the combination here and surface a clear error rather than
+  // silently producing wrong ST.
+  for (const elem of elements) {
+    if ("kind" in elem && elem.kind === "closeParen") {
+      errors.push({
+        message:
+          "Parenthesized expressions are not supported in IL bodies that " +
+          "also use control flow (JMP/JMPC/RET/CAL/...). Rewrite the " +
+          "expression without parentheses or split the POU.",
+        line: elem.sourceLine,
+        column: 1,
+      });
+      return { stBody: "", errors };
+    }
+    if (!("kind" in elem) && elem.openParen) {
+      errors.push({
+        message:
+          "Parenthesized expressions are not supported in IL bodies that " +
+          "also use control flow (JMP/JMPC/RET/CAL/...). Rewrite the " +
+          "expression without parentheses or split the POU.",
+        line: elem.sourceLine,
+        column: 1,
+      });
+      return { stBody: "", errors };
+    }
+  }
+
   // Filter to instructions only (handle close parens inline during block building)
   const instructions = elements.filter(
     (e): e is ILInstruction => !("kind" in e),

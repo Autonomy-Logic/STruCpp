@@ -27,14 +27,29 @@ export function transpileILSource(
   source: string,
   fileName?: string,
 ): ILTranspileResult {
-  const regions = extractPOURegions(source);
+  const { regions, errors: detectionErrors } = extractPOURegions(source);
+
+  // Detection errors (e.g. malformed POUs without VAR blocks) are reported
+  // even if no IL bodies are present, so structural problems surface in
+  // straight-ST programs too.
+  const errors: ILTranspileResult["errors"] = detectionErrors.map((e) => {
+    const entry: ILTranspileResult["errors"][number] = {
+      message: e.message,
+      line: e.line,
+      column: e.column,
+      severity: "error",
+    };
+    if (fileName) entry.file = fileName;
+    return entry;
+  });
+
   const ilRegions = regions.filter((r) => r.isIL);
 
   if (ilRegions.length === 0) {
-    return { hasIL: false, stSource: source, errors: [] };
+    // Even when there's no IL, propagate any detection errors so callers
+    // see them. hasIL stays false because no rewrite happened.
+    return { hasIL: false, stSource: source, errors };
   }
-
-  const errors: ILTranspileResult["errors"] = [];
 
   // Rebuild the source, replacing IL bodies with ST equivalents.
   // Process regions in reverse order so offsets remain valid.

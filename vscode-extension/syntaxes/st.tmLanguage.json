@@ -309,7 +309,7 @@
         {
           "comment": "IL operators at the start of a line (with optional leading whitespace)",
           "name": "keyword.operator.il.st",
-          "match": "(?i)^\\s*(?:LD[N]?|ST[N]?|JMP[C]?[N]?|RET[C]?[N]?|CAL[C]?[N]?|EQ|NE|GT|GE|LT|LE|ADD|SUB|MUL|DIV|AND[N]?|OR[N]?|XOR[N]?|S1|R1|CLK|CU|CD|PV|PT)\\b"
+          "match": "(?i)^\\s*(?:LDN?|STN?|JMP(?:CN?)?|RET(?:CN?)?|CAL(?:CN?)?|EQ|NE|GT|GE|LT|LE|ADD|SUB|MUL|DIV|ANDN?|ORN?|XORN?|S1|R1|CLK|CU|CD|PV|PT)\\b"
         },
         {
           "comment": "IL labels: identifier followed by colon at start of line, no assignment operator after",
