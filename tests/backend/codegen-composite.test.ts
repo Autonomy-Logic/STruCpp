@@ -361,3 +361,54 @@ describe("Phase 3.3: Validation Examples", () => {
     expect(result.cppCode).toContain("POINTS[I].Y = I * 2;");
   });
 });
+
+
+describe("Enum-typed variable declarations (regression)", () => {
+  // Regression: enum-typed fields used to be emitted as the bare
+  // `enum class` C++ type (e.g. `IRRIGATION_STATE STATE;`). That has no
+  // value_ / forced_ / forced_value_ layout, so the debugger's
+  // `read_impl<int16_t>` cast would walk past the 2-byte enum into
+  // adjacent memory — surfacing as ghost values like 256/257 when an
+  // adjacent IECVar field was forced. Variables of enum type must use
+  // the `IEC_<name>` wrapper (= IEC_ENUM<name>) so they have proper
+  // IECVar shape.
+  it("should wrap enum-typed program variables in IEC_<name>", () => {
+    const result = compileST(`
+      TYPE
+        Color : (RED, GREEN, BLUE);
+      END_TYPE
+      PROGRAM Test
+        VAR
+          c : Color;
+        END_VAR
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain("enum class COLOR");
+    expect(result.headerCode).toContain("using IEC_COLOR = IEC_ENUM<COLOR>;");
+    expect(result.headerCode).toContain("IEC_COLOR C;");
+  });
+
+  it("should wrap enum-typed FB members in IEC_<name>", () => {
+    const result = compileST(`
+      TYPE
+        Mode : (AUTO, MANUAL);
+      END_TYPE
+      FUNCTION_BLOCK Driver
+        VAR_INPUT
+          m : Mode;
+        END_VAR
+        VAR
+          local_m : Mode;
+        END_VAR
+      END_FUNCTION_BLOCK
+      PROGRAM Test
+        VAR d : Driver; END_VAR
+        d();
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain("IEC_MODE M;");
+    expect(result.headerCode).toContain("IEC_MODE LOCAL_M;");
+  });
+});
