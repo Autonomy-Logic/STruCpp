@@ -525,7 +525,7 @@ export class DocumentManager {
 const MAX_DISCOVERY_DEPTH = 10;
 
 /** Pattern matching .st and .iecst source files */
-const ST_FILE_PATTERN = /\.(st|iecst)$/i;
+const ST_FILE_PATTERN = /\.(st|iecst|il)$/i;
 
 /**
  * Recursively discover files matching a pattern in a directory.

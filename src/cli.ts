@@ -440,7 +440,9 @@ function compileLibraryMode(options: CLIOptions): void {
       if (stat.isDirectory()) {
         const discovered = discoverSTFiles(inputPath);
         if (discovered.length === 0) {
-          console.error(`Error: No .st files found in directory: ${inputPath}`);
+          console.error(
+            `Error: No .st or .il files found in directory: ${inputPath}`,
+          );
           process.exit(1);
         }
         filePaths.push(...discovered);
@@ -926,7 +928,7 @@ function main(): void {
   const inputPath = resolve(primaryInput);
   const outputPath = options.output
     ? resolve(options.output)
-    : inputPath.replace(/\.st$/i, ".cpp");
+    : inputPath.replace(/\.(st|il)$/i, ".cpp");
 
   // Derive header filename from output path for correct #include directive
   const headerFileName = basename(outputPath).replace(/\.cpp$/i, ".hpp");

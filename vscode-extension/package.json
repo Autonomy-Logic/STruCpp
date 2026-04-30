@@ -34,7 +34,9 @@
         "extensions": [
           ".st",
           ".iecst",
-          ".ST"
+          ".ST",
+          ".il",
+          ".IL"
         ],
         "configuration": "./language-configuration.json"
       }

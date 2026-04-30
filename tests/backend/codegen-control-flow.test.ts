@@ -510,7 +510,33 @@ describe("Phase 3.2: EXIT Statement Code Generation", () => {
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("for (I = 1; I <= 100; I++) {");
     expect(result.cppCode).toContain("if (SUM > 50) {");
-    expect(result.cppCode).toContain("break;");
+    expect(result.cppCode).toContain("goto __strucpp_loop_exit_0;");
+    expect(result.cppCode).toContain("__strucpp_loop_exit_0: ;");
+  });
+
+  it("should escape REPEAT loop from inside CASE via goto (IL state-machine pattern)", () => {
+    // Regression: plain `break` only exits the switch, not the surrounding
+    // do-while loop. Compiled IL bodies use this exact pattern (state-machine
+    // CASE inside REPEAT...UNTIL false), so EXIT must goto past the loop.
+    const result = compileST(`
+      PROGRAM TestExitFromCase
+        VAR state : INT := 0; END_VAR
+        REPEAT
+          CASE state OF
+            0: state := 1;
+            1: EXIT;
+          END_CASE;
+        UNTIL FALSE END_REPEAT;
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain("do {");
+    expect(result.cppCode).toContain("switch (STATE)");
+    expect(result.cppCode).toContain("goto __strucpp_loop_exit_0;");
+    expect(result.cppCode).toContain("__strucpp_loop_exit_0: ;");
+    // Critical: NOT a plain break; the C++ optimizer would otherwise loop
+    // forever because `break` inside a switch only escapes the switch.
+    expect(result.cppCode).not.toMatch(/case 1:\s*break;/);
   });
 
   it("should generate EXIT in WHILE loop", () => {
@@ -527,7 +553,8 @@ describe("Phase 3.2: EXIT Statement Code Generation", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("while (!DONE) {");
-    expect(result.cppCode).toContain("break;");
+    expect(result.cppCode).toContain("goto __strucpp_loop_exit_0;");
+    expect(result.cppCode).toContain("__strucpp_loop_exit_0: ;");
   });
 });
 
@@ -591,7 +618,10 @@ describe("Phase 3.2: Complex Control Flow", () => {
     expect(result.cppCode).toContain("for (J = 0; J <= 9; J++) {");
     expect(result.cppCode).toContain("if (I == J) {");
     expect(result.cppCode).toContain("FOUND = true;");
-    expect(result.cppCode).toContain("break;");
+    // EXIT in the inner FOR breaks only the inner loop. Inner loop's label
+    // index is 1 because the outer loop pushed label 0 first.
+    expect(result.cppCode).toContain("goto __strucpp_loop_exit_1;");
+    expect(result.cppCode).toContain("__strucpp_loop_exit_1: ;");
   });
 
   it("should handle validation example: nested IF with ELSIF", () => {
@@ -638,7 +668,7 @@ describe("Phase 3.2: Complex Control Flow", () => {
     expect(result.cppCode).toContain("for (I = 1; I <= 100; I++) {");
     expect(result.cppCode).toContain("SUM = SUM + I;");
     expect(result.cppCode).toContain("if (SUM > 50) {");
-    expect(result.cppCode).toContain("break;");
+    expect(result.cppCode).toContain("goto __strucpp_loop_exit_0;");
   });
 
   it("should handle validation example: WHILE loop", () => {
