@@ -96,10 +96,10 @@ export function stripDependencyPreambles(
 }
 
 /**
- * Recursively discover all `.st` files in a directory.
+ * Recursively discover all `.st` and `.il` files in a directory.
  *
  * @param dir - Directory to scan
- * @returns Array of absolute paths to `.st` files
+ * @returns Array of absolute paths to `.st` and `.il` files
  */
 export function discoverSTFiles(dir: string): string[] {
   const resolvedDir = resolve(dir);
@@ -109,7 +109,8 @@ export function discoverSTFiles(dir: string): string[] {
   });
   const stFiles: string[] = [];
   for (const entry of entries) {
-    if (entry.isFile() && entry.name.endsWith(".st")) {
+    const lower = entry.name.toLowerCase();
+    if (entry.isFile() && (lower.endsWith(".st") || lower.endsWith(".il"))) {
       // entry.parentPath is available in Node 20+; fallback to entry.path
       const parentPath =
         (entry as { parentPath?: string }).parentPath ??

@@ -19,6 +19,7 @@
     { "include": "#variable-blocks" },
     { "include": "#configuration-keywords" },
     { "include": "#control-flow" },
+    { "include": "#il-operators" },
     { "include": "#operators" },
     { "include": "#elementary-types" },
     { "include": "#reference-keywords" },
@@ -300,6 +301,23 @@
         {
           "name": "keyword.other.memory.st",
           "match": "(?i)\\b(?:__NEW|__DELETE)\\b"
+        }
+      ]
+    },
+    "il-operators": {
+      "patterns": [
+        {
+          "comment": "IL operators at the start of a line (with optional leading whitespace)",
+          "name": "keyword.operator.il.st",
+          "match": "(?i)^\\s*(?:LDN?|STN?|JMP(?:CN?)?|RET(?:CN?)?|CAL(?:CN?)?|EQ|NE|GT|GE|LT|LE|ADD|SUB|MUL|DIV|ANDN?|ORN?|XORN?|S1|R1|CLK|CU|CD|PV|PT)\\b"
+        },
+        {
+          "comment": "IL labels: identifier followed by colon at start of line, no assignment operator after",
+          "match": "^(\\s*)(\\w+)(\\s*:)\\s*$",
+          "captures": {
+            "2": { "name": "entity.name.label.il.st" },
+            "3": { "name": "punctuation.definition.label.il.st" }
+          }
         }
       ]
     },
