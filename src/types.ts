@@ -59,6 +59,14 @@ export interface CompileOptions {
   /** Global constants injected as constexpr into the C++ header preamble (before namespace).
    *  Useful for library-wide sizing parameters like STRING_LENGTH, LIST_LENGTH. */
   globalConstants?: Record<string, number>;
+
+  /**
+   * MD5 string embedded in the debug map + exposed to the target via
+   * FC 0x45. Caller computes over (program.st, strucpp version, any other
+   * state that should invalidate the editor's cached layout). If unset,
+   * the debug map's md5 field is left empty.
+   */
+  md5?: string;
 }
 
 /**
@@ -148,6 +156,19 @@ export interface CompileResult {
 
   /** Resolved library archives (stdlib + user) used during compilation */
   resolvedLibraries?: import("./library/library-manifest.js").StlibArchive[];
+
+  /**
+   * Per-project debugger pointer-table C++ source. Write to
+   * `generated_debug.cpp` in the build directory. Consumed by
+   * strucpp::debug::handle_*() at runtime. See debug-table-gen.ts.
+   */
+  debugTableCpp?: string;
+
+  /**
+   * Editor-side manifest mapping variable paths to (arrayIdx, elemIdx)
+   * addresses. Serialize to `debug-map.json`. See debug-table-gen.ts.
+   */
+  debugMap?: import("./backend/debug-table-gen.js").DebugMapV2;
 }
 
 /**

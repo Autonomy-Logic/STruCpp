@@ -55,6 +55,7 @@ if(BUILD_TESTING)
         tests/test_iec_types.cpp
         tests/test_iec_var.cpp
         tests/test_std_lib.cpp
+        tests/test_debug_dispatch.cpp
     )
 
     target_link_libraries(runtime_tests PRIVATE

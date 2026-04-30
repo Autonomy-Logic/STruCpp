@@ -112,11 +112,16 @@ private:
     
 public:
     IEC_ENUM_Var() noexcept : value_{}, forced_{false}, forced_value_{} {}
-    
-    explicit IEC_ENUM_Var(EnumType val) noexcept 
+
+    // Non-explicit so raw `EnumType` values can implicitly convert at call
+    // sites — matches the implicit `IECVar(T v)` constructor for elementary
+    // types. Without this, codegen would have to wrap every raw enum
+    // literal at the call site, since enum-typed variables are now
+    // declared as `IEC_<name>` (= IEC_ENUM_Var<EnumType>).
+    IEC_ENUM_Var(EnumType val) noexcept
         : value_{val}, forced_{false}, forced_value_{} {}
-    
-    explicit IEC_ENUM_Var(value_type val) noexcept 
+
+    IEC_ENUM_Var(value_type val) noexcept
         : value_{val}, forced_{false}, forced_value_{} {}
     
     IEC_ENUM_Var(const IEC_ENUM_Var&) = default;

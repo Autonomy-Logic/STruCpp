@@ -18,10 +18,15 @@ import {
 } from "./types.js";
 import { parse as parseSource } from "./frontend/parser.js";
 import { buildAST } from "./frontend/ast-builder.js";
+import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
 import { SemanticAnalyzer } from "./semantic/analyzer.js";
 import { CodeGenerator } from "./backend/codegen.js";
+import {
+  generateDebugTable,
+  type DebugMapV2,
+} from "./backend/debug-table-gen.js";
 import { StdFunctionRegistry } from "./semantic/std-function-registry.js";
 import type {
   CompilationUnit,
@@ -188,8 +193,38 @@ function runPipeline(
   let symbolTables: SymbolTables | undefined;
   const allArchives: StlibArchive[] = [];
 
+  // Phase 0: IL→ST transpilation (if source contains IL bodies)
+  let effectiveSource = source;
+  {
+    const ilResult = transpileILSource(source, mergedOptions.fileName);
+    if (ilResult.hasIL) {
+      effectiveSource = ilResult.stSource;
+      for (const err of ilResult.errors) {
+        const entry: CompileError = {
+          message: err.message,
+          line: err.line,
+          column: err.column,
+          severity: err.severity,
+        };
+        if (err.file) entry.file = err.file;
+        errors.push(entry);
+      }
+      if (errors.length > 0 && !continueOnError) {
+        return {
+          ast,
+          projectModel,
+          symbolTables,
+          errors,
+          warnings,
+          allArchives,
+          mergedOptions,
+        };
+      }
+    }
+  }
+
   // Phase 1: Parse ST source to CST
-  const parseResult = parseSource(source);
+  const parseResult = parseSource(effectiveSource);
   if (parseResult.errors.length > 0) {
     for (const err of parseResult.errors) {
       const errObj = err as {
@@ -627,6 +662,22 @@ export function compile(
     pipeline.warnings.push(entry);
   }
 
+  // Emit debugger pointer tables + editor manifest. This is best-effort:
+  // if projectModel or symbolTables are missing (malformed input), we still
+  // return the primary compile output; the debug artifacts are just omitted.
+  let debugTableCpp: string | undefined;
+  let debugMap: DebugMapV2 | undefined;
+  if (pipeline.projectModel && pipeline.symbolTables) {
+    const dbg = generateDebugTable(
+      pipeline.ast,
+      pipeline.projectModel,
+      pipeline.symbolTables,
+      { md5: pipeline.mergedOptions.md5 ?? "" },
+    );
+    debugTableCpp = dbg.debugTableCpp;
+    debugMap = dbg.debugMap;
+  }
+
   return {
     success: true,
     cppCode: codeResult.cppCode,
@@ -641,6 +692,8 @@ export function compile(
     ...(pipeline.allArchives.length > 0
       ? { resolvedLibraries: pipeline.allArchives }
       : {}),
+    ...(debugTableCpp !== undefined ? { debugTableCpp } : {}),
+    ...(debugMap !== undefined ? { debugMap } : {}),
   };
 }
 

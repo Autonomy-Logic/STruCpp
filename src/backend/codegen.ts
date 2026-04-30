@@ -248,6 +248,16 @@ export class CodeGenerator {
   /** Counter for generating unique temporary variable names */
   private tempVarCounter = 0;
 
+  /**
+   * Stack of loop exit labels for EXIT codegen. C++ `break` only escapes the
+   * innermost switch/loop, so `EXIT` inside a `CASE` nested in a loop must
+   * goto past the loop instead. Each loop pushes a fresh label; an inner
+   * `EXIT` records `used=true` so the closing emitter only writes the label
+   * when something jumps to it.
+   */
+  private loopExitLabelStack: Array<{ name: string; used: boolean }> = [];
+  private loopExitLabelCounter = 0;
+
   /** Current statement indent level (set by generateStatement before expression generation) */
   private currentStatementIndent = "    ";
 
@@ -382,11 +392,22 @@ export class CodeGenerator {
         return `IECWStringVar<${maxLength}>`;
       }
     }
-    // User-defined types (FBs, interfaces, structs) use bare name - no IEC_ prefix
+    // User-defined types fall into two camps:
+    //   1. FBs / interfaces / structs / arrays — fields already wrap leaves
+    //      in IECVar internally, so the bare class name is used directly.
+    //   2. Enums (`enum class`) — the raw C++ enum has no value_/forced_/
+    //      forced_value_ layout, so the debugger's `read_impl<int16_t>`
+    //      cast walks past the 2-byte enum into adjacent memory and
+    //      returns garbage when nearby variables are forced. Use the
+    //      `IEC_<name>` wrapper (= `IEC_ENUM<name>`) so enum-typed fields
+    //      have proper IECVar shape with forcing support.
     if (this.isUserDefinedType(typeName)) {
       // Programs use Program_NAME class naming convention
       if (this.knownProgramTypes.has(typeName.toUpperCase())) {
         return `Program_${typeName}`;
+      }
+      if (this.enumTypeMembers.has(typeName.toUpperCase())) {
+        return `IEC_${typeName}`;
       }
       return typeName;
     }
@@ -2241,9 +2262,18 @@ export class CodeGenerator {
         this.generateRepeatStatement(stmt, indent);
         isCompound = true;
         break;
-      case "ExitStatement":
-        this.emit(`${indent}break;`);
+      case "ExitStatement": {
+        const top = this.loopExitLabelStack[this.loopExitLabelStack.length - 1];
+        if (top) {
+          top.used = true;
+          this.emit(`${indent}goto ${top.name};`);
+        } else {
+          // EXIT outside a loop is invalid IEC ST; emit defensive break
+          // rather than crash codegen.
+          this.emit(`${indent}break;`);
+        }
         break;
+      }
       case "ReturnStatement":
         this.generateReturnStatement(indent);
         break;
@@ -2541,10 +2571,17 @@ export class CodeGenerator {
     }
     this.recordLineMapping(stmt.sourceSpan.startLine, forLine);
 
+    const exitLabel = {
+      name: `__strucpp_loop_exit_${this.loopExitLabelCounter++}`,
+      used: false,
+    };
+    this.loopExitLabelStack.push(exitLabel);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.loopExitLabelStack.pop();
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    if (exitLabel.used) this.emit(`${indent}${exitLabel.name}: ;`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
@@ -2556,10 +2593,17 @@ export class CodeGenerator {
     const whileLine = this.currentLine;
     this.emit(`${indent}while (${this.generateExpression(stmt.condition)}) {`);
     this.recordLineMapping(stmt.sourceSpan.startLine, whileLine);
+    const exitLabel = {
+      name: `__strucpp_loop_exit_${this.loopExitLabelCounter++}`,
+      used: false,
+    };
+    this.loopExitLabelStack.push(exitLabel);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.loopExitLabelStack.pop();
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
     this.emit(`${indent}}`);
+    if (exitLabel.used) this.emit(`${indent}${exitLabel.name}: ;`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
   }
 
@@ -2571,12 +2615,19 @@ export class CodeGenerator {
     const doLine = this.currentLine;
     this.emit(`${indent}do {`);
     this.recordLineMapping(stmt.sourceSpan.startLine, doLine);
+    const exitLabel = {
+      name: `__strucpp_loop_exit_${this.loopExitLabelCounter++}`,
+      used: false,
+    };
+    this.loopExitLabelStack.push(exitLabel);
     this.generateStatements(stmt.body, indent + this.options.indent);
+    this.loopExitLabelStack.pop();
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const untilLine = this.currentLine;
     this.emit(
       `${indent}} while (!(${this.generateExpression(stmt.condition)}));`,
     );
+    if (exitLabel.used) this.emit(`${indent}${exitLabel.name}: ;`);
     this.recordLineMapping(stmt.sourceSpan.endLine, untilLine);
   }
 
@@ -4466,7 +4517,22 @@ export class CodeGenerator {
    * Generate the located variables descriptor array in the header.
    */
   private generateLocatedVarsDeclaration(): void {
-    if (this.locatedVars.length === 0) return;
+    // Library compilations (no PROGRAM, no CONFIGURATION — only FBs /
+    // functions / types) must NOT emit these symbols, otherwise the
+    // consumer's program would see two definitions when its preamble
+    // includes the library. Top-level program builds always emit them so
+    // the runtime sketch can reference `locatedVars` / `locatedVarsCount`
+    // unconditionally — including when the user has zero `AT %...`
+    // declarations (then we emit a 1-element placeholder array because
+    // C++ disallows zero-length arrays at namespace scope; the sketch's
+    // binding loop iterates `i < locatedVarsCount` so the placeholder is
+    // never accessed at runtime).
+    const hasPrograms =
+      !!this.projectModel && this.projectModel.programs.size > 0;
+    if (!hasPrograms) return;
+
+    const isEmpty = this.locatedVars.length === 0;
+    const arrayLen = isEmpty ? 1 : this.locatedVars.length;
 
     this.emitHeader(
       "// =============================================================================",
@@ -4490,13 +4556,14 @@ export class CodeGenerator {
         `// Forward: ${locVar.varName} AT ${locVar.address} in Program_${locVar.programName}`,
       );
     }
+    if (isEmpty) {
+      this.emitHeader("// (no located variables — placeholder entry only)");
+    }
     this.emitHeader("");
 
     // The actual array will be defined in the implementation file
     // and initialized in the constructor
-    this.emitHeader(
-      `extern LocatedVar locatedVars[${this.locatedVars.length}];`,
-    );
+    this.emitHeader(`extern LocatedVar locatedVars[${arrayLen}];`);
     this.emitHeader(
       `constexpr uint32_t locatedVarsCount = ${this.locatedVars.length};`,
     );
@@ -4507,7 +4574,13 @@ export class CodeGenerator {
    * Generate the located variables array definition in the implementation.
    */
   private generateLocatedVarsDefinition(): void {
-    if (this.locatedVars.length === 0) return;
+    // Mirror the declaration's library-skip + placeholder logic.
+    const hasPrograms =
+      !!this.projectModel && this.projectModel.programs.size > 0;
+    if (!hasPrograms) return;
+
+    const isEmpty = this.locatedVars.length === 0;
+    const arrayLen = isEmpty ? 1 : this.locatedVars.length;
 
     this.emit(
       "// =============================================================================",
@@ -4517,15 +4590,21 @@ export class CodeGenerator {
       "// =============================================================================",
     );
     this.emit("");
-    this.emit(`LocatedVar locatedVars[${this.locatedVars.length}] = {`);
+    this.emit(`LocatedVar locatedVars[${arrayLen}] = {`);
 
-    for (let i = 0; i < this.locatedVars.length; i++) {
-      const locVar = this.locatedVars[i]!;
-      const comma = i < this.locatedVars.length - 1 ? "," : "";
+    if (isEmpty) {
       this.emit(
-        `    { LocatedArea::${locVar.area}, LocatedSize::${locVar.size}, ` +
-          `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
+        `    { LocatedArea::Input, LocatedSize::Bit, 0, 0, {0, 0, 0}, nullptr }  // placeholder; locatedVarsCount is 0`,
       );
+    } else {
+      for (let i = 0; i < this.locatedVars.length; i++) {
+        const locVar = this.locatedVars[i]!;
+        const comma = i < this.locatedVars.length - 1 ? "," : "";
+        this.emit(
+          `    { LocatedArea::${locVar.area}, LocatedSize::${locVar.size}, ` +
+            `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
+        );
+      }
     }
 
     this.emit("};");
