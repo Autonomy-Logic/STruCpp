@@ -1760,7 +1760,25 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const constQualifier = decl.isConstant ? "const " : "";
 
-        const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
+        // Use mapTypeRefToCpp so inline ARRAY types (where typeName looks
+        // like __INLINE_ARRAY_<T> and the bounds live alongside on the
+        // ProjectVarDeclaration) get expanded to Array1D<T, L, U>. Going
+        // through mapVarTypeToCpp directly would emit IEC___INLINE_ARRAY_<T>.
+        const cppType = this.mapTypeRefToCpp({
+          name: decl.typeName,
+          ...(decl.maxLength !== undefined
+            ? { maxLength: decl.maxLength }
+            : {}),
+          ...(decl.arrayDimensions !== undefined
+            ? { arrayDimensions: decl.arrayDimensions }
+            : {}),
+          ...(decl.elementTypeName !== undefined
+            ? { elementTypeName: decl.elementTypeName }
+            : {}),
+          ...(decl.referenceKind !== undefined
+            ? { referenceKind: decl.referenceKind }
+            : {}),
+        });
         const memberName = this.mangleMemberIfNeeded(
           decl.name,
           cppType,
@@ -1786,11 +1804,13 @@ export class CodeGenerator {
           this.recordHeaderLineMapping(stLine, memberLine);
         }
 
-        // Collect retain variables
+        // Collect retain variables (cppType — same metadata-aware lookup
+        // as the member emission above, so inline arrays don't end up as
+        // IEC___INLINE_ARRAY_<T> in the retain table either).
         if (decl.isRetain) {
           retainVars.push({
             name: decl.name,
-            typeName: this.mapVarTypeToCpp(decl.typeName, decl.maxLength),
+            typeName: cppType,
           });
         }
       }
@@ -1964,9 +1984,25 @@ export class CodeGenerator {
       this.emitHeader("    // VAR_GLOBAL variables");
       for (const gvar of config.globalVars) {
         const constQualifier = gvar.isConstant ? "const " : "";
-        this.emitHeader(
-          `    ${constQualifier}${this.mapVarTypeToCpp(gvar.typeName)} ${gvar.name};`,
-        );
+        // Same metadata-aware lookup as program locals (see comment in
+        // generateProgramHeaderFromModel) — globals can also be inline
+        // ARRAY types and need Array1D<...> expansion.
+        const cppType = this.mapTypeRefToCpp({
+          name: gvar.typeName,
+          ...(gvar.maxLength !== undefined
+            ? { maxLength: gvar.maxLength }
+            : {}),
+          ...(gvar.arrayDimensions !== undefined
+            ? { arrayDimensions: gvar.arrayDimensions }
+            : {}),
+          ...(gvar.elementTypeName !== undefined
+            ? { elementTypeName: gvar.elementTypeName }
+            : {}),
+          ...(gvar.referenceKind !== undefined
+            ? { referenceKind: gvar.referenceKind }
+            : {}),
+        });
+        this.emitHeader(`    ${constQualifier}${cppType} ${gvar.name};`);
       }
       this.emitHeader("");
     }
