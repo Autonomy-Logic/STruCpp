@@ -418,6 +418,87 @@ export class CodeGenerator {
    * Map a TypeReference to its C++ type string, including parameterized length
    * and pointer/reference qualifiers.
    */
+  /**
+   * Build a TypeReference shape suitable for emitting a parameter type.
+   *
+   * Preserves array/pointer metadata (so inline ARRAY parameters become
+   * `Array1D<T, L, U>&` and pointer params become `IEC_Ptr<T>&`) but
+   * strips STRING/WSTRING maxLength so any size string binds to the
+   * &-reference — matching the previous behavior of the call sites that
+   * went through `mapVarTypeToCpp(decl.type.name)` without maxLength.
+   */
+  protected toParamTypeRef<
+    T extends {
+      name: string;
+      maxLength?: number | string;
+      referenceKind?: string;
+      arrayDimensions?: Array<{ start: number; end: number }>;
+      elementTypeName?: string;
+    },
+  >(
+    typeRef: T,
+  ): {
+    name: string;
+    maxLength?: number | string;
+    referenceKind?: string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+  } {
+    const upper = typeRef.name.toUpperCase();
+    const isString = upper === "STRING" || upper === "WSTRING";
+    return {
+      name: typeRef.name,
+      ...(!isString && typeRef.maxLength !== undefined
+        ? { maxLength: typeRef.maxLength }
+        : {}),
+      ...(typeRef.arrayDimensions !== undefined
+        ? { arrayDimensions: typeRef.arrayDimensions }
+        : {}),
+      ...(typeRef.elementTypeName !== undefined
+        ? { elementTypeName: typeRef.elementTypeName }
+        : {}),
+      ...(typeRef.referenceKind !== undefined
+        ? { referenceKind: typeRef.referenceKind }
+        : {}),
+    };
+  }
+
+  /**
+   * Convert a project-model record (ProjectVarDeclaration /
+   * VarExternalDeclaration) into a TypeReference shape suitable for
+   * `mapTypeRefToCpp` / `toParamTypeRef`. Project-model records keep the
+   * type name in `.typeName` and reserve `.name` for the variable name;
+   * this helper rewires the fields so the shape matches what the
+   * type-resolution helpers expect.
+   */
+  private projectVarToTypeRef(spec: {
+    typeName: string;
+    maxLength?: number | string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+    referenceKind?: string;
+  }): {
+    name: string;
+    maxLength?: number | string;
+    referenceKind?: string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+  } {
+    return {
+      name: spec.typeName,
+      ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
+      ...(spec.arrayDimensions !== undefined
+        ? { arrayDimensions: spec.arrayDimensions }
+        : {}),
+      ...(spec.elementTypeName !== undefined
+        ? { elementTypeName: spec.elementTypeName }
+        : {}),
+      ...(spec.referenceKind !== undefined
+        ? { referenceKind: spec.referenceKind }
+        : {}),
+    };
+  }
+
   protected mapTypeRefToCpp(typeRef: {
     name: string;
     maxLength?: number | string;
@@ -1148,18 +1229,23 @@ export class CodeGenerator {
             if (decl.type.name.startsWith("__VLA_")) {
               params.push(`${this.mapTypeRefToCpp(decl.type)} ${name}`);
             } else {
-              // Strip maxLength for STRING/WSTRING so any size binds to the reference
-              const cppType = this.mapVarTypeToCpp(decl.type.name);
-              params.push(`${cppType}& ${name}`);
+              // mapTypeRefToCpp preserves arrayDimensions / elementTypeName
+              // (so inline ARRAY params emit Array1D<...>) but we still want
+              // STRING/WSTRING maxLength dropped so any string size binds to
+              // the &-reference — strip it on a shallow copy of the typeRef.
+              params.push(
+                `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+              );
             }
           }
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            // Strip maxLength for STRING/WSTRING so any size binds to the reference
-            const cppType = this.mapVarTypeToCpp(decl.type.name);
-            params.push(`${cppType}& ${name}`);
+            // Same metadata-aware lookup as VAR_IN_OUT — see the comment above.
+            params.push(
+              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+            );
           }
         }
       }
@@ -1324,18 +1410,21 @@ export class CodeGenerator {
       } else if (block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            // For STRING/WSTRING VAR_IN_OUT, strip maxLength to use base type
-            // so any STRING size can bind to the reference
-            const cppType = this.mapVarTypeToCpp(decl.type.name);
-            params.push(`${cppType}& ${name}`);
+            // mapTypeRefToCpp preserves arrayDimensions / elementTypeName
+            // (so inline ARRAY params emit Array1D<...>) while
+            // toParamTypeRef strips STRING/WSTRING maxLength so any
+            // string size binds to the &-reference.
+            params.push(
+              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+            );
           }
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            // For STRING/WSTRING VAR_OUTPUT, strip maxLength similarly
-            const cppType = this.mapVarTypeToCpp(decl.type.name);
-            params.push(`${cppType}& ${name}`);
+            params.push(
+              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+            );
           }
         }
       }
@@ -1820,18 +1909,31 @@ export class CodeGenerator {
     if (prog.varExternal.length > 0) {
       this.emitHeader("    // External variables (references to globals)");
       for (const ext of prog.varExternal) {
-        this.emitHeader(
-          `    ${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name};`,
+        // VAR_EXTERNAL records have separate `name` (variable) and
+        // `typeName` (type). projectVarToTypeRef rewires them; then
+        // mapTypeRefToCpp+toParamTypeRef preserves array/pointer
+        // metadata while stripping STRING/WSTRING maxLength so any
+        // string size binds to the &-reference (matches previous
+        // behavior of the mapVarTypeToCpp(ext.typeName) call).
+        const cppType = this.mapTypeRefToCpp(
+          this.toParamTypeRef(this.projectVarToTypeRef(ext)),
         );
+        this.emitHeader(`    ${cppType}& ${ext.name};`);
       }
     }
 
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     if (prog.varExternal.length > 0) {
-      // Constructor with external variable references
+      // Constructor with external variable references — same metadata-aware
+      // type resolution as the field declarations above.
       const params = prog.varExternal
-        .map((ext) => `${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name}_ref`)
+        .map((ext) => {
+          const cppType = this.mapTypeRefToCpp(
+            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
+          );
+          return `${cppType}& ${ext.name}_ref`;
+        })
         .join(", ");
       this.emitHeader(`    explicit ${className}(${params});`);
     } else {
@@ -1874,8 +1976,16 @@ export class CodeGenerator {
 
     // Constructor
     if (prog.varExternal.length > 0) {
+      // Same metadata-aware type resolution as the matching declaration
+      // in generateProgramHeaderFromModel — must agree byte-for-byte or
+      // the linker rejects the definition.
       const params = prog.varExternal
-        .map((ext) => `${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name}_ref`)
+        .map((ext) => {
+          const cppType = this.mapTypeRefToCpp(
+            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
+          );
+          return `${cppType}& ${ext.name}_ref`;
+        })
         .join(", ");
       this.emit(`Program_${prog.name}::Program_${prog.name}(${params})`);
 
