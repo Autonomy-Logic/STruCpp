@@ -68,12 +68,18 @@ public:
         }
     }
     
-    // Element access (1-based IEC indexing) - no bounds checking
-    var_type& operator[](int64_t index) noexcept {
+    // Element access (1-based IEC indexing) - no bounds checking.
+    // constexpr so &arr[i] is a constant expression — required by AVR
+    // PROGMEM placement of the generated debug-pointer table.
+    // generated_debug.cpp emits entries like
+    //   { (void*)&g_config.foo.MY_ARRAY[i], TAG_DINT, 0 }
+    // which would otherwise need dynamic initialization and avr-gcc
+    // rejects `dynamic initialization put into program memory area`.
+    constexpr var_type& operator[](int64_t index) noexcept {
         return data_[to_internal_index(index)];
     }
-    
-    const var_type& operator[](int64_t index) const noexcept {
+
+    constexpr const var_type& operator[](int64_t index) const noexcept {
         return data_[to_internal_index(index)];
     }
     
@@ -139,12 +145,14 @@ private:
 public:
     IEC_ARRAY_2D() noexcept : data_{} {}
     
-    // Element access (1-based IEC indexing) - no bounds checking
-    var_type& operator()(int64_t i, int64_t j) noexcept {
+    // Element access (1-based IEC indexing) - no bounds checking.
+    // constexpr so &arr(i, j) is a constant expression — see the
+    // matching note on IEC_ARRAY_1D::operator[] above.
+    constexpr var_type& operator()(int64_t i, int64_t j) noexcept {
         return data_[to_linear_index(i, j)];
     }
-    
-    const var_type& operator()(int64_t i, int64_t j) const noexcept {
+
+    constexpr const var_type& operator()(int64_t i, int64_t j) const noexcept {
         return data_[to_linear_index(i, j)];
     }
     
@@ -215,11 +223,13 @@ private:
 public:
     IEC_ARRAY_3D() noexcept : data_{} {}
     
-    var_type& operator()(int64_t i, int64_t j, int64_t k) noexcept {
+    // constexpr so &arr(i, j, k) is a constant expression — see the
+    // matching note on IEC_ARRAY_1D::operator[] above.
+    constexpr var_type& operator()(int64_t i, int64_t j, int64_t k) noexcept {
         return data_[to_linear_index(i, j, k)];
     }
-    
-    const var_type& operator()(int64_t i, int64_t j, int64_t k) const noexcept {
+
+    constexpr const var_type& operator()(int64_t i, int64_t j, int64_t k) const noexcept {
         return data_[to_linear_index(i, j, k)];
     }
     
