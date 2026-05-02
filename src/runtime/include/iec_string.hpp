@@ -20,6 +20,7 @@
 #include <type_traits>
 #include "iec_types.hpp"
 #include "iec_var.hpp"
+#include "iec_traits.hpp"
 
 namespace strucpp {
 
