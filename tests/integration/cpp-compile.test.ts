@@ -1110,6 +1110,45 @@ int main() {
     expect(runResult.output).toContain('q=3');
     expect(runResult.output).toContain('r=1');
   });
+
+  // Regression: NOT() over a comparison expression. IECVar's `==` returns
+  // a raw `bool`, so `NOT(a == b)` instantiates the primary template with
+  // T = bool. The bitwise path (`~bool` → integer-promoted `~1 == -2` →
+  // back to bool == true) used to swallow both polarities and return
+  // `true` regardless of inputs, so any IF NOT(a = b) THEN body fired
+  // unconditionally. Fixed by adding a raw-bool specialization that uses
+  // logical `!`.
+  it('NOT(comparison) returns the correct boolean', () => {
+    const source = `
+      PROGRAM Main
+        VAR a : INT := 5; END_VAR
+        VAR b : INT := 5; END_VAR
+        VAR c : INT := 7; END_VAR
+        VAR equal_pos : BOOL; END_VAR
+        VAR equal_neg : BOOL; END_VAR
+
+        equal_pos := NOT (a = b);   (* a == b → NOT(true) → false *)
+        equal_neg := NOT (a = c);   (* a != c → NOT(false) → true *)
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const mainCode = `
+#include <cstdio>
+int main() {
+    strucpp::Program_MAIN prog;
+    prog.run();
+    std::cout << "pos=" << static_cast<int>(prog.EQUAL_POS.get()) << std::endl;
+    std::cout << "neg=" << static_cast<int>(prog.EQUAL_NEG.get()) << std::endl;
+    return 0;
+}
+`;
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'not_comparison');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toContain('pos=0');
+    expect(runResult.output).toContain('neg=1');
+  });
 });
 
 /**

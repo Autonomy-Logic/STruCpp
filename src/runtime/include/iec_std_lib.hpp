@@ -750,11 +750,23 @@ inline T MOD(T a, T b) noexcept {
 /**
  * NOT - Bitwise NOT (one's complement)
  * Input: ANY_BIT, Output: ANY_BIT (same type)
- * BOOL specialization uses logical negation so that NOT(TRUE) == FALSE.
+ *
+ * BOOL needs logical negation, not bitwise: `~bool(true)` integer-promotes
+ * to `~1 == -2`, and converting back via `bool(-2)` is `true` (any non-zero
+ * is true), so the bitwise path returns `true` for both inputs. The
+ * IEC_BOOL specialization handles wrapped booleans, but expressions like
+ * `NOT(a == b)` instantiate the primary template with `T = bool` (raw)
+ * because IECVar's comparison operators return plain `bool`. Add a
+ * raw-bool specialization that uses `!` so NOT(comparison) works.
  */
 template<typename T, enable_if_any_bit<T> = 0>
 inline T NOT(T value) noexcept {
     return T(~iec_unwrap(value));
+}
+
+template<>
+inline bool NOT(bool value) noexcept {
+    return !value;
 }
 
 template<>
