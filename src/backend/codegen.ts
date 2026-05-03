@@ -181,7 +181,16 @@ export const defaultCodeGenOptions: CodeGenOptions = {
  * Result of code generation.
  */
 export interface CodeGenResult {
-  /** Generated C++ implementation code */
+  /**
+   * One emit bucket per output file. Always contains
+   * `configuration.cpp` (library preambles, located-var defs,
+   * configuration glue) plus one `pou_<NAME>.cpp` per program/FB/
+   * function. The single-string `cppCode` is the legacy concatenated
+   * view — derived from this map by the public `compile()` wrapper.
+   */
+  cppFiles: Array<{ name: string; content: string }>;
+
+  /** Generated C++ implementation code (concatenation of cppFiles). */
   cppCode: string;
 
   /** Generated C++ header code */
@@ -211,11 +220,23 @@ export interface CodeGenResult {
  */
 export class CodeGenerator {
   private options: CodeGenOptions;
-  protected output: string[] = [];
+
+  /**
+   * One emit bucket per output .cpp file. The codegen splits POU
+   * implementations across files so the runtime build can run
+   * `make -j$(nproc)` and ccache can keep .o files for unchanged
+   * POUs across rebuilds. `output` always points at the bucket for
+   * the currently-active file; `setOutputFile` swaps it. The
+   * bucket map preserves insertion order, which determines emit
+   * order for the legacy `cppCode` concatenation.
+   */
+  private outputFiles: Map<string, string[]> = new Map();
+  protected output: string[] = []; // currently-active bucket
+  private currentLine = 1; // line counter within currently-active file
+
   private headerOutput: string[] = [];
   private lineMap: Map<number, LineMapEntry> = new Map();
   private headerLineMap: Map<number, LineMapEntry> = new Map();
-  private currentLine = 1;
   private currentHeaderLine = 1;
   private projectModel?: ProjectModel;
 
@@ -418,6 +439,87 @@ export class CodeGenerator {
    * Map a TypeReference to its C++ type string, including parameterized length
    * and pointer/reference qualifiers.
    */
+  /**
+   * Build a TypeReference shape suitable for emitting a parameter type.
+   *
+   * Preserves array/pointer metadata (so inline ARRAY parameters become
+   * `Array1D<T, L, U>&` and pointer params become `IEC_Ptr<T>&`) but
+   * strips STRING/WSTRING maxLength so any size string binds to the
+   * &-reference — matching the previous behavior of the call sites that
+   * went through `mapVarTypeToCpp(decl.type.name)` without maxLength.
+   */
+  protected toParamTypeRef<
+    T extends {
+      name: string;
+      maxLength?: number | string;
+      referenceKind?: string;
+      arrayDimensions?: Array<{ start: number; end: number }>;
+      elementTypeName?: string;
+    },
+  >(
+    typeRef: T,
+  ): {
+    name: string;
+    maxLength?: number | string;
+    referenceKind?: string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+  } {
+    const upper = typeRef.name.toUpperCase();
+    const isString = upper === "STRING" || upper === "WSTRING";
+    return {
+      name: typeRef.name,
+      ...(!isString && typeRef.maxLength !== undefined
+        ? { maxLength: typeRef.maxLength }
+        : {}),
+      ...(typeRef.arrayDimensions !== undefined
+        ? { arrayDimensions: typeRef.arrayDimensions }
+        : {}),
+      ...(typeRef.elementTypeName !== undefined
+        ? { elementTypeName: typeRef.elementTypeName }
+        : {}),
+      ...(typeRef.referenceKind !== undefined
+        ? { referenceKind: typeRef.referenceKind }
+        : {}),
+    };
+  }
+
+  /**
+   * Convert a project-model record (ProjectVarDeclaration /
+   * VarExternalDeclaration) into a TypeReference shape suitable for
+   * `mapTypeRefToCpp` / `toParamTypeRef`. Project-model records keep the
+   * type name in `.typeName` and reserve `.name` for the variable name;
+   * this helper rewires the fields so the shape matches what the
+   * type-resolution helpers expect.
+   */
+  private projectVarToTypeRef(spec: {
+    typeName: string;
+    maxLength?: number | string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+    referenceKind?: string;
+  }): {
+    name: string;
+    maxLength?: number | string;
+    referenceKind?: string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+  } {
+    return {
+      name: spec.typeName,
+      ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
+      ...(spec.arrayDimensions !== undefined
+        ? { arrayDimensions: spec.arrayDimensions }
+        : {}),
+      ...(spec.elementTypeName !== undefined
+        ? { elementTypeName: spec.elementTypeName }
+        : {}),
+      ...(spec.referenceKind !== undefined
+        ? { referenceKind: spec.referenceKind }
+        : {}),
+    };
+  }
+
   protected mapTypeRefToCpp(typeRef: {
     name: string;
     maxLength?: number | string;
@@ -607,9 +709,76 @@ export class CodeGenerator {
   }
 
   /**
+   * Switch the active emit bucket. Creates a new bucket if the file
+   * name hasn't been seen before; otherwise resumes appending to the
+   * existing one. Caller is responsible for emitting the per-TU
+   * preamble (license, #include, namespace open) on the first switch
+   * to a file via `startTranslationUnit`.
+   *
+   * `currentLine` keeps its global value across switches — lineMap
+   * entries reference positions in the legacy concatenated `cppCode`,
+   * which is what the REPL line-mapping display and gdb debug info
+   * (via #line directives) consume. Splitting only affects which
+   * physical .cpp file a line lands in; the logical numbering for
+   * the source-map is end-to-end across all files.
+   */
+  private setOutputFile(name: string): void {
+    let bucket = this.outputFiles.get(name);
+    if (!bucket) {
+      bucket = [];
+      this.outputFiles.set(name, bucket);
+    }
+    this.output = bucket;
+  }
+
+  /**
+   * Begin a new translation unit. Emits the standard preamble (banner,
+   * #include for the shared header, opening namespace) into the file's
+   * bucket. Pair with `endTranslationUnit` after emitting POU bodies.
+   */
+  private startTranslationUnit(name: string): void {
+    this.setOutputFile(name);
+    const ns = this.projectModel
+      ? getProjectNamespace(this.projectModel)
+      : "strucpp";
+    this.emit(
+      "// Generated by STruC++ - IEC 61131-3 Structured Text to C++ Compiler",
+    );
+    this.emit("// Do not edit this file manually.");
+    this.emit("");
+    this.emit(`#include "${this.options.headerFileName}"`);
+    this.emit("");
+    this.emit(`namespace ${ns} {`);
+    this.emit("");
+  }
+
+  /**
+   * Close the namespace on the currently-active translation unit.
+   * Mirrors `startTranslationUnit`.
+   */
+  private endTranslationUnit(): void {
+    const ns = this.projectModel
+      ? getProjectNamespace(this.projectModel)
+      : "strucpp";
+    this.emit(`}  // namespace ${ns}`);
+  }
+
+  /**
+   * Build a deterministic .cpp file name for a POU. Names already
+   * conform to C identifier rules (the parser enforces it), so we
+   * just lowercase + prefix; per-POU uniqueness is the caller's
+   * concern (multiple POUs with the same name would already be a
+   * semantic error caught earlier).
+   */
+  private pouFileName(pouName: string): string {
+    return `pou_${pouName}.cpp`;
+  }
+
+  /**
    * Generate C++ code from a compilation unit.
    */
   generate(ast: CompilationUnit): CodeGenResult {
+    this.outputFiles = new Map();
     this.output = [];
     this.headerOutput = [];
     this.lineMap = new Map();
@@ -706,9 +875,18 @@ export class CodeGenerator {
     // Generate implementation
     this.generateImplementation(ast);
 
+    const eol = this.options.lineEnding;
+    const cppFiles = Array.from(this.outputFiles.entries()).map(
+      ([name, lines]) => ({ name, content: lines.join(eol) }),
+    );
     return {
-      cppCode: this.output.join(this.options.lineEnding),
-      headerCode: this.headerOutput.join(this.options.lineEnding),
+      cppFiles,
+      // Legacy concatenation — preserves the historical single-blob
+      // shape for callers (CLI single-file output, library compiler,
+      // REPL preview, tests) that don't care about per-TU split. The
+      // public compile() wrapper exposes this verbatim.
+      cppCode: cppFiles.map((f) => f.content).join(eol),
+      headerCode: this.headerOutput.join(eol),
       lineMap: this.lineMap,
       headerLineMap: this.headerLineMap,
       warnings: this.codegenWarnings,
@@ -892,25 +1070,29 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate the C++ implementation file.
+   * Generate the C++ implementation files.
+   *
+   * Splits across multiple translation units so the runtime build can
+   * run `make -j$(nproc)` and ccache can keep .o files for unchanged
+   * POUs across rebuilds:
+   *
+   *   configuration.cpp     library preambles, located-vars definition,
+   *                         configuration glue (must be exactly one TU
+   *                         to avoid duplicate symbol errors at link).
+   *   pou_<NAME>.cpp        one TU per program / FB / function.
+   *
+   * All files share `generated.hpp`, so editing a POU's *body* leaves
+   * other TUs' preprocessed source unchanged → ccache reuses them.
+   * Editing a declaration invalidates the header and forces a full
+   * rebuild — same as any C++ project.
    */
   private generateImplementation(ast: CompilationUnit): void {
-    // Determine the namespace for this project
-    const ns = this.projectModel
-      ? getProjectNamespace(this.projectModel)
-      : "strucpp";
+    // 1. Shared TU: library preambles, located-vars def, configurations.
+    //    Anything that must have exactly one definition in the .so
+    //    lives here (multiple-TU defs would link-fail with "multiple
+    //    definition of …").
+    this.startTranslationUnit("configuration.cpp");
 
-    this.emit(
-      "// Generated by STruC++ - IEC 61131-3 Structured Text to C++ Compiler",
-    );
-    this.emit("// Do not edit this file manually.");
-    this.emit("");
-    this.emit(`#include "${this.options.headerFileName}"`);
-    this.emit("");
-    this.emit(`namespace ${ns} {`);
-    this.emit("");
-
-    // Inject library implementation code (stdlib + user libraries)
     for (const lib of this.libraryPreambles) {
       this.emit(`// Library: ${lib.name}`);
       for (const line of lib.cppCode.split("\n")) {
@@ -919,31 +1101,8 @@ export class CodeGenerator {
       this.emit("");
     }
 
-    // Generate located variables descriptor array definition
     this.generateLocatedVarsDefinition();
 
-    // Generate program implementations
-    if (this.projectModel) {
-      for (const prog of this.projectModel.programs.values()) {
-        this.generateProgramImplementationFromModel(prog);
-      }
-    } else {
-      for (const prog of ast.programs) {
-        this.generateProgramImplementation(prog);
-      }
-    }
-
-    // Generate function block implementations (same topological order as header)
-    for (const fb of this.sortedFBs) {
-      this.generateFBImplementation(fb);
-    }
-
-    // Generate function implementations
-    for (const func of ast.functions) {
-      this.generateFunctionImplementation(func);
-    }
-
-    // Generate configuration implementations
     if (this.projectModel) {
       for (const config of this.projectModel.configurations) {
         this.generateConfigurationImplementationFromModel(config);
@@ -954,7 +1113,38 @@ export class CodeGenerator {
       }
     }
 
-    this.emit(`}  // namespace ${ns}`);
+    this.endTranslationUnit();
+
+    // 2. One TU per program.
+    if (this.projectModel) {
+      for (const prog of this.projectModel.programs.values()) {
+        this.startTranslationUnit(this.pouFileName(prog.name));
+        this.generateProgramImplementationFromModel(prog);
+        this.endTranslationUnit();
+      }
+    } else {
+      for (const prog of ast.programs) {
+        this.startTranslationUnit(this.pouFileName(prog.name));
+        this.generateProgramImplementation(prog);
+        this.endTranslationUnit();
+      }
+    }
+
+    // 3. One TU per function block. Topological order doesn't matter
+    //    here (each impl just sees the shared header's full set of
+    //    class declarations); ordering only mattered for the header.
+    for (const fb of this.sortedFBs) {
+      this.startTranslationUnit(this.pouFileName(fb.name));
+      this.generateFBImplementation(fb);
+      this.endTranslationUnit();
+    }
+
+    // 4. One TU per function.
+    for (const func of ast.functions) {
+      this.startTranslationUnit(this.pouFileName(func.name));
+      this.generateFunctionImplementation(func);
+      this.endTranslationUnit();
+    }
   }
 
   /**
@@ -1148,18 +1338,23 @@ export class CodeGenerator {
             if (decl.type.name.startsWith("__VLA_")) {
               params.push(`${this.mapTypeRefToCpp(decl.type)} ${name}`);
             } else {
-              // Strip maxLength for STRING/WSTRING so any size binds to the reference
-              const cppType = this.mapVarTypeToCpp(decl.type.name);
-              params.push(`${cppType}& ${name}`);
+              // mapTypeRefToCpp preserves arrayDimensions / elementTypeName
+              // (so inline ARRAY params emit Array1D<...>) but we still want
+              // STRING/WSTRING maxLength dropped so any string size binds to
+              // the &-reference — strip it on a shallow copy of the typeRef.
+              params.push(
+                `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+              );
             }
           }
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            // Strip maxLength for STRING/WSTRING so any size binds to the reference
-            const cppType = this.mapVarTypeToCpp(decl.type.name);
-            params.push(`${cppType}& ${name}`);
+            // Same metadata-aware lookup as VAR_IN_OUT — see the comment above.
+            params.push(
+              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+            );
           }
         }
       }
@@ -1324,18 +1519,21 @@ export class CodeGenerator {
       } else if (block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            // For STRING/WSTRING VAR_IN_OUT, strip maxLength to use base type
-            // so any STRING size can bind to the reference
-            const cppType = this.mapVarTypeToCpp(decl.type.name);
-            params.push(`${cppType}& ${name}`);
+            // mapTypeRefToCpp preserves arrayDimensions / elementTypeName
+            // (so inline ARRAY params emit Array1D<...>) while
+            // toParamTypeRef strips STRING/WSTRING maxLength so any
+            // string size binds to the &-reference.
+            params.push(
+              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+            );
           }
         }
       } else if (block.blockType === "VAR_OUTPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            // For STRING/WSTRING VAR_OUTPUT, strip maxLength similarly
-            const cppType = this.mapVarTypeToCpp(decl.type.name);
-            params.push(`${cppType}& ${name}`);
+            params.push(
+              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+            );
           }
         }
       }
@@ -1760,7 +1958,25 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const constQualifier = decl.isConstant ? "const " : "";
 
-        const cppType = this.mapVarTypeToCpp(decl.typeName, decl.maxLength);
+        // Use mapTypeRefToCpp so inline ARRAY types (where typeName looks
+        // like __INLINE_ARRAY_<T> and the bounds live alongside on the
+        // ProjectVarDeclaration) get expanded to Array1D<T, L, U>. Going
+        // through mapVarTypeToCpp directly would emit IEC___INLINE_ARRAY_<T>.
+        const cppType = this.mapTypeRefToCpp({
+          name: decl.typeName,
+          ...(decl.maxLength !== undefined
+            ? { maxLength: decl.maxLength }
+            : {}),
+          ...(decl.arrayDimensions !== undefined
+            ? { arrayDimensions: decl.arrayDimensions }
+            : {}),
+          ...(decl.elementTypeName !== undefined
+            ? { elementTypeName: decl.elementTypeName }
+            : {}),
+          ...(decl.referenceKind !== undefined
+            ? { referenceKind: decl.referenceKind }
+            : {}),
+        });
         const memberName = this.mangleMemberIfNeeded(
           decl.name,
           cppType,
@@ -1786,11 +2002,13 @@ export class CodeGenerator {
           this.recordHeaderLineMapping(stLine, memberLine);
         }
 
-        // Collect retain variables
+        // Collect retain variables (cppType — same metadata-aware lookup
+        // as the member emission above, so inline arrays don't end up as
+        // IEC___INLINE_ARRAY_<T> in the retain table either).
         if (decl.isRetain) {
           retainVars.push({
             name: decl.name,
-            typeName: this.mapVarTypeToCpp(decl.typeName, decl.maxLength),
+            typeName: cppType,
           });
         }
       }
@@ -1800,18 +2018,31 @@ export class CodeGenerator {
     if (prog.varExternal.length > 0) {
       this.emitHeader("    // External variables (references to globals)");
       for (const ext of prog.varExternal) {
-        this.emitHeader(
-          `    ${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name};`,
+        // VAR_EXTERNAL records have separate `name` (variable) and
+        // `typeName` (type). projectVarToTypeRef rewires them; then
+        // mapTypeRefToCpp+toParamTypeRef preserves array/pointer
+        // metadata while stripping STRING/WSTRING maxLength so any
+        // string size binds to the &-reference (matches previous
+        // behavior of the mapVarTypeToCpp(ext.typeName) call).
+        const cppType = this.mapTypeRefToCpp(
+          this.toParamTypeRef(this.projectVarToTypeRef(ext)),
         );
+        this.emitHeader(`    ${cppType}& ${ext.name};`);
       }
     }
 
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     if (prog.varExternal.length > 0) {
-      // Constructor with external variable references
+      // Constructor with external variable references — same metadata-aware
+      // type resolution as the field declarations above.
       const params = prog.varExternal
-        .map((ext) => `${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name}_ref`)
+        .map((ext) => {
+          const cppType = this.mapTypeRefToCpp(
+            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
+          );
+          return `${cppType}& ${ext.name}_ref`;
+        })
         .join(", ");
       this.emitHeader(`    explicit ${className}(${params});`);
     } else {
@@ -1854,8 +2085,16 @@ export class CodeGenerator {
 
     // Constructor
     if (prog.varExternal.length > 0) {
+      // Same metadata-aware type resolution as the matching declaration
+      // in generateProgramHeaderFromModel — must agree byte-for-byte or
+      // the linker rejects the definition.
       const params = prog.varExternal
-        .map((ext) => `${this.mapVarTypeToCpp(ext.typeName)}& ${ext.name}_ref`)
+        .map((ext) => {
+          const cppType = this.mapTypeRefToCpp(
+            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
+          );
+          return `${cppType}& ${ext.name}_ref`;
+        })
         .join(", ");
       this.emit(`Program_${prog.name}::Program_${prog.name}(${params})`);
 
@@ -1964,9 +2203,25 @@ export class CodeGenerator {
       this.emitHeader("    // VAR_GLOBAL variables");
       for (const gvar of config.globalVars) {
         const constQualifier = gvar.isConstant ? "const " : "";
-        this.emitHeader(
-          `    ${constQualifier}${this.mapVarTypeToCpp(gvar.typeName)} ${gvar.name};`,
-        );
+        // Same metadata-aware lookup as program locals (see comment in
+        // generateProgramHeaderFromModel) — globals can also be inline
+        // ARRAY types and need Array1D<...> expansion.
+        const cppType = this.mapTypeRefToCpp({
+          name: gvar.typeName,
+          ...(gvar.maxLength !== undefined
+            ? { maxLength: gvar.maxLength }
+            : {}),
+          ...(gvar.arrayDimensions !== undefined
+            ? { arrayDimensions: gvar.arrayDimensions }
+            : {}),
+          ...(gvar.elementTypeName !== undefined
+            ? { elementTypeName: gvar.elementTypeName }
+            : {}),
+          ...(gvar.referenceKind !== undefined
+            ? { referenceKind: gvar.referenceKind }
+            : {}),
+        });
+        this.emitHeader(`    ${constQualifier}${cppType} ${gvar.name};`);
       }
       this.emitHeader("");
     }

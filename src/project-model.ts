@@ -72,14 +72,33 @@ export interface ProjectVarDeclaration {
   isConstant: boolean;
   isRetain: boolean;
   address?: string;
+  /** For inline ARRAY types (typeName like __INLINE_ARRAY_<T>) — bounds carried
+   *  through so codegen can reconstruct Array1D<T, L, U>. Without this, a
+   *  variable typed __INLINE_ARRAY_DINT emits as IEC___INLINE_ARRAY_DINT
+   *  (an undefined type) because the bounds were dropped. */
+  arrayDimensions?: Array<{ start: number; end: number }>;
+  /** Element type for inline arrays (e.g. "DINT"). */
+  elementTypeName?: string;
+  /** Pointer/reference qualifier carried through from the AST TypeReference. */
+  referenceKind?: string;
 }
 
 /**
  * External variable declaration (reference to global).
+ *
+ * Carries the same type-shape metadata as ProjectVarDeclaration so codegen
+ * can reconstruct Array1D<...> / IEC_Ptr<...> for VAR_EXTERNAL references
+ * to inline-array or pointer globals. Without these, codegen falls through
+ * to mapVarTypeToCpp's IEC_${name} default and emits broken types like
+ * IEC___INLINE_ARRAY_DINT.
  */
 export interface VarExternalDeclaration {
   name: string;
   typeName: string;
+  maxLength?: number | string;
+  arrayDimensions?: Array<{ start: number; end: number }>;
+  elementTypeName?: string;
+  referenceKind?: string;
 }
 
 /**
@@ -332,9 +351,25 @@ export class ProjectModelBuilder {
       if (block.blockType === "VAR_EXTERNAL") {
         for (const decl of block.declarations) {
           for (const varName of decl.names) {
+            // Carry type-shape metadata through so codegen can rebuild
+            // Array1D<...> / IEC_Ptr<...> instead of falling through to
+            // mapVarTypeToCpp's IEC_${name} default.
             varExternal.push({
               name: varName,
               typeName: decl.type.name,
+              ...(decl.type.maxLength !== undefined
+                ? { maxLength: decl.type.maxLength }
+                : {}),
+              ...(decl.type.arrayDimensions !== undefined
+                ? { arrayDimensions: decl.type.arrayDimensions }
+                : {}),
+              ...(decl.type.elementTypeName !== undefined
+                ? { elementTypeName: decl.type.elementTypeName }
+                : {}),
+              ...(decl.type.referenceKind !== undefined &&
+              decl.type.referenceKind !== "none"
+                ? { referenceKind: decl.type.referenceKind }
+                : {}),
             });
           }
         }
@@ -656,6 +691,19 @@ export class ProjectModelBuilder {
       ...(decl.address !== undefined ? { address: decl.address } : {}),
       ...(decl.type.maxLength !== undefined
         ? { maxLength: decl.type.maxLength }
+        : {}),
+      // Carry inline-array metadata through so codegen can rebuild
+      // Array1D<T, L, U> instead of falling through to mapVarTypeToCpp's
+      // IEC_${name} branch (which produces IEC___INLINE_ARRAY_<T>).
+      ...(decl.type.arrayDimensions !== undefined
+        ? { arrayDimensions: decl.type.arrayDimensions }
+        : {}),
+      ...(decl.type.elementTypeName !== undefined
+        ? { elementTypeName: decl.type.elementTypeName }
+        : {}),
+      ...(decl.type.referenceKind !== undefined &&
+      decl.type.referenceKind !== "none"
+        ? { referenceKind: decl.type.referenceKind }
         : {}),
     };
   }

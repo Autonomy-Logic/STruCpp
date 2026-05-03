@@ -118,13 +118,44 @@ export interface LineMapEntry {
 }
 
 /**
+ * Per-translation-unit emit produced by the codegen.
+ *
+ * The codegen splits implementation across one TU per POU plus a
+ * shared `configuration.cpp` for library preambles, located-var
+ * definitions, and configuration runtime glue. Per-POU TUs let the
+ * runtime build with `make -j$(nproc)` and ccache can reuse .o files
+ * for POUs whose preprocessed source didn't change. The header
+ * (`generated.hpp`) is shared — declaration-only edits invalidate
+ * everything as usual.
+ */
+export interface CppFile {
+  /** Basename only — caller writes it next to generated.hpp. */
+  name: string;
+  /** Full file content including the standard preamble + namespace. */
+  content: string;
+}
+
+/**
  * Result of a compilation.
  */
 export interface CompileResult {
   /** Whether compilation was successful */
   success: boolean;
 
-  /** Generated C++ implementation code */
+  /**
+   * Generated C++ implementation files, one per POU plus one shared
+   * `configuration.cpp`. The runtime's Makefile picks them up via
+   * `wildcard $(GENERATED_DIR)/*.cpp`, so emitting more files just
+   * results in more parallel compile work — no list to keep in sync.
+   */
+  cppFiles: CppFile[];
+
+  /**
+   * Concatenated implementation source — derived from `cppFiles`.
+   * Kept for legacy callers (CLI single-file output, library compiler,
+   * REPL preview, tests) that want one blob; new consumers should use
+   * `cppFiles` and write each file independently.
+   */
   cppCode: string;
 
   /** Generated C++ header code */

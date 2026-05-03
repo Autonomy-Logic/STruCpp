@@ -586,6 +586,7 @@ export function compile(
   if (pipeline.errors.length > 0 || !pipeline.ast) {
     return {
       success: false,
+      cppFiles: [],
       cppCode: "",
       headerCode: "",
       lineMap: new Map(),
@@ -680,6 +681,7 @@ export function compile(
 
   return {
     success: true,
+    cppFiles: codeResult.cppFiles,
     cppCode: codeResult.cppCode,
     headerCode: codeResult.headerCode,
     lineMap: codeResult.lineMap,

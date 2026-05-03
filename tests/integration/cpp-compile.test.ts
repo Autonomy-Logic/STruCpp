@@ -1110,6 +1110,45 @@ int main() {
     expect(runResult.output).toContain('q=3');
     expect(runResult.output).toContain('r=1');
   });
+
+  // Regression: NOT() over a comparison expression. IECVar's `==` returns
+  // a raw `bool`, so `NOT(a == b)` instantiates the primary template with
+  // T = bool. The bitwise path (`~bool` → integer-promoted `~1 == -2` →
+  // back to bool == true) used to swallow both polarities and return
+  // `true` regardless of inputs, so any IF NOT(a = b) THEN body fired
+  // unconditionally. Fixed by adding a raw-bool specialization that uses
+  // logical `!`.
+  it('NOT(comparison) returns the correct boolean', () => {
+    const source = `
+      PROGRAM Main
+        VAR a : INT := 5; END_VAR
+        VAR b : INT := 5; END_VAR
+        VAR c : INT := 7; END_VAR
+        VAR equal_pos : BOOL; END_VAR
+        VAR equal_neg : BOOL; END_VAR
+
+        equal_pos := NOT (a = b);   (* a == b → NOT(true) → false *)
+        equal_neg := NOT (a = c);   (* a != c → NOT(false) → true *)
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const mainCode = `
+#include <cstdio>
+int main() {
+    strucpp::Program_MAIN prog;
+    prog.run();
+    std::cout << "pos=" << static_cast<int>(prog.EQUAL_POS.get()) << std::endl;
+    std::cout << "neg=" << static_cast<int>(prog.EQUAL_NEG.get()) << std::endl;
+    return 0;
+}
+`;
+    const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'not_comparison');
+    expect(runResult.success).toBe(true);
+    expect(runResult.output).toContain('pos=0');
+    expect(runResult.output).toContain('neg=1');
+  });
 });
 
 /**
@@ -1277,5 +1316,81 @@ int main() {
     const runResult = compileAndRun(result.headerCode, result.cppCode, mainCode, 'external_multi_pragma');
     expect(runResult.success).toBe(true);
     expect(runResult.output).toContain('x=10');
+  });
+});
+
+/**
+ * Codegen splits implementation across one TU per POU (programs, FBs,
+ * functions) plus a shared `configuration.cpp`. The runtime build can
+ * then run `make -j$(nproc)` and ccache can reuse .o files for unchanged
+ * POUs. These tests pin the split shape so it doesn't regress and so
+ * the legacy `cppCode` concatenation stays consistent with `cppFiles`.
+ */
+describe('Multi-file codegen output', () => {
+  it('emits one TU per POU plus configuration.cpp', () => {
+    const source = `
+      FUNCTION_BLOCK FB_A
+        VAR_INPUT x : INT; END_VAR
+        VAR_OUTPUT y : INT; END_VAR
+        y := x;
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK FB_B
+        VAR_INPUT a : BOOL; END_VAR
+        VAR_OUTPUT b : BOOL; END_VAR
+        b := a;
+      END_FUNCTION_BLOCK
+      FUNCTION SQUARE : INT
+        VAR_INPUT v : INT; END_VAR
+        SQUARE := v * v;
+      END_FUNCTION
+      PROGRAM Main
+        VAR fa : FB_A; result : INT; END_VAR
+        fa(x := 3);
+        result := SQUARE(v := fa.y);
+      END_PROGRAM
+      CONFIGURATION CONFIG0
+        RESOURCE R ON PLC
+          TASK T(INTERVAL := T#100ms, PRIORITY := 1);
+          PROGRAM I WITH T : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    // Configuration TU + one per POU (POU names land uppercased in
+    // file names because the codegen uppercases them in declarations).
+    const names = result.cppFiles.map((f) => f.name).sort();
+    expect(names).toEqual(
+      ['configuration.cpp', 'pou_FB_A.cpp', 'pou_FB_B.cpp', 'pou_MAIN.cpp', 'pou_SQUARE.cpp'].sort(),
+    );
+
+    // Every TU must include the shared header and open the strucpp
+    // namespace — splitting must not leak orphan code outside.
+    for (const f of result.cppFiles) {
+      expect(f.content).toContain(`#include "generated.hpp"`);
+      expect(f.content).toContain('namespace strucpp {');
+      expect(f.content).toMatch(/}\s+\/\/\s+namespace strucpp/);
+    }
+
+    // Each POU's body lives in its own TU, not in any other.
+    const fbAContent = result.cppFiles.find((f) => f.name === 'pou_FB_A.cpp')!.content;
+    const fbBContent = result.cppFiles.find((f) => f.name === 'pou_FB_B.cpp')!.content;
+    expect(fbAContent).toMatch(/FB_A::/);
+    expect(fbAContent).not.toMatch(/FB_B::/);
+    expect(fbBContent).toMatch(/FB_B::/);
+    expect(fbBContent).not.toMatch(/FB_A::/);
+
+    // Configuration TU owns the located-vars table and the
+    // configuration class implementation; per-POU TUs do not.
+    const configContent = result.cppFiles.find((f) => f.name === 'configuration.cpp')!.content;
+    expect(configContent).toContain('locatedVars');
+    expect(fbAContent).not.toContain('LocatedVar locatedVars');
+
+    // Legacy `cppCode` is the concatenation in emit order, with the
+    // configuration TU first so consumers that scan for the
+    // configuration class (REPL, library compiler) still find it.
+    expect(result.cppCode.startsWith(configContent)).toBe(true);
+    const concatenated = result.cppFiles.map((f) => f.content).join('\n');
+    expect(result.cppCode).toBe(concatenated);
   });
 });
