@@ -113,6 +113,29 @@ inline void unforce_impl(void* p) noexcept {
     static_cast<IECVar<T>*>(p)->unforce();
 }
 
+// Soft write — updates the underlying value_ via IECVar::set(). Respects
+// existing forces (set() is a no-op while forced_ is true), so a force in
+// place stays authoritative until the user explicitly unforces.
+//
+// Distinct from force_impl: that one pins the variable indefinitely; this
+// one writes a value the program can overwrite on the next scan cycle.
+// Used by external clients (OPC-UA, future BACnet, etc.) that want
+// regular write semantics rather than debugger-style forcing.
+template <typename T>
+inline void write_impl(void* p, const uint8_t* bytes) noexcept {
+    T v;
+    std::memcpy(&v, bytes, sizeof(T));
+    static_cast<IECVar<T>*>(p)->set(v);
+}
+
+// memcpy-into-bool is technically UB for non-{0,1} byte values; normalize
+// explicitly. Same reasoning as force_impl<bool>.
+template <>
+inline void write_impl<bool>(void* p, const uint8_t* bytes) noexcept {
+    const bool v = bytes[0] != 0;
+    static_cast<IECVar<bool>*>(p)->set(v);
+}
+
 template <typename T>
 inline void read_impl(const void* p, uint8_t* dest) noexcept {
     T v = static_cast<const IECVar<T>*>(p)->get();
@@ -135,6 +158,11 @@ inline void force_string_stub(void* /*p*/, const uint8_t* /*bytes*/) noexcept {
 inline void unforce_string_stub(void* /*p*/) noexcept {
     // Phase 4a: no-op.
 }
+inline void write_string_stub(void* /*p*/, const uint8_t* /*bytes*/) noexcept {
+    // Phase 4a: no-op. Soft writes to strings are disabled until
+    // variable-length wire encoding is defined. Same constraint as
+    // force_string_stub.
+}
 inline void read_string_stub(const void* /*p*/, uint8_t* dest) noexcept {
     // Phase 4a: zero-fill. Editor displays "<debugger string read N/A>".
     dest[0] = 0;
@@ -148,6 +176,7 @@ struct TypeOps {
     void (*force)  (void*, const uint8_t*);
     void (*unforce)(void*);
     void (*read)   (const void*, uint8_t*);
+    void (*write)  (void*, const uint8_t*);
     uint8_t size;
 };
 
@@ -156,27 +185,27 @@ struct TypeOps {
 // Kept inline so it's flash-resident with no separate .cpp required.
 // ---------------------------------------------------------------------------
 inline constexpr TypeOps type_ops[TAG__COUNT] = {
-    /*BOOL    */ { &force_impl<BOOL_t>,   &unforce_impl<BOOL_t>,   &read_impl<BOOL_t>,   sizeof(BOOL_t)   },
-    /*SINT    */ { &force_impl<SINT_t>,   &unforce_impl<SINT_t>,   &read_impl<SINT_t>,   sizeof(SINT_t)   },
-    /*USINT   */ { &force_impl<USINT_t>,  &unforce_impl<USINT_t>,  &read_impl<USINT_t>,  sizeof(USINT_t)  },
-    /*INT     */ { &force_impl<INT_t>,    &unforce_impl<INT_t>,    &read_impl<INT_t>,    sizeof(INT_t)    },
-    /*UINT    */ { &force_impl<UINT_t>,   &unforce_impl<UINT_t>,   &read_impl<UINT_t>,   sizeof(UINT_t)   },
-    /*DINT    */ { &force_impl<DINT_t>,   &unforce_impl<DINT_t>,   &read_impl<DINT_t>,   sizeof(DINT_t)   },
-    /*UDINT   */ { &force_impl<UDINT_t>,  &unforce_impl<UDINT_t>,  &read_impl<UDINT_t>,  sizeof(UDINT_t)  },
-    /*LINT    */ { &force_impl<LINT_t>,   &unforce_impl<LINT_t>,   &read_impl<LINT_t>,   sizeof(LINT_t)   },
-    /*ULINT   */ { &force_impl<ULINT_t>,  &unforce_impl<ULINT_t>,  &read_impl<ULINT_t>,  sizeof(ULINT_t)  },
-    /*REAL    */ { &force_impl<REAL_t>,   &unforce_impl<REAL_t>,   &read_impl<REAL_t>,   sizeof(REAL_t)   },
-    /*LREAL   */ { &force_impl<LREAL_t>,  &unforce_impl<LREAL_t>,  &read_impl<LREAL_t>,  sizeof(LREAL_t)  },
-    /*BYTE    */ { &force_impl<BYTE_t>,   &unforce_impl<BYTE_t>,   &read_impl<BYTE_t>,   sizeof(BYTE_t)   },
-    /*WORD    */ { &force_impl<WORD_t>,   &unforce_impl<WORD_t>,   &read_impl<WORD_t>,   sizeof(WORD_t)   },
-    /*DWORD   */ { &force_impl<DWORD_t>,  &unforce_impl<DWORD_t>,  &read_impl<DWORD_t>,  sizeof(DWORD_t)  },
-    /*LWORD   */ { &force_impl<LWORD_t>,  &unforce_impl<LWORD_t>,  &read_impl<LWORD_t>,  sizeof(LWORD_t)  },
-    /*TIME    */ { &force_impl<TIME_t>,   &unforce_impl<TIME_t>,   &read_impl<TIME_t>,   sizeof(TIME_t)   },
-    /*DATE    */ { &force_impl<DATE_t>,   &unforce_impl<DATE_t>,   &read_impl<DATE_t>,   sizeof(DATE_t)   },
-    /*TOD     */ { &force_impl<TOD_t>,    &unforce_impl<TOD_t>,    &read_impl<TOD_t>,    sizeof(TOD_t)    },
-    /*DT      */ { &force_impl<DT_t>,     &unforce_impl<DT_t>,     &read_impl<DT_t>,     sizeof(DT_t)     },
-    /*STRING  */ { &force_string_stub,    &unforce_string_stub,    &read_string_stub,    0 },
-    /*WSTRING */ { &force_string_stub,    &unforce_string_stub,    &read_string_stub,    0 },
+    /*BOOL    */ { &force_impl<BOOL_t>,   &unforce_impl<BOOL_t>,   &read_impl<BOOL_t>,   &write_impl<BOOL_t>,   sizeof(BOOL_t)   },
+    /*SINT    */ { &force_impl<SINT_t>,   &unforce_impl<SINT_t>,   &read_impl<SINT_t>,   &write_impl<SINT_t>,   sizeof(SINT_t)   },
+    /*USINT   */ { &force_impl<USINT_t>,  &unforce_impl<USINT_t>,  &read_impl<USINT_t>,  &write_impl<USINT_t>,  sizeof(USINT_t)  },
+    /*INT     */ { &force_impl<INT_t>,    &unforce_impl<INT_t>,    &read_impl<INT_t>,    &write_impl<INT_t>,    sizeof(INT_t)    },
+    /*UINT    */ { &force_impl<UINT_t>,   &unforce_impl<UINT_t>,   &read_impl<UINT_t>,   &write_impl<UINT_t>,   sizeof(UINT_t)   },
+    /*DINT    */ { &force_impl<DINT_t>,   &unforce_impl<DINT_t>,   &read_impl<DINT_t>,   &write_impl<DINT_t>,   sizeof(DINT_t)   },
+    /*UDINT   */ { &force_impl<UDINT_t>,  &unforce_impl<UDINT_t>,  &read_impl<UDINT_t>,  &write_impl<UDINT_t>,  sizeof(UDINT_t)  },
+    /*LINT    */ { &force_impl<LINT_t>,   &unforce_impl<LINT_t>,   &read_impl<LINT_t>,   &write_impl<LINT_t>,   sizeof(LINT_t)   },
+    /*ULINT   */ { &force_impl<ULINT_t>,  &unforce_impl<ULINT_t>,  &read_impl<ULINT_t>,  &write_impl<ULINT_t>,  sizeof(ULINT_t)  },
+    /*REAL    */ { &force_impl<REAL_t>,   &unforce_impl<REAL_t>,   &read_impl<REAL_t>,   &write_impl<REAL_t>,   sizeof(REAL_t)   },
+    /*LREAL   */ { &force_impl<LREAL_t>,  &unforce_impl<LREAL_t>,  &read_impl<LREAL_t>,  &write_impl<LREAL_t>,  sizeof(LREAL_t)  },
+    /*BYTE    */ { &force_impl<BYTE_t>,   &unforce_impl<BYTE_t>,   &read_impl<BYTE_t>,   &write_impl<BYTE_t>,   sizeof(BYTE_t)   },
+    /*WORD    */ { &force_impl<WORD_t>,   &unforce_impl<WORD_t>,   &read_impl<WORD_t>,   &write_impl<WORD_t>,   sizeof(WORD_t)   },
+    /*DWORD   */ { &force_impl<DWORD_t>,  &unforce_impl<DWORD_t>,  &read_impl<DWORD_t>,  &write_impl<DWORD_t>,  sizeof(DWORD_t)  },
+    /*LWORD   */ { &force_impl<LWORD_t>,  &unforce_impl<LWORD_t>,  &read_impl<LWORD_t>,  &write_impl<LWORD_t>,  sizeof(LWORD_t)  },
+    /*TIME    */ { &force_impl<TIME_t>,   &unforce_impl<TIME_t>,   &read_impl<TIME_t>,   &write_impl<TIME_t>,   sizeof(TIME_t)   },
+    /*DATE    */ { &force_impl<DATE_t>,   &unforce_impl<DATE_t>,   &read_impl<DATE_t>,   &write_impl<DATE_t>,   sizeof(DATE_t)   },
+    /*TOD     */ { &force_impl<TOD_t>,    &unforce_impl<TOD_t>,    &read_impl<TOD_t>,    &write_impl<TOD_t>,    sizeof(TOD_t)    },
+    /*DT      */ { &force_impl<DT_t>,     &unforce_impl<DT_t>,     &read_impl<DT_t>,     &write_impl<DT_t>,     sizeof(DT_t)     },
+    /*STRING  */ { &force_string_stub,    &unforce_string_stub,    &read_string_stub,    &write_string_stub,    0 },
+    /*WSTRING */ { &force_string_stub,    &unforce_string_stub,    &read_string_stub,    &write_string_stub,    0 },
 };
 
 // ---------------------------------------------------------------------------
@@ -262,6 +291,23 @@ inline uint16_t handle_read(uint8_t arr, uint16_t elem, uint8_t* dest) noexcept 
     return n;
 }
 
+/** Soft write (non-forcing). Updates the underlying value via
+ *  IECVar::set(). If the variable is currently forced, the write is
+ *  silently ignored — forcing remains authoritative until unforced.
+ *  This matches OPC-UA / BACnet write semantics: the next scan cycle
+ *  may overwrite the written value, unlike force which pins it.
+ *  Returns STATUS_* code. */
+inline uint8_t handle_write(uint8_t arr, uint16_t elem,
+                            const uint8_t* bytes, uint16_t len) noexcept {
+    Entry e = read_entry(arr, elem);
+    if (!e.ptr || e.tag >= TAG__COUNT) return STATUS_OUT_OF_BOUNDS;
+    uint8_t expected = type_ops[e.tag].size;
+    if (expected == 0) return STATUS_DATA_TOO_LARGE;  // string stub
+    if (len < expected) return STATUS_DATA_TOO_LARGE;
+    type_ops[e.tag].write(e.ptr, bytes);
+    return STATUS_OK;
+}
+
 /** Variable size for (arr, elem) — 0 if unknown/out-of-bounds. */
 inline uint16_t handle_size(uint8_t arr, uint16_t elem) noexcept {
     Entry e = read_entry(arr, elem);
@@ -332,6 +378,12 @@ STRUCPP_V4_EXPORT uint8_t strucpp_debug_set(uint8_t arr, uint16_t elem,
 STRUCPP_V4_EXPORT uint16_t strucpp_debug_read(uint8_t arr, uint16_t elem,
                                                uint8_t *dest) {
     return strucpp::debug::handle_read(arr, elem, dest);
+}
+
+STRUCPP_V4_EXPORT uint8_t strucpp_debug_write(uint8_t arr, uint16_t elem,
+                                               const uint8_t *bytes,
+                                               uint16_t len) {
+    return strucpp::debug::handle_write(arr, elem, bytes, len);
 }
 
 } // extern "C"
