@@ -209,4 +209,87 @@ END_CONFIGURATION
     expect(cpp).toContain("&g_config.INSTANCE0.TON0.Q");
     expect(cpp).not.toContain("&g_config.INSTANCE0.TON0.STATE");
   });
+
+  // Globals (CONFIGURATION VAR_GLOBAL) end up at the head of the debug map
+  // with bare uppercase names — that's what the editor's
+  // `buildGlobalDebugPath()` returns and what OPC-UA `GVL:` references
+  // resolve against. Without this, OPC-UA can't expose any global.
+  describe("VAR_GLOBAL leaves", () => {
+    const globalsSource = `
+PROGRAM main
+  VAR_EXTERNAL gxRun : BOOL; giCount : INT; END_VAR
+  VAR local : INT; END_VAR
+  giCount := giCount + 1;
+END_PROGRAM
+
+CONFIGURATION Config0
+  VAR_GLOBAL
+    gxRun : BOOL;
+    giCount : INT;
+  END_VAR
+  RESOURCE Res0 ON PLC
+    TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM p WITH t : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+
+    it("emits each VAR_GLOBAL as a leaf with the bare uppercase name", () => {
+      const result = compile(globalsSource);
+      expect(result.success).toBe(true);
+      const paths = result.debugMap!.leaves.map((l) => l.path);
+      expect(paths).toContain("GXRUN");
+      expect(paths).toContain("GICOUNT");
+      // Locals still come through with their instance prefix
+      expect(paths).toContain("P.LOCAL");
+    });
+
+    it("uses g_config.<name> as the C++ pointer expression for globals", () => {
+      // The AST builder canonicalises identifier case (IEC 61131-3 is
+      // case-insensitive), so even `gxRun` ends up as `GXRUN` in the
+      // generated header — the debug-table C++ has to address that field.
+      const result = compile(globalsSource);
+      const cpp = result.debugTableCpp!;
+      expect(cpp).toContain("&g_config.GXRUN");
+      expect(cpp).toContain("&g_config.GICOUNT");
+    });
+
+    it("places globals before instance vars (own bucket at array 0)", () => {
+      const result = compile(globalsSource);
+      const map = result.debugMap!;
+      const gxRun = map.leaves.find((l) => l.path === "GXRUN")!;
+      const local = map.leaves.find((l) => l.path === "P.LOCAL")!;
+      // Globals own array 0; the instance flush opens array 1 for locals.
+      expect(gxRun.arrayIdx).toBe(0);
+      expect(local.arrayIdx).toBe(1);
+    });
+
+    it("walks struct/array globals into per-leaf entries", () => {
+      const result = compile(`
+TYPE Point : STRUCT x : INT; y : INT; END_STRUCT END_TYPE
+
+PROGRAM main
+  VAR_EXTERNAL p : Point; nums : ARRAY[0..2] OF INT; END_VAR
+END_PROGRAM
+
+CONFIGURATION Config0
+  VAR_GLOBAL
+    p : Point;
+    nums : ARRAY[0..2] OF INT;
+  END_VAR
+  RESOURCE Res0 ON PLC
+    TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM inst WITH t : main;
+  END_RESOURCE
+END_CONFIGURATION
+`);
+      expect(result.success).toBe(true);
+      const paths = result.debugMap!.leaves.map((l) => l.path);
+      expect(paths).toContain("P.X");
+      expect(paths).toContain("P.Y");
+      expect(paths).toContain("NUMS[0]");
+      expect(paths).toContain("NUMS[1]");
+      expect(paths).toContain("NUMS[2]");
+    });
+  });
 });
