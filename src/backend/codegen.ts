@@ -4475,11 +4475,13 @@ export class CodeGenerator {
     emitBody: (bodyIndent: string) => void,
     instanceEnoTarget: string | null = null,
   ): void {
-    const targets = [enoVar, instanceEnoTarget].filter(
-      (t): t is string => t !== null,
-    );
-
     if (enExpr !== null) {
+      // EN gates the call; mirror it on every ENO sink. Both the bound
+      // `ENO => var` (if any) and the FB instance's ENO member end up
+      // reflecting the gate decision.
+      const targets = [enoVar, instanceEnoTarget].filter(
+        (t): t is string => t !== null,
+      );
       const bodyIndent = indent + this.options.indent;
       this.emit(`${indent}if (${enExpr}) {`);
       emitBody(bodyIndent);
@@ -4492,9 +4494,15 @@ export class CodeGenerator {
       }
       this.emit(`${indent}}`);
     } else {
+      // No EN at the call site. Only honour an explicit `ENO => var`
+      // binding — that's the caller asking to read the post-call
+      // signal. Don't touch `inst.ENO`: the FB class default-inits it
+      // to `true`, so re-assigning is redundant, and skipping keeps
+      // the output forward-compatible with closed-source library FBs
+      // that may not have an ENO member at all.
       emitBody(indent);
-      for (const t of targets) {
-        this.emit(`${indent}${t} = true;`);
+      if (enoVar !== null) {
+        this.emit(`${indent}${enoVar} = true;`);
       }
     }
   }
