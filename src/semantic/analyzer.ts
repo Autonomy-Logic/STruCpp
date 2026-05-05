@@ -37,6 +37,7 @@ import {
   buildEnumMemberMap,
   type EnumMemberEntry,
 } from "./type-utils.js";
+import { isEnArgument, isEnoArgument, stripEnEno } from "../ast-utils.js";
 
 // =============================================================================
 // Located Variable Address Parsing
@@ -1519,10 +1520,15 @@ export class SemanticAnalyzer {
   /**
    * Validate standard function argument counts and special constraints (e.g., ADR l-value).
    * Covers all registered std functions and *_TO_* conversion functions.
+   *
+   * EN and ENO are implicit IEC 61131-3 pins — they gate execution and signal
+   * success around the call site, but they are not part of any function's
+   * declared signature. Strip them before counting against the registry.
    */
   private checkStdFunctionArgs(expr: FunctionCallExpression): void {
     const nameUpper = expr.functionName.toUpperCase();
-    const argCount = expr.arguments.length;
+    const userArgs = stripEnEno(expr.arguments);
+    const argCount = userArgs.length;
 
     // Look up in std function registry
     const desc = this.stdRegistry.lookup(nameUpper);
@@ -1562,7 +1568,7 @@ export class SemanticAnalyzer {
 
     // Additional ADR constraint: argument must be an l-value
     if (nameUpper === "ADR" && argCount > 0) {
-      const arg = expr.arguments[0]!.value;
+      const arg = userArgs[0]!.value;
       if (!this.isLValue(arg)) {
         this.addError(
           "ADR() requires a variable reference, not an expression",
@@ -1570,6 +1576,35 @@ export class SemanticAnalyzer {
           expr.sourceSpan.startCol,
           expr.sourceSpan.file,
         );
+      }
+    }
+
+    // EN/ENO type sanity. The codegen wrapper expects EN to evaluate to a
+    // boolean and ENO to bind to a boolean l-value; bail early with a clear
+    // message rather than letting the C++ compiler explode downstream.
+    for (const arg of expr.arguments) {
+      if (isEnArgument(arg)) {
+        const t = arg.value.resolvedType;
+        if (t && t.typeKind === "elementary") {
+          const elemName = (t as ElementaryType).name;
+          if (elemName.toUpperCase() !== "BOOL") {
+            this.addError(
+              `'EN' input must be a BOOL expression, got ${elemName}`,
+              arg.value.sourceSpan.startLine,
+              arg.value.sourceSpan.startCol,
+              arg.value.sourceSpan.file,
+            );
+          }
+        }
+      } else if (isEnoArgument(arg)) {
+        if (!this.isLValue(arg.value)) {
+          this.addError(
+            "'ENO' output must be bound to a variable",
+            arg.value.sourceSpan.startLine,
+            arg.value.sourceSpan.startCol,
+            arg.value.sourceSpan.file,
+          );
+        }
       }
     }
   }
