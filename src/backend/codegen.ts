@@ -1223,6 +1223,18 @@ export class CodeGenerator {
       }
     }
 
+    // IEC 61131-3 implicit ENO output. Mirrors EN at every call site, so
+    // user code that does `IF inst.ENO THEN ...` after invoking the FB
+    // resolves. Default is true so FBs invoked without an EN pin see ENO=1
+    // (matches the standard: ENO defaults to TRUE when EN is omitted).
+    // Only emitted on the leaf FB; if it extends another FB, the parent
+    // already provides ENO.
+    if (!fb.extends) {
+      this.emitHeader("");
+      this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
+      this.emitHeader("    IEC_BOOL ENO = true;");
+    }
+
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     this.emitHeader(`    ${fb.name}();`);
@@ -1299,6 +1311,14 @@ export class CodeGenerator {
       }
     }
 
+    this.emitHeader("");
+    // Implicit IEC 61131-3 ENO pin. Mirrors EN at every call site, so
+    // user code that does `IF prog.ENO THEN ...` after invoking the
+    // program (or the test framework that wraps a program as a UUT and
+    // invokes it like an FB) resolves. Default true matches the
+    // standard's "ENO defaults to TRUE when EN is omitted".
+    this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
+    this.emitHeader("    IEC_BOOL ENO = true;");
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     this.emitHeader(`    Program_${prog.name}();`);
@@ -2041,6 +2061,11 @@ export class CodeGenerator {
       }
     }
 
+    this.emitHeader("");
+    // Implicit IEC 61131-3 ENO pin (see generateProgramHeaderDeclaration
+    // for the rationale; this is the project-model code path, same shape).
+    this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
+    this.emitHeader("    IEC_BOOL ENO = true;");
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     if (prog.varExternal.length > 0) {
@@ -4437,29 +4462,39 @@ export class CodeGenerator {
    * Emit EN/ENO wrapper around a body emitter callback.
    * When EN is present, wraps in `if (EN) { body; ENO=true; } else { ENO=false; }`.
    * When only ENO is present, emits body then `ENO=true;`.
+   *
+   * `instanceEnoTarget` (e.g. `inst.ENO`) is for FB invocations: the
+   * implicit IEC ENO output on the FB instance has to mirror EN so user
+   * code that reads `inst.ENO` after the call gets the right value.
+   * Pass null for plain function calls (no instance).
    */
   private emitEnEnoWrapper(
     indent: string,
     enExpr: string | null,
     enoVar: string | null,
     emitBody: (bodyIndent: string) => void,
+    instanceEnoTarget: string | null = null,
   ): void {
+    const targets = [enoVar, instanceEnoTarget].filter(
+      (t): t is string => t !== null,
+    );
+
     if (enExpr !== null) {
       const bodyIndent = indent + this.options.indent;
       this.emit(`${indent}if (${enExpr}) {`);
       emitBody(bodyIndent);
-      if (enoVar !== null) {
-        this.emit(`${bodyIndent}${enoVar} = true;`);
+      for (const t of targets) {
+        this.emit(`${bodyIndent}${t} = true;`);
       }
       this.emit(`${indent}} else {`);
-      if (enoVar !== null) {
-        this.emit(`${bodyIndent}${enoVar} = false;`);
+      for (const t of targets) {
+        this.emit(`${bodyIndent}${t} = false;`);
       }
       this.emit(`${indent}}`);
     } else {
       emitBody(indent);
-      if (enoVar !== null) {
-        this.emit(`${indent}${enoVar} = true;`);
+      for (const t of targets) {
+        this.emit(`${indent}${t} = true;`);
       }
     }
   }
@@ -4507,10 +4542,18 @@ export class CodeGenerator {
       }
     }
 
-    // Call the FB/program execution body, wrapped with EN/ENO logic
-    this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
-      this.emitPOUCallLine(instanceName, call.functionName, bi);
-    });
+    // Call the FB/program execution body, wrapped with EN/ENO logic.
+    // Pass the FB instance's ENO field so source code can read
+    // `inst.ENO` after the invocation and see the right value.
+    this.emitEnEnoWrapper(
+      indent,
+      enExpr,
+      enoVar,
+      (bi) => {
+        this.emitPOUCallLine(instanceName, call.functionName, bi);
+      },
+      `${instanceName}.ENO`,
+    );
 
     // Capture output arguments (=> syntax), excluding ENO (already handled)
     for (const arg of filteredArgs) {

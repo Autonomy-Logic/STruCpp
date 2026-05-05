@@ -381,12 +381,25 @@ inline T MUX(IEC_INT k, T in0, T in1) noexcept {
 // Comparison Functions (ANY_ELEMENTARY -> BOOL)
 // =============================================================================
 
+// Comparison operators take two arguments deduced independently — that way
+// `LE(real_var, 0.0)` (where the literal is double / IEC_LREAL) and
+// `EQ(my_int, 0)` (where the literal is int / IEC_INT) both type-check
+// without forcing the caller to wrap every literal in a cast. Each side
+// only has to land on an IEC elementary type after `iec_unwrap`; the
+// comparison itself uses C++'s usual arithmetic conversions to find a
+// common type.
+template<typename A, typename B>
+using enable_if_two_elementary = std::enable_if_t<
+    is_any_elementary_v<iec_underlying_type_t<std::decay_t<A>>> &&
+        is_any_elementary_v<iec_underlying_type_t<std::decay_t<B>>>,
+    int>;
+
 /**
  * GT - Greater than
  * Input: ANY_ELEMENTARY, Output: BOOL
  */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL GT(T a, T b) noexcept {
+template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL GT(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) > iec_unwrap(b));
 }
 
@@ -394,8 +407,8 @@ inline IEC_BOOL GT(T a, T b) noexcept {
  * GE - Greater than or equal
  * Input: ANY_ELEMENTARY, Output: BOOL
  */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL GE(T a, T b) noexcept {
+template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL GE(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) >= iec_unwrap(b));
 }
 
@@ -403,8 +416,8 @@ inline IEC_BOOL GE(T a, T b) noexcept {
  * EQ - Equal
  * Input: ANY_ELEMENTARY, Output: BOOL
  */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL EQ(T a, T b) noexcept {
+template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL EQ(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) == iec_unwrap(b));
 }
 
@@ -412,8 +425,8 @@ inline IEC_BOOL EQ(T a, T b) noexcept {
  * LE - Less than or equal
  * Input: ANY_ELEMENTARY, Output: BOOL
  */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL LE(T a, T b) noexcept {
+template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL LE(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) <= iec_unwrap(b));
 }
 
@@ -421,8 +434,8 @@ inline IEC_BOOL LE(T a, T b) noexcept {
  * LT - Less than
  * Input: ANY_ELEMENTARY, Output: BOOL
  */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL LT(T a, T b) noexcept {
+template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL LT(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) < iec_unwrap(b));
 }
 
@@ -430,8 +443,8 @@ inline IEC_BOOL LT(T a, T b) noexcept {
  * NE - Not equal
  * Input: ANY_ELEMENTARY, Output: BOOL
  */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL NE(T a, T b) noexcept {
+template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL NE(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) != iec_unwrap(b));
 }
 
