@@ -10,12 +10,14 @@
  *   - vitest globalSetup (runs before all tests)
  *   - npm run build:libs (manual invocation)
  *
- * Requirements:
- *   - dist/ must be built (run `npm run build` first)
- *   - libs/iec-standard-fb.stlib must exist with embedded sources
- *   - libs/oscat-basic.stlib must exist with embedded sources
+ * Refreshes `dist/` via tsc before importing from it. Otherwise a `src/`
+ * change without a manual `npm run build` would silently regenerate the
+ * .stlib archives against stale codegen — the on-disk libs would no
+ * longer match `src/`. tsc on this codebase runs in ~1s so the cost is
+ * negligible compared to the test suite that follows.
  */
 
+import { execSync } from "child_process";
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
@@ -27,13 +29,42 @@ const projectRoot = resolve(__dirname, "..");
 const libsDir = resolve(projectRoot, "libs");
 const vscodeLibsDir = resolve(projectRoot, "vscode-extension", "bundled-libs");
 
-// Import compiler from dist/
-const { compileStlib } = await import(
-  resolve(projectRoot, "dist/library/library-compiler.js")
-);
-const { loadStlibFromFile } = await import(
-  resolve(projectRoot, "dist/library/library-loader.js")
-);
+let compileStlib;
+let loadStlibFromFile;
+
+/**
+ * Refresh `dist/` from `src/` and import the freshly compiled modules.
+ *
+ * Plain `tsc` (no --incremental) on purpose: incremental's `.tsbuildinfo`
+ * tracks what was emitted in the previous run, so if `dist/` has been
+ * wiped or hand-edited but `.tsbuildinfo` survived, incremental would
+ * skip emission and leave us with no `dist/` at all. Full builds are
+ * ~1s here, well within the test-suite budget.
+ */
+async function refreshAndLoadCompiler() {
+  console.log("[rebuild-libs] Refreshing dist/ via tsc...");
+  try {
+    execSync("npx tsc", {
+      cwd: projectRoot,
+      stdio: "inherit",
+    });
+  } catch {
+    throw new Error(
+      "[rebuild-libs] TypeScript compilation failed — see errors above. " +
+        "Aborting library rebuild so the on-disk .stlib archives stay " +
+        "consistent with the last good dist/.",
+    );
+  }
+
+  const compiler = await import(
+    resolve(projectRoot, "dist/library/library-compiler.js")
+  );
+  const loader = await import(
+    resolve(projectRoot, "dist/library/library-loader.js")
+  );
+  compileStlib = compiler.compileStlib;
+  loadStlibFromFile = loader.loadStlibFromFile;
+}
 
 /**
  * Rebuild a single .stlib archive from its embedded sources.
@@ -81,6 +112,11 @@ export async function setup() {
     console.warn("[rebuild-libs] iec-standard-fb.stlib not found — skipping");
     return;
   }
+
+  // 0. Refresh dist/ before pulling the compiler from it. Without this
+  //    a src/ edit without a manual `npm run build` would regenerate
+  //    the libs against stale codegen.
+  await refreshAndLoadCompiler();
 
   // 1. Rebuild IEC standard FB library (no dependencies)
   console.log("[rebuild-libs] Rebuilding iec-standard-fb.stlib...");

@@ -15,6 +15,7 @@
 import type {
   IECType,
   ElementaryType,
+  ArrayType,
   CompilationUnit,
   ReferenceType,
   StructType,
@@ -581,4 +582,30 @@ export function buildEnumMemberMap(
     }
   }
   return map;
+}
+
+/**
+ * Render an IECType as a short human-readable string for diagnostic
+ * messages. Names the offending type without leaking internal field
+ * structure: "INT", "STRUCT 'MyType'", "ARRAY", "REF_TO INT", etc.
+ *
+ * Falls back to the typeKind tag if the variant carries no name.
+ */
+export function describeType(t: IECType): string {
+  switch (t.typeKind) {
+    case "elementary":
+      return (t as ElementaryType).name;
+    case "struct":
+      return `STRUCT '${(t as StructType).name}'`;
+    case "enum":
+      return `ENUM '${(t as EnumType).name}'`;
+    case "functionBlock":
+      return `FUNCTION_BLOCK '${(t as FunctionBlockType).name}'`;
+    case "array":
+      return `ARRAY OF ${describeType((t as ArrayType).elementType)}`;
+    case "reference":
+      return `REF_TO ${describeType((t as ReferenceType).referencedType)}`;
+    default:
+      return t.typeKind;
+  }
 }

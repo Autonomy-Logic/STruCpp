@@ -60,6 +60,40 @@ import type {
 } from "./frontend/ast.js";
 
 /**
+ * Predicate: is this argument the implicit IEC EN input (`EN := <bool>`)?
+ * EN gates whether the call body executes — it is not part of the function's
+ * declared signature, so callers that validate or type-check arg counts
+ * against a signature must filter it out first.
+ */
+export function isEnArgument(arg: Argument): boolean {
+  return !arg.isOutput && arg.name?.toUpperCase() === "EN";
+}
+
+/**
+ * Predicate: is this argument the implicit IEC ENO output (`ENO => <var>`)?
+ * Same reasoning as `isEnArgument`: ENO is bound by the runtime wrapper,
+ * not by the function itself.
+ */
+export function isEnoArgument(arg: Argument): boolean {
+  return arg.isOutput && arg.name?.toUpperCase() === "ENO";
+}
+
+/**
+ * Predicate: either EN input or ENO output.
+ */
+export function isEnEnoArgument(arg: Argument): boolean {
+  return isEnArgument(arg) || isEnoArgument(arg);
+}
+
+/**
+ * Filter EN/ENO out of an argument list. Returns the user-supplied arguments
+ * that the function's declared parameters should be matched against.
+ */
+export function stripEnEno(args: Argument[]): Argument[] {
+  return args.filter((a) => !isEnEnoArgument(a));
+}
+
+/**
  * Recursively walk an AST subtree, calling visitor for each node.
  * If visitor returns false, children of that node are skipped.
  */

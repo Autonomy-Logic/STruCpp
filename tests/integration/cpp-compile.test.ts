@@ -1320,6 +1320,81 @@ int main() {
 });
 
 /**
+ * Pin the cross-sign-class semantics of the comparison templates in
+ * iec_std_lib.hpp. C++ usual arithmetic conversions promote the signed
+ * operand to unsigned when the unsigned operand is wider-or-equal — so
+ * `EQ(IEC_UINT(0xFFFF), -1)` is TRUE because -1 wraps to 0xFFFF before
+ * the compare. The templates intentionally don't insert a guard against
+ * this: see the doc comment on `enable_if_two_elementary` for why.
+ *
+ * If anyone tightens the comparators (e.g. adds a `same-sign-class`
+ * static_assert), these expectations flip and the change becomes a
+ * deliberate one rather than a silent behavior shift.
+ */
+describeIfGpp('iec_std_lib comparison sign-class semantics', () => {
+  let tempDir: string;
+  let pchPath: string;
+
+  beforeAll(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'strucpp-cmpsign-test-'));
+    pchPath = createPCH(tempDir);
+  });
+
+  afterAll(() => {
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('mixed-sign comparisons follow C++ usual arithmetic conversions', () => {
+    // Wrapping is only observable when the unsigned operand has rank >=
+    // int, since otherwise both sides promote up to int and the compare
+    // happens in signed land. Use UDINT (uint32_t) where the rank ties
+    // and the signed operand converts to unsigned.
+    const mainCode = `
+int main() {
+    using namespace strucpp;
+    IEC_UDINT u_max = IEC_UDINT(0xFFFFFFFFu);
+    IEC_DINT  neg_one = -1;
+    IEC_UDINT zero_u = 0;
+
+    // -1 promotes to UDINT (uint32_t) = 0xFFFFFFFF, so EQ is TRUE.
+    std::cout << "eq_max_neg=" << static_cast<int>(EQ(u_max, neg_one)) << std::endl;
+    std::cout << "ne_max_neg=" << static_cast<int>(NE(u_max, neg_one)) << std::endl;
+
+    // For (zero_u, -1): -1 -> 0xFFFFFFFF, so 0 < 0xFFFFFFFF -> LT is TRUE,
+    // 0 > 0xFFFFFFFF -> GT is FALSE. Counterintuitive vs. mathematical
+    // ordering, which is exactly the foot-gun the doc warns about.
+    std::cout << "lt_zero_neg=" << static_cast<int>(LT(zero_u, neg_one)) << std::endl;
+    std::cout << "gt_zero_neg=" << static_cast<int>(GT(zero_u, neg_one)) << std::endl;
+
+    // For UINT (uint16_t) vs INT, both sides promote up to int and the
+    // compare is signed — no wrap, intuitive answers.
+    IEC_UINT u16_max = IEC_UINT(0xFFFF);
+    IEC_INT  neg_int = -1;
+    std::cout << "eq_uint_neg=" << static_cast<int>(EQ(u16_max, neg_int)) << std::endl;
+    return 0;
+}
+`;
+    const stdout = compileAndRunHelper({
+      tempDir,
+      pchPath,
+      headerCode: '',
+      cppCode: '',
+      testName: 'cmp_sign_class',
+      mainCode,
+    });
+    // Wrapping cases (UDINT vs signed)
+    expect(stdout).toContain('eq_max_neg=1');
+    expect(stdout).toContain('ne_max_neg=0');
+    expect(stdout).toContain('lt_zero_neg=1');
+    expect(stdout).toContain('gt_zero_neg=0');
+    // Non-wrapping case (UINT vs INT — both promote to int)
+    expect(stdout).toContain('eq_uint_neg=0');
+  });
+});
+
+/**
  * Codegen splits implementation across one TU per POU (programs, FBs,
  * functions) plus a shared `configuration.cpp`. The runtime build can
  * then run `make -j$(nproc)` and ccache can reuse .o files for unchanged
@@ -1392,5 +1467,58 @@ describe('Multi-file codegen output', () => {
     expect(result.cppCode.startsWith(configContent)).toBe(true);
     const concatenated = result.cppFiles.map((f) => f.content).join('\n');
     expect(result.cppCode).toBe(concatenated);
+  });
+
+  it('emits pouIncludes after the shared header in every per-POU TU', () => {
+    // The editor uses this to plumb c_blocks.h through so generated POU
+    // bodies that reference user-defined `<NAME>_VARS` structs and
+    // `<name>_setup` / `<name>_loop` extern functions resolve at C++
+    // compile time.
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := x + 1;
+      END_PROGRAM
+      CONFIGURATION CONFIG0
+        RESOURCE R ON PLC
+          TASK T(INTERVAL := T#100ms, PRIORITY := 1);
+          PROGRAM I WITH T : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source, { pouIncludes: ['c_blocks.h', 'extras.h'] });
+    expect(result.success).toBe(true);
+
+    const pouFiles = result.cppFiles.filter((f) => f.name.startsWith('pou_'));
+    expect(pouFiles.length).toBeGreaterThan(0);
+    for (const f of pouFiles) {
+      expect(f.content).toContain('#include "generated.hpp"');
+      expect(f.content).toContain('#include "c_blocks.h"');
+      expect(f.content).toContain('#include "extras.h"');
+      // Order must be: shared header first, then extras, before namespace open.
+      const headerIdx = f.content.indexOf('#include "generated.hpp"');
+      const cBlocksIdx = f.content.indexOf('#include "c_blocks.h"');
+      const nsIdx = f.content.indexOf('namespace strucpp');
+      expect(headerIdx).toBeLessThan(cBlocksIdx);
+      expect(cBlocksIdx).toBeLessThan(nsIdx);
+    }
+  });
+
+  it('omits pouIncludes by default', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := x + 1;
+      END_PROGRAM
+      CONFIGURATION CONFIG0
+        RESOURCE R ON PLC
+          TASK T(INTERVAL := T#100ms, PRIORITY := 1);
+          PROGRAM I WITH T : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    const pouFile = result.cppFiles.find((f) => f.name.startsWith('pou_'))!;
+    expect(pouFile.content).not.toContain('c_blocks.h');
   });
 });

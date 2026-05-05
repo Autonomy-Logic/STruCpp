@@ -35,6 +35,14 @@ export interface CompileOptions {
   /** Header filename to use in #include directive (default: "generated.hpp") */
   headerFileName?: string;
 
+  /** Extra `#include "..."` lines emitted in every per-POU translation
+   *  unit (after the shared `headerFileName` include). The editor sets
+   *  this to `["c_blocks.h"]` when the project has C/C++ blocks so that
+   *  POU bodies which call into user-defined `<NAME>_VARS` structs and
+   *  `<name>_setup` / `<name>_loop` extern functions resolve. Empty by
+   *  default; harmless when unset. */
+  pouIncludes?: string[];
+
   /** Primary source file name for error reporting (default: "main.st") */
   fileName?: string;
 
