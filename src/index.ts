@@ -54,6 +54,29 @@ export const defaultOptions: CompileOptions = {
   optimizationLevel: 0,
 };
 
+/** Conservative include-path character set: alphanumerics, dot, slash,
+ *  hyphen, underscore, plus.  Disallows quotes, backslashes, and newlines
+ *  so a `pouIncludes` entry can never break out of `#include "..."` and
+ *  splice unintended directives into a generated TU. */
+const INCLUDE_PATH_RE = /^[\w./+-]+$/;
+
+/**
+ * Reject obviously-malformed option values up front so misuse surfaces as
+ * a thrown error from the API entry point, not as broken C++ later in
+ * the pipeline.  Keep the checks narrow: the goal is to close foot-guns
+ * without becoming a schema validator.
+ */
+function validateCompileOptions(options: CompileOptions): void {
+  for (const include of options.pouIncludes ?? []) {
+    if (typeof include !== "string" || !INCLUDE_PATH_RE.test(include)) {
+      throw new TypeError(
+        `pouIncludes entry ${JSON.stringify(include)} is not a valid include filename ` +
+          `(allowed characters: alphanumerics, '.', '/', '-', '_', '+').`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Library tree-shaking: only include libraries whose symbols are referenced
 // ---------------------------------------------------------------------------
@@ -186,6 +209,7 @@ function runPipeline(
   continueOnError: boolean,
 ): PipelineResult {
   const mergedOptions = { ...defaultOptions, ...options };
+  validateCompileOptions(mergedOptions);
   const errors: CompileError[] = [];
   const warnings: CompileError[] = [];
   let ast: CompilationUnit | undefined;

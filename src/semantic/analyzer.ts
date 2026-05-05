@@ -35,6 +35,7 @@ import {
   resolveFieldType,
   resolveArrayElementType,
   buildEnumMemberMap,
+  describeType,
   type EnumMemberEntry,
 } from "./type-utils.js";
 import { isEnArgument, isEnoArgument, stripEnEno } from "../ast-utils.js";
@@ -1585,11 +1586,13 @@ export class SemanticAnalyzer {
     for (const arg of expr.arguments) {
       if (isEnArgument(arg)) {
         const t = arg.value.resolvedType;
-        if (t && t.typeKind === "elementary") {
-          const elemName = (t as ElementaryType).name;
-          if (elemName.toUpperCase() !== "BOOL") {
+        if (t) {
+          const isBool =
+            t.typeKind === "elementary" &&
+            (t as ElementaryType).name.toUpperCase() === "BOOL";
+          if (!isBool) {
             this.addError(
-              `'EN' input must be a BOOL expression, got ${elemName}`,
+              `'EN' input must be a BOOL expression, got ${describeType(t)}`,
               arg.value.sourceSpan.startLine,
               arg.value.sourceSpan.startCol,
               arg.value.sourceSpan.file,

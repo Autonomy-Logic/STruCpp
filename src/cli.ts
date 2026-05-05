@@ -62,7 +62,7 @@ import {
   findRuntimeIncludeDir,
   findBundledLibsDir,
 } from "./build-utils.js";
-import type { CompileOptions } from "./types.js";
+import type { CompileError, CompileOptions } from "./types.js";
 import { importCodesysLibrary } from "./library/codesys-import/index.js";
 
 interface CLIOptions {
@@ -91,6 +91,44 @@ interface CLIOptions {
   importLib?: string;
   test: string[];
   defines: Record<string, number>;
+}
+
+/**
+ * Print one or more diagnostics to stdout/stderr with a blank line
+ * between entries. Builds the source map once and reuses it across
+ * the loop. Used by every CLI mode that surfaces compile/parse/analyze
+ * errors so the formatting (and the spacing) stays consistent.
+ */
+function printDiagnostics(
+  errors: ReadonlyArray<CompileError>,
+  sources: DiagnosticSource[],
+  stream: "error" | "warn" = "error",
+): void {
+  const map = buildSourceMap(sources);
+  const out = stream === "warn" ? console.warn : console.error;
+  for (const err of errors) {
+    out(formatDiagnostic(err, map));
+    out("");
+  }
+}
+
+/**
+ * Coerce a stlib-compile error (which has optional line/file fields) into
+ * the CompileError shape `printDiagnostics` consumes. Defaults `column` to
+ * 1 since stlib errors don't carry one.
+ */
+function toDiagnostic(err: {
+  message: string;
+  line?: number;
+  file?: string;
+}): CompileError {
+  return {
+    message: err.message,
+    line: err.line ?? 0,
+    column: 1,
+    severity: "error",
+    ...(err.file ? { file: err.file } : {}),
+  };
 }
 
 function parseArgs(args: string[]): CLIOptions {
@@ -515,24 +553,7 @@ function compileLibraryMode(options: CLIOptions): void {
 
   if (!result.success) {
     console.error("\nLibrary compilation failed:\n");
-    const libSourceMap = buildSourceMap(
-      sources.map((s) => ({ fileName: s.fileName, source: s.source })),
-    );
-    for (const error of result.errors) {
-      console.error(
-        formatDiagnostic(
-          {
-            message: error.message,
-            line: error.line ?? 0,
-            column: 1,
-            severity: "error",
-            ...(error.file ? { file: error.file } : {}),
-          },
-          libSourceMap,
-        ),
-      );
-      console.error("");
-    }
+    printDiagnostics(result.errors.map(toDiagnostic), sources);
     process.exit(1);
   }
 
@@ -599,14 +620,10 @@ function runTestMode(options: CLIOptions): void {
   const result = compile(source, compileOptions);
   if (!result.success) {
     console.error("Error compiling source files:\n");
-    const testSourceMap = buildSourceMap([
+    printDiagnostics(result.errors, [
       { fileName: basename(inputPath), source },
       ...additionalSources,
     ]);
-    for (const err of result.errors) {
-      console.error(formatDiagnostic(err, testSourceMap));
-      console.error("");
-    }
     process.exit(1);
   }
 
@@ -630,11 +647,7 @@ function runTestMode(options: CLIOptions): void {
     const parseResult = parseTestFile(testSource, basename(testPath));
     if (parseResult.errors.length > 0) {
       console.error(`Error parsing ${basename(testPath)}:\n`);
-      const testFileMap = buildSourceMap(testSources);
-      for (const err of parseResult.errors) {
-        console.error(formatDiagnostic(err, testFileMap));
-        console.error("");
-      }
+      printDiagnostics(parseResult.errors, testSources);
       process.exit(1);
     }
     if (parseResult.testFile) {
@@ -650,16 +663,12 @@ function runTestMode(options: CLIOptions): void {
   // 3b. Semantic analysis of test files
   if (result.symbolTables) {
     let hasTestErrors = false;
-    const analysisMap = buildSourceMap(testSources);
     for (const tf of testFiles) {
       const analysisResult = analyzeTestFile(tf, result.symbolTables);
       if (analysisResult.errors.length > 0) {
         hasTestErrors = true;
         console.error(`Error in test file '${tf.fileName}':\n`);
-        for (const err of analysisResult.errors) {
-          console.error(formatDiagnostic(err, analysisMap));
-          console.error("");
-        }
+        printDiagnostics(analysisResult.errors, testSources);
       }
     }
     if (hasTestErrors) {
@@ -887,27 +896,7 @@ function importLibMode(options: CLIOptions): void {
 
   if (!result.success) {
     console.error("\nLibrary compilation failed:\n");
-    const importSourceMap = buildSourceMap(
-      importResult.sources.map((s) => ({
-        fileName: s.fileName,
-        source: s.source,
-      })),
-    );
-    for (const error of result.errors) {
-      console.error(
-        formatDiagnostic(
-          {
-            message: error.message,
-            line: error.line ?? 0,
-            column: 1,
-            severity: "error",
-            ...(error.file ? { file: error.file } : {}),
-          },
-          importSourceMap,
-        ),
-      );
-      console.error("");
-    }
+    printDiagnostics(result.errors.map(toDiagnostic), importResult.sources);
     console.error(
       "Note: Extracted ST sources may need manual adjustments for compilation.",
     );
@@ -1028,21 +1017,14 @@ function main(): void {
     { fileName: basename(inputPath), source },
     ...additionalSources,
   ];
-  const sourceMap = buildSourceMap(diagSources);
 
   if (!result.success) {
     console.error("\nCompilation failed:\n");
-    for (const error of result.errors) {
-      console.error(formatDiagnostic(error, sourceMap));
-      console.error("");
-    }
+    printDiagnostics(result.errors, diagSources);
     process.exit(1);
   }
 
-  for (const warning of result.warnings) {
-    console.warn(formatDiagnostic(warning, sourceMap));
-    console.warn("");
-  }
+  printDiagnostics(result.warnings, diagSources, "warn");
 
   try {
     writeFileSync(outputPath, result.cppCode, "utf-8");

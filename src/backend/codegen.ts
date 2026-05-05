@@ -4459,14 +4459,20 @@ export class CodeGenerator {
   }
 
   /**
-   * Emit EN/ENO wrapper around a body emitter callback.
-   * When EN is present, wraps in `if (EN) { body; ENO=true; } else { ENO=false; }`.
-   * When only ENO is present, emits body then `ENO=true;`.
+   * Emit an EN/ENO wrapper around a body-emitting callback.
    *
-   * `instanceEnoTarget` (e.g. `inst.ENO`) is for FB invocations: the
-   * implicit IEC ENO output on the FB instance has to mirror EN so user
-   * code that reads `inst.ENO` after the call gets the right value.
-   * Pass null for plain function calls (no instance).
+   * Two ENO sinks are reflected uniformly:
+   *   - `enoVar`              — the caller's `ENO => var` binding, if any.
+   *   - `instanceEnoTarget`   — the FB instance's implicit ENO member
+   *                             (e.g. `inst.ENO`), passed for FB calls so
+   *                             `IF inst.ENO THEN ...` reads the right
+   *                             value.  null for plain function calls.
+   *
+   * Both sinks are written every time so they can't carry stale values
+   * across calls.  Per IEC 61131-3 §6.4.1.3, ENO defaults to TRUE when
+   * EN is omitted — so an unguarded call writes TRUE to every sink it
+   * has, which also overwrites any FALSE left behind by a prior gated
+   * invocation.
    */
   private emitEnEnoWrapper(
     indent: string,
@@ -4475,35 +4481,26 @@ export class CodeGenerator {
     emitBody: (bodyIndent: string) => void,
     instanceEnoTarget: string | null = null,
   ): void {
+    const targets = [enoVar, instanceEnoTarget].filter(
+      (t): t is string => t !== null,
+    );
+    const writeTargets = (atIndent: string, value: boolean): void => {
+      for (const t of targets) {
+        this.emit(`${atIndent}${t} = ${value};`);
+      }
+    };
+
     if (enExpr !== null) {
-      // EN gates the call; mirror it on every ENO sink. Both the bound
-      // `ENO => var` (if any) and the FB instance's ENO member end up
-      // reflecting the gate decision.
-      const targets = [enoVar, instanceEnoTarget].filter(
-        (t): t is string => t !== null,
-      );
       const bodyIndent = indent + this.options.indent;
       this.emit(`${indent}if (${enExpr}) {`);
       emitBody(bodyIndent);
-      for (const t of targets) {
-        this.emit(`${bodyIndent}${t} = true;`);
-      }
+      writeTargets(bodyIndent, true);
       this.emit(`${indent}} else {`);
-      for (const t of targets) {
-        this.emit(`${bodyIndent}${t} = false;`);
-      }
+      writeTargets(bodyIndent, false);
       this.emit(`${indent}}`);
     } else {
-      // No EN at the call site. Only honour an explicit `ENO => var`
-      // binding — that's the caller asking to read the post-call
-      // signal. Don't touch `inst.ENO`: the FB class default-inits it
-      // to `true`, so re-assigning is redundant, and skipping keeps
-      // the output forward-compatible with closed-source library FBs
-      // that may not have an ENO member at all.
       emitBody(indent);
-      if (enoVar !== null) {
-        this.emit(`${indent}${enoVar} = true;`);
-      }
+      writeTargets(indent, true);
     }
   }
 

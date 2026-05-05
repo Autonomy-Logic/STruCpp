@@ -388,6 +388,26 @@ inline T MUX(IEC_INT k, T in0, T in1) noexcept {
 // only has to land on an IEC elementary type after `iec_unwrap`; the
 // comparison itself uses C++'s usual arithmetic conversions to find a
 // common type.
+//
+// CONVERSION SEMANTICS — read this before writing cross-sign tests:
+// Mixing signed and unsigned operands follows C++'s usual arithmetic
+// conversions, not an IEC rule.
+//
+//   - When the unsigned operand has *lower* integer rank than `int`
+//     (IEC_USINT, IEC_UINT — uint8/uint16), both sides are promoted to
+//     `int` and the compare happens in signed land. No wrap.
+//
+//   - When the unsigned operand has rank >= `int` (IEC_UDINT, IEC_ULINT —
+//     uint32/uint64) the signed operand converts to the unsigned type
+//     and a negative value wraps to a large unsigned. So
+//     `EQ(IEC_UDINT(0xFFFFFFFFu), -1)` is TRUE because -1 becomes
+//     0xFFFFFFFF before the compare.
+//
+// STruC++ does not insert extra guards: IEC 61131-3 doesn't define
+// cross-sign-class comparison, and we want the generated C++ to behave
+// predictably under standard rules. If a project needs sign-strict
+// comparisons, cast both sides to the same type before calling
+// EQ/NE/LT/LE/GT/GE.
 template<typename A, typename B>
 using enable_if_two_elementary = std::enable_if_t<
     is_any_elementary_v<iec_underlying_type_t<std::decay_t<A>>> &&
