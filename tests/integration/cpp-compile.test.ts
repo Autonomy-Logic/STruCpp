@@ -1393,4 +1393,57 @@ describe('Multi-file codegen output', () => {
     const concatenated = result.cppFiles.map((f) => f.content).join('\n');
     expect(result.cppCode).toBe(concatenated);
   });
+
+  it('emits pouIncludes after the shared header in every per-POU TU', () => {
+    // The editor uses this to plumb c_blocks.h through so generated POU
+    // bodies that reference user-defined `<NAME>_VARS` structs and
+    // `<name>_setup` / `<name>_loop` extern functions resolve at C++
+    // compile time.
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := x + 1;
+      END_PROGRAM
+      CONFIGURATION CONFIG0
+        RESOURCE R ON PLC
+          TASK T(INTERVAL := T#100ms, PRIORITY := 1);
+          PROGRAM I WITH T : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source, { pouIncludes: ['c_blocks.h', 'extras.h'] });
+    expect(result.success).toBe(true);
+
+    const pouFiles = result.cppFiles.filter((f) => f.name.startsWith('pou_'));
+    expect(pouFiles.length).toBeGreaterThan(0);
+    for (const f of pouFiles) {
+      expect(f.content).toContain('#include "generated.hpp"');
+      expect(f.content).toContain('#include "c_blocks.h"');
+      expect(f.content).toContain('#include "extras.h"');
+      // Order must be: shared header first, then extras, before namespace open.
+      const headerIdx = f.content.indexOf('#include "generated.hpp"');
+      const cBlocksIdx = f.content.indexOf('#include "c_blocks.h"');
+      const nsIdx = f.content.indexOf('namespace strucpp');
+      expect(headerIdx).toBeLessThan(cBlocksIdx);
+      expect(cBlocksIdx).toBeLessThan(nsIdx);
+    }
+  });
+
+  it('omits pouIncludes by default', () => {
+    const source = `
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := x + 1;
+      END_PROGRAM
+      CONFIGURATION CONFIG0
+        RESOURCE R ON PLC
+          TASK T(INTERVAL := T#100ms, PRIORITY := 1);
+          PROGRAM I WITH T : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    const pouFile = result.cppFiles.find((f) => f.name.startsWith('pou_'))!;
+    expect(pouFile.content).not.toContain('c_blocks.h');
+  });
 });

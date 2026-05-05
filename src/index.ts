@@ -621,6 +621,7 @@ export function compile(
       ? { lineDirectiveFileName: pipeline.mergedOptions.lineDirectiveFileName }
       : {}),
     libraryHeaders,
+    pouIncludes: pipeline.mergedOptions.pouIncludes ?? [],
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
   });
