@@ -41,6 +41,11 @@ import { resolve, basename, dirname, join } from "path";
 import { tmpdir, platform } from "os";
 import { execFileSync } from "child_process";
 import { compile, getVersion, compileStlib } from "./index.js";
+import {
+  formatDiagnostic,
+  buildSourceMap,
+  type DiagnosticSource,
+} from "./diagnostic-formatter.js";
 import { loadStlibFromFile, discoverStlibs } from "./library/library-loader.js";
 import { discoverSTFiles } from "./library/library-utils.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
@@ -57,7 +62,7 @@ import {
   findRuntimeIncludeDir,
   findBundledLibsDir,
 } from "./build-utils.js";
-import type { CompileOptions } from "./types.js";
+import type { CompileError, CompileOptions } from "./types.js";
 import { importCodesysLibrary } from "./library/codesys-import/index.js";
 
 interface CLIOptions {
@@ -86,6 +91,44 @@ interface CLIOptions {
   importLib?: string;
   test: string[];
   defines: Record<string, number>;
+}
+
+/**
+ * Print one or more diagnostics to stdout/stderr with a blank line
+ * between entries. Builds the source map once and reuses it across
+ * the loop. Used by every CLI mode that surfaces compile/parse/analyze
+ * errors so the formatting (and the spacing) stays consistent.
+ */
+function printDiagnostics(
+  errors: ReadonlyArray<CompileError>,
+  sources: DiagnosticSource[],
+  stream: "error" | "warn" = "error",
+): void {
+  const map = buildSourceMap(sources);
+  const out = stream === "warn" ? console.warn : console.error;
+  for (const err of errors) {
+    out(formatDiagnostic(err, map));
+    out("");
+  }
+}
+
+/**
+ * Coerce a stlib-compile error (which has optional line/file fields) into
+ * the CompileError shape `printDiagnostics` consumes. Defaults `column` to
+ * 1 since stlib errors don't carry one.
+ */
+function toDiagnostic(err: {
+  message: string;
+  line?: number;
+  file?: string;
+}): CompileError {
+  return {
+    message: err.message,
+    line: err.line ?? 0,
+    column: 1,
+    severity: "error",
+    ...(err.file ? { file: err.file } : {}),
+  };
 }
 
 function parseArgs(args: string[]): CLIOptions {
@@ -509,13 +552,8 @@ function compileLibraryMode(options: CLIOptions): void {
   const result = compileStlib(sources, stlibOpts);
 
   if (!result.success) {
-    console.error("\nLibrary compilation failed:");
-    for (const error of result.errors) {
-      const location = error.file
-        ? `${error.file}:${error.line ?? 0}`
-        : `${error.line ?? 0}`;
-      console.error(`  ${location}: error: ${error.message}`);
-    }
+    console.error("\nLibrary compilation failed:\n");
+    printDiagnostics(result.errors.map(toDiagnostic), sources);
     process.exit(1);
   }
 
@@ -581,13 +619,11 @@ function runTestMode(options: CLIOptions): void {
 
   const result = compile(source, compileOptions);
   if (!result.success) {
-    console.error("Error compiling source files:");
-    for (const err of result.errors) {
-      const location = err.file
-        ? `${err.file}:${err.line}:${err.column}`
-        : `${err.line}:${err.column}`;
-      console.error(`  ${location}: ${err.severity}: ${err.message}`);
-    }
+    console.error("Error compiling source files:\n");
+    printDiagnostics(result.errors, [
+      { fileName: basename(inputPath), source },
+      ...additionalSources,
+    ]);
     process.exit(1);
   }
 
@@ -596,6 +632,7 @@ function runTestMode(options: CLIOptions): void {
 
   // 3. Parse test files
   const testFiles: import("./testing/test-model.js").TestFile[] = [];
+  const testSources: DiagnosticSource[] = [];
   for (const testPath of options.test) {
     const resolvedPath = resolve(testPath);
     let testSource: string;
@@ -605,13 +642,12 @@ function runTestMode(options: CLIOptions): void {
       console.error(`Error: Cannot read test file: ${resolvedPath}`);
       process.exit(1);
     }
+    testSources.push({ fileName: basename(testPath), source: testSource });
 
     const parseResult = parseTestFile(testSource, basename(testPath));
     if (parseResult.errors.length > 0) {
-      console.error(`Error parsing ${basename(testPath)}:`);
-      for (const err of parseResult.errors) {
-        console.error(`  ${err.line}:${err.column}: ${err.message}`);
-      }
+      console.error(`Error parsing ${basename(testPath)}:\n`);
+      printDiagnostics(parseResult.errors, testSources);
       process.exit(1);
     }
     if (parseResult.testFile) {
@@ -631,10 +667,8 @@ function runTestMode(options: CLIOptions): void {
       const analysisResult = analyzeTestFile(tf, result.symbolTables);
       if (analysisResult.errors.length > 0) {
         hasTestErrors = true;
-        console.error(`Error in test file '${tf.fileName}':`);
-        for (const err of analysisResult.errors) {
-          console.error(`  ${err.line}:${err.column}: ${err.message}`);
-        }
+        console.error(`Error in test file '${tf.fileName}':\n`);
+        printDiagnostics(analysisResult.errors, testSources);
       }
     }
     if (hasTestErrors) {
@@ -861,15 +895,10 @@ function importLibMode(options: CLIOptions): void {
   const result = compileStlib(importResult.sources, stlibOpts);
 
   if (!result.success) {
-    console.error("\nLibrary compilation failed:");
-    for (const error of result.errors) {
-      const location = error.file
-        ? `${error.file}:${error.line ?? 0}`
-        : `${error.line ?? 0}`;
-      console.error(`  ${location}: error: ${error.message}`);
-    }
+    console.error("\nLibrary compilation failed:\n");
+    printDiagnostics(result.errors.map(toDiagnostic), importResult.sources);
     console.error(
-      "\nNote: Extracted ST sources may need manual adjustments for compilation.",
+      "Note: Extracted ST sources may need manual adjustments for compilation.",
     );
     process.exit(1);
   }
@@ -984,26 +1013,18 @@ function main(): void {
 
   const result = compile(source, compileOptions);
 
+  const diagSources: DiagnosticSource[] = [
+    { fileName: basename(inputPath), source },
+    ...additionalSources,
+  ];
+
   if (!result.success) {
-    console.error("\nCompilation failed:");
-    for (const error of result.errors) {
-      const location = error.file
-        ? `${error.file}:${error.line}:${error.column}`
-        : `${error.line}:${error.column}`;
-      console.error(`  ${location}: ${error.severity}: ${error.message}`);
-      if (error.suggestion) {
-        console.error(`    Suggestion: ${error.suggestion}`);
-      }
-    }
+    console.error("\nCompilation failed:\n");
+    printDiagnostics(result.errors, diagSources);
     process.exit(1);
   }
 
-  for (const warning of result.warnings) {
-    const location = warning.file
-      ? `${warning.file}:${warning.line}:${warning.column}`
-      : `${warning.line}:${warning.column}`;
-    console.warn(`  ${location}: warning: ${warning.message}`);
-  }
+  printDiagnostics(result.warnings, diagSources, "warn");
 
   try {
     writeFileSync(outputPath, result.cppCode, "utf-8");

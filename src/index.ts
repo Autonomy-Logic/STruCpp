@@ -54,6 +54,29 @@ export const defaultOptions: CompileOptions = {
   optimizationLevel: 0,
 };
 
+/** Conservative include-path character set: alphanumerics, dot, slash,
+ *  hyphen, underscore, plus.  Disallows quotes, backslashes, and newlines
+ *  so a `pouIncludes` entry can never break out of `#include "..."` and
+ *  splice unintended directives into a generated TU. */
+const INCLUDE_PATH_RE = /^[\w./+-]+$/;
+
+/**
+ * Reject obviously-malformed option values up front so misuse surfaces as
+ * a thrown error from the API entry point, not as broken C++ later in
+ * the pipeline.  Keep the checks narrow: the goal is to close foot-guns
+ * without becoming a schema validator.
+ */
+function validateCompileOptions(options: CompileOptions): void {
+  for (const include of options.pouIncludes ?? []) {
+    if (typeof include !== "string" || !INCLUDE_PATH_RE.test(include)) {
+      throw new TypeError(
+        `pouIncludes entry ${JSON.stringify(include)} is not a valid include filename ` +
+          `(allowed characters: alphanumerics, '.', '/', '-', '_', '+').`,
+      );
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Library tree-shaking: only include libraries whose symbols are referenced
 // ---------------------------------------------------------------------------
@@ -186,6 +209,7 @@ function runPipeline(
   continueOnError: boolean,
 ): PipelineResult {
   const mergedOptions = { ...defaultOptions, ...options };
+  validateCompileOptions(mergedOptions);
   const errors: CompileError[] = [];
   const warnings: CompileError[] = [];
   let ast: CompilationUnit | undefined;
@@ -231,12 +255,14 @@ function runPipeline(
         message?: string;
         token?: { startLine?: number; startColumn?: number };
       };
-      errors.push({
+      const entry: CompileError = {
         message: errObj.message ?? "Parse error",
         line: errObj.token?.startLine ?? 0,
         column: errObj.token?.startColumn ?? 0,
         severity: "error",
-      });
+      };
+      if (mergedOptions.fileName) entry.file = mergedOptions.fileName;
+      errors.push(entry);
     }
     // In analyze mode, continue with partial CST from Chevrotain recovery.
     // In compile mode, abort immediately.
@@ -384,6 +410,7 @@ function runPipeline(
         line: err.line ?? 0,
         column: err.column ?? 0,
         severity: "error",
+        ...(err.file ? { file: err.file } : {}),
       });
     }
     for (const warn of projectModelResult.warnings) {
@@ -392,6 +419,7 @@ function runPipeline(
         line: warn.line ?? 0,
         column: warn.column ?? 0,
         severity: "warning",
+        ...(warn.file ? { file: warn.file } : {}),
       });
     }
   } catch (e) {
@@ -617,6 +645,7 @@ export function compile(
       ? { lineDirectiveFileName: pipeline.mergedOptions.lineDirectiveFileName }
       : {}),
     libraryHeaders,
+    pouIncludes: pipeline.mergedOptions.pouIncludes ?? [],
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
   });
@@ -810,6 +839,14 @@ export type {
   AnalysisResult,
 } from "./types.js";
 export type { SourceSpan, LineMapEntry, Severity } from "./types.js";
+
+// Re-export diagnostic formatting helpers
+export {
+  buildSourceMap,
+  formatDiagnostic,
+  formatDiagnostics,
+} from "./diagnostic-formatter.js";
+export type { DiagnosticSource } from "./diagnostic-formatter.js";
 
 // Re-export AST types for LSP integration
 export type {

@@ -38,6 +38,7 @@ import {
   resolveArrayElementType,
   typeName as typeNameUtil,
 } from "./type-utils.js";
+import { stripEnEno } from "../ast-utils.js";
 
 // Re-export from type-utils for backward compatibility
 export { ELEMENTARY_TYPES, TYPE_CATEGORIES } from "./type-utils.js";
@@ -513,12 +514,16 @@ export class TypeChecker {
             return retType;
           }
         }
-        // Return matches first parameter
-        if (desc.returnMatchesFirstParam && expr.arguments.length > 0) {
-          const firstArgType = expr.arguments[0]!.value.resolvedType;
-          if (firstArgType) {
-            expr.resolvedType = firstArgType;
-            return firstArgType;
+        // Return matches first parameter (skipping EN/ENO — they're not part
+        // of the declared signature).
+        if (desc.returnMatchesFirstParam) {
+          const userArgs = stripEnEno(expr.arguments);
+          if (userArgs.length > 0) {
+            const firstArgType = userArgs[0]!.value.resolvedType;
+            if (firstArgType) {
+              expr.resolvedType = firstArgType;
+              return firstArgType;
+            }
           }
         }
       }
@@ -921,9 +926,13 @@ export class TypeChecker {
     const desc = this.stdRegistry.lookup(nameUpper);
     if (!desc) return; // User-defined or unknown — skip constraint checking
 
-    // Validate argument types against parameter constraints
-    for (let i = 0; i < expr.arguments.length && i < desc.params.length; i++) {
-      const arg = expr.arguments[i]!;
+    // Validate argument types against parameter constraints. Strip EN/ENO
+    // first — they're handled by the codegen wrapper and don't map onto the
+    // declared signature, so leaving them in would shift positional indices
+    // and the param at slot 0 would be type-checked against EN's BOOL.
+    const userArgs = stripEnEno(expr.arguments);
+    for (let i = 0; i < userArgs.length && i < desc.params.length; i++) {
+      const arg = userArgs[i]!;
       const param = desc.params[i]!;
       const argType = arg.value.resolvedType;
 

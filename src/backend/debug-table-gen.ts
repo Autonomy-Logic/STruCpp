@@ -464,6 +464,32 @@ export function generateDebugTable(
     }
   };
 
+  // Configurations carry both VAR_GLOBAL declarations and the
+  // resource → task → program-instance tree. Globals go first so they own
+  // a dedicated bucket at the head of the table — that way edits to a
+  // program don't shift global addresses around.
+  //
+  // Path convention is bare uppercase name (no instance prefix): the
+  // editor's `buildGlobalDebugPath()` returns `name.toUpperCase()` and
+  // OPC-UA `GVL:foo` references resolve against the same key.
+  // C++ expression is `${configGlobal}.${name}` because globals are
+  // emitted as members of the Configuration class (see codegen.ts
+  // `generateConfigurationFromAST`).
+  for (const config of ast.configurations) {
+    for (const block of config.varBlocks) {
+      if (block.blockType !== "VAR_GLOBAL") continue;
+      for (const decl of block.declarations) {
+        for (const varName of decl.names) {
+          visitTypeRef(
+            varName.toUpperCase(),
+            `${configGlobal}.${varName}`,
+            decl.type,
+          );
+        }
+      }
+    }
+  }
+
   // Walk configurations → resources → tasks → instances.
   for (const config of projectModel.configurations) {
     for (const resource of config.resources) {
