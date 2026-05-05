@@ -41,6 +41,11 @@ import { resolve, basename, dirname, join } from "path";
 import { tmpdir, platform } from "os";
 import { execFileSync } from "child_process";
 import { compile, getVersion, compileStlib } from "./index.js";
+import {
+  formatDiagnostic,
+  buildSourceMap,
+  type DiagnosticSource,
+} from "./diagnostic-formatter.js";
 import { loadStlibFromFile, discoverStlibs } from "./library/library-loader.js";
 import { discoverSTFiles } from "./library/library-utils.js";
 import { generateReplMain } from "./backend/repl-main-gen.js";
@@ -509,12 +514,24 @@ function compileLibraryMode(options: CLIOptions): void {
   const result = compileStlib(sources, stlibOpts);
 
   if (!result.success) {
-    console.error("\nLibrary compilation failed:");
+    console.error("\nLibrary compilation failed:\n");
+    const libSourceMap = buildSourceMap(
+      sources.map((s) => ({ fileName: s.fileName, source: s.source })),
+    );
     for (const error of result.errors) {
-      const location = error.file
-        ? `${error.file}:${error.line ?? 0}`
-        : `${error.line ?? 0}`;
-      console.error(`  ${location}: error: ${error.message}`);
+      console.error(
+        formatDiagnostic(
+          {
+            message: error.message,
+            line: error.line ?? 0,
+            column: 1,
+            severity: "error",
+            ...(error.file ? { file: error.file } : {}),
+          },
+          libSourceMap,
+        ),
+      );
+      console.error("");
     }
     process.exit(1);
   }
@@ -581,12 +598,14 @@ function runTestMode(options: CLIOptions): void {
 
   const result = compile(source, compileOptions);
   if (!result.success) {
-    console.error("Error compiling source files:");
+    console.error("Error compiling source files:\n");
+    const testSourceMap = buildSourceMap([
+      { fileName: basename(inputPath), source },
+      ...additionalSources,
+    ]);
     for (const err of result.errors) {
-      const location = err.file
-        ? `${err.file}:${err.line}:${err.column}`
-        : `${err.line}:${err.column}`;
-      console.error(`  ${location}: ${err.severity}: ${err.message}`);
+      console.error(formatDiagnostic(err, testSourceMap));
+      console.error("");
     }
     process.exit(1);
   }
@@ -596,6 +615,7 @@ function runTestMode(options: CLIOptions): void {
 
   // 3. Parse test files
   const testFiles: import("./testing/test-model.js").TestFile[] = [];
+  const testSources: DiagnosticSource[] = [];
   for (const testPath of options.test) {
     const resolvedPath = resolve(testPath);
     let testSource: string;
@@ -605,12 +625,15 @@ function runTestMode(options: CLIOptions): void {
       console.error(`Error: Cannot read test file: ${resolvedPath}`);
       process.exit(1);
     }
+    testSources.push({ fileName: basename(testPath), source: testSource });
 
     const parseResult = parseTestFile(testSource, basename(testPath));
     if (parseResult.errors.length > 0) {
-      console.error(`Error parsing ${basename(testPath)}:`);
+      console.error(`Error parsing ${basename(testPath)}:\n`);
+      const testFileMap = buildSourceMap(testSources);
       for (const err of parseResult.errors) {
-        console.error(`  ${err.line}:${err.column}: ${err.message}`);
+        console.error(formatDiagnostic(err, testFileMap));
+        console.error("");
       }
       process.exit(1);
     }
@@ -627,13 +650,15 @@ function runTestMode(options: CLIOptions): void {
   // 3b. Semantic analysis of test files
   if (result.symbolTables) {
     let hasTestErrors = false;
+    const analysisMap = buildSourceMap(testSources);
     for (const tf of testFiles) {
       const analysisResult = analyzeTestFile(tf, result.symbolTables);
       if (analysisResult.errors.length > 0) {
         hasTestErrors = true;
-        console.error(`Error in test file '${tf.fileName}':`);
+        console.error(`Error in test file '${tf.fileName}':\n`);
         for (const err of analysisResult.errors) {
-          console.error(`  ${err.line}:${err.column}: ${err.message}`);
+          console.error(formatDiagnostic(err, analysisMap));
+          console.error("");
         }
       }
     }
@@ -861,15 +886,30 @@ function importLibMode(options: CLIOptions): void {
   const result = compileStlib(importResult.sources, stlibOpts);
 
   if (!result.success) {
-    console.error("\nLibrary compilation failed:");
+    console.error("\nLibrary compilation failed:\n");
+    const importSourceMap = buildSourceMap(
+      importResult.sources.map((s) => ({
+        fileName: s.fileName,
+        source: s.source,
+      })),
+    );
     for (const error of result.errors) {
-      const location = error.file
-        ? `${error.file}:${error.line ?? 0}`
-        : `${error.line ?? 0}`;
-      console.error(`  ${location}: error: ${error.message}`);
+      console.error(
+        formatDiagnostic(
+          {
+            message: error.message,
+            line: error.line ?? 0,
+            column: 1,
+            severity: "error",
+            ...(error.file ? { file: error.file } : {}),
+          },
+          importSourceMap,
+        ),
+      );
+      console.error("");
     }
     console.error(
-      "\nNote: Extracted ST sources may need manual adjustments for compilation.",
+      "Note: Extracted ST sources may need manual adjustments for compilation.",
     );
     process.exit(1);
   }
@@ -984,25 +1024,24 @@ function main(): void {
 
   const result = compile(source, compileOptions);
 
+  const diagSources: DiagnosticSource[] = [
+    { fileName: basename(inputPath), source },
+    ...additionalSources,
+  ];
+  const sourceMap = buildSourceMap(diagSources);
+
   if (!result.success) {
-    console.error("\nCompilation failed:");
+    console.error("\nCompilation failed:\n");
     for (const error of result.errors) {
-      const location = error.file
-        ? `${error.file}:${error.line}:${error.column}`
-        : `${error.line}:${error.column}`;
-      console.error(`  ${location}: ${error.severity}: ${error.message}`);
-      if (error.suggestion) {
-        console.error(`    Suggestion: ${error.suggestion}`);
-      }
+      console.error(formatDiagnostic(error, sourceMap));
+      console.error("");
     }
     process.exit(1);
   }
 
   for (const warning of result.warnings) {
-    const location = warning.file
-      ? `${warning.file}:${warning.line}:${warning.column}`
-      : `${warning.line}:${warning.column}`;
-    console.warn(`  ${location}: warning: ${warning.message}`);
+    console.warn(formatDiagnostic(warning, sourceMap));
+    console.warn("");
   }
 
   try {

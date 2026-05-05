@@ -231,12 +231,14 @@ function runPipeline(
         message?: string;
         token?: { startLine?: number; startColumn?: number };
       };
-      errors.push({
+      const entry: CompileError = {
         message: errObj.message ?? "Parse error",
         line: errObj.token?.startLine ?? 0,
         column: errObj.token?.startColumn ?? 0,
         severity: "error",
-      });
+      };
+      if (mergedOptions.fileName) entry.file = mergedOptions.fileName;
+      errors.push(entry);
     }
     // In analyze mode, continue with partial CST from Chevrotain recovery.
     // In compile mode, abort immediately.
@@ -384,6 +386,7 @@ function runPipeline(
         line: err.line ?? 0,
         column: err.column ?? 0,
         severity: "error",
+        ...(err.file ? { file: err.file } : {}),
       });
     }
     for (const warn of projectModelResult.warnings) {
@@ -392,6 +395,7 @@ function runPipeline(
         line: warn.line ?? 0,
         column: warn.column ?? 0,
         severity: "warning",
+        ...(warn.file ? { file: warn.file } : {}),
       });
     }
   } catch (e) {
@@ -810,6 +814,14 @@ export type {
   AnalysisResult,
 } from "./types.js";
 export type { SourceSpan, LineMapEntry, Severity } from "./types.js";
+
+// Re-export diagnostic formatting helpers
+export {
+  buildSourceMap,
+  formatDiagnostic,
+  formatDiagnostics,
+} from "./diagnostic-formatter.js";
+export type { DiagnosticSource } from "./diagnostic-formatter.js";
 
 // Re-export AST types for LSP integration
 export type {
