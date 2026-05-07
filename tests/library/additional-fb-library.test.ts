@@ -228,17 +228,23 @@ describe("Additional Function Blocks Library", () => {
       expect(result.success).toBe(true);
     });
 
-    it("a user program can capture an RTC offset with date arithmetic", () => {
-      // Locks in the new DT-arithmetic type rule used by RTC's body
-      // (DT - DT → TIME, DT + TIME → DT). Without it the RTC FB itself
-      // wouldn't have compiled in the first place.
+    it("a user program can drive RTC across the rising-edge anchor", () => {
+      // RTC is hardware-agnostic — body uses only TIME() (monotonic
+      // scan-cycle time) and the IEC date arithmetic rules added for
+      // this library. This test invokes the FB twice across the rising
+      // edge of IN to make sure the anchoring path type-checks AND the
+      // generated code holds together when the FB is exercised in a
+      // realistic two-step sequence rather than a single snapshot call.
       const userProgram = `
         PROGRAM main
           VAR
-            clock : RTC ;
+            clock  : RTC ;
             preset : DT := DT#2026-01-01-00:00:00 ;
           END_VAR
+          (* Pre-anchor scan: CDT counts from DT zero. *)
           clock(IN := FALSE, PDT := preset) ;
+          (* Rising edge: latches preset as the new anchor. *)
+          clock(IN := TRUE,  PDT := preset) ;
         END_PROGRAM
       `;
 
@@ -248,6 +254,22 @@ describe("Additional Function Blocks Library", () => {
 
       expect(result.errors).toEqual([]);
       expect(result.success).toBe(true);
+    });
+
+    it("RTC does NOT pull in CURRENT_DT() — runs on hardware-agnostic targets", () => {
+      // Regression guard for the Arduino constraint: RTC must be self-
+      // contained on TIME(). If a future change re-introduces a
+      // CURRENT_DT() call inside the FB body, that call would surface
+      // in the embedded ST source and this assertion would catch it
+      // before it broke targets that don't ship std::chrono.
+      //
+      // Strip comments before scanning — the file's header comment
+      // intentionally explains the design choice and mentions the
+      // function name in prose; the call we want to forbid is in
+      // executable code only.
+      const rtcSource = getSource("rtc.st");
+      const stripComments = (s: string) => s.replace(/\(\*[\s\S]*?\*\)/g, "");
+      expect(stripComments(rtcSource)).not.toMatch(/CURRENT_DT\s*\(/);
     });
   });
 });
