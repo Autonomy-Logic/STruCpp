@@ -41,6 +41,10 @@ function serializeVarType(
   return entry;
 }
 
+/** Match a top-of-line POU header. */
+const POU_HEADER_RE =
+  /^[ \t]*(FUNCTION_BLOCK|FUNCTION|PROGRAM|TYPE)[ \t]+(\w+)/gm;
+
 /**
  * Build a "POU name → category" map from categorized source inputs.
  *
@@ -56,15 +60,84 @@ function serializeVarType(
 function buildCategoryByPouName(
   sources: Array<{ source: string; fileName: string; category?: string }>,
 ): Map<string, string> {
+  // Manifest entry names come from the parser, which uppercases POU
+  // identifiers. Source-text names preserve original casing (CODESYS
+  // happily exports "FT_Profile" as mixed case). Normalize both sides
+  // by uppercasing the map keys, so we match regardless of the casing
+  // used in the original source.
   const map = new Map<string, string>();
-  const declRe = /^[ \t]*(FUNCTION_BLOCK|FUNCTION|PROGRAM|TYPE)[ \t]+(\w+)/gm;
   for (const src of sources) {
     if (!src.category) continue;
     let m: RegExpExecArray | null;
-    declRe.lastIndex = 0;
-    while ((m = declRe.exec(src.source)) !== null) {
-      const name = m[2]!;
+    POU_HEADER_RE.lastIndex = 0;
+    while ((m = POU_HEADER_RE.exec(src.source)) !== null) {
+      const name = m[2]!.toUpperCase();
       if (!map.has(name)) map.set(name, src.category);
+    }
+  }
+  return map;
+}
+
+/**
+ * Pick the structured documentation block from one POU's source region.
+ *
+ * Both CODESYS-exported POUs and OSCAT-style hand-authored ST tend to
+ * carry a `(* version X.Y …  programmer …  tested by …  description … *)`
+ * block right after the VAR sections. We scan every top-level `(* … *)`
+ * block in the region and return the first one whose body contains one
+ * of the trigger words (`version`, `programmer`, `tested by`). This
+ * skips inline variable annotations like `(* Laufvariable Stack *)` —
+ * which appear earlier in the source for some POUs and would otherwise
+ * shadow the real doc block.
+ *
+ * Returns the trimmed block body (without the surrounding `(*`/`*)`),
+ * or `null` if no doc-shaped block is present (typical for plain
+ * STRUCT/GVL definitions).
+ */
+function extractDocBlock(region: string): string | null {
+  const re = /\(\*([\s\S]*?)\*\)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(region)) !== null) {
+    const body = m[1]!;
+    if (/(?:^|\n)[ \t]*(?:version|programmer|tested\s*by)\b/i.test(body)) {
+      return body.trim();
+    }
+  }
+  return null;
+}
+
+/**
+ * Build a "POU name → documentation" map by splitting each source into
+ * per-POU regions and running `extractDocBlock` on each.
+ *
+ * Multi-POU files are common in hand-authored libs (counter.st in
+ * iec-standard-fb concatenates 15 counter variants), so we segment the
+ * source at every top-level POU header rather than treating the whole
+ * file as one region — otherwise every POU in the file would receive
+ * the same doc block, or only the first POU's block would survive.
+ */
+function buildDocByPouName(
+  sources: Array<{ source: string; fileName: string }>,
+): Map<string, string> {
+  // Map keys are uppercased to match the parser's identifier-canonicalization
+  // (see comment in `buildCategoryByPouName`).
+  const map = new Map<string, string>();
+  for (const src of sources) {
+    const matches: Array<{ name: string; offset: number }> = [];
+    let m: RegExpExecArray | null;
+    POU_HEADER_RE.lastIndex = 0;
+    while ((m = POU_HEADER_RE.exec(src.source)) !== null) {
+      matches.push({ name: m[2]!.toUpperCase(), offset: m.index });
+    }
+    for (let i = 0; i < matches.length; i++) {
+      const start = matches[i]!.offset;
+      const end =
+        i + 1 < matches.length ? matches[i + 1]!.offset : src.source.length;
+      const region = src.source.slice(start, end);
+      const doc = extractDocBlock(region);
+      if (doc && !map.has(matches[i]!.name)) {
+        map.set(matches[i]!.name, doc);
+      }
     }
   }
   return map;
@@ -81,6 +154,23 @@ function tagCategory<T extends { name: string; category?: string }>(
 ): T {
   const cat = catByName.get(entry.name);
   if (cat) entry.category = cat;
+  return entry;
+}
+
+/**
+ * Optionally tag a manifest entry with documentation extracted from its
+ * inline source doc-block. Same omit-when-empty contract as `tagCategory`
+ * — entries without a doc block in their source serialize identically to
+ * the pre-extraction shape, so library.json's
+ * `applyLibraryConfigDocumentation` post-processor still works as the
+ * authoritative override mechanism for hand-curated docs.
+ */
+function tagDocumentation<T extends { name: string; documentation?: string }>(
+  entry: T,
+  docByName: Map<string, string>,
+): T {
+  const doc = docByName.get(entry.name);
+  if (doc) entry.documentation = doc;
   return entry;
 }
 
@@ -104,6 +194,7 @@ export function compileLibrary(
   },
 ): LibraryCompileResult {
   const catByName = buildCategoryByPouName(sources);
+  const docByName = buildDocByPouName(sources);
   if (sources.length === 0) {
     return {
       success: false,
@@ -178,55 +269,61 @@ export function compileLibrary(
       version: options.version,
       namespace: options.namespace,
       functions: ast.functions.map((fn) =>
-        tagCategory(
-          {
-            name: fn.name,
-            returnType: fn.returnType.name,
-            parameters: fn.varBlocks.flatMap((block) =>
-              block.declarations.flatMap((decl) =>
-                decl.names.map((name) => ({
-                  name,
-                  type: decl.type.name,
-                  direction:
-                    block.blockType === "VAR_OUTPUT"
-                      ? "output"
-                      : block.blockType === "VAR_IN_OUT"
-                        ? "inout"
-                        : "input",
-                })),
+        tagDocumentation(
+          tagCategory(
+            {
+              name: fn.name,
+              returnType: fn.returnType.name,
+              parameters: fn.varBlocks.flatMap((block) =>
+                block.declarations.flatMap((decl) =>
+                  decl.names.map((name) => ({
+                    name,
+                    type: decl.type.name,
+                    direction:
+                      block.blockType === "VAR_OUTPUT"
+                        ? "output"
+                        : block.blockType === "VAR_IN_OUT"
+                          ? "inout"
+                          : "input",
+                  })),
+                ),
               ),
-            ),
-          },
-          catByName,
+            },
+            catByName,
+          ),
+          docByName,
         ),
       ),
       functionBlocks: ast.functionBlocks.map((fb) =>
-        tagCategory(
-          {
-            name: fb.name,
-            inputs: fb.varBlocks
-              .filter((b) => b.blockType === "VAR_INPUT")
-              .flatMap((b) =>
-                b.declarations.flatMap((d) =>
-                  d.names.map((n) => serializeVarType(n, d.type)),
+        tagDocumentation(
+          tagCategory(
+            {
+              name: fb.name,
+              inputs: fb.varBlocks
+                .filter((b) => b.blockType === "VAR_INPUT")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) => serializeVarType(n, d.type)),
+                  ),
                 ),
-              ),
-            outputs: fb.varBlocks
-              .filter((b) => b.blockType === "VAR_OUTPUT")
-              .flatMap((b) =>
-                b.declarations.flatMap((d) =>
-                  d.names.map((n) => serializeVarType(n, d.type)),
+              outputs: fb.varBlocks
+                .filter((b) => b.blockType === "VAR_OUTPUT")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) => serializeVarType(n, d.type)),
+                  ),
                 ),
-              ),
-            inouts: fb.varBlocks
-              .filter((b) => b.blockType === "VAR_IN_OUT")
-              .flatMap((b) =>
-                b.declarations.flatMap((d) =>
-                  d.names.map((n) => serializeVarType(n, d.type)),
+              inouts: fb.varBlocks
+                .filter((b) => b.blockType === "VAR_IN_OUT")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) => serializeVarType(n, d.type)),
+                  ),
                 ),
-              ),
-          },
-          catByName,
+            },
+            catByName,
+          ),
+          docByName,
         ),
       ),
       types: ast.types.map((t) => {
