@@ -1,50 +1,53 @@
 (* Additional Function Blocks: RTC                                       *)
+(* Source ported verbatim from MatIEC's lib/rtc.txt with one substitution: *)
+(* the MatIEC pragma `{__SET_VAR(data__->,CURRENT_TIME,,__CURRENT_TIME)}`  *)
+(* read MatIEC's `__CURRENT_TIME` global, which serves the same purpose as *)
+(* STruC++'s TIME() — monotonic scan-cycle time, hardware agnostic. We     *)
+(* substitute TO_DT(TIME()) so the same int64 tick value lands in a DT-    *)
+(* typed local. STruC++ requires an explicit conversion where MatIEC's     *)
+(* pragma did a raw bit-copy; behaviour is otherwise identical.            *)
 (*                                                                        *)
-(* Hardware/time agnostic real-time clock.                                *)
+(* Original MatIEC documentation:                                          *)
 (*                                                                        *)
-(* The block uses only TIME() (monotonic scan-cycle time, always present  *)
-(* on every target including Arduino) — no wall-clock function calls. It  *)
-(* maintains an internal (DT, TIME) anchor pair:                          *)
+(*   RTC - Real-time clock                                                *)
 (*                                                                        *)
-(*   ANCHOR_DT,   initially DT zero (defaulted)                          *)
-(*   ANCHOR_TIME, initially T#0s                                         *)
+(*   Q is a copy of IN.                                                    *)
 (*                                                                        *)
-(* On every scan: CDT := ANCHOR_DT + (TIME() - ANCHOR_TIME).              *)
+(*   When IN = FALSE, CDT is the current "tick" time exposed by the       *)
+(*   runtime as a DT.                                                      *)
 (*                                                                        *)
-(* On the rising edge of IN, the user-supplied PDT is latched as the new  *)
-(* anchor and the current TIME() becomes the time origin, so CDT begins  *)
-(* counting from PDT. Subsequent rising edges re-anchor; falling edges    *)
-(* leave the anchor in place so CDT keeps advancing at real-time rate.   *)
-(*                                                                        *)
-(* The MatIEC RTC depended on a runtime-injected `__CURRENT_TIME` global  *)
-(* (wall-clock DT). That coupling is intentionally removed here so the    *)
-(* block compiles unchanged on Arduino targets where wall-clock time isn't *)
-(* available. Users who DO want wall-clock semantics can call the          *)
-(* CURRENT_DT() runtime function and feed its result into PDT on the      *)
-(* platforms where that function is supported.                            *)
+(*   When IN changes from FALSE to TRUE, PDT is stored. As long as IN is   *)
+(*   TRUE, CDT is equal to PDT + the amount of time since PDT was loaded. *)
 
 FUNCTION_BLOCK RTC
   VAR_INPUT
-    IN  : BOOL ;             (* Rising edge latches PDT as the anchor *)
-    PDT : DT ;               (* Preset datetime, sampled on rising edge of IN *)
+    IN  : BOOL ;                  (* 0 - current time, 1 - load time from PDT *)
+    PDT : DT ;                    (* Preset datetime *)
   END_VAR
   VAR_OUTPUT
-    Q   : BOOL := FALSE ;    (* Copy of IN *)
-    CDT : DT ;               (* Current datetime relative to the latched anchor *)
-  END_VAR
-  VAR
-    PREV_IN     : BOOL := FALSE ;
-    ANCHOR_DT   : DT ;       (* Defaults to DT zero — pre-anchor CDT counts from DT zero. *)
-    ANCHOR_TIME : TIME := T#0s ;
+    Q   : BOOL := FALSE ;         (* Copy of IN *)
+    CDT : DT ;                    (* Datetime, current or relative to PDT *)
   END_VAR
 
-  IF IN AND NOT PREV_IN THEN
-    (* Rising edge: latch PDT and capture current scan time as origin. *)
-    ANCHOR_DT   := PDT ;
-    ANCHOR_TIME := TIME() ;
+  VAR
+    PREV_IN      : BOOL := FALSE ;
+    OFFSET       : TIME ;
+    CURRENT_TIME : DT ;
+  END_VAR
+
+  CURRENT_TIME := TO_DT(TIME()) ;
+
+  IF IN THEN
+    IF NOT PREV_IN THEN
+      OFFSET := PDT - CURRENT_TIME ;
+    END_IF ;
+
+    (* PDT + time since PDT was loaded *)
+    CDT := CURRENT_TIME + OFFSET ;
+  ELSE
+    CDT := CURRENT_TIME ;
   END_IF ;
 
-  CDT := ANCHOR_DT + (TIME() - ANCHOR_TIME) ;
-  Q   := IN ;
+  Q := IN ;
   PREV_IN := IN ;
 END_FUNCTION_BLOCK
