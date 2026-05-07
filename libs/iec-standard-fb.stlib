@@ -20,7 +20,8 @@
             "type": "BOOL"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The output produces a single pulse when a rising edge is detected."
       },
       {
         "name": "F_TRIG",
@@ -36,7 +37,8 @@
             "type": "BOOL"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The output produces a single pulse when a falling edge is detected."
       },
       {
         "name": "SR",
@@ -56,7 +58,8 @@
             "type": "BOOL"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The SR bistable is a latch where the Set dominates."
       },
       {
         "name": "RS",
@@ -76,7 +79,8 @@
             "type": "BOOL"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The RS bistable is a latch where the Reset dominates."
       },
       {
         "name": "CTU",
@@ -104,7 +108,8 @@
             "type": "INT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
       },
       {
         "name": "CTD",
@@ -132,7 +137,8 @@
             "type": "INT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
       },
       {
         "name": "CTUD",
@@ -172,7 +178,8 @@
             "type": "INT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
       },
       {
         "name": "CTU_DINT",
@@ -200,7 +207,8 @@
             "type": "DINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
       },
       {
         "name": "CTU_LINT",
@@ -228,7 +236,8 @@
             "type": "LINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
       },
       {
         "name": "CTU_UDINT",
@@ -256,7 +265,8 @@
             "type": "UDINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
       },
       {
         "name": "CTU_ULINT",
@@ -284,7 +294,8 @@
             "type": "ULINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
       },
       {
         "name": "CTD_DINT",
@@ -312,7 +323,8 @@
             "type": "DINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
       },
       {
         "name": "CTD_LINT",
@@ -340,7 +352,8 @@
             "type": "LINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
       },
       {
         "name": "CTD_UDINT",
@@ -368,7 +381,8 @@
             "type": "UDINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
       },
       {
         "name": "CTD_ULINT",
@@ -396,7 +410,8 @@
             "type": "ULINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
       },
       {
         "name": "CTUD_DINT",
@@ -436,7 +451,8 @@
             "type": "DINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
       },
       {
         "name": "CTUD_LINT",
@@ -476,7 +492,8 @@
             "type": "LINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
       },
       {
         "name": "CTUD_UDINT",
@@ -516,7 +533,8 @@
             "type": "UDINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
       },
       {
         "name": "CTUD_ULINT",
@@ -556,7 +574,8 @@
             "type": "ULINT"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
       },
       {
         "name": "TON",
@@ -580,7 +599,8 @@
             "type": "TIME"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The on-delay timer can be used to delay setting an output true, for fixed period after an input becomes true."
       },
       {
         "name": "TOF",
@@ -604,7 +624,8 @@
             "type": "TIME"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The off-delay timer can be used to delay setting an output false, for fixed period after input goes false."
       },
       {
         "name": "TP",
@@ -628,7 +649,8 @@
             "type": "TIME"
           }
         ],
-        "inouts": []
+        "inouts": [],
+        "documentation": "The pulse timer can be used to generate output pulses of a given time duration."
       }
     ],
     "types": [],

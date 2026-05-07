@@ -58,6 +58,33 @@ describe("Additional Function Blocks Library", () => {
         ]),
       );
     });
+
+    it("populates per-block documentation from library.json", () => {
+      // Block-level docs are merged into the manifest at build time
+      // from libs/sources/additional-function-blocks/library.json. If
+      // an FB ever lands without docs, the editor's hover dialog has
+      // nothing to show — tests catch that here so a stale library.json
+      // doesn't sneak through.
+      const fbsByName = Object.fromEntries(
+        stlibArchive.manifest.functionBlocks.map((fb) => [fb.name, fb]),
+      );
+      for (const name of ["RTC", "INTEGRAL", "DERIVATIVE", "PID", "RAMP", "HYSTERESIS"]) {
+        const fb = fbsByName[name];
+        expect(fb, `${name} should be in the manifest`).toBeDefined();
+        expect(fb!.documentation, `${name} should have documentation`).toMatch(/\S/);
+      }
+    });
+
+    it("RTC documentation matches the editor's prose for hover dialogs", () => {
+      // Locks in the exact wording when the editor migration lands so
+      // users see the same hover text they get today from the editor's
+      // hardcoded library catalog. Update this assertion intentionally
+      // when the prose is revised — drift is the bug we want to catch.
+      const rtc = stlibArchive.manifest.functionBlocks.find((fb) => fb.name === "RTC");
+      expect(rtc?.documentation).toBe(
+        "The real time clock has many uses including time stamping, setting dates and times of day in batch reports, in alarm messages and so on.",
+      );
+    });
   });
 
   describe("FB signatures", () => {

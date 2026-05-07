@@ -366,6 +366,33 @@ describe("Standard FB Library", () => {
       expect(stlibArchive.manifest.functionBlocks).toHaveLength(22);
     });
 
+    it("populates per-block documentation from library.json", () => {
+      // Block-level docs are merged from
+      // libs/sources/iec-standard-fb/library.json at build time.
+      // Every FB in the archive must carry a doc string; if a new FB
+      // is added without a corresponding library.json entry, the
+      // build script fails — this test guards against that loop being
+      // weakened in the future.
+      for (const fb of stlibArchive.manifest.functionBlocks) {
+        expect(fb.documentation, `${fb.name} should have documentation`).toMatch(/\S/);
+      }
+    });
+
+    it("TON / TOF / TP documentation matches the editor's prose", () => {
+      const byName = Object.fromEntries(
+        stlibArchive.manifest.functionBlocks.map((fb) => [fb.name, fb]),
+      );
+      expect(byName.TON?.documentation).toBe(
+        "The on-delay timer can be used to delay setting an output true, for fixed period after an input becomes true.",
+      );
+      expect(byName.TOF?.documentation).toBe(
+        "The off-delay timer can be used to delay setting an output false, for fixed period after input goes false.",
+      );
+      expect(byName.TP?.documentation).toBe(
+        "The pulse timer can be used to generate output pulses of a given time duration.",
+      );
+    });
+
     it("should have non-empty headerCode and cppCode", () => {
       expect(stlibArchive.headerCode).toBeTruthy();
       expect(stlibArchive.cppCode).toBeTruthy();

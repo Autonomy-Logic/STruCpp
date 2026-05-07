@@ -1,10 +1,17 @@
 #!/usr/bin/env node
 /**
- * Rebuild all bundled .stlib library archives from their embedded sources.
+ * Rebuild all bundled .stlib library archives.
  *
- * This script decompiles the existing archives, recompiles them with the
- * current compiler, and writes back the updated archives. It ensures the
- * bundled libraries always match the current codegen output.
+ * The hand-authored libs (iec-standard-fb, additional-function-blocks)
+ * are rebuilt FROM DISK — `libs/sources/<lib-name>/` is the canonical
+ * source of truth, and `libs/<lib-name>.stlib` is a pure build artifact.
+ * library.json next to the .st files carries metadata + per-block docs.
+ *
+ * OSCAT is still rebuilt by round-tripping its embedded sources through
+ * `compileStlib` because its true upstream is the CODESYS .library file
+ * at tests/fixtures/codesys/oscat_basic_335_codesys3.library, and the
+ * codesys-importer doesn't yet write disk sources during build. Bringing
+ * OSCAT onto the same `libs/sources/` model is a follow-up task.
  *
  * Used as:
  *   - vitest globalSetup (runs before all tests)
@@ -18,7 +25,7 @@
  */
 
 import { execSync } from "child_process";
-import { readFileSync, writeFileSync, existsSync, copyFileSync } from "fs";
+import { readFileSync, readdirSync, writeFileSync, existsSync, copyFileSync } from "fs";
 import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
@@ -27,10 +34,13 @@ const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, "..");
 
 const libsDir = resolve(projectRoot, "libs");
+const sourcesRoot = resolve(libsDir, "sources");
 const vscodeLibsDir = resolve(projectRoot, "vscode-extension", "bundled-libs");
 
 let compileStlib;
 let loadStlibFromFile;
+let loadLibraryConfig;
+let applyLibraryConfigDocumentation;
 
 /**
  * Refresh `dist/` from `src/` and import the freshly compiled modules.
@@ -62,16 +72,92 @@ async function refreshAndLoadCompiler() {
   const loader = await import(
     resolve(projectRoot, "dist/library/library-loader.js")
   );
+  const config = await import(
+    resolve(projectRoot, "dist/library/library-config.js")
+  );
   compileStlib = compiler.compileStlib;
   loadStlibFromFile = loader.loadStlibFromFile;
+  loadLibraryConfig = config.loadLibraryConfig;
+  applyLibraryConfigDocumentation = config.applyLibraryConfigDocumentation;
 }
 
 /**
- * Rebuild a single .stlib archive from its embedded sources.
+ * Rebuild a hand-authored library from disk: reads library.json plus
+ * the .st files from libs/sources/<libDirName>/, recompiles, applies
+ * block docs, writes the .stlib archive.
+ *
+ * `orderedSources` enforces a deterministic file order so type-resolution
+ * across files (e.g. PID needing INTEGRAL/DERIVATIVE first) doesn't
+ * depend on filesystem traversal.
  */
-function rebuildLibrary(stlibPath, options) {
-  const archive = loadStlibFromFile(stlibPath);
+function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, dependencies }) {
+  const sourcesDir = resolve(sourcesRoot, libDirName);
+  if (!existsSync(sourcesDir)) {
+    throw new Error(`Source directory not found: ${sourcesDir}`);
+  }
 
+  const config = loadLibraryConfig(sourcesDir);
+  if (!config) {
+    throw new Error(`${sourcesDir}/library.json not found`);
+  }
+
+  const onDisk = new Set(readdirSync(sourcesDir).filter((f) => f.endsWith(".st")));
+  const missing = orderedSources.filter((f) => !onDisk.has(f));
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing source files in ${sourcesDir}:\n  ${missing.join("\n  ")}`,
+    );
+  }
+  const sources = orderedSources.map((fileName) => ({
+    fileName,
+    source: readFileSync(resolve(sourcesDir, fileName), "utf-8"),
+  }));
+
+  const result = compileStlib(sources, {
+    name: config.name,
+    version: config.version,
+    namespace: config.namespace,
+    noSource: false,
+    builtin: config.isBuiltin === true,
+    dependencies,
+  });
+
+  if (!result.success) {
+    const errs = result.errors.map((e) => `  ${e.file ?? ""}:${e.line ?? 0}: ${e.message}`);
+    throw new Error(
+      `Failed to rebuild ${config.name}:\n${errs.join("\n")}`,
+    );
+  }
+
+  if (config.description) {
+    result.archive.manifest.description = config.description;
+  }
+
+  const docReport = applyLibraryConfigDocumentation(result.archive, config);
+  if (
+    docReport.unknownBlockDocs.length > 0 ||
+    docReport.unknownFunctionDocs.length > 0
+  ) {
+    const lines = [
+      ...docReport.unknownBlockDocs.map((n) => `  blocks["${n}"] — not in compiled manifest`),
+      ...docReport.unknownFunctionDocs.map((n) => `  functions["${n}"] — not in compiled manifest`),
+    ];
+    throw new Error(
+      `${sourcesDir}/library.json references unknown symbols:\n${lines.join("\n")}`,
+    );
+  }
+
+  writeFileSync(stlibPath, JSON.stringify(result.archive, null, 2) + "\n", "utf-8");
+  return result.archive;
+}
+
+/**
+ * Rebuild OSCAT from its embedded sources (legacy round-trip path).
+ * Kept until the codesys-importer is taught to write disk sources at
+ * `libs/sources/oscat-basic/` during a re-import.
+ */
+function rebuildOscatFromArchive(stlibPath, dependencies) {
+  const archive = loadStlibFromFile(stlibPath);
   if (!archive.sources || archive.sources.length === 0) {
     throw new Error(`${stlibPath}: no embedded sources — cannot rebuild`);
   }
@@ -82,7 +168,7 @@ function rebuildLibrary(stlibPath, options) {
     namespace: archive.manifest.namespace,
     noSource: false,
     builtin: archive.manifest.isBuiltin,
-    dependencies: options.dependencies,
+    dependencies,
     globalConstants: archive.globalConstants,
   });
 
@@ -93,7 +179,6 @@ function rebuildLibrary(stlibPath, options) {
     );
   }
 
-  // Preserve description from original manifest
   if (archive.manifest.description) {
     result.archive.manifest.description = archive.manifest.description;
   }
@@ -109,33 +194,43 @@ export async function setup() {
   const additionalFbPath = resolve(libsDir, "additional-function-blocks.stlib");
   const oscatPath = resolve(libsDir, "oscat-basic.stlib");
 
-  if (!existsSync(iecPath)) {
-    console.warn("[rebuild-libs] iec-standard-fb.stlib not found — skipping");
-    return;
-  }
-
-  // 0. Refresh dist/ before pulling the compiler from it. Without this
-  //    a src/ edit without a manual `npm run build` would regenerate
-  //    the libs against stale codegen.
   await refreshAndLoadCompiler();
 
-  // 1. Rebuild IEC standard FB library (no dependencies)
+  // 1. IEC standard FB library — disk-backed, no inter-lib deps.
   console.log("[rebuild-libs] Rebuilding iec-standard-fb.stlib...");
-  rebuildLibrary(iecPath, {});
+  rebuildLibraryFromDisk({
+    libDirName: "iec-standard-fb",
+    stlibPath: iecPath,
+    orderedSources: ["edge_detection.st", "bistable.st", "counter.st", "timer.st"],
+  });
 
-  // 2. Rebuild Additional Function Blocks (no dependencies on other libs;
-  //    PID's references to INTEGRAL/DERIVATIVE are intra-library and
-  //    resolved by source-order in the embedded sources[]).
-  if (existsSync(additionalFbPath)) {
+  // 2. Additional Function Blocks — disk-backed; PID instantiates
+  //    INTEGRAL/DERIVATIVE intra-library so the file order matters.
+  if (existsSync(resolve(sourcesRoot, "additional-function-blocks"))) {
     console.log("[rebuild-libs] Rebuilding additional-function-blocks.stlib...");
-    rebuildLibrary(additionalFbPath, {});
+    rebuildLibraryFromDisk({
+      libDirName: "additional-function-blocks",
+      stlibPath: additionalFbPath,
+      orderedSources: [
+        "integral.st",
+        "derivative.st",
+        "rtc.st",
+        "pid.st",
+        "ramp.st",
+        "hysteresis.st",
+      ],
+    });
   }
 
-  // 3. Rebuild OSCAT (depends on IEC standard FB library)
+  // 3. OSCAT — legacy archive-round-trip path; depends on iec-standard-fb.
+  //    TODO(libs): migrate OSCAT onto the libs/sources/ pattern by having
+  //    the codesys-importer extract the .library file at
+  //    tests/fixtures/codesys/oscat_basic_335_codesys3.library into
+  //    libs/sources/oscat-basic/*.st + library.json.
   if (existsSync(oscatPath)) {
-    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib...");
+    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (legacy round-trip)...");
     const iecArchive = loadStlibFromFile(iecPath);
-    rebuildLibrary(oscatPath, { dependencies: [iecArchive] });
+    rebuildOscatFromArchive(oscatPath, [iecArchive]);
   }
 
   // 4. Copy to VSCode extension bundled-libs if directory exists

@@ -21,6 +21,10 @@ export interface LibraryFunctionEntry {
     type: string;
     direction: "input" | "output" | "inout";
   }>;
+  /** Function-level help text shown in editor hover dialogs. Authored
+   *  in the library's `library.json` and merged into the manifest at
+   *  build time (see scripts/generate-*.mjs). */
+  documentation?: string;
 }
 
 /**
@@ -53,6 +57,11 @@ export interface LibraryFBEntry {
   outputs: LibraryVarType[];
   /** In-out variables */
   inouts: LibraryVarType[];
+  /** Block-level help text shown in editor hover dialogs. Authored in
+   *  the library's `library.json` and merged into the manifest at build
+   *  time (see scripts/generate-*.mjs). Optional so existing archives
+   *  without docs still load. */
+  documentation?: string;
 }
 
 /**

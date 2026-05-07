@@ -1,0 +1,27 @@
+{
+  "name": "additional-function-blocks",
+  "version": "1.0.0",
+  "namespace": "strucpp",
+  "description": "IEC 61131-3 Annex E Additional Function Blocks (RTC, INTEGRAL, DERIVATIVE, PID, RAMP, HYSTERESIS) — auto-generated from ST sources",
+  "isBuiltin": true,
+  "blocks": {
+    "RTC": {
+      "documentation": "The real time clock has many uses including time stamping, setting dates and times of day in batch reports, in alarm messages and so on."
+    },
+    "INTEGRAL": {
+      "documentation": "The integral function block integrates the value of input XIN over time."
+    },
+    "DERIVATIVE": {
+      "documentation": "The derivative function block produces an output XOUT proportional to the rate of change of the input XIN."
+    },
+    "PID": {
+      "documentation": "The PID (proportional, Integral, Derivative) function block provides the classical three term controller for closed loop control."
+    },
+    "RAMP": {
+      "documentation": "The RAMP function block is modelled on example given in the standard."
+    },
+    "HYSTERESIS": {
+      "documentation": "The hysteresis function block provides a hysteresis boolean output driven by the difference of two floating point (REAL) inputs XIN1 and XIN2."
+    }
+  }
+}
