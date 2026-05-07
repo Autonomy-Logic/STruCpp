@@ -386,6 +386,49 @@ describe("V3 integration: OSCAT Basic 335", () => {
     expect(constLang!.source).toContain("TYPE CONSTANTS_LANGUAGE");
   });
 
+  it("extracts the OSCAT VAR_GLOBAL block instantiating CONSTANTS_*", () => {
+    // The V3 .library encodes a GVL the same way as a POU at the
+    // structural level — header in column B of a 4-varint record,
+    // body lines in column A of subsequent records — but with the
+    // keyword `VAR_GLOBAL` (optionally CONSTANT/RETAIN/PERSISTENT)
+    // instead of `FUNCTION_BLOCK`/`FUNCTION`/`PROGRAM`/`TYPE`.
+    // Earlier the header-detection regex only matched the latter four
+    // and dropped GVLs silently, leaving POUs that reference
+    // `LANGUAGE.WEEKDAYS[…]` (HOLIDAY / SUN_POS / the date helpers)
+    // with undeclared globals downstream. This test pins the GVL
+    // extraction so a regex regression surfaces here.
+    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const gvls = result.sources.filter((s) => /\bVAR_GLOBAL\b/.test(s.source));
+    expect(gvls.length).toBeGreaterThanOrEqual(1);
+
+    // OSCAT-specific: at least one GVL must declare the five CONSTANTS_*
+    // instances. Without these, HOLIDAY/SUN_POS et al. would compile-fail.
+    const constantsGvl = gvls.find((s) =>
+      /MATH\s*:\s*CONSTANTS_MATH/.test(s.source) &&
+      /LANGUAGE\s*:\s*CONSTANTS_LANGUAGE/.test(s.source) &&
+      /LOCATION\s*:\s*CONSTANTS_LOCATION/.test(s.source),
+    );
+    expect(constantsGvl, "Expected a GVL declaring MATH/LANGUAGE/LOCATION instances").toBeDefined();
+    expect(constantsGvl!.source).toMatch(/PHYS\s*:\s*CONSTANTS_PHYS/);
+    expect(constantsGvl!.source).toMatch(/SETUP\s*:\s*CONSTANTS_SETUP/);
+    expect(constantsGvl!.source).toMatch(/END_VAR/);
+  });
+
+  it("extracts the OSCAT VAR_GLOBAL CONSTANT block (STRING_LENGTH / LIST_LENGTH)", () => {
+    // OSCAT keeps its compile-time integer constants in a separate
+    // GVL with the CONSTANT modifier. The `VAR_GLOBAL CONSTANT`
+    // variant of the keyword must also be recognised by the header
+    // detector — without it the constants drop out and library users
+    // hit "undeclared identifier STRING_LENGTH" at compile time.
+    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const gvlConst = result.sources.find((s) =>
+      /\bVAR_GLOBAL\s+CONSTANT\b/.test(s.source) &&
+      /\bSTRING_LENGTH\s*:\s*INT\b/.test(s.source),
+    );
+    expect(gvlConst, "Expected a VAR_GLOBAL CONSTANT GVL with STRING_LENGTH").toBeDefined();
+    expect(gvlConst!.source).toMatch(/LIST_LENGTH\s*:\s*INT/);
+  });
+
   it("V3 POU counts are comparable to V2.3 extraction", () => {
     const v23Result = importCodesysLibrary(OSCAT_V23_PATH);
     const v3Result = importCodesysLibrary(OSCAT_V3_PATH);

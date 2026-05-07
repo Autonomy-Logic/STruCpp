@@ -52,15 +52,8 @@
  *    `*)`). Net result: 2/559 OSCAT POUs cannot be cleanly extracted
  *    today, so OSCAT's .stlib stays tracked in libs/ as a build
  *    artifact exception until this is resolved.
- * 2. VAR_GLOBAL extraction misses the OSCAT GVL that instantiates
- *    LANGUAGE/MATH/PHYS/SETUP/LOCATION as instances of the CONSTANTS_*
- *    struct types. The struct TYPEs themselves are extracted cleanly;
- *    only the global variable instances are missing. POUs that
- *    reference `LANGUAGE.WEEKDAYS[…]` etc. (HOLIDAY, SUN_POS, the
- *    date-localisation helpers) would compile-fail without those
- *    globals.
  *
- * Both are tracked in TODO comments at the relevant code sites below.
+ * Tracked in a TODO comment at the impl-extraction site below.
  */
 
 import { inflateRawSync } from "zlib";
@@ -258,16 +251,31 @@ function extractFromRecords(
     implLines.push(strings.get(boundaryRec[k]!) ?? "");
   }
 
-  // Find the POU/TYPE header: scan from boundary for first 4-varint record
-  // whose rec[1] resolves to a recognized header string.
+  // Find the POU/TYPE/GVL header: scan from boundary for first 4-varint
+  // record whose rec[1] resolves to a recognized header string.
+  //
+  // GVLs are encoded the same way as POUs/TYPEs at the structural level —
+  // a header record (n=4) carries the section keyword in column B
+  // (varint[1]), and subsequent records hold the body lines in column A.
+  // The keyword is the only difference: "FUNCTION_BLOCK Foo" /
+  // "FUNCTION Foo" / "PROGRAM Foo" / "TYPE Foo :" / "VAR_GLOBAL"
+  // (optionally CONSTANT, RETAIN, PERSISTENT). Earlier versions of this
+  // loop only matched the first three, so GVL objects fell off the
+  // header-detection path and were silently dropped — OSCAT's
+  // LANGUAGE/MATH/PHYS/SETUP/LOCATION instances vanished, and any POU
+  // referencing those globals failed to compile downstream.
   const declLines: string[] = [];
   let headerRecIdx = -1;
 
   for (let i = boundary; i < records.length; i++) {
     const rec = records[i]!;
-    if (rec.length === 4 && rec.length <= 4) {
+    if (rec.length === 4) {
       const headerStr = strings.get(rec[1]!) ?? "";
-      if (POU_DECL_RE.test(headerStr) || /^TYPE\s+\w+/.test(headerStr)) {
+      if (
+        POU_DECL_RE.test(headerStr) ||
+        TYPE_DECL_RE.test(headerStr) ||
+        GVL_DECL_RE.test(headerStr)
+      ) {
         declLines.push(headerStr);
         headerRecIdx = i;
         break;
