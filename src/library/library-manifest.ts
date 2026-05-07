@@ -25,6 +25,13 @@ export interface LibraryFunctionEntry {
    *  in the library's `library.json` and merged into the manifest at
    *  build time (see scripts/generate-*.mjs). */
   documentation?: string;
+  /** Folder path within the library, slash-separated (e.g. "POUs/Time&Date").
+   *  Empty/undefined means the entry lives at the root. Hierarchy is
+   *  metadata-only — codegen is unaffected. The disk source layout,
+   *  imported library folder structure, or any future tooling-driven
+   *  organization populates this; consumers (editor library trees,
+   *  decompile-to-folder extraction) read it back. */
+  category?: string;
 }
 
 /**
@@ -62,6 +69,8 @@ export interface LibraryFBEntry {
    *  time (see scripts/generate-*.mjs). Optional so existing archives
    *  without docs still load. */
   documentation?: string;
+  /** Folder path within the library — see `LibraryFunctionEntry.category`. */
+  category?: string;
 }
 
 /**
@@ -74,6 +83,8 @@ export interface LibraryTypeEntry {
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
   baseType?: string;
+  /** Folder path within the library — see `LibraryFunctionEntry.category`. */
+  category?: string;
 }
 
 /**
@@ -130,8 +141,14 @@ export interface StlibArchive {
   headerCode: string;
   /** Compiled C++ implementations (namespace body only) */
   cppCode: string;
-  /** Original ST source files (omitted for closed-source distribution) */
-  sources?: Array<{ fileName: string; source: string }>;
+  /** Original ST source files (omitted for closed-source distribution).
+   *  `category` mirrors the manifest entry category for the POUs declared
+   *  in this file so `--decompile-lib` can recreate the folder hierarchy
+   *  on disk without re-parsing the source. Sources that span multiple
+   *  POUs (e.g. iec-standard-fb's counter.st) all share one category by
+   *  construction — every POU declared in the same file came from the
+   *  same input folder. */
+  sources?: Array<{ fileName: string; source: string; category?: string }>;
   /** Global constants required by this library (e.g., STRING_LENGTH, LIST_LENGTH) */
   globalConstants?: Record<string, number>;
   /** Reserved for future library-to-library dependency resolution */

@@ -42,6 +42,49 @@ function serializeVarType(
 }
 
 /**
+ * Build a "POU name → category" map from categorized source inputs.
+ *
+ * Each .st file may declare multiple POUs (counter.st in iec-standard-fb
+ * holds 15 counter variants in one file). All POUs declared in the same
+ * source file inherit that file's category — by construction each input
+ * file lives in exactly one folder.
+ *
+ * Uses a regex over top-of-line POU declarations rather than running the
+ * parser, which keeps the lookup cheap (~600 sources × cheap regex vs.
+ * Chevrotain re-parse per source).
+ */
+function buildCategoryByPouName(
+  sources: Array<{ source: string; fileName: string; category?: string }>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  const declRe = /^[ \t]*(FUNCTION_BLOCK|FUNCTION|PROGRAM|TYPE)[ \t]+(\w+)/gm;
+  for (const src of sources) {
+    if (!src.category) continue;
+    let m: RegExpExecArray | null;
+    declRe.lastIndex = 0;
+    while ((m = declRe.exec(src.source)) !== null) {
+      const name = m[2]!;
+      if (!map.has(name)) map.set(name, src.category);
+    }
+  }
+  return map;
+}
+
+/**
+ * Optionally tag a manifest entry with its category. The field is omitted
+ * entirely when no category was assigned, so an .stlib built from a flat
+ * source layout serializes byte-identical to the pre-hierarchy format.
+ */
+function tagCategory<T extends { name: string; category?: string }>(
+  entry: T,
+  catByName: Map<string, string>,
+): T {
+  const cat = catByName.get(entry.name);
+  if (cat) entry.category = cat;
+  return entry;
+}
+
+/**
  * Compile ST source files into a library.
  *
  * @param sources - Array of ST source files
@@ -49,7 +92,7 @@ function serializeVarType(
  * @returns The compiled library with manifest and C++ code
  */
 export function compileLibrary(
-  sources: Array<{ source: string; fileName: string }>,
+  sources: Array<{ source: string; fileName: string; category?: string }>,
   options: {
     name: string;
     version: string;
@@ -60,6 +103,7 @@ export function compileLibrary(
     globalConstants?: Record<string, number>;
   },
 ): LibraryCompileResult {
+  const catByName = buildCategoryByPouName(sources);
   if (sources.length === 0) {
     return {
       success: false,
@@ -133,57 +177,67 @@ export function compileLibrary(
       name: options.name,
       version: options.version,
       namespace: options.namespace,
-      functions: ast.functions.map((fn) => ({
-        name: fn.name,
-        returnType: fn.returnType.name,
-        parameters: fn.varBlocks.flatMap((block) =>
-          block.declarations.flatMap((decl) =>
-            decl.names.map((name) => ({
-              name,
-              type: decl.type.name,
-              direction:
-                block.blockType === "VAR_OUTPUT"
-                  ? "output"
-                  : block.blockType === "VAR_IN_OUT"
-                    ? "inout"
-                    : "input",
-            })),
-          ),
+      functions: ast.functions.map((fn) =>
+        tagCategory(
+          {
+            name: fn.name,
+            returnType: fn.returnType.name,
+            parameters: fn.varBlocks.flatMap((block) =>
+              block.declarations.flatMap((decl) =>
+                decl.names.map((name) => ({
+                  name,
+                  type: decl.type.name,
+                  direction:
+                    block.blockType === "VAR_OUTPUT"
+                      ? "output"
+                      : block.blockType === "VAR_IN_OUT"
+                        ? "inout"
+                        : "input",
+                })),
+              ),
+            ),
+          },
+          catByName,
         ),
-      })),
-      functionBlocks: ast.functionBlocks.map((fb) => ({
-        name: fb.name,
-        inputs: fb.varBlocks
-          .filter((b) => b.blockType === "VAR_INPUT")
-          .flatMap((b) =>
-            b.declarations.flatMap((d) =>
-              d.names.map((n) => serializeVarType(n, d.type)),
-            ),
-          ),
-        outputs: fb.varBlocks
-          .filter((b) => b.blockType === "VAR_OUTPUT")
-          .flatMap((b) =>
-            b.declarations.flatMap((d) =>
-              d.names.map((n) => serializeVarType(n, d.type)),
-            ),
-          ),
-        inouts: fb.varBlocks
-          .filter((b) => b.blockType === "VAR_IN_OUT")
-          .flatMap((b) =>
-            b.declarations.flatMap((d) =>
-              d.names.map((n) => serializeVarType(n, d.type)),
-            ),
-          ),
-      })),
-      types: ast.types.map((t) => ({
-        name: t.name,
-        kind:
+      ),
+      functionBlocks: ast.functionBlocks.map((fb) =>
+        tagCategory(
+          {
+            name: fb.name,
+            inputs: fb.varBlocks
+              .filter((b) => b.blockType === "VAR_INPUT")
+              .flatMap((b) =>
+                b.declarations.flatMap((d) =>
+                  d.names.map((n) => serializeVarType(n, d.type)),
+                ),
+              ),
+            outputs: fb.varBlocks
+              .filter((b) => b.blockType === "VAR_OUTPUT")
+              .flatMap((b) =>
+                b.declarations.flatMap((d) =>
+                  d.names.map((n) => serializeVarType(n, d.type)),
+                ),
+              ),
+            inouts: fb.varBlocks
+              .filter((b) => b.blockType === "VAR_IN_OUT")
+              .flatMap((b) =>
+                b.declarations.flatMap((d) =>
+                  d.names.map((n) => serializeVarType(n, d.type)),
+                ),
+              ),
+          },
+          catByName,
+        ),
+      ),
+      types: ast.types.map((t) => {
+        const kind: "struct" | "enum" | "alias" =
           t.definition.kind === "StructDefinition"
             ? "struct"
             : t.definition.kind === "EnumDefinition"
               ? "enum"
-              : "alias",
-      })),
+              : "alias";
+        return tagCategory({ name: t.name, kind }, catByName);
+      }),
       headers: [headerFileName],
       isBuiltin: false,
       sourceFiles: sources.map((s) => s.fileName),
@@ -205,7 +259,7 @@ export function compileLibrary(
  * @returns The compiled `.stlib` archive result
  */
 export function compileStlib(
-  sources: Array<{ source: string; fileName: string }>,
+  sources: Array<{ source: string; fileName: string; category?: string }>,
   options: {
     name: string;
     version: string;
@@ -278,10 +332,14 @@ export function compileStlib(
     })),
   };
   if (!options.noSource) {
-    archive.sources = sources.map((s) => ({
-      fileName: s.fileName,
-      source: s.source,
-    }));
+    archive.sources = sources.map((s) => {
+      const entry: { fileName: string; source: string; category?: string } = {
+        fileName: s.fileName,
+        source: s.source,
+      };
+      if (s.category) entry.category = s.category;
+      return entry;
+    });
   }
   if (
     options.globalConstants &&

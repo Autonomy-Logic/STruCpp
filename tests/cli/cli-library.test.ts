@@ -537,4 +537,156 @@ describe("CLI Library Features", () => {
       expect(stderr).toContain("Cannot read stlib archive");
     });
   });
+
+  describe("hierarchy (folder-based categories)", () => {
+    it("compile-from-folder tags manifest entries with subfolder paths", () => {
+      // A directory passed to --compile-lib carries hierarchy: each
+      // .st file's path relative to the root becomes its category.
+      // This pins that flow end-to-end via the CLI rather than the
+      // programmatic compileStlib() API.
+      const workDir = freshDir("compile-folder-hier");
+      const libRoot = join(workDir, "src");
+      mkdirSync(join(libRoot, "math"), { recursive: true });
+      mkdirSync(join(libRoot, "io", "serial"), { recursive: true });
+      writeFileSync(
+        join(libRoot, "math", "add.st"),
+        "FUNCTION ADD2 : INT VAR_INPUT a:INT;b:INT;END_VAR ADD2:=a+b; END_FUNCTION\n",
+      );
+      writeFileSync(
+        join(libRoot, "io", "serial", "echo.st"),
+        "FUNCTION_BLOCK ECHO_FB VAR_INPUT s:INT;END_VAR VAR_OUTPUT o:INT;END_VAR o:=s; END_FUNCTION_BLOCK\n",
+      );
+      writeFileSync(
+        join(libRoot, "rootlevel.st"),
+        "FUNCTION ROOTFN : INT VAR_INPUT x:INT;END_VAR ROOTFN:=x; END_FUNCTION\n",
+      );
+
+      const libDir = join(workDir, "out");
+      runCLI([
+        "--compile-lib",
+        libRoot,
+        "-o",
+        libDir,
+        "--lib-name",
+        "hier-lib",
+      ]);
+
+      const archive = JSON.parse(
+        readFileSync(join(libDir, "hier-lib.stlib"), "utf-8"),
+      );
+      const fnByName = new Map(
+        archive.manifest.functions.map((f: { name: string }) => [f.name, f]),
+      );
+      const fbByName = new Map(
+        archive.manifest.functionBlocks.map(
+          (fb: { name: string }) => [fb.name, fb],
+        ),
+      );
+
+      expect((fnByName.get("ADD2") as { category?: string }).category).toBe(
+        "math",
+      );
+      expect((fbByName.get("ECHO_FB") as { category?: string }).category).toBe(
+        "io/serial",
+      );
+      // Root-level files have no category.
+      expect((fnByName.get("ROOTFN") as { category?: string }).category).toBe(
+        undefined,
+      );
+
+      // Sources mirror the manifest categories so --decompile-lib can
+      // recreate the folder layout without re-parsing the .st content.
+      const srcByName = new Map<string, { category?: string }>(
+        archive.sources.map(
+          (s: { fileName: string; category?: string }) => [s.fileName, s],
+        ),
+      );
+      expect(srcByName.get("add.st")?.category).toBe("math");
+      expect(srcByName.get("echo.st")?.category).toBe("io/serial");
+      expect(srcByName.get("rootlevel.st")?.category).toBe(undefined);
+    });
+
+    it("decompile-lib recreates the folder hierarchy on disk", () => {
+      // Round-trip: compile a folder layout into a .stlib, then
+      // decompile and check every .st landed back under its category
+      // path. Categoryless files write at the output root.
+      const workDir = freshDir("decompile-hier");
+      const libRoot = join(workDir, "src");
+      mkdirSync(join(libRoot, "alpha"), { recursive: true });
+      mkdirSync(join(libRoot, "beta", "deep"), { recursive: true });
+      writeFileSync(
+        join(libRoot, "alpha", "a.st"),
+        "FUNCTION FA : INT VAR_INPUT x:INT;END_VAR FA:=x; END_FUNCTION\n",
+      );
+      writeFileSync(
+        join(libRoot, "beta", "deep", "b.st"),
+        "FUNCTION FB : INT VAR_INPUT y:INT;END_VAR FB:=y; END_FUNCTION\n",
+      );
+      writeFileSync(
+        join(libRoot, "top.st"),
+        "FUNCTION FT : INT VAR_INPUT z:INT;END_VAR FT:=z; END_FUNCTION\n",
+      );
+
+      const libDir = join(workDir, "out");
+      runCLI([
+        "--compile-lib",
+        libRoot,
+        "-o",
+        libDir,
+        "--lib-name",
+        "rt-lib",
+      ]);
+
+      const extractDir = join(workDir, "extracted");
+      runCLI([
+        "--decompile-lib",
+        join(libDir, "rt-lib.stlib"),
+        "-o",
+        extractDir,
+      ]);
+
+      expect(existsSync(join(extractDir, "alpha", "a.st"))).toBe(true);
+      expect(existsSync(join(extractDir, "beta", "deep", "b.st"))).toBe(true);
+      expect(existsSync(join(extractDir, "top.st"))).toBe(true);
+    });
+
+    it("flat archives extract flat (no spurious folders)", () => {
+      // No category metadata → identical extraction behaviour to
+      // pre-hierarchy versions of the CLI. Pins backwards compat.
+      const workDir = freshDir("decompile-flat");
+      const stFile = join(workDir, "flat.st");
+      writeFileSync(
+        stFile,
+        "FUNCTION FZ : INT VAR_INPUT q:INT;END_VAR FZ:=q; END_FUNCTION\n",
+      );
+
+      const libDir = join(workDir, "out");
+      runCLI([
+        "--compile-lib",
+        stFile,
+        "-o",
+        libDir,
+        "--lib-name",
+        "flat-lib",
+      ]);
+
+      const archive = JSON.parse(
+        readFileSync(join(libDir, "flat-lib.stlib"), "utf-8"),
+      );
+      const fz = archive.manifest.functions.find(
+        (f: { name: string }) => f.name === "FZ",
+      );
+      expect(fz.category).toBe(undefined);
+      expect(archive.sources[0].category).toBe(undefined);
+
+      const extractDir = join(workDir, "extracted");
+      runCLI([
+        "--decompile-lib",
+        join(libDir, "flat-lib.stlib"),
+        "-o",
+        extractDir,
+      ]);
+      expect(existsSync(join(extractDir, "flat.st"))).toBe(true);
+    });
+  });
 });

@@ -2,20 +2,24 @@
 /**
  * Rebuild all bundled .stlib library archives.
  *
- * The hand-authored libs (iec-standard-fb, additional-function-blocks)
- * are rebuilt FROM DISK — `libs/sources/<lib-name>/` holds the
- * canonical source of truth (.st files + library.json with metadata,
- * description, global constants, and per-block documentation). The
- * matching .stlib in `libs/` is a pure build artefact produced here
- * and gitignored.
+ * Every bundled library is rebuilt FROM DISK — `libs/sources/<lib-name>/`
+ * holds the canonical source of truth and the matching .stlib in `libs/`
+ * is a pure build artefact produced here (and gitignored).
  *
- * OSCAT keeps the legacy round-trip path: it reads its embedded
- * sources from the existing libs/oscat-basic.stlib and recompiles.
- * The .stlib stays tracked because the codesys-importer can't yet
- * reproduce the archive cleanly (a regression drops the closing `*)`
- * of trailing block comments on a majority of POUs). Once that's
- * fixed, OSCAT can move under libs/sources/oscat-basic/ next to a
- * library.json and this round-trip path goes away.
+ * Two shapes of disk-backed source are supported:
+ *
+ *   - Hand-authored libs (iec-standard-fb, additional-function-blocks):
+ *     library.json + a deterministic list of .st files. The .st files
+ *     are concatenated in `orderedSources` order and fed to the strucpp
+ *     compiler so cross-file type references (e.g. PID instantiating
+ *     INTEGRAL/DERIVATIVE) resolve consistently regardless of filesystem
+ *     traversal order.
+ *
+ *   - CODESYS-imported libs (oscat-basic): library.json names a
+ *     `codesysSource` (.library file). We run the codesys-importer
+ *     against that file to extract POUs/TYPEs/GVLs into in-memory ST
+ *     sources, then feed those into the same compile step. The .library
+ *     file is the canonical source of truth — never the .stlib.
  *
  * Used as:
  *   - the canonical "build strucpp" entry point (`npm run build`)
@@ -28,8 +32,8 @@
  */
 
 import { execSync } from "child_process";
-import { readFileSync, readdirSync, writeFileSync, existsSync, copyFileSync } from "fs";
-import { resolve, dirname } from "path";
+import { readFileSync, readdirSync, writeFileSync, existsSync, copyFileSync, statSync } from "fs";
+import { resolve, dirname, relative, sep, posix } from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -44,6 +48,7 @@ let compileStlib;
 let loadStlibFromFile;
 let loadLibraryConfig;
 let applyLibraryConfigDocumentation;
+let importCodesysLibrary;
 
 /**
  * Refresh `dist/` from `src/` and import the freshly compiled modules.
@@ -78,10 +83,14 @@ async function refreshAndLoadCompiler() {
   const config = await import(
     resolve(projectRoot, "dist/library/library-config.js")
   );
+  const codesysImport = await import(
+    resolve(projectRoot, "dist/library/codesys-import/index.js")
+  );
   compileStlib = compiler.compileStlib;
   loadStlibFromFile = loader.loadStlibFromFile;
   loadLibraryConfig = config.loadLibraryConfig;
   applyLibraryConfigDocumentation = config.applyLibraryConfigDocumentation;
+  importCodesysLibrary = codesysImport.importCodesysLibrary;
 }
 
 /**
@@ -132,13 +141,48 @@ function compileAndWrite({ sources, config, stlibPath, dependencies, sourcesDir 
 }
 
 /**
+ * Recursively collect all `.st` files under `dir`, returning their paths
+ * relative to `dir` using POSIX separators (so the values are usable as
+ * both file lookups and category strings on every platform). Sorted to
+ * keep filesystem-traversal order deterministic when no explicit
+ * `orderedSources` list is provided.
+ */
+function collectStFilesRecursive(dir) {
+  const out = [];
+  function walk(current) {
+    for (const entry of readdirSync(current).sort()) {
+      const full = resolve(current, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+      } else if (entry.endsWith(".st")) {
+        out.push(relative(dir, full).split(sep).join(posix.sep));
+      }
+    }
+  }
+  walk(dir);
+  return out;
+}
+
+/**
  * Rebuild a hand-authored library from disk: reads library.json plus
- * the .st files from libs/sources/<libDirName>/, recompiles, applies
- * block docs, writes the .stlib archive.
+ * every .st file under libs/sources/<libDirName>/ (recursing into
+ * subdirectories), recompiles, applies block docs, writes the .stlib
+ * archive.
  *
- * `orderedSources` enforces a deterministic file order so type-resolution
- * across files (e.g. PID needing INTEGRAL/DERIVATIVE first) doesn't
- * depend on filesystem traversal.
+ * Folder layout drives manifest hierarchy: a file at
+ * `libs/sources/my_lib/some_category/foo.st` produces manifest entries
+ * tagged with `category: "some_category"`. Files at the lib root carry
+ * no category. Hierarchy is purely metadata — every source is still
+ * stored flat-by-filename inside the .stlib archive (just with the
+ * `category` field set on the source entry, mirroring the manifest).
+ *
+ * `orderedSources` is optional. When provided it enforces a
+ * deterministic compile order (so cross-file type resolution doesn't
+ * depend on filesystem traversal — see PID needing INTEGRAL/DERIVATIVE
+ * first). Each entry is a path relative to the lib's source directory
+ * and may include subfolders (e.g. `["motion/ramp.st", "motion/pid.st"]`).
+ * When omitted, every .st under the lib directory is picked up in
+ * sorted order.
  */
 function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, dependencies }) {
   const sourcesDir = resolve(sourcesRoot, libDirName);
@@ -151,57 +195,96 @@ function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, depende
     throw new Error(`${sourcesDir}/library.json not found`);
   }
 
-  const onDisk = new Set(readdirSync(sourcesDir).filter((f) => f.endsWith(".st")));
-  const missing = orderedSources.filter((f) => !onDisk.has(f));
-  if (missing.length > 0) {
-    throw new Error(
-      `Missing source files in ${sourcesDir}:\n  ${missing.join("\n  ")}`,
-    );
+  const allRelative = collectStFilesRecursive(sourcesDir);
+  let pickedRelative;
+  if (orderedSources && orderedSources.length > 0) {
+    const onDisk = new Set(allRelative);
+    const missing = orderedSources.filter((f) => !onDisk.has(f));
+    if (missing.length > 0) {
+      throw new Error(
+        `Missing source files in ${sourcesDir}:\n  ${missing.join("\n  ")}`,
+      );
+    }
+    pickedRelative = orderedSources;
+  } else {
+    pickedRelative = allRelative;
   }
-  const sources = orderedSources.map((fileName) => ({
-    fileName,
-    source: readFileSync(resolve(sourcesDir, fileName), "utf-8"),
-  }));
+
+  const sources = pickedRelative.map((relPath) => {
+    const slashIdx = relPath.lastIndexOf("/");
+    const fileName = slashIdx === -1 ? relPath : relPath.slice(slashIdx + 1);
+    const category = slashIdx === -1 ? undefined : relPath.slice(0, slashIdx);
+    const entry = {
+      fileName,
+      source: readFileSync(resolve(sourcesDir, relPath), "utf-8"),
+    };
+    if (category) entry.category = category;
+    return entry;
+  });
 
   return compileAndWrite({ sources, config, stlibPath, dependencies, sourcesDir });
 }
 
 /**
- * Rebuild OSCAT from the embedded sources in its existing .stlib.
+ * Rebuild a CODESYS-imported library from disk: reads library.json plus
+ * the bundled .library file from libs/sources/<libDirName>/, runs the
+ * codesys-importer to extract ST sources, then compiles them through
+ * the same path as hand-authored libs.
  *
- * Round-trip path: read the archive's `sources[]`, recompile, write
- * back. Kept for OSCAT only because our codesys-importer's V3 parser
- * has known reverse-engineering gaps (see v3-parser.ts module header)
- * that prevent a clean re-import from the .library binary today. When
- * those gaps are closed, OSCAT can move to libs/sources/oscat-basic/
- * with a library.json + the .library file as the canonical source,
- * matching the pattern of every other lib.
+ * `library.json.codesysSource` names the .library file relative to the
+ * lib's source directory. We resolve it, hand it off to importCodesysLibrary
+ * (which auto-detects V2.3 vs V3), and feed the resulting in-memory ST
+ * sources into compileAndWrite. The .library file is the canonical source
+ * of truth — never the .stlib output.
  */
-function rebuildOscatFromArchive(stlibPath, dependencies) {
-  const archive = loadStlibFromFile(stlibPath);
-  if (!archive.sources || archive.sources.length === 0) {
+function rebuildLibraryFromCodesys({ libDirName, stlibPath, dependencies }) {
+  const sourcesDir = resolve(sourcesRoot, libDirName);
+  if (!existsSync(sourcesDir)) {
+    throw new Error(`Source directory not found: ${sourcesDir}`);
+  }
+
+  const config = loadLibraryConfig(sourcesDir);
+  if (!config) {
+    throw new Error(`${sourcesDir}/library.json not found`);
+  }
+  if (!config.codesysSource) {
     throw new Error(
-      `${stlibPath}: no embedded sources — cannot rebuild OSCAT via the round-trip path`,
+      `${sourcesDir}/library.json missing 'codesysSource' field — required for codesys-imported libs`,
     );
   }
-  const result = compileStlib(archive.sources, {
-    name: archive.manifest.name,
-    version: archive.manifest.version,
-    namespace: archive.manifest.namespace,
-    noSource: false,
-    builtin: archive.manifest.isBuiltin,
+
+  const codesysPath = resolve(sourcesDir, config.codesysSource);
+  if (!existsSync(codesysPath)) {
+    throw new Error(`CODESYS source file not found: ${codesysPath}`);
+  }
+
+  const importResult = importCodesysLibrary(codesysPath);
+  if (!importResult.success) {
+    throw new Error(
+      `Failed to import ${codesysPath}:\n  ${importResult.errors.join("\n  ")}`,
+    );
+  }
+
+  // Merge constants discovered by the importer (VAR_GLOBAL CONSTANT
+  // integer blocks promoted to compile-time values) over any explicit
+  // overrides in library.json — explicit wins, since users sometimes
+  // override OSCAT defaults like STRING_LENGTH for memory-constrained
+  // targets.
+  const mergedConfig = {
+    ...config,
+    globalConstants: {
+      ...importResult.globalConstants,
+      ...(config.globalConstants ?? {}),
+    },
+  };
+
+  return compileAndWrite({
+    sources: importResult.sources,
+    config: mergedConfig,
+    stlibPath,
     dependencies,
-    globalConstants: archive.globalConstants,
+    sourcesDir,
   });
-  if (!result.success) {
-    const errs = result.errors.map((e) => `  ${e.file ?? ""}:${e.line ?? 0}: ${e.message}`);
-    throw new Error(`Failed to rebuild ${archive.manifest.name}:\n${errs.join("\n")}`);
-  }
-  if (archive.manifest.description) {
-    result.archive.manifest.description = archive.manifest.description;
-  }
-  writeFileSync(stlibPath, JSON.stringify(result.archive, null, 2) + "\n", "utf-8");
-  return result.archive;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -239,15 +322,18 @@ export async function setup() {
     });
   }
 
-  // 3. OSCAT — round-trip from existing archive. The .stlib stays
-  //    tracked because our codesys-importer's V3 parser has known
-  //    reverse-engineering gaps for the longest OSCAT POUs (DCF77,
-  //    UTC_TO_LTIME) and for the VAR_GLOBAL section. See v3-parser.ts
-  //    module header for the specifics. Depends on iec-standard-fb.
-  if (existsSync(oscatPath)) {
-    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (round-trip)...");
+  // 3. OSCAT — codesys-imported from libs/sources/oscat-basic/. The
+  //    canonical source is the bundled .library file (V3 binary);
+  //    rebuild-libs runs the codesys-importer at build time to extract
+  //    ST sources, then compiles them. Depends on iec-standard-fb.
+  if (existsSync(resolve(sourcesRoot, "oscat-basic"))) {
+    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (from codesys)...");
     const iecArchive = loadStlibFromFile(iecPath);
-    rebuildOscatFromArchive(oscatPath, [iecArchive]);
+    rebuildLibraryFromCodesys({
+      libDirName: "oscat-basic",
+      stlibPath: oscatPath,
+      dependencies: [iecArchive],
+    });
   }
 
   // 4. Copy compiled archives into vscode-extension/bundled-libs/. The

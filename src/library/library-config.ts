@@ -61,6 +61,12 @@ export interface LibraryConfig {
    *  (e.g. OSCAT's STRING_LENGTH and LIST_LENGTH). Forwarded to
    *  compileStlib's `globalConstants` option. */
   globalConstants?: Record<string, number>;
+  /** Path (relative to the library's source directory) to a CODESYS
+   *  binary library file (.lib for V2.3, .library for V3) that the build
+   *  script should run through the codesys-importer instead of compiling
+   *  hand-authored .st files. When set, the lib's source directory should
+   *  not contain .st files — the importer produces them at build time. */
+  codesysSource?: string;
   /** Block-level documentation, keyed by FB name. */
   blocks?: Record<string, { documentation: string }>;
   /** Function-level documentation, keyed by function name. */
@@ -108,6 +114,8 @@ function validateLibraryConfig(raw: unknown, path: string): LibraryConfig {
   };
   if (typeof obj.description === "string") config.description = obj.description;
   if (typeof obj.isBuiltin === "boolean") config.isBuiltin = obj.isBuiltin;
+  if (typeof obj.codesysSource === "string")
+    config.codesysSource = obj.codesysSource;
 
   if (obj.globalConstants !== undefined) {
     config.globalConstants = validateGlobalConstants(obj.globalConstants, path);

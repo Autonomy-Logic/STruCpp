@@ -19,12 +19,15 @@ import {
 } from "../../dist/library/codesys-import/index.js";
 import type { ExtractedPOU } from "../../dist/library/codesys-import/index.js";
 
-// Path to CODESYS library fixtures checked into the repository
+// Path to CODESYS library fixtures checked into the repository.
+// The V3 .library file is the canonical source for the bundled OSCAT
+// stlib too (see libs/sources/oscat-basic/), so we point at that copy
+// to avoid duplicating a 1.2 MB binary blob between fixtures/ and libs/.
 const FIXTURES_DIR = resolve(__dirname, "../fixtures/codesys");
 const OSCAT_V23_PATH = resolve(FIXTURES_DIR, "oscat_basic_335.lib");
 const OSCAT_V3_PATH = resolve(
-  FIXTURES_DIR,
-  "oscat_basic_335_codesys3.library",
+  __dirname,
+  "../../libs/sources/oscat-basic/oscat_basic_335.library",
 );
 const V23_REFERENCE_DIR = resolve(FIXTURES_DIR, "v23-reference");
 
@@ -414,19 +417,69 @@ describe("V3 integration: OSCAT Basic 335", () => {
     expect(constantsGvl!.source).toMatch(/END_VAR/);
   });
 
-  it("extracts the OSCAT VAR_GLOBAL CONSTANT block (STRING_LENGTH / LIST_LENGTH)", () => {
-    // OSCAT keeps its compile-time integer constants in a separate
-    // GVL with the CONSTANT modifier. The `VAR_GLOBAL CONSTANT`
-    // variant of the keyword must also be recognised by the header
-    // detector — without it the constants drop out and library users
-    // hit "undeclared identifier STRING_LENGTH" at compile time.
+  it("promotes the OSCAT VAR_GLOBAL CONSTANT integers to globalConstants", () => {
+    // OSCAT's compile-time integer constants live in a `VAR_GLOBAL
+    // CONSTANT` block in the V3 source. They must be surfaced on the
+    // import result's `globalConstants` map (not as a runtime GVL),
+    // because downstream the strucpp codegen uses values like
+    // STRING_LENGTH as C++ template parameters (`IECStringVar<STRING_LENGTH>`),
+    // which require a constexpr — a runtime GVL can't satisfy that.
+    // The originating GVL is dropped from the source list to avoid a
+    // duplicate definition when compileStlib also sees globalConstants.
     const result = importCodesysLibrary(OSCAT_V3_PATH);
-    const gvlConst = result.sources.find((s) =>
+    expect(result.globalConstants.STRING_LENGTH).toBeTypeOf("number");
+    expect(result.globalConstants.LIST_LENGTH).toBeTypeOf("number");
+    const constGvl = result.sources.find((s) =>
       /\bVAR_GLOBAL\s+CONSTANT\b/.test(s.source) &&
-      /\bSTRING_LENGTH\s*:\s*INT\b/.test(s.source),
+      /\bSTRING_LENGTH\b/.test(s.source),
     );
-    expect(gvlConst, "Expected a VAR_GLOBAL CONSTANT GVL with STRING_LENGTH").toBeDefined();
-    expect(gvlConst!.source).toMatch(/LIST_LENGTH\s*:\s*INT/);
+    expect(
+      constGvl,
+      "VAR_GLOBAL CONSTANT block should not appear as a source — it should have been promoted to globalConstants",
+    ).toBeUndefined();
+  });
+
+  it("extracts the OSCAT folder hierarchy from .meta files", () => {
+    // OSCAT's V3 .library encodes its project-explorer tree
+    // (POUs/Time&Date, POUs/Buffer Management, Data types, …) as
+    // .meta+.object pairs whose .meta carries a parent-folder GUID.
+    // The importer walks that chain and surfaces a slash-separated
+    // `category` on each ExtractedPOU; the well-known POUs below pin
+    // the resolved paths against CODESYS's own UI placement.
+    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const expected: Record<string, string> = {
+      "DCF77.st": "POUs/Time&Date",
+      "HOLIDAY.st": "POUs/Time&Date",
+      "UTC_TO_LTIME.st": "POUs/Time&Date",
+      "BUFFER_COMP.st": "POUs/Buffer Management",
+      "ACOSH.st": "POUs/Mathematical",
+      "COMPLEX.st": "Data types",
+      "CRC_GEN.st": "POUs/Logic/Others",
+    };
+    for (const [fileName, category] of Object.entries(expected)) {
+      const src = result.sources.find((s) => s.fileName === fileName);
+      expect(src, `${fileName} extracted`).toBeDefined();
+      expect(src!.category).toBe(category);
+    }
+    // Spot-check distribution: the largest folders should hold dozens
+    // of POUs, well above the noise floor of "everything at root".
+    const counts = new Map<string, number>();
+    for (const s of result.sources) {
+      const c = s.category ?? "<root>";
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    expect(counts.get("POUs/String") ?? 0).toBeGreaterThanOrEqual(50);
+    expect(counts.get("POUs/Mathematical") ?? 0).toBeGreaterThanOrEqual(50);
+    expect(counts.get("POUs/Time&Date") ?? 0).toBeGreaterThanOrEqual(40);
+  });
+
+  it("V2.3 import leaves category undefined (no folders in V2.3 format)", () => {
+    // V2.3 .lib predates the folder feature — the format has no place
+    // to record one. Asserting "no categories" pins this so a future
+    // V2.3 parser change can't silently start emitting them.
+    const result = importCodesysLibrary(OSCAT_V23_PATH);
+    const categorized = result.sources.filter((s) => s.category);
+    expect(categorized.length).toBe(0);
   });
 
   it("V3 POU counts are comparable to V2.3 extraction", () => {
