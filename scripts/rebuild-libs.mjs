@@ -44,7 +44,6 @@ let compileStlib;
 let loadStlibFromFile;
 let loadLibraryConfig;
 let applyLibraryConfigDocumentation;
-let importCodesysLibrary;
 
 /**
  * Refresh `dist/` from `src/` and import the freshly compiled modules.
@@ -79,14 +78,10 @@ async function refreshAndLoadCompiler() {
   const config = await import(
     resolve(projectRoot, "dist/library/library-config.js")
   );
-  const codesys = await import(
-    resolve(projectRoot, "dist/library/codesys-import/index.js")
-  );
   compileStlib = compiler.compileStlib;
   loadStlibFromFile = loader.loadStlibFromFile;
   loadLibraryConfig = config.loadLibraryConfig;
   applyLibraryConfigDocumentation = config.applyLibraryConfigDocumentation;
-  importCodesysLibrary = codesys.importCodesysLibrary;
 }
 
 /**
@@ -172,130 +167,41 @@ function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, depende
 }
 
 /**
- * Rebuild a CODESYS-imported library: reads library.json from
- * `libs/sources/<libDirName>/`, runs the codesys-importer over the
- * `.library` file colocated in the same directory, and feeds the
- * extracted ST sources into compileStlib.
+ * Rebuild OSCAT from the embedded sources in its existing .stlib.
  *
- * Used by OSCAT today. The .library file is the canonical source of
- * truth on disk; library.json supplies the metadata (name, namespace,
- * version, globalConstants).
+ * Round-trip path: read the archive's `sources[]`, recompile, write
+ * back. Kept for OSCAT only because our codesys-importer's V3 parser
+ * has known reverse-engineering gaps (see v3-parser.ts module header)
+ * that prevent a clean re-import from the .library binary today. When
+ * those gaps are closed, OSCAT can move to libs/sources/oscat-basic/
+ * with a library.json + the .library file as the canonical source,
+ * matching the pattern of every other lib.
  */
-function rebuildLibraryFromCodesys({ libDirName, stlibPath, codesysLibraryFile, dependencies }) {
-  const sourcesDir = resolve(sourcesRoot, libDirName);
-  if (!existsSync(sourcesDir)) {
-    throw new Error(`Source directory not found: ${sourcesDir}`);
-  }
-  const config = loadLibraryConfig(sourcesDir);
-  if (!config) {
-    throw new Error(`${sourcesDir}/library.json not found`);
-  }
-  const codesysLibraryPath = resolve(sourcesDir, codesysLibraryFile);
-  if (!existsSync(codesysLibraryPath)) {
-    throw new Error(`CODESYS library file not found: ${codesysLibraryPath}`);
-  }
-
-  const importResult = importCodesysLibrary(codesysLibraryPath);
-  if (!importResult.success) {
+function rebuildOscatFromArchive(stlibPath, dependencies) {
+  const archive = loadStlibFromFile(stlibPath);
+  if (!archive.sources || archive.sources.length === 0) {
     throw new Error(
-      `CODESYS import failed for ${codesysLibraryPath}:\n  ${importResult.errors.join("\n  ")}`,
+      `${stlibPath}: no embedded sources — cannot rebuild OSCAT via the round-trip path`,
     );
   }
-
-  // Post-process step 1: drop POUs whose imported source has unbalanced
-  // block comments. The codesys-importer's V3 parser handles ~99.6% of
-  // the OSCAT corpus correctly with the stride-10 boundary-record fix,
-  // but a small number of POUs (DCF77, UTC_TO_LTIME at 335/0/1.10) end
-  // up truncated mid-revision-history. The trailing `*)` is missing AND
-  // unrelated junk strings get appended in its place, so neither
-  // appending `*)` nor truncating-and-closing produces a recompilable
-  // POU. Skip them with a warning so the rest of OSCAT still builds —
-  // the editor and runtime degrade to "FB not in library" for those
-  // names, which is preferable to failing the whole library build.
-  const droppedNames = new Set();
-  const survivors = [];
-  for (const s of importResult.sources) {
-    let depth = 0;
-    for (let i = 0; i < s.source.length - 1; i++) {
-      if (s.source[i] === "(" && s.source[i + 1] === "*") { depth++; i++; }
-      else if (s.source[i] === "*" && s.source[i + 1] === ")") {
-        depth = Math.max(0, depth - 1); i++;
-      }
-    }
-    if (depth > 0) {
-      droppedNames.add(s.fileName.replace(/\.gvl\.st$/, "").replace(/\.st$/, ""));
-    } else {
-      survivors.push(s);
-    }
-  }
-  const directDrops = [...droppedNames];
-
-  // Post-process step 2: also drop transitive callers. If a POU body
-  // calls a dropped FB or function by name, the C++ codegen would emit
-  // an unresolved symbol reference. Iteratively widen the drop set
-  // until it stabilises — typically just one extra hop (e.g.
-  // CALENDAR_CALC depends on UTC_TO_LTIME).
-  let widened = true;
-  while (widened) {
-    widened = false;
-    for (let idx = survivors.length - 1; idx >= 0; idx--) {
-      const s = survivors[idx];
-      let calls = false;
-      for (const name of droppedNames) {
-        if (new RegExp(`\\b${name}\\s*\\(`).test(s.source)) { calls = true; break; }
-      }
-      if (calls) {
-        droppedNames.add(s.fileName.replace(/\.gvl\.st$/, "").replace(/\.st$/, ""));
-        survivors.splice(idx, 1);
-        widened = true;
-      }
-    }
-  }
-  const transitiveDrops = [...droppedNames].filter((n) => !directDrops.includes(n));
-
-  if (directDrops.length > 0) {
-    console.warn(
-      `[rebuild-libs] WARNING: ${directDrops.length} POU(s) skipped — ` +
-        `unclosed block comments after CODESYS V3 import (the v3-parser ` +
-        `truncates these mid-revision-history): ${directDrops.join(", ")}`,
-    );
-  }
-  if (transitiveDrops.length > 0) {
-    console.warn(
-      `[rebuild-libs] WARNING: ${transitiveDrops.length} POU(s) skipped — ` +
-        `transitively depend on the dropped POUs above: ${transitiveDrops.join(", ")}`,
-    );
-  }
-  const cleanSources = survivors;
-
-  // Append any hand-authored .st sources sitting next to library.json.
-  // These supplement the .library import and are used today only for
-  // the OSCAT GVL block (globals.st instantiates the CONSTANTS_*
-  // structs as VAR_GLOBAL — the V3 GVL extractor still misses that
-  // block). They're appended AFTER the imported sources so they can
-  // reference imported TYPEs.
-  const supplemental = readdirSync(sourcesDir)
-    .filter((f) => f.endsWith(".st"))
-    .sort();
-  if (supplemental.length > 0) {
-    console.log(
-      `[rebuild-libs]   + ${supplemental.length} hand-authored supplement(s): ${supplemental.join(", ")}`,
-    );
-    for (const fileName of supplemental) {
-      cleanSources.push({
-        fileName,
-        source: readFileSync(resolve(sourcesDir, fileName), "utf-8"),
-      });
-    }
-  }
-
-  return compileAndWrite({
-    sources: cleanSources,
-    config,
-    stlibPath,
+  const result = compileStlib(archive.sources, {
+    name: archive.manifest.name,
+    version: archive.manifest.version,
+    namespace: archive.manifest.namespace,
+    noSource: false,
+    builtin: archive.manifest.isBuiltin,
     dependencies,
-    sourcesDir,
+    globalConstants: archive.globalConstants,
   });
+  if (!result.success) {
+    const errs = result.errors.map((e) => `  ${e.file ?? ""}:${e.line ?? 0}: ${e.message}`);
+    throw new Error(`Failed to rebuild ${archive.manifest.name}:\n${errs.join("\n")}`);
+  }
+  if (archive.manifest.description) {
+    result.archive.manifest.description = archive.manifest.description;
+  }
+  writeFileSync(stlibPath, JSON.stringify(result.archive, null, 2) + "\n", "utf-8");
+  return result.archive;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -333,19 +239,15 @@ export async function setup() {
     });
   }
 
-  // 3. OSCAT — codesys-imported. Sources extracted from the binary
-  //    .library file at libs/sources/oscat-basic/ on every build;
-  //    metadata + globalConstants come from library.json next to it.
-  //    Depends on iec-standard-fb at compile time.
-  if (existsSync(resolve(sourcesRoot, "oscat-basic"))) {
-    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (CODESYS import)...");
+  // 3. OSCAT — round-trip from existing archive. The .stlib stays
+  //    tracked because our codesys-importer's V3 parser has known
+  //    reverse-engineering gaps for the longest OSCAT POUs (DCF77,
+  //    UTC_TO_LTIME) and for the VAR_GLOBAL section. See v3-parser.ts
+  //    module header for the specifics. Depends on iec-standard-fb.
+  if (existsSync(oscatPath)) {
+    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (round-trip)...");
     const iecArchive = loadStlibFromFile(iecPath);
-    rebuildLibraryFromCodesys({
-      libDirName: "oscat-basic",
-      stlibPath: oscatPath,
-      codesysLibraryFile: "oscat_basic_335.library",
-      dependencies: [iecArchive],
-    });
+    rebuildOscatFromArchive(oscatPath, [iecArchive]);
   }
 
   // 4. Copy compiled archives into vscode-extension/bundled-libs/. The

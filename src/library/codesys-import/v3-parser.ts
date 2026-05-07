@@ -5,15 +5,29 @@
  *
  * Extracts POU source code from CODESYS V3 .library files (ZIP archives).
  *
- * The V3 .library format:
- * - ZIP archive containing GUID-named .meta/.object pairs + auxiliary files
+ * Format overview (reverse-engineered, undocumented):
+ * - ZIP archive containing GUID-named .meta/.object pairs + auxiliary files.
  * - String table: __shared_data_storage_string_table__.auxiliary
  *   All source text stored as sequential LEB128-indexed UTF-8 entries.
+ *   Strings are added to the table in the order POUs are saved, so the
+ *   indices for any single POU's lines tend to form a contiguous
+ *   monotonically-increasing range — a useful signal for distinguishing
+ *   real-content varints from shared/junk pointers reused across POUs.
  * - Object files: UUID.object — per-POU binary with two sub-objects:
  *   1) Implementation (code body): records 1..boundary, column A
  *   2) Declaration (VAR blocks + header): records after boundary, column A
  *   Records are 3-varint tuples delimited by 8 zero bytes.
- *   A boundary record (>3 varints) separates the two sub-objects.
+ *   A "boundary" record (the first record after R0 with >3 varints)
+ *   separates the two sub-objects.
+ *
+ * Boundary-record packing (the source of most extraction subtleties):
+ *   When a POU's implementation fits in fewer than ~127 lines, the
+ *   boundary record is small (n in [4..16]) and its column A holds
+ *   simply the LAST impl line — typically the closing `*)` of a
+ *   trailing block comment whose body lived in the records just before.
+ *   For longer implementations, CODESYS packs the overflow into the
+ *   boundary record at stride-10 positions: varint[0], [10], [20], ….
+ *   We read both layouts here (the old `i < boundary` was off-by-one).
  *
  * Object file binary layout:
  *   [20-byte header: magic 02200928 + 12 zeros + uint32LE data length]
@@ -22,6 +36,31 @@
  *   [Boundary record: 6+ varints + 8-zero terminator]
  *   [Records: 3-4 varints + 8-zero terminator]  (declaration lines)
  *   [Final record: varints, NO terminator]
+ *
+ * KNOWN REVERSE-ENGINEERING GAPS (TODO):
+ * 1. Long-impl boundary records (~600+ varints) for the largest OSCAT
+ *    POUs (DCF77, UTC_TO_LTIME) transition from stride-10 to a non-
+ *    uniform stride (~11) partway through. Empirical analysis of DCF77
+ *    R62 (n=1484) shows real-content varints at stride-10 positions
+ *    0..1280 and at irregular positions 1302/1313/1335/… afterwards,
+ *    plus the closing `*)` at position 1445 (varint=11, a low/shared
+ *    string value that filters by `varint > maxCol0` would miss).
+ *    The transition point appears related to row metadata that the
+ *    parser doesn't yet decode. Pure stride-10 over-reads (picks up
+ *    junk shared strings from later rows); pure varint-filter under-
+ *    reads (drops legitimate-but-shared lines like `END_IF;`, `ELSE`,
+ *    `*)`). Net result: 2/559 OSCAT POUs cannot be cleanly extracted
+ *    today, so OSCAT's .stlib stays tracked in libs/ as a build
+ *    artifact exception until this is resolved.
+ * 2. VAR_GLOBAL extraction misses the OSCAT GVL that instantiates
+ *    LANGUAGE/MATH/PHYS/SETUP/LOCATION as instances of the CONSTANTS_*
+ *    struct types. The struct TYPEs themselves are extracted cleanly;
+ *    only the global variable instances are missing. POUs that
+ *    reference `LANGUAGE.WEEKDAYS[…]` etc. (HOLIDAY, SUN_POS, the
+ *    date-localisation helpers) would compile-fail without those
+ *    globals.
+ *
+ * Both are tracked in TODO comments at the relevant code sites below.
  */
 
 import { inflateRawSync } from "zlib";
@@ -122,7 +161,7 @@ export function decodeObjectIndices(data: Buffer): number[] {
  * Parse an object file into records delimited by 8 zero bytes.
  * Skips the 20-byte header.
  */
-export function parseObjectRecords(data: Buffer): number[][] {
+function parseObjectRecords(data: Buffer): number[][] {
   if (data.length < OBJECT_HEADER_SIZE) return [];
 
   let offset = OBJECT_HEADER_SIZE;
@@ -392,7 +431,7 @@ function handleBareGVL(
  * Unzip entries from a buffer using Node.js built-in zlib.
  * Handles Stored (method 0) and Deflated (method 8) entries.
  */
-export function* unzipEntries(
+function* unzipEntries(
   data: Buffer,
 ): Generator<{ name: string; data: Buffer }> {
   let offset = 0;

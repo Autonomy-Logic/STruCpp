@@ -15,6 +15,14 @@ build/
 # CI rebuilds them before tests via vitest globalSetup; release jobs
 # rebuild them as part of `npm run build`.
 libs/*.stlib
+# Exception: libs/oscat-basic.stlib stays tracked because OSCAT's
+# upstream is a binary CODESYS V3 .library file and our V3 importer
+# has known reverse-engineering gaps that prevent a clean round-trip
+# (see src/library/codesys-import/v3-parser.ts header for details).
+# When the importer is brought to 100% extraction parity, OSCAT can
+# move to libs/sources/oscat-basic/ alongside the hand-authored libs
+# and this exception can be removed.
+!libs/oscat-basic.stlib
 # Extension-side copy is also a build artifact (vscode-extension's
 # esbuild.mjs syncs it from libs/ at vsix build time).
 vscode-extension/bundled-libs/*.stlib

@@ -19,16 +19,12 @@ import {
 } from "../../dist/library/codesys-import/index.js";
 import type { ExtractedPOU } from "../../dist/library/codesys-import/index.js";
 
-// Path to CODESYS library fixtures checked into the repository.
-// The V2.3 .lib stays in tests/fixtures/codesys/ since it's only a
-// V2.3-importer test fixture. The V3 .library file is the canonical
-// source for the OSCAT lib build, so it lives at libs/sources/oscat-basic/
-// and the V3 importer tests pull it from there to avoid duplication.
+// Path to CODESYS library fixtures checked into the repository
 const FIXTURES_DIR = resolve(__dirname, "../fixtures/codesys");
 const OSCAT_V23_PATH = resolve(FIXTURES_DIR, "oscat_basic_335.lib");
 const OSCAT_V3_PATH = resolve(
-  __dirname,
-  "../../libs/sources/oscat-basic/oscat_basic_335.library",
+  FIXTURES_DIR,
+  "oscat_basic_335_codesys3.library",
 );
 const V23_REFERENCE_DIR = resolve(FIXTURES_DIR, "v23-reference");
 
