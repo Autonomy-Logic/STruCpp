@@ -122,7 +122,7 @@ export function decodeObjectIndices(data: Buffer): number[] {
  * Parse an object file into records delimited by 8 zero bytes.
  * Skips the 20-byte header.
  */
-function parseObjectRecords(data: Buffer): number[][] {
+export function parseObjectRecords(data: Buffer): number[][] {
   if (data.length < OBJECT_HEADER_SIZE) return [];
 
   let offset = OBJECT_HEADER_SIZE;
@@ -183,13 +183,40 @@ function extractFromRecords(
 
   if (boundary === -1) return null;
 
-  // Implementation: records 1..boundary-1, column A (varint[0])
+  // Implementation extraction.
+  //
+  // Records 1..boundary-1 are "thin" rows (n=3) carrying one impl line
+  // each in varint[0]. The boundary record itself is special: when the
+  // implementation fits in fewer than ~127 lines it shows up as a
+  // medium-sized record (n in [4..16]) whose varint[0] is the LAST impl
+  // line (often the closing `*)` of a trailing block comment). When the
+  // implementation is longer, CODESYS packs the overflow into a much
+  // larger boundary record where additional impl lines live at
+  // stride-10 positions: varint[0], [10], [20], ..., [stride*k].
+  //
+  // The non-stride positions in a fat boundary record carry per-line
+  // metadata (column-name pointers, junk shared strings) that's
+  // irrelevant for source extraction. The pattern was observed across
+  // every OSCAT POU with > ~127 impl lines (HOLIDAY, DCF77, _ARRAY_SORT,
+  // SEQUENCE_4/8, ESR_MON_B8, etc.); without reading the stride
+  // overflow we'd drop the tail of the implementation, leaving
+  // unclosed block comments and dangling IF/END_IF pairs that fail to
+  // recompile.
+  const STRIDE_OVERFLOW = 10;
   const implLines: string[] = [];
   for (let i = 1; i < boundary; i++) {
     const rec = records[i]!;
     if (rec.length > 0) {
       implLines.push(strings.get(rec[0]!) ?? "");
     }
+  }
+  // Boundary record: varint[0] always; varint[10*k] for fat boundaries.
+  const boundaryRec = records[boundary]!;
+  if (boundaryRec.length > 0) {
+    implLines.push(strings.get(boundaryRec[0]!) ?? "");
+  }
+  for (let k = STRIDE_OVERFLOW; k < boundaryRec.length; k += STRIDE_OVERFLOW) {
+    implLines.push(strings.get(boundaryRec[k]!) ?? "");
   }
 
   // Find the POU/TYPE header: scan from boundary for first 4-varint record
@@ -365,7 +392,7 @@ function handleBareGVL(
  * Unzip entries from a buffer using Node.js built-in zlib.
  * Handles Stored (method 0) and Deflated (method 8) entries.
  */
-function* unzipEntries(
+export function* unzipEntries(
   data: Buffer,
 ): Generator<{ name: string; data: Buffer }> {
   let offset = 0;
