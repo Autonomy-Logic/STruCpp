@@ -1,0 +1,240 @@
+{
+  "formatVersion": 1,
+  "manifest": {
+    "name": "additional-function-blocks",
+    "version": "1.0.0",
+    "namespace": "strucpp",
+    "functions": [],
+    "functionBlocks": [
+      {
+        "name": "INTEGRAL",
+        "inputs": [
+          {
+            "name": "RUN",
+            "type": "BOOL"
+          },
+          {
+            "name": "R1",
+            "type": "BOOL"
+          },
+          {
+            "name": "XIN",
+            "type": "REAL"
+          },
+          {
+            "name": "X0",
+            "type": "REAL"
+          },
+          {
+            "name": "CYCLE",
+            "type": "TIME"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "XOUT",
+            "type": "REAL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "DERIVATIVE",
+        "inputs": [
+          {
+            "name": "RUN",
+            "type": "BOOL"
+          },
+          {
+            "name": "XIN",
+            "type": "REAL"
+          },
+          {
+            "name": "CYCLE",
+            "type": "TIME"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "XOUT",
+            "type": "REAL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "RTC",
+        "inputs": [
+          {
+            "name": "IN",
+            "type": "BOOL"
+          },
+          {
+            "name": "PDT",
+            "type": "DT"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          },
+          {
+            "name": "CDT",
+            "type": "DT"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "PID",
+        "inputs": [
+          {
+            "name": "AUTO",
+            "type": "BOOL"
+          },
+          {
+            "name": "PV",
+            "type": "REAL"
+          },
+          {
+            "name": "SP",
+            "type": "REAL"
+          },
+          {
+            "name": "X0",
+            "type": "REAL"
+          },
+          {
+            "name": "KP",
+            "type": "REAL"
+          },
+          {
+            "name": "TR",
+            "type": "REAL"
+          },
+          {
+            "name": "TD",
+            "type": "REAL"
+          },
+          {
+            "name": "CYCLE",
+            "type": "TIME"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "XOUT",
+            "type": "REAL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "RAMP",
+        "inputs": [
+          {
+            "name": "RUN",
+            "type": "BOOL"
+          },
+          {
+            "name": "X0",
+            "type": "REAL"
+          },
+          {
+            "name": "X1",
+            "type": "REAL"
+          },
+          {
+            "name": "TR",
+            "type": "TIME"
+          },
+          {
+            "name": "CYCLE",
+            "type": "TIME"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "BUSY",
+            "type": "BOOL"
+          },
+          {
+            "name": "XOUT",
+            "type": "REAL"
+          }
+        ],
+        "inouts": []
+      },
+      {
+        "name": "HYSTERESIS",
+        "inputs": [
+          {
+            "name": "XIN1",
+            "type": "REAL"
+          },
+          {
+            "name": "XIN2",
+            "type": "REAL"
+          },
+          {
+            "name": "EPS",
+            "type": "REAL"
+          }
+        ],
+        "outputs": [
+          {
+            "name": "Q",
+            "type": "BOOL"
+          }
+        ],
+        "inouts": []
+      }
+    ],
+    "types": [],
+    "headers": [],
+    "isBuiltin": true,
+    "sourceFiles": [
+      "integral.st",
+      "derivative.st",
+      "rtc.st",
+      "pid.st",
+      "ramp.st",
+      "hysteresis.st"
+    ],
+    "description": "IEC 61131-3 Annex E Additional Function Blocks (RTC, INTEGRAL, DERIVATIVE, PID, RAMP, HYSTERESIS) — auto-generated from ST sources"
+  },
+  "headerCode": "\nclass INTEGRAL;\nclass DERIVATIVE;\nclass RTC;\nclass PID;\nclass RAMP;\nclass HYSTERESIS;\n\nclass INTEGRAL {\npublic:\n    // Inputs\n    IEC_BOOL RUN;\n    IEC_BOOL R1;\n    IEC_REAL XIN;\n    IEC_REAL X0;\n    IEC_TIME CYCLE;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_REAL XOUT;\n\n    // Implicit IEC 61131-3 ENO pin (mirrors EN)\n    IEC_BOOL ENO = true;\n\n    // Constructor\n    INTEGRAL();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~INTEGRAL() = default;\n};\n\nclass DERIVATIVE {\npublic:\n    // Inputs\n    IEC_BOOL RUN;\n    IEC_REAL XIN;\n    IEC_TIME CYCLE;\n    // Outputs\n    IEC_REAL XOUT;\n    // Local variables\n    IEC_REAL X1;\n    IEC_REAL X2;\n    IEC_REAL X3;\n\n    // Implicit IEC 61131-3 ENO pin (mirrors EN)\n    IEC_BOOL ENO = true;\n\n    // Constructor\n    DERIVATIVE();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~DERIVATIVE() = default;\n};\n\nclass RTC {\npublic:\n    // Inputs\n    IEC_BOOL IN;\n    IEC_DT PDT;\n    // Outputs\n    IEC_BOOL Q;\n    IEC_DT CDT;\n    // Local variables\n    IEC_BOOL PREV_IN;\n    IEC_TIME OFFSET;\n    IEC_DT CURRENT_TIME;\n\n    // Implicit IEC 61131-3 ENO pin (mirrors EN)\n    IEC_BOOL ENO = true;\n\n    // Constructor\n    RTC();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~RTC() = default;\n};\n\nclass RAMP {\npublic:\n    // Inputs\n    IEC_BOOL RUN;\n    IEC_REAL X0;\n    IEC_REAL X1;\n    IEC_TIME TR;\n    IEC_TIME CYCLE;\n    // Outputs\n    IEC_BOOL BUSY;\n    IEC_REAL XOUT;\n    // Local variables\n    IEC_REAL XI;\n    IEC_TIME T;\n\n    // Implicit IEC 61131-3 ENO pin (mirrors EN)\n    IEC_BOOL ENO = true;\n\n    // Constructor\n    RAMP();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~RAMP() = default;\n};\n\nclass HYSTERESIS {\npublic:\n    // Inputs\n    IEC_REAL XIN1;\n    IEC_REAL XIN2;\n    IEC_REAL EPS;\n    // Outputs\n    IEC_BOOL Q;\n\n    // Implicit IEC 61131-3 ENO pin (mirrors EN)\n    IEC_BOOL ENO = true;\n\n    // Constructor\n    HYSTERESIS();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~HYSTERESIS() = default;\n};\n\nclass PID {\npublic:\n    // Inputs\n    IEC_BOOL AUTO;\n    IEC_REAL PV;\n    IEC_REAL SP;\n    IEC_REAL X0;\n    IEC_REAL KP;\n    IEC_REAL TR;\n    IEC_REAL TD;\n    IEC_TIME CYCLE;\n    // Outputs\n    IEC_REAL XOUT;\n    // Local variables\n    IEC_REAL ERROR;\n    INTEGRAL ITERM;\n    DERIVATIVE DTERM;\n\n    // Implicit IEC 61131-3 ENO pin (mirrors EN)\n    IEC_BOOL ENO = true;\n\n    // Constructor\n    PID();\n\n    // Execute function block\n    void operator()();\n\n    virtual ~PID() = default;\n};\n",
+  "cppCode": "\n\nINTEGRAL::INTEGRAL() {\n    // Initialize variables\n}\n\nvoid INTEGRAL::operator()() {\n    Q = !R1;\n    if (R1) {\n        XOUT = X0;\n    } else if (RUN) {\n        XOUT = XOUT + XIN * TO_REAL(CYCLE);\n    }\n}\n\n\nDERIVATIVE::DERIVATIVE() {\n    // Initialize variables\n}\n\nvoid DERIVATIVE::operator()() {\n    if (RUN) {\n        XOUT = (3.0 * (XIN - X3) + X1 - X2) / (10.0 * TO_REAL(CYCLE));\n        X3 = X2;\n        X2 = X1;\n        X1 = XIN;\n    } else {\n        XOUT = 0.0;\n        X1 = XIN;\n        X2 = XIN;\n        X3 = XIN;\n    }\n}\n\n\nRTC::RTC()\n    : Q(false), PREV_IN(false)\n{\n    // Initialize variables\n}\n\nvoid RTC::operator()() {\n    CURRENT_TIME = CURRENT_DT();\n    if (IN) {\n        if (!PREV_IN) {\n            OFFSET = PDT - CURRENT_TIME;\n        }\n        CDT = CURRENT_TIME + OFFSET;\n    } else {\n        CDT = CURRENT_TIME;\n    }\n    Q = IN;\n    PREV_IN = IN;\n}\n\n\nRAMP::RAMP()\n    : XOUT(0.0), T(0LL)\n{\n    // Initialize variables\n}\n\nvoid RAMP::operator()() {\n    BUSY = RUN;\n    if (RUN) {\n        if (T >= TR) {\n            BUSY = false;\n            XOUT = X1;\n        } else {\n            XOUT = XI + (X1 - XI) * TO_REAL(T) / TO_REAL(TR);\n            T = T + CYCLE;\n        }\n    } else {\n        XOUT = X0;\n        XI = X0;\n        T = 0LL;\n    }\n}\n\n\nHYSTERESIS::HYSTERESIS()\n    : Q(false)\n{\n    // Initialize variables\n}\n\nvoid HYSTERESIS::operator()() {\n    if (Q) {\n        if (XIN1 < (XIN2 - EPS)) {\n            Q = false;\n        }\n    } else if (XIN1 > (XIN2 + EPS)) {\n        Q = true;\n    }\n}\n\n\nPID::PID() {\n    // Initialize variables\n}\n\nvoid PID::operator()() {\n    ERROR = PV - SP;\n    ITERM.RUN = AUTO;\n    ITERM.R1 = !AUTO;\n    ITERM.XIN = ERROR;\n    ITERM.X0 = TR * (X0 - ERROR);\n    ITERM.CYCLE = CYCLE;\n    ITERM();\n    ITERM.ENO = true;\n    DTERM.RUN = AUTO;\n    DTERM.XIN = ERROR;\n    DTERM.CYCLE = CYCLE;\n    DTERM();\n    DTERM.ENO = true;\n    XOUT = KP * (ERROR + ITERM.XOUT / TR + DTERM.XOUT * TD);\n}\n",
+  "dependencies": [],
+  "sources": [
+    {
+      "fileName": "integral.st",
+      "source": "(* Additional Function Blocks: INTEGRAL                                  *)\n(* Source carried verbatim from MatIEC's lib/integral_st.txt.            *)\n(* Original header preserved for traceability:                           *)\n(*   \"Following taken directly from the IEC 61131.3 draft standard\"      *)\n(*   \"FINAL DRAFT - IEC 61131-3, 2nd Ed. (2001-12-10)\"                   *)\n\nFUNCTION_BLOCK INTEGRAL\n  VAR_INPUT\n    RUN   : BOOL ;       (* 1 = integrate, 0 = hold *)\n    R1    : BOOL ;       (* Overriding reset        *)\n    XIN   : REAL ;       (* Input variable          *)\n    X0    : REAL ;       (* Initial value           *)\n    CYCLE : TIME ;       (* Sampling period         *)\n  END_VAR\n  VAR_OUTPUT\n    Q    : BOOL ;        (* NOT R1                  *)\n    XOUT : REAL ;        (* Integrated output       *)\n  END_VAR\n\n  Q := NOT R1 ;\n  IF R1 THEN\n    XOUT := X0 ;\n  ELSIF RUN THEN\n    XOUT := XOUT + XIN * TIME_TO_REAL(CYCLE) ;\n  END_IF ;\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "derivative.st",
+      "source": "(* Additional Function Blocks: DERIVATIVE                                *)\n(* Source carried verbatim from MatIEC's lib/derivative_st.txt.          *)\n(* Original header preserved for traceability:                           *)\n(*   \"Following taken directly from the IEC 61131.3 draft standard\"      *)\n(*   \"FINAL DRAFT - IEC 61131-3, 2nd Ed. (2001-12-10)\"                   *)\n\nFUNCTION_BLOCK DERIVATIVE\n  VAR_INPUT\n    RUN   : BOOL ;          (* 0 = reset                  *)\n    XIN   : REAL ;          (* Input to be differentiated *)\n    CYCLE : TIME ;          (* Sampling period            *)\n  END_VAR\n  VAR_OUTPUT\n    XOUT : REAL ;           (* Differentiated output      *)\n  END_VAR\n  VAR\n    X1 : REAL ;\n    X2 : REAL ;\n    X3 : REAL ;\n  END_VAR\n\n  IF RUN THEN\n    XOUT := (3.0 * (XIN - X3) + X1 - X2) / (10.0 * TIME_TO_REAL(CYCLE)) ;\n    X3 := X2 ;\n    X2 := X1 ;\n    X1 := XIN ;\n  ELSE\n    XOUT := 0.0 ;\n    X1 := XIN ;\n    X2 := XIN ;\n    X3 := XIN ;\n  END_IF ;\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "rtc.st",
+      "source": "(* Additional Function Blocks: RTC                                       *)\n(* Source adapted from MatIEC's lib/rtc.txt.                             *)\n(*                                                                        *)\n(* Behavioural contract preserved: Q is a copy of IN. While IN is FALSE,  *)\n(* CDT is the current wall-clock date-and-time. On the rising edge of IN, *)\n(* the offset between PDT and CURRENT_TIME is captured; while IN stays    *)\n(* TRUE, CDT == PDT + (time elapsed since the offset was captured).       *)\n(*                                                                        *)\n(* The MatIEC source used a `{__SET_VAR(data__->,CURRENT_TIME,,            *)\n(* __CURRENT_TIME)}` pragma to read the runtime's wall-clock pseudo-       *)\n(* global. STruC++ exposes the same capability through the regular        *)\n(* CURRENT_DT() runtime function, so the body uses a plain assignment.    *)\n\nFUNCTION_BLOCK RTC\n  VAR_INPUT\n    IN  : BOOL ;             (* FALSE = report current time, TRUE = load PDT and track *)\n    PDT : DT ;               (* Preset datetime *)\n  END_VAR\n  VAR_OUTPUT\n    Q   : BOOL := FALSE ;    (* Copy of IN *)\n    CDT : DT ;               (* Datetime, current or relative to PDT *)\n  END_VAR\n  VAR\n    PREV_IN      : BOOL := FALSE ;\n    OFFSET       : TIME ;\n    CURRENT_TIME : DT ;\n  END_VAR\n\n  CURRENT_TIME := CURRENT_DT() ;\n\n  IF IN THEN\n    IF NOT PREV_IN THEN\n      OFFSET := PDT - CURRENT_TIME ;\n    END_IF ;\n\n    (* PDT + time since PDT was loaded *)\n    CDT := CURRENT_TIME + OFFSET ;\n  ELSE\n    CDT := CURRENT_TIME ;\n  END_IF ;\n\n  Q := IN ;\n  PREV_IN := IN ;\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "pid.st",
+      "source": "(* Additional Function Blocks: PID                                       *)\n(* Source carried verbatim from MatIEC's lib/pid_st.txt.                 *)\n(* Original header preserved for traceability:                           *)\n(*   \"Following taken directly from the IEC 61131.3 draft standard\"      *)\n(*   \"FINAL DRAFT - IEC 61131-3, 2nd Ed. (2001-12-10)\"                   *)\n(*                                                                        *)\n(* Depends on INTEGRAL and DERIVATIVE FBs declared elsewhere in this lib. *)\n\nFUNCTION_BLOCK PID\n  VAR_INPUT\n    AUTO  : BOOL ;       (* 0 - manual , 1 - automatic *)\n    PV    : REAL ;       (* Process variable *)\n    SP    : REAL ;       (* Set point *)\n    X0    : REAL ;       (* Manual output adjustment - typically from transfer station *)\n    KP    : REAL ;       (* Proportionality constant *)\n    TR    : REAL ;       (* Reset time *)\n    TD    : REAL ;       (* Derivative time constant *)\n    CYCLE : TIME ;       (* Sampling period *)\n  END_VAR\n  VAR_OUTPUT\n    XOUT : REAL ;\n  END_VAR\n  VAR\n    ERROR : REAL ;        (* PV - SP *)\n    ITERM : INTEGRAL ;    (* FB for integral term  *)\n    DTERM : DERIVATIVE ;  (* FB for derivative term *)\n  END_VAR\n\n  ERROR := PV - SP ;\n  (*** Adjust ITERM so that XOUT := X0 when AUTO = 0 ***)\n  ITERM (RUN := AUTO, R1 := NOT AUTO, XIN := ERROR,\n         X0 := TR * (X0 - ERROR), CYCLE := CYCLE) ;\n  DTERM (RUN := AUTO, XIN := ERROR, CYCLE := CYCLE) ;\n  XOUT := KP * (ERROR + ITERM.XOUT / TR + DTERM.XOUT * TD) ;\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "ramp.st",
+      "source": "(* Additional Function Blocks: RAMP                                      *)\n(* Source carried verbatim from MatIEC's lib/ramp_st.txt.                *)\n(* Original header preserved for traceability:                           *)\n(*   \"Following taken directly from the IEC 61131.3 draft standard\"      *)\n(*   \"FINAL DRAFT - IEC 61131-3, 2nd Ed. (2001-12-10)\"                   *)\n\nFUNCTION_BLOCK RAMP\n  VAR_INPUT\n    RUN   : BOOL ;       (* 0 - track X0, 1 - ramp to/track X1 *)\n    X0    : REAL ;\n    X1    : REAL ;\n    TR    : TIME ;       (* Ramp duration *)\n    CYCLE : TIME ;       (* Sampling period *)\n  END_VAR\n  VAR_OUTPUT\n    BUSY : BOOL ;        (* BUSY = 1 during ramping period *)\n    XOUT : REAL := 0.0 ;\n  END_VAR\n  VAR\n    XI : REAL ;          (* Initial value *)\n    T  : TIME := T#0s ;  (* Elapsed time of ramp *)\n  END_VAR\n\n  BUSY := RUN ;\n  IF RUN THEN\n    IF T >= TR THEN\n      BUSY := FALSE ;\n      XOUT := X1 ;\n    ELSE\n      XOUT := XI + (X1 - XI) * TIME_TO_REAL(T) / TIME_TO_REAL(TR) ;\n      T := T + CYCLE ;\n    END_IF ;\n  ELSE\n    XOUT := X0 ;\n    XI := X0 ;\n    T := T#0s ;\n  END_IF ;\nEND_FUNCTION_BLOCK\n"
+    },
+    {
+      "fileName": "hysteresis.st",
+      "source": "(* Additional Function Blocks: HYSTERESIS                                *)\n(* Source carried verbatim from MatIEC's lib/hysteresis_st.txt.          *)\n(* Original header preserved for traceability:                           *)\n(*   \"Following taken directly from the IEC 61131.3 draft standard\"      *)\n(*   \"FINAL DRAFT - IEC 61131-3, 2nd Ed. (2001-12-10)\"                   *)\n(*                                                                        *)\n(* Boolean hysteresis on the difference of two REAL inputs (XIN1 - XIN2). *)\n\nFUNCTION_BLOCK HYSTERESIS\n  VAR_INPUT\n    XIN1 : REAL ;\n    XIN2 : REAL ;\n    EPS  : REAL ;\n  END_VAR\n  VAR_OUTPUT\n    Q : BOOL := FALSE ;\n  END_VAR\n\n  IF Q THEN\n    IF XIN1 < (XIN2 - EPS) THEN\n      Q := FALSE ;\n    END_IF ;\n  ELSIF XIN1 > (XIN2 + EPS) THEN\n    Q := TRUE ;\n  END_IF ;\nEND_FUNCTION_BLOCK\n"
+    }
+  ]
+}

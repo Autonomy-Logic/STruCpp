@@ -106,6 +106,7 @@ function rebuildLibrary(stlibPath, options) {
 
 export async function setup() {
   const iecPath = resolve(libsDir, "iec-standard-fb.stlib");
+  const additionalFbPath = resolve(libsDir, "additional-function-blocks.stlib");
   const oscatPath = resolve(libsDir, "oscat-basic.stlib");
 
   if (!existsSync(iecPath)) {
@@ -122,16 +123,30 @@ export async function setup() {
   console.log("[rebuild-libs] Rebuilding iec-standard-fb.stlib...");
   rebuildLibrary(iecPath, {});
 
-  // 2. Rebuild OSCAT (depends on IEC standard FB library)
+  // 2. Rebuild Additional Function Blocks (no dependencies on other libs;
+  //    PID's references to INTEGRAL/DERIVATIVE are intra-library and
+  //    resolved by source-order in the embedded sources[]).
+  if (existsSync(additionalFbPath)) {
+    console.log("[rebuild-libs] Rebuilding additional-function-blocks.stlib...");
+    rebuildLibrary(additionalFbPath, {});
+  }
+
+  // 3. Rebuild OSCAT (depends on IEC standard FB library)
   if (existsSync(oscatPath)) {
     console.log("[rebuild-libs] Rebuilding oscat-basic.stlib...");
     const iecArchive = loadStlibFromFile(iecPath);
     rebuildLibrary(oscatPath, { dependencies: [iecArchive] });
   }
 
-  // 3. Copy to VSCode extension bundled-libs if directory exists
+  // 4. Copy to VSCode extension bundled-libs if directory exists
   if (existsSync(vscodeLibsDir)) {
     copyFileSync(iecPath, resolve(vscodeLibsDir, "iec-standard-fb.stlib"));
+    if (existsSync(additionalFbPath)) {
+      copyFileSync(
+        additionalFbPath,
+        resolve(vscodeLibsDir, "additional-function-blocks.stlib"),
+      );
+    }
     if (existsSync(oscatPath)) {
       copyFileSync(oscatPath, resolve(vscodeLibsDir, "oscat-basic.stlib"));
     }

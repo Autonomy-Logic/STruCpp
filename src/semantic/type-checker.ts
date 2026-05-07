@@ -45,6 +45,70 @@ export { ELEMENTARY_TYPES, TYPE_CATEGORIES } from "./type-utils.js";
 export type { TypeCategory } from "./type-utils.js";
 
 // =============================================================================
+// IEC 61131-3 date/time arithmetic helpers
+// =============================================================================
+
+/** True when the operand type is one of the absolute-time types. */
+function isInstantType(t: IECType): boolean {
+  if (t.typeKind !== "elementary") return false;
+  const name = (t as ElementaryType).name;
+  return name === "DT" || name === "DATE" || name === "TOD";
+}
+
+/** True when the operand type is the duration type (TIME). */
+function isDurationType(t: IECType): boolean {
+  if (t.typeKind !== "elementary") return false;
+  return (t as ElementaryType).name === "TIME";
+}
+
+/** True when the operand pair maps to a recognised date/time arithmetic
+ *  rule from IEC 61131-3 §6.6.2.2 — instant minus instant, or instant
+ *  ± duration. Anything else (DT * 2, TIME / DT, …) falls through to
+ *  the normal arithmetic path so we don't widen the rule beyond what
+ *  the standard sanctions. */
+function isDateTimeArithmetic(
+  left: IECType,
+  right: IECType,
+  op: string,
+): boolean {
+  const leftIsInstant = isInstantType(left);
+  const rightIsInstant = isInstantType(right);
+  const leftIsTime = isDurationType(left);
+  const rightIsTime = isDurationType(right);
+
+  // instant - instant → TIME (duration). Both must be the same instant
+  // type per the standard (DT - TOD is meaningless).
+  if (op === "-" && leftIsInstant && rightIsInstant) {
+    return (left as ElementaryType).name === (right as ElementaryType).name;
+  }
+  // instant ± duration → instant (offset)
+  if (leftIsInstant && rightIsTime) return true;
+  // duration + instant → instant (commutative addition only)
+  if (op === "+" && leftIsTime && rightIsInstant) return true;
+  return false;
+}
+
+/** Resolves the result type for a recognised date/time arithmetic pair.
+ *  Pre-condition: isDateTimeArithmetic returned true for the same args. */
+function resolveDateTimeArithmetic(
+  left: IECType,
+  right: IECType,
+  op: string,
+): IECType | undefined {
+  const leftIsInstant = isInstantType(left);
+  const rightIsInstant = isInstantType(right);
+
+  if (op === "-" && leftIsInstant && rightIsInstant) {
+    return ELEMENTARY_TYPES["TIME"];
+  }
+  // instant ± duration: result keeps the instant type.
+  if (leftIsInstant) return left;
+  // duration + instant (commutative): result is the instant type.
+  if (rightIsInstant) return right;
+  return undefined;
+}
+
+// =============================================================================
 // Type Checker
 // =============================================================================
 
@@ -428,6 +492,23 @@ export class TypeChecker {
     // Logical operators return BOOL
     else if (["AND", "OR", "XOR"].includes(expr.operator)) {
       type = ELEMENTARY_TYPES["BOOL"];
+    }
+    // IEC 61131-3 date/time arithmetic (table 30 of the standard).
+    // Date types are int64_t aliases at the C++ level so the operator-
+    // overload returns IECVar<int64_t>, but the *semantic* result type
+    // depends on the operands:
+    //   DT/DATE/TOD - DT/DATE/TOD = TIME   (duration between two instants)
+    //   DT/DATE/TOD ± TIME       = DT/DATE/TOD (instant offset)
+    // Without these rules the type checker collapses DT - DT to DT,
+    // which then refuses assignment to a TIME variable (the natural use
+    // of the difference). This breaks RTC-style code that captures an
+    // offset between two datetimes — including the Additional Function
+    // Blocks library's RTC FB and any user code doing date arithmetic.
+    else if (
+      ["+", "-"].includes(expr.operator) &&
+      isDateTimeArithmetic(leftType, rightType, expr.operator)
+    ) {
+      type = resolveDateTimeArithmetic(leftType, rightType, expr.operator);
     }
     // Arithmetic operators return the "wider" type
     else if (["+", "-", "*", "/", "MOD", "**"].includes(expr.operator)) {
