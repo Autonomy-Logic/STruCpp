@@ -79,65 +79,40 @@ function buildCategoryByPouName(
 }
 
 /**
- * Pick the structured documentation block from one POU's source region.
+ * Build a "POU name → documentation" map from caller-supplied per-source
+ * documentation strings.
  *
- * Both CODESYS-exported POUs and OSCAT-style hand-authored ST tend to
- * carry a `(* version X.Y …  programmer …  tested by …  description … *)`
- * block right after the VAR sections. We scan every top-level `(* … *)`
- * block in the region and return the first one whose body contains one
- * of the trigger words (`version`, `programmer`, `tested by`). This
- * skips inline variable annotations like `(* Laufvariable Stack *)` —
- * which appear earlier in the source for some POUs and would otherwise
- * shadow the real doc block.
+ * Documentation lives in the source entry rather than in the source text
+ * — only the upstream importer (V3 codesys-importer in particular) knows
+ * which `(* … *)` block in a source is structurally the POU doc and which
+ * is an inline variable annotation. The compiler trusts what the importer
+ * already determined; if `source.documentation` is set, it's the doc.
  *
- * Returns the trimmed block body (without the surrounding `(*`/`*)`),
- * or `null` if no doc-shaped block is present (typical for plain
- * STRUCT/GVL definitions).
- */
-function extractDocBlock(region: string): string | null {
-  const re = /\(\*([\s\S]*?)\*\)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(region)) !== null) {
-    const body = m[1]!;
-    if (/(?:^|\n)[ \t]*(?:version|programmer|tested\s*by)\b/i.test(body)) {
-      return body.trim();
-    }
-  }
-  return null;
-}
-
-/**
- * Build a "POU name → documentation" map by splitting each source into
- * per-POU regions and running `extractDocBlock` on each.
+ * For hand-authored .st files (e.g. when `--compile-lib` is pointed at a
+ * directory of .st files without going through the codesys-importer),
+ * `documentation` is unset and the map stays empty — those libraries get
+ * their docs from the `library.json` `blocks` / `functions` maps via
+ * `applyLibraryConfigDocumentation`, which still runs as a post-step.
  *
- * Multi-POU files are common in hand-authored libs (counter.st in
- * iec-standard-fb concatenates 15 counter variants), so we segment the
- * source at every top-level POU header rather than treating the whole
- * file as one region — otherwise every POU in the file would receive
- * the same doc block, or only the first POU's block would survive.
+ * Each input source maps to all POU names it declares; the strucpp parser
+ * uppercases identifiers, so we uppercase keys to bridge cases like
+ * OSCAT's `FT_Profile` → manifest `FT_PROFILE`.
  */
 function buildDocByPouName(
-  sources: Array<{ source: string; fileName: string }>,
+  sources: Array<{
+    source: string;
+    fileName: string;
+    documentation?: string;
+  }>,
 ): Map<string, string> {
-  // Map keys are uppercased to match the parser's identifier-canonicalization
-  // (see comment in `buildCategoryByPouName`).
   const map = new Map<string, string>();
   for (const src of sources) {
-    const matches: Array<{ name: string; offset: number }> = [];
+    if (!src.documentation) continue;
     let m: RegExpExecArray | null;
     POU_HEADER_RE.lastIndex = 0;
     while ((m = POU_HEADER_RE.exec(src.source)) !== null) {
-      matches.push({ name: m[2]!.toUpperCase(), offset: m.index });
-    }
-    for (let i = 0; i < matches.length; i++) {
-      const start = matches[i]!.offset;
-      const end =
-        i + 1 < matches.length ? matches[i + 1]!.offset : src.source.length;
-      const region = src.source.slice(start, end);
-      const doc = extractDocBlock(region);
-      if (doc && !map.has(matches[i]!.name)) {
-        map.set(matches[i]!.name, doc);
-      }
+      const name = m[2]!.toUpperCase();
+      if (!map.has(name)) map.set(name, src.documentation);
     }
   }
   return map;
@@ -182,7 +157,12 @@ function tagDocumentation<T extends { name: string; documentation?: string }>(
  * @returns The compiled library with manifest and C++ code
  */
 export function compileLibrary(
-  sources: Array<{ source: string; fileName: string; category?: string }>,
+  sources: Array<{
+    source: string;
+    fileName: string;
+    category?: string;
+    documentation?: string;
+  }>,
   options: {
     name: string;
     version: string;
@@ -333,7 +313,10 @@ export function compileLibrary(
             : t.definition.kind === "EnumDefinition"
               ? "enum"
               : "alias";
-        return tagCategory({ name: t.name, kind }, catByName);
+        return tagDocumentation(
+          tagCategory({ name: t.name, kind }, catByName),
+          docByName,
+        );
       }),
       headers: [headerFileName],
       isBuiltin: false,
@@ -356,7 +339,12 @@ export function compileLibrary(
  * @returns The compiled `.stlib` archive result
  */
 export function compileStlib(
-  sources: Array<{ source: string; fileName: string; category?: string }>,
+  sources: Array<{
+    source: string;
+    fileName: string;
+    category?: string;
+    documentation?: string;
+  }>,
   options: {
     name: string;
     version: string;

@@ -396,6 +396,53 @@ function extractBoundaryRows(
 }
 
 /**
+ * Extract the POU documentation from the trailing decl records.
+ *
+ * CODESYS's editor renders a POU in two panes: a declarations pane (top)
+ * and a body pane (bottom). The decl sub-object in the .object file
+ * mirrors the top pane exactly, and CODESYS reserves the slot AFTER the
+ * last `END_VAR` (or `END_TYPE` for type definitions) for the POU's
+ * documentation comment — that's why a `(* foo *)` written as the first
+ * line of the body still ends up in the body sub-object, while the doc
+ * block always lives in this trailing decl slot regardless of what the
+ * user types where in either pane.
+ *
+ * Structural extraction:
+ *   1. Walk the decl records and remember the index of the LAST one whose
+ *      col 0 is "END_VAR" or "END_TYPE".
+ *   2. Concatenate col 0 of every record after that anchor.
+ *   3. Pull the first complete `(* … *)` block from the joined text.
+ *      That's the POU's doc — no content heuristics, no trigger words.
+ *
+ * Returns null when no anchor is found, when the trailing tail is empty,
+ * or when no closed `(* … *)` block is present (e.g. plain TYPE structs
+ * with no comment, or POUs that omit a doc entirely).
+ */
+function extractDocFromDeclRecords(
+  records: number[][],
+  declStartIdx: number,
+  strings: Map<number, string>,
+): string | null {
+  let anchorIdx = -1;
+  for (let i = declStartIdx; i < records.length; i++) {
+    const line = (strings.get(records[i]![0]!) ?? "").trim();
+    if (line === "END_VAR" || line === "END_TYPE") anchorIdx = i;
+  }
+  if (anchorIdx === -1) return null;
+
+  const tailLines: string[] = [];
+  for (let i = anchorIdx + 1; i < records.length; i++) {
+    if (records[i]!.length === 0) continue;
+    tailLines.push(strings.get(records[i]![0]!) ?? "");
+  }
+  const tail = tailLines.join("\n");
+  const docMatch = tail.match(/\(\*([\s\S]*?)\*\)/);
+  if (!docMatch) return null;
+  const inner = docMatch[1]!.trim();
+  return inner.length > 0 ? inner : null;
+}
+
+/**
  * Extract a POU from a parsed object file's record stream.
  *
  * Layout:
@@ -415,7 +462,11 @@ function extractBoundaryRows(
 function extractFromRecords(
   records: number[][],
   strings: Map<number, string>,
-): { declaration: string; implementation: string } | null {
+): {
+  declaration: string;
+  implementation: string;
+  documentation?: string;
+} | null {
   if (records.length < 3) return null;
 
   // R0[5] = total impl line count, but only for POU-shaped objects whose
@@ -488,10 +539,28 @@ function extractFromRecords(
   }
   void headerCol;
 
-  return {
+  // Documentation — pulled structurally from the slot CODESYS reserves
+  // for the POU's variables-pane comment (after the last END_VAR /
+  // END_TYPE in the decl records). See extractDocFromDeclRecords for
+  // the rationale; returning a `documentation` field instead of
+  // re-discovering it via text regex downstream eliminates the risk of
+  // mistaking a body comment or a `(* Initialize variables *)` inline
+  // annotation for the POU doc.
+  const documentation =
+    headerRecIdx !== -1
+      ? extractDocFromDeclRecords(records, headerRecIdx + 1, strings)
+      : null;
+
+  const result: {
+    declaration: string;
+    implementation: string;
+    documentation?: string;
+  } = {
     declaration: declLines.join("\n"),
     implementation: implLines.join("\n"),
   };
+  if (documentation) result.documentation = documentation;
+  return result;
 }
 
 /**
@@ -831,7 +900,7 @@ export function parseV3Library(data: Buffer): {
     const extracted = extractFromRecords(records, strings);
     if (!extracted) continue;
 
-    const { declaration, implementation } = extracted;
+    const { declaration, implementation, documentation } = extracted;
 
     // VAR_GLOBAL CONSTANT integer blocks promote to compile-time constants
     // and the GVL is dropped — see extractConstantGlobals for the rationale.
@@ -858,6 +927,7 @@ export function parseV3Library(data: Buffer): {
       const objGuid = name.replace(/\.object$/, "");
       const path = folderPaths.get(objGuid);
       if (path) pou.category = path;
+      if (documentation) pou.documentation = documentation;
       seenNames.add(pou.name);
       pous.push(pou);
     }

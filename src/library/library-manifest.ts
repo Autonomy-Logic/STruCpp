@@ -83,6 +83,11 @@ export interface LibraryTypeEntry {
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
   baseType?: string;
+  /** Type-level help text — same lifecycle as `LibraryFBEntry.documentation`,
+   *  populated automatically from the structured doc-block slot in CODESYS
+   *  imports (typically the type's revision-history comment for OSCAT) and
+   *  overridable via `library.json`. */
+  documentation?: string;
   /** Folder path within the library — see `LibraryFunctionEntry.category`. */
   category?: string;
 }

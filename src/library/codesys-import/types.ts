@@ -35,6 +35,15 @@ export interface ExtractedPOU {
    *  encode this in their per-object .meta records (parent-folder GUID
    *  chain); V2.3 .lib files predate folders and always omit it. */
   category?: string;
+  /**
+   * POU documentation pulled from the structurally-anchored slot CODESYS
+   * reserves for the variables-pane comment (the records after the last
+   * `END_VAR` / `END_TYPE` in the decl sub-object). Independent of any
+   * trigger-word convention: whatever comment lives in that slot becomes
+   * the POU's doc. Body comments end up in the impl sub-object so they
+   * never bleed in. Undefined when the POU has no comment in that slot.
+   */
+  documentation?: string;
 }
 
 /** Detected CODESYS library format. */
