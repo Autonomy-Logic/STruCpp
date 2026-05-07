@@ -57,6 +57,10 @@ export interface LibraryConfig {
   description?: string;
   /** Marks the library as a built-in runtime library (vs. user-installed). */
   isBuiltin?: boolean;
+  /** Compile-time integer constants the library's ST sources reference
+   *  (e.g. OSCAT's STRING_LENGTH and LIST_LENGTH). Forwarded to
+   *  compileStlib's `globalConstants` option. */
+  globalConstants?: Record<string, number>;
   /** Block-level documentation, keyed by FB name. */
   blocks?: Record<string, { documentation: string }>;
   /** Function-level documentation, keyed by function name. */
@@ -105,6 +109,9 @@ function validateLibraryConfig(raw: unknown, path: string): LibraryConfig {
   if (typeof obj.description === "string") config.description = obj.description;
   if (typeof obj.isBuiltin === "boolean") config.isBuiltin = obj.isBuiltin;
 
+  if (obj.globalConstants !== undefined) {
+    config.globalConstants = validateGlobalConstants(obj.globalConstants, path);
+  }
   if (obj.blocks !== undefined) {
     config.blocks = validateDocMap(obj.blocks, "blocks", path);
   }
@@ -112,6 +119,25 @@ function validateLibraryConfig(raw: unknown, path: string): LibraryConfig {
     config.functions = validateDocMap(obj.functions, "functions", path);
   }
   return config;
+}
+
+function validateGlobalConstants(
+  value: unknown,
+  path: string,
+): Record<string, number> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${path}: "globalConstants" must be an object map`);
+  }
+  const out: Record<string, number> = {};
+  for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      throw new Error(
+        `${path}: globalConstants["${key}"] must be a finite number`,
+      );
+    }
+    out[key] = v;
+  }
+  return out;
 }
 
 function validateDocMap(

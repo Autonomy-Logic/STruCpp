@@ -6,7 +6,8 @@
   "types": "dist/index.d.ts",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/rebuild-libs.mjs",
+    "build:tsc-only": "tsc",
     "build:stdlib": "node scripts/generate-stdlib.mjs",
     "build:additional-fb": "node scripts/generate-additional-fb.mjs",
     "build:libs": "node scripts/rebuild-libs.mjs",
@@ -24,7 +25,8 @@
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist/",
+    "clean": "rm -rf dist/ libs/*.stlib vscode-extension/bundled-libs/*.stlib",
+    "prepack": "npm run build",
     "prepublishOnly": "npm run build",
     "prepare": "husky"
   },

@@ -6,6 +6,28 @@ dist/
 build/
 *.tsbuildinfo
 
+# Compiled library archives — the canonical source of truth lives in
+# libs/sources/<lib-name>/ (.st files + library.json). The .stlib
+# archives are produced by `npm run build` from those sources, so
+# tracking them in git would just create stale-blob churn on every
+# library or compiler change. Build flow:
+#   npm install && npm run build   →  generates libs/*.stlib
+# CI rebuilds them before tests via vitest globalSetup; release jobs
+# rebuild them as part of `npm run build`.
+libs/*.stlib
+# Exception: libs/oscat-basic.stlib stays tracked because OSCAT's
+# upstream is a binary CODESYS .library file at
+# tests/fixtures/codesys/oscat_basic_335_codesys3.library, and the
+# codesys-importer currently drops the closing `*)` of trailing block
+# comments on a majority of POUs (397/559 sources). Re-importing
+# would produce an archive that fails to compile. Once the importer
+# regression is fixed, OSCAT can move to libs/sources/oscat-basic/
+# alongside the hand-authored libs and this exception can be removed.
+!libs/oscat-basic.stlib
+# Extension-side copy is also a build artifact (vscode-extension's
+# esbuild.mjs syncs it from libs/ at vsix build time).
+vscode-extension/bundled-libs/*.stlib
+
 # IDE and editors
 .vscode/
 .idea/

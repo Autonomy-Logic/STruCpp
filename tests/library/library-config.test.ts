@@ -100,6 +100,49 @@ describe("loadLibraryConfig", () => {
     expect(cfg?.functions?.FN.documentation).toBe("fn-doc");
   });
 
+  it("loads globalConstants when supplied (e.g. OSCAT's STRING_LENGTH)", () => {
+    writeJson("library.json", {
+      name: "x",
+      version: "1",
+      namespace: "ns",
+      globalConstants: { STRING_LENGTH: 254, LIST_LENGTH: 254 },
+    });
+    const cfg = loadLibraryConfig(tmp);
+    expect(cfg?.globalConstants).toEqual({ STRING_LENGTH: 254, LIST_LENGTH: 254 });
+  });
+
+  it("throws when globalConstants is an array instead of an object map", () => {
+    writeJson("library.json", {
+      name: "x",
+      version: "1",
+      namespace: "ns",
+      globalConstants: [254, 254],
+    });
+    expect(() => loadLibraryConfig(tmp)).toThrow(/globalConstants/);
+  });
+
+  it("throws when a globalConstants value is non-numeric", () => {
+    writeJson("library.json", {
+      name: "x",
+      version: "1",
+      namespace: "ns",
+      globalConstants: { STRING_LENGTH: "254" },
+    });
+    expect(() => loadLibraryConfig(tmp)).toThrow(/STRING_LENGTH/);
+  });
+
+  it("throws when a globalConstants value is non-finite (NaN / Infinity)", () => {
+    writeJson("library.json", {
+      name: "x",
+      version: "1",
+      namespace: "ns",
+      // JSON can't carry NaN, but it can carry null. The validator
+      // rejects anything that's not a finite number, including null.
+      globalConstants: { BAD: null },
+    });
+    expect(() => loadLibraryConfig(tmp)).toThrow(/BAD/);
+  });
+
   it("throws on malformed JSON", () => {
     writeFileSync(join(tmp, "library.json"), "{ not json", "utf-8");
     expect(() => loadLibraryConfig(tmp)).toThrow(/invalid JSON/i);

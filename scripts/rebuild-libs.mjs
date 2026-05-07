@@ -3,25 +3,28 @@
  * Rebuild all bundled .stlib library archives.
  *
  * The hand-authored libs (iec-standard-fb, additional-function-blocks)
- * are rebuilt FROM DISK — `libs/sources/<lib-name>/` is the canonical
- * source of truth, and `libs/<lib-name>.stlib` is a pure build artifact.
- * library.json next to the .st files carries metadata + per-block docs.
+ * are rebuilt FROM DISK — `libs/sources/<lib-name>/` holds the
+ * canonical source of truth (.st files + library.json with metadata,
+ * description, global constants, and per-block documentation). The
+ * matching .stlib in `libs/` is a pure build artefact produced here
+ * and gitignored.
  *
- * OSCAT is still rebuilt by round-tripping its embedded sources through
- * `compileStlib` because its true upstream is the CODESYS .library file
- * at tests/fixtures/codesys/oscat_basic_335_codesys3.library, and the
- * codesys-importer doesn't yet write disk sources during build. Bringing
- * OSCAT onto the same `libs/sources/` model is a follow-up task.
+ * OSCAT keeps the legacy round-trip path: it reads its embedded
+ * sources from the existing libs/oscat-basic.stlib and recompiles.
+ * The .stlib stays tracked because the codesys-importer can't yet
+ * reproduce the archive cleanly (a regression drops the closing `*)`
+ * of trailing block comments on a majority of POUs). Once that's
+ * fixed, OSCAT can move under libs/sources/oscat-basic/ next to a
+ * library.json and this round-trip path goes away.
  *
  * Used as:
- *   - vitest globalSetup (runs before all tests)
- *   - npm run build:libs (manual invocation)
+ *   - the canonical "build strucpp" entry point (`npm run build`)
+ *   - vitest's globalSetup, so tests always see freshly-built archives
  *
- * Refreshes `dist/` via tsc before importing from it. Otherwise a `src/`
- * change without a manual `npm run build` would silently regenerate the
- * .stlib archives against stale codegen — the on-disk libs would no
- * longer match `src/`. tsc on this codebase runs in ~1s so the cost is
- * negligible compared to the test suite that follows.
+ * Refreshes `dist/` via tsc before importing from it: a `src/` change
+ * without a manual `npm run build:tsc-only` would otherwise regenerate
+ * libs against stale codegen. tsc on this codebase runs in ~1s so the
+ * cost is negligible.
  */
 
 import { execSync } from "child_process";
@@ -82,37 +85,13 @@ async function refreshAndLoadCompiler() {
 }
 
 /**
- * Rebuild a hand-authored library from disk: reads library.json plus
- * the .st files from libs/sources/<libDirName>/, recompiles, applies
- * block docs, writes the .stlib archive.
+ * Compile + archive a library from a list of in-memory ST sources.
  *
- * `orderedSources` enforces a deterministic file order so type-resolution
- * across files (e.g. PID needing INTEGRAL/DERIVATIVE first) doesn't
- * depend on filesystem traversal.
+ * Shared core for both the disk-backed (.st files) and codesys-imported
+ * (.library file) build paths — the only thing that differs upstream is
+ * how the `sources` array gets produced.
  */
-function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, dependencies }) {
-  const sourcesDir = resolve(sourcesRoot, libDirName);
-  if (!existsSync(sourcesDir)) {
-    throw new Error(`Source directory not found: ${sourcesDir}`);
-  }
-
-  const config = loadLibraryConfig(sourcesDir);
-  if (!config) {
-    throw new Error(`${sourcesDir}/library.json not found`);
-  }
-
-  const onDisk = new Set(readdirSync(sourcesDir).filter((f) => f.endsWith(".st")));
-  const missing = orderedSources.filter((f) => !onDisk.has(f));
-  if (missing.length > 0) {
-    throw new Error(
-      `Missing source files in ${sourcesDir}:\n  ${missing.join("\n  ")}`,
-    );
-  }
-  const sources = orderedSources.map((fileName) => ({
-    fileName,
-    source: readFileSync(resolve(sourcesDir, fileName), "utf-8"),
-  }));
-
+function compileAndWrite({ sources, config, stlibPath, dependencies, sourcesDir }) {
   const result = compileStlib(sources, {
     name: config.name,
     version: config.version,
@@ -120,6 +99,7 @@ function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, depende
     noSource: false,
     builtin: config.isBuiltin === true,
     dependencies,
+    globalConstants: config.globalConstants,
   });
 
   if (!result.success) {
@@ -152,14 +132,62 @@ function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, depende
 }
 
 /**
- * Rebuild OSCAT from its embedded sources (legacy round-trip path).
- * Kept until the codesys-importer is taught to write disk sources at
- * `libs/sources/oscat-basic/` during a re-import.
+ * Rebuild a hand-authored library from disk: reads library.json plus
+ * the .st files from libs/sources/<libDirName>/, recompiles, applies
+ * block docs, writes the .stlib archive.
+ *
+ * `orderedSources` enforces a deterministic file order so type-resolution
+ * across files (e.g. PID needing INTEGRAL/DERIVATIVE first) doesn't
+ * depend on filesystem traversal.
+ */
+function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, dependencies }) {
+  const sourcesDir = resolve(sourcesRoot, libDirName);
+  if (!existsSync(sourcesDir)) {
+    throw new Error(`Source directory not found: ${sourcesDir}`);
+  }
+
+  const config = loadLibraryConfig(sourcesDir);
+  if (!config) {
+    throw new Error(`${sourcesDir}/library.json not found`);
+  }
+
+  const onDisk = new Set(readdirSync(sourcesDir).filter((f) => f.endsWith(".st")));
+  const missing = orderedSources.filter((f) => !onDisk.has(f));
+  if (missing.length > 0) {
+    throw new Error(
+      `Missing source files in ${sourcesDir}:\n  ${missing.join("\n  ")}`,
+    );
+  }
+  const sources = orderedSources.map((fileName) => ({
+    fileName,
+    source: readFileSync(resolve(sourcesDir, fileName), "utf-8"),
+  }));
+
+  return compileAndWrite({ sources, config, stlibPath, dependencies, sourcesDir });
+}
+
+/**
+ * Rebuild OSCAT from the embedded sources in its existing .stlib.
+ *
+ * Legacy round-trip path: read `archive.sources`, recompile, write
+ * back. This is OSCAT-only — every other lib uses the disk-backed
+ * `rebuildLibraryFromDisk` path. Kept until the codesys-importer can
+ * cleanly re-extract OSCAT from its CODESYS .library fixture (today
+ * the importer drops the closing `*)` of trailing block comments on
+ * a majority of POUs, so a fresh import would produce an archive that
+ * fails to recompile).
+ *
+ * The on-disk source-of-truth pattern still applies: when the importer
+ * regression is fixed, OSCAT will move to libs/sources/oscat-basic/
+ * with a library.json + .st files written by the importer, and this
+ * round-trip helper goes away.
  */
 function rebuildOscatFromArchive(stlibPath, dependencies) {
   const archive = loadStlibFromFile(stlibPath);
   if (!archive.sources || archive.sources.length === 0) {
-    throw new Error(`${stlibPath}: no embedded sources — cannot rebuild`);
+    throw new Error(
+      `${stlibPath}: no embedded sources — cannot rebuild OSCAT via the round-trip path`,
+    );
   }
 
   const result = compileStlib(archive.sources, {
@@ -222,18 +250,21 @@ export async function setup() {
     });
   }
 
-  // 3. OSCAT — legacy archive-round-trip path; depends on iec-standard-fb.
-  //    TODO(libs): migrate OSCAT onto the libs/sources/ pattern by having
-  //    the codesys-importer extract the .library file at
-  //    tests/fixtures/codesys/oscat_basic_335_codesys3.library into
-  //    libs/sources/oscat-basic/*.st + library.json.
+  // 3. OSCAT — round-trip-from-archive (legacy path). Tracked .stlib
+  //    is the de-facto source of truth until the codesys-importer can
+  //    cleanly re-extract OSCAT (it currently mangles trailing block
+  //    comments). Depends on iec-standard-fb at compile time.
   if (existsSync(oscatPath)) {
-    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (legacy round-trip)...");
+    console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (round-trip)...");
     const iecArchive = loadStlibFromFile(iecPath);
     rebuildOscatFromArchive(oscatPath, [iecArchive]);
   }
 
-  // 4. Copy to VSCode extension bundled-libs if directory exists
+  // 4. Copy compiled archives into vscode-extension/bundled-libs/. The
+  //    extension's esbuild bundler also does this at .vsix package time
+  //    — this copy keeps the extension's local development workflow
+  //    (`cd vscode-extension && npx vitest run`) working without an
+  //    extra build step.
   if (existsSync(vscodeLibsDir)) {
     copyFileSync(iecPath, resolve(vscodeLibsDir, "iec-standard-fb.stlib"));
     if (existsSync(additionalFbPath)) {
