@@ -941,9 +941,27 @@ export class CodeGenerator {
       }
     }
 
-    // Undefine macros that collide with IEC identifiers (e.g. macOS math.h OVERFLOW)
+    // Undefine macros that collide with IEC identifiers.
+    //
+    // Each platform's standard headers steal short IEC-style names for
+    // their own purposes; the result is preprocessor expansion of
+    // struct fields like `IEC_REAL SP;` into garbage like
+    // `IEC_REAL (*(volatile uint8_t *)(0x3D));`, which never reaches
+    // the C++ compiler in any usable form. The fixes that work
+    // architecturally — wrapping the runtime in a namespace, renaming
+    // the IEC variables — either don't help (macros expand before
+    // namespace resolution) or break IEC standard FB names. So we
+    // unconditionally `#undef` the worst offenders: the cost is zero
+    // on platforms where the macro isn't defined.
+    //
+    //   OVERFLOW — math.h on macOS / glibc defines it as a numeric
+    //              error constant; collides with several OSCAT FBs.
+    //   SP       — <avr/io.h> defines the AVR Stack Pointer as
+    //              `(*(volatile uint8_t *)(0x3D))`; collides with
+    //              PID's SP (setpoint) and any user variable named SP.
     this.emitHeader("");
     this.emitHeader("#undef OVERFLOW");
+    this.emitHeader("#undef SP");
 
     // Emit global constants (before namespace, so they work as template parameters)
     const globalConsts = Object.entries(this.options.globalConstants);
