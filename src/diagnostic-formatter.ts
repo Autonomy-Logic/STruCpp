@@ -109,8 +109,24 @@ export function formatDiagnostic(
   const palette = getPalette();
   const sevColor = severityColor(error.severity, palette);
   const fileLabel = error.file ?? "<input>";
+
+  // When the diagnostic carries a body-relative line (set by the
+  // POU-context annotation pass for errors inside a POU body), prefer
+  // it for the user-visible numbering — that's the line the editor's
+  // Monaco body view shows, and it's what matches the bracketed
+  // `[POU / body line N]` prefix consumers render alongside this
+  // header.  The raw file line is still used to read the source
+  // content from the source map (the text physically lives at
+  // `error.line` in the per-POU file), but we render the gutter and
+  // header column with `displayLine` so a user reading the diagnostic
+  // sees one consistent number throughout.
+  const displayLine =
+    error.section === "body" && error.bodyLine !== undefined
+      ? error.bodyLine
+      : error.line;
+
   const header =
-    `${palette.bold}${fileLabel}:${error.line}:${error.column}:${palette.reset} ` +
+    `${palette.bold}${fileLabel}:${displayLine}:${error.column}:${palette.reset} ` +
     `${sevColor}${palette.bold}${error.severity}:${palette.reset} ` +
     `${error.message}` +
     (error.code ? ` [${error.code}]` : "");
@@ -125,7 +141,7 @@ export function formatDiagnostic(
 
   // Render gutter with the line number right-aligned to a 4-space minimum,
   // matching gcc's typical output width.
-  const lineNumStr = String(error.line);
+  const lineNumStr = String(displayLine);
   const gutterWidth = Math.max(lineNumStr.length, 4);
   const lineGutter = `${palette.cyan}${lineNumStr.padStart(gutterWidth)} | ${palette.reset}`;
   const blankGutter = `${palette.cyan}${" ".repeat(gutterWidth)} | ${palette.reset}`;
