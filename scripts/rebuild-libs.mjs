@@ -49,6 +49,7 @@ let loadStlibFromFile;
 let loadLibraryConfig;
 let applyLibraryConfigDocumentation;
 let importCodesysLibrary;
+let StdFunctionRegistry;
 
 /**
  * Refresh `dist/` from `src/` and import the freshly compiled modules.
@@ -86,11 +87,15 @@ async function refreshAndLoadCompiler() {
   const codesysImport = await import(
     resolve(projectRoot, "dist/library/codesys-import/index.js")
   );
+  const stdFnRegistry = await import(
+    resolve(projectRoot, "dist/semantic/std-function-registry.js")
+  );
   compileStlib = compiler.compileStlib;
   loadStlibFromFile = loader.loadStlibFromFile;
   loadLibraryConfig = config.loadLibraryConfig;
   applyLibraryConfigDocumentation = config.applyLibraryConfigDocumentation;
   importCodesysLibrary = codesysImport.importCodesysLibrary;
+  StdFunctionRegistry = stdFnRegistry.StdFunctionRegistry;
 }
 
 /**
@@ -287,12 +292,137 @@ function rebuildLibraryFromCodesys({ libDirName, stlibPath, dependencies }) {
   });
 }
 
+/**
+ * Display-name mapping for std-function categories.
+ *
+ * StdFunctionRegistry uses lowercase identifiers ("numeric", "trig",
+ * "arithmetic", …); the .stlib `category` field lives next to user-
+ * authored hierarchy paths, so we capitalize them here for consistent
+ * presentation in editor library trees. Two registry buckets fold into
+ * "Numerical" since IEC 61131-3 groups numeric and trig functions
+ * together visually; everything else is one-to-one.
+ */
+const STD_FN_CATEGORY_DISPLAY = {
+  numeric: "Numerical",
+  trig: "Numerical",
+  arithmetic: "Arithmetic",
+  selection: "Selection",
+  comparison: "Comparison",
+  bitwise: "Bitwise",
+  bitshift: "BitShift",
+  conversion: "TypeConversion",
+  string: "CharacterString",
+  time: "Time",
+  system: "System",
+};
+
+/**
+ * Map one StdFunctionRegistry descriptor onto a LibraryFunctionEntry.
+ *
+ * Type encoding: a `specific` constraint emits the concrete IEC type
+ * name (`INT`, `BOOL`, …); any other constraint passes through as the
+ * generic name (`ANY_NUM`, `ANY_INT`, …). Tooling unifies parameters
+ * and the return type by matching identical generic names — see the
+ * docstring on LibraryFunctionEntry for the contract.
+ *
+ * Variadic shape: `{ minArgs }` is forwarded so editor blocks can grow
+ * extra input pins past the declared parameter list (ADD/MUL accept any
+ * number of operands ≥ 2, MUX accepts a selector + any number of
+ * inputs ≥ 2).
+ */
+function descriptorToFunctionEntry(desc) {
+  const returnType =
+    desc.returnConstraint === "specific"
+      ? desc.specificReturnType
+      : desc.returnConstraint;
+
+  const parameters = desc.params.map((p) => ({
+    name: p.name,
+    type: p.constraint === "specific" ? p.specificType : p.constraint,
+    direction: "input",
+  }));
+
+  const entry = {
+    name: desc.name,
+    returnType,
+    parameters,
+  };
+  if (desc.isVariadic) {
+    entry.variadic = { minArgs: desc.minArgs ?? desc.params.length };
+  }
+  const category = STD_FN_CATEGORY_DISPLAY[desc.category];
+  if (category) entry.category = category;
+  return entry;
+}
+
+/**
+ * Build the synthetic `iec-std-functions.stlib` archive.
+ *
+ * No ST sources, no codesys-importer involvement, no compileStlib call:
+ * the std functions are runtime intrinsics that the strucpp codegen
+ * inlines via `StdFunctionRegistry`, so the .stlib is purely a metadata
+ * carrier for editors and other tooling. We synthesise a valid
+ * `StlibArchive` shape directly (empty headerCode/cppCode/dependencies,
+ * one `LibraryFunctionEntry` per descriptor) and then run the existing
+ * `applyLibraryConfigDocumentation` step against it so a future
+ * `library.json` `functions: { ADD: { documentation: "…" } }` entry can
+ * supply hand-curated docs without changing this script.
+ */
+function synthesizeStdFunctionsLibrary({ libDirName, stlibPath }) {
+  const sourcesDir = resolve(sourcesRoot, libDirName);
+  if (!existsSync(sourcesDir)) {
+    throw new Error(`Source directory not found: ${sourcesDir}`);
+  }
+  const config = loadLibraryConfig(sourcesDir);
+  if (!config) {
+    throw new Error(`${sourcesDir}/library.json not found`);
+  }
+
+  const registry = new StdFunctionRegistry();
+  const functions = registry
+    .getAll()
+    .map(descriptorToFunctionEntry)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const archive = {
+    formatVersion: 1,
+    manifest: {
+      name: config.name,
+      version: config.version,
+      namespace: config.namespace,
+      functions,
+      functionBlocks: [],
+      types: [],
+      headers: [],
+      isBuiltin: config.isBuiltin === true,
+    },
+    headerCode: "",
+    cppCode: "",
+    dependencies: [],
+  };
+  if (config.description) archive.manifest.description = config.description;
+
+  const docReport = applyLibraryConfigDocumentation(archive, config);
+  if (docReport.unknownFunctionDocs.length > 0) {
+    const lines = docReport.unknownFunctionDocs.map(
+      (n) => `  functions["${n}"] — not in compiled manifest`,
+    );
+    throw new Error(
+      `${sourcesDir}/library.json references unknown symbols:\n${lines.join("\n")}`,
+    );
+  }
+
+  writeFileSync(stlibPath, JSON.stringify(archive, null, 2) + "\n", "utf-8");
+  return archive;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 export async function setup() {
   const iecPath = resolve(libsDir, "iec-standard-fb.stlib");
   const additionalFbPath = resolve(libsDir, "additional-function-blocks.stlib");
   const oscatPath = resolve(libsDir, "oscat-basic.stlib");
+  const stdFnPath = resolve(libsDir, "iec-std-functions.stlib");
 
   await refreshAndLoadCompiler();
 
@@ -342,7 +472,19 @@ export async function setup() {
     });
   }
 
-  // 4. Copy compiled archives into vscode-extension/bundled-libs/. The
+  // 4. IEC std functions — synthesized from StdFunctionRegistry. Pure
+  //    metadata: no .st sources, no codegen output. Editor tooling
+  //    consumes the manifest to render ADD/SUB/MUX/SHL/CONCAT/... in
+  //    the same library tree it uses for compiled .stlibs.
+  if (existsSync(resolve(sourcesRoot, "iec-std-functions"))) {
+    console.log("[rebuild-libs] Synthesizing iec-std-functions.stlib...");
+    synthesizeStdFunctionsLibrary({
+      libDirName: "iec-std-functions",
+      stlibPath: stdFnPath,
+    });
+  }
+
+  // 5. Copy compiled archives into vscode-extension/bundled-libs/. The
   //    extension's esbuild bundler also does this at .vsix package time
   //    — this copy keeps the extension's local development workflow
   //    (`cd vscode-extension && npx vitest run`) working without an
@@ -357,6 +499,9 @@ export async function setup() {
     }
     if (existsSync(oscatPath)) {
       copyFileSync(oscatPath, resolve(vscodeLibsDir, "oscat-basic.stlib"));
+    }
+    if (existsSync(stdFnPath)) {
+      copyFileSync(stdFnPath, resolve(vscodeLibsDir, "iec-std-functions.stlib"));
     }
   }
 

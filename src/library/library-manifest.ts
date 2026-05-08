@@ -9,11 +9,21 @@
 
 /**
  * Library function entry in a manifest.
+ *
+ * Parameter and return types are stored as bare type names (`"INT"`,
+ * `"ANY_NUM"`, etc.). Generic types like `ANY_NUM` / `ANY_INT` /
+ * `ANY_REAL` / `ANY_BIT` / `ANY_STRING` / `ANY_ELEMENTARY` / `ANY` are
+ * IEC 61131-3 type categories — when they appear in this entry the
+ * tooling must unify identically-named generics across params and
+ * return type to find a concrete type at instantiation. The strucpp
+ * synthetic `iec-std-functions.stlib` (built from `StdFunctionRegistry`)
+ * uses these directly; library compilers for ordinary .st sources only
+ * emit concrete IEC type names.
  */
 export interface LibraryFunctionEntry {
   /** Function name */
   name: string;
-  /** Return type name */
+  /** Return type name (concrete IEC type or generic — see above) */
   returnType: string;
   /** Parameter list */
   parameters: Array<{
@@ -21,6 +31,15 @@ export interface LibraryFunctionEntry {
     type: string;
     direction: "input" | "output" | "inout";
   }>;
+  /** Variadic call shape. When set, `parameters` describes the leading
+   *  required parameters and the function accepts any number of
+   *  additional arguments matching the LAST parameter's type. `minArgs`
+   *  is the minimum total argument count (typically `parameters.length`
+   *  for variadic-after-required, e.g. `ADD(IN1, IN2, …)` has 2 declared
+   *  params and minArgs=2). Only used by tooling to validate call sites
+   *  / render extensible blocks; codegen reads it from compiler-internal
+   *  metadata directly. */
+  variadic?: { minArgs: number };
   /** Function-level help text shown in editor hover dialogs. Authored
    *  in the library's `library.json` and merged into the manifest at
    *  build time (see scripts/generate-*.mjs). */
