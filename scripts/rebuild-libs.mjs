@@ -301,7 +301,13 @@ export async function setup() {
   rebuildLibraryFromDisk({
     libDirName: "iec-standard-fb",
     stlibPath: iecPath,
-    orderedSources: ["edge_detection.st", "bistable.st", "counter.st", "timer.st"],
+    orderedSources: [
+      "edge_detection.st",
+      "bistable.st",
+      "sema.st",
+      "counter.st",
+      "timer.st",
+    ],
   });
 
   // 2. Additional Function Blocks — disk-backed; PID instantiates

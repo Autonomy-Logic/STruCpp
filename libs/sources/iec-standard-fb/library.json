@@ -17,6 +17,9 @@
     "RS": {
       "documentation": "The RS bistable is a latch where the Reset dominates."
     },
+    "SEMA": {
+      "documentation": "The semaphore provides a mechanism to allow software elements mutually exclusive access to certain resources."
+    },
     "CTU": {
       "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
     },

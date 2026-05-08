@@ -31,6 +31,7 @@ function getSource(fileName: string): string {
 
 const edgeDetST = getSource("edge_detection.st");
 const bistableST = getSource("bistable.st");
+const semaST = getSource("sema.st");
 const counterST = getSource("counter.st");
 const timerST = getSource("timer.st");
 
@@ -126,6 +127,7 @@ describe("Standard FB Library", () => {
         [
           { source: edgeDetST, fileName: "edge_detection.st" },
           { source: bistableST, fileName: "bistable.st" },
+          { source: semaST, fileName: "sema.st" },
           { source: counterST, fileName: "counter.st" },
           { source: timerST, fileName: "timer.st" },
         ],
@@ -138,8 +140,8 @@ describe("Standard FB Library", () => {
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
-      // 2 edge + 2 bistable + 15 counters + 3 timers = 22
-      expect(result.manifest.functionBlocks).toHaveLength(22);
+      // 2 edge + 2 bistable + 1 sema + 15 counters + 3 timers = 23
+      expect(result.manifest.functionBlocks).toHaveLength(23);
       expect(result.manifest.name).toBe("iec-standard-fb");
 
       // Verify all expected FBs are present
@@ -150,6 +152,8 @@ describe("Standard FB Library", () => {
       // Bistable
       expect(fbNames).toContain("SR");
       expect(fbNames).toContain("RS");
+      // Semaphore
+      expect(fbNames).toContain("SEMA");
       // Counters (base)
       expect(fbNames).toContain("CTU");
       expect(fbNames).toContain("CTD");
@@ -175,6 +179,7 @@ describe("Standard FB Library", () => {
       [
         { source: edgeDetST, fileName: "edge_detection.st" },
         { source: bistableST, fileName: "bistable.st" },
+        { source: semaST, fileName: "sema.st" },
         { source: counterST, fileName: "counter.st" },
         { source: timerST, fileName: "timer.st" },
       ],
@@ -242,6 +247,19 @@ describe("Standard FB Library", () => {
       expect(fb!.outputs).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ name: "Q1", type: "BOOL" }),
+        ]),
+      );
+    });
+
+    it("should have correct IO for SEMA", () => {
+      const fb = findFB("SEMA");
+      expect(fb).toBeDefined();
+      const inputNames = fb!.inputs.map((i) => i.name);
+      expect(inputNames).toContain("CLAIM");
+      expect(inputNames).toContain("RELEASE");
+      expect(fb!.outputs).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "BUSY", type: "BOOL" }),
         ]),
       );
     });
@@ -362,8 +380,11 @@ describe("Standard FB Library", () => {
       expect(stlibArchive.manifest.isBuiltin).toBe(true);
     });
 
-    it("should contain all 22 standard FBs", () => {
-      expect(stlibArchive.manifest.functionBlocks).toHaveLength(22);
+    it("should contain all 23 standard FBs", () => {
+      // 23 = 2 bistables (SR/RS) + 1 SEMA + 2 edge detectors (R_TRIG/F_TRIG)
+      // + 15 counter variants (CTU/CTD/CTUD × 5 width variants) + 3 timers
+      // (TP/TON/TOF). Matches MatIEC's iec_std_FB.h verbatim.
+      expect(stlibArchive.manifest.functionBlocks).toHaveLength(23);
     });
 
     it("populates per-block documentation from library.json", () => {
@@ -734,6 +755,7 @@ describe("Standard FB Library", () => {
         [
           { source: edgeDetST, fileName: "edge_detection.st" },
           { source: bistableST, fileName: "bistable.st" },
+          { source: semaST, fileName: "sema.st" },
           { source: counterST, fileName: "counter.st" },
           { source: timerST, fileName: "timer.st" },
         ],
