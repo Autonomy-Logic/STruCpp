@@ -6,8 +6,10 @@
   "types": "dist/index.d.ts",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "node scripts/rebuild-libs.mjs",
+    "build:tsc-only": "tsc",
     "build:stdlib": "node scripts/generate-stdlib.mjs",
+    "build:additional-fb": "node scripts/generate-additional-fb.mjs",
     "build:libs": "node scripts/rebuild-libs.mjs",
     "build:bundle": "npm run build && node scripts/bundle.mjs",
     "build:pkg": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node18-linux-x64,node18-win-x64,node18-macos-x64 --out-path dist/bin --compress GZip",
@@ -23,7 +25,8 @@
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist/",
+    "clean": "rm -rf dist/ libs/*.stlib vscode-extension/bundled-libs/*.stlib",
+    "prepack": "npm run build",
     "prepublishOnly": "npm run build",
     "prepare": "husky"
   },

@@ -26,6 +26,7 @@
 #include "iec_ptr.hpp"
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
@@ -1041,6 +1042,30 @@ inline int64_t __CURRENT_TIME_NS = 0;
  */
 inline IEC_TIME TIME() {
     return IEC_TIME(static_cast<TIME_t>(__CURRENT_TIME_NS));
+}
+
+/**
+ * CURRENT_DT() — wall-clock date-and-time.
+ *
+ * Returns the current absolute time as IEC_DT (nanoseconds since the
+ * Unix epoch). Distinct from TIME() which returns the scan-cycle's
+ * monotonic elapsed time, not a date.
+ *
+ * Used by the Additional Function Blocks library's RTC FB, which under
+ * MatIEC consumed a `__CURRENT_TIME` global the runtime injected before
+ * each scan. STruC++ exposes the same capability through this regular
+ * function so RTC's body can call it without compiler-specific pragmas.
+ *
+ * Resolution and monotonicity are inherited from std::chrono::system_clock,
+ * which on Linux maps to CLOCK_REALTIME — the value can step backwards if
+ * the system clock is corrected (NTP, manual `date` change). Code that
+ * needs strict monotonicity should use TIME() instead.
+ */
+inline IEC_DT CURRENT_DT() {
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    auto ns  = duration_cast<nanoseconds>(now.time_since_epoch()).count();
+    return IEC_DT(static_cast<DT_t>(ns));
 }
 
 // =============================================================================

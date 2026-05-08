@@ -19,12 +19,15 @@ import {
 } from "../../dist/library/codesys-import/index.js";
 import type { ExtractedPOU } from "../../dist/library/codesys-import/index.js";
 
-// Path to CODESYS library fixtures checked into the repository
+// Path to CODESYS library fixtures checked into the repository.
+// The V3 .library file is the canonical source for the bundled OSCAT
+// stlib too (see libs/sources/oscat-basic/), so we point at that copy
+// to avoid duplicating a 1.2 MB binary blob between fixtures/ and libs/.
 const FIXTURES_DIR = resolve(__dirname, "../fixtures/codesys");
 const OSCAT_V23_PATH = resolve(FIXTURES_DIR, "oscat_basic_335.lib");
 const OSCAT_V3_PATH = resolve(
-  FIXTURES_DIR,
-  "oscat_basic_335_codesys3.library",
+  __dirname,
+  "../../libs/sources/oscat-basic/oscat_basic_335.library",
 );
 const V23_REFERENCE_DIR = resolve(FIXTURES_DIR, "v23-reference");
 
@@ -384,6 +387,177 @@ describe("V3 integration: OSCAT Basic 335", () => {
     );
     expect(constLang).toBeDefined();
     expect(constLang!.source).toContain("TYPE CONSTANTS_LANGUAGE");
+  });
+
+  it("extracts the OSCAT VAR_GLOBAL block instantiating CONSTANTS_*", () => {
+    // The V3 .library encodes a GVL the same way as a POU at the
+    // structural level — header in column B of a 4-varint record,
+    // body lines in column A of subsequent records — but with the
+    // keyword `VAR_GLOBAL` (optionally CONSTANT/RETAIN/PERSISTENT)
+    // instead of `FUNCTION_BLOCK`/`FUNCTION`/`PROGRAM`/`TYPE`.
+    // Earlier the header-detection regex only matched the latter four
+    // and dropped GVLs silently, leaving POUs that reference
+    // `LANGUAGE.WEEKDAYS[…]` (HOLIDAY / SUN_POS / the date helpers)
+    // with undeclared globals downstream. This test pins the GVL
+    // extraction so a regex regression surfaces here.
+    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const gvls = result.sources.filter((s) => /\bVAR_GLOBAL\b/.test(s.source));
+    expect(gvls.length).toBeGreaterThanOrEqual(1);
+
+    // OSCAT-specific: at least one GVL must declare the five CONSTANTS_*
+    // instances. Without these, HOLIDAY/SUN_POS et al. would compile-fail.
+    const constantsGvl = gvls.find((s) =>
+      /MATH\s*:\s*CONSTANTS_MATH/.test(s.source) &&
+      /LANGUAGE\s*:\s*CONSTANTS_LANGUAGE/.test(s.source) &&
+      /LOCATION\s*:\s*CONSTANTS_LOCATION/.test(s.source),
+    );
+    expect(constantsGvl, "Expected a GVL declaring MATH/LANGUAGE/LOCATION instances").toBeDefined();
+    expect(constantsGvl!.source).toMatch(/PHYS\s*:\s*CONSTANTS_PHYS/);
+    expect(constantsGvl!.source).toMatch(/SETUP\s*:\s*CONSTANTS_SETUP/);
+    expect(constantsGvl!.source).toMatch(/END_VAR/);
+  });
+
+  it("promotes the OSCAT VAR_GLOBAL CONSTANT integers to globalConstants", () => {
+    // OSCAT's compile-time integer constants live in a `VAR_GLOBAL
+    // CONSTANT` block in the V3 source. They must be surfaced on the
+    // import result's `globalConstants` map (not as a runtime GVL),
+    // because downstream the strucpp codegen uses values like
+    // STRING_LENGTH as C++ template parameters (`IECStringVar<STRING_LENGTH>`),
+    // which require a constexpr — a runtime GVL can't satisfy that.
+    // The originating GVL is dropped from the source list to avoid a
+    // duplicate definition when compileStlib also sees globalConstants.
+    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    expect(result.globalConstants.STRING_LENGTH).toBeTypeOf("number");
+    expect(result.globalConstants.LIST_LENGTH).toBeTypeOf("number");
+    const constGvl = result.sources.find((s) =>
+      /\bVAR_GLOBAL\s+CONSTANT\b/.test(s.source) &&
+      /\bSTRING_LENGTH\b/.test(s.source),
+    );
+    expect(
+      constGvl,
+      "VAR_GLOBAL CONSTANT block should not appear as a source — it should have been promoted to globalConstants",
+    ).toBeUndefined();
+  });
+
+  it("extracts the OSCAT folder hierarchy from .meta files", () => {
+    // OSCAT's V3 .library encodes its project-explorer tree
+    // (POUs/Time&Date, POUs/Buffer Management, Data types, …) as
+    // .meta+.object pairs whose .meta carries a parent-folder GUID.
+    // The importer walks that chain and surfaces a slash-separated
+    // `category` on each ExtractedPOU; the well-known POUs below pin
+    // the resolved paths against CODESYS's own UI placement.
+    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const expected: Record<string, string> = {
+      "DCF77.st": "POUs/Time&Date",
+      "HOLIDAY.st": "POUs/Time&Date",
+      "UTC_TO_LTIME.st": "POUs/Time&Date",
+      "BUFFER_COMP.st": "POUs/Buffer Management",
+      "ACOSH.st": "POUs/Mathematical",
+      "COMPLEX.st": "Data types",
+      "CRC_GEN.st": "POUs/Logic/Others",
+    };
+    for (const [fileName, category] of Object.entries(expected)) {
+      const src = result.sources.find((s) => s.fileName === fileName);
+      expect(src, `${fileName} extracted`).toBeDefined();
+      expect(src!.category).toBe(category);
+    }
+    // Spot-check distribution: the largest folders should hold dozens
+    // of POUs, well above the noise floor of "everything at root".
+    const counts = new Map<string, number>();
+    for (const s of result.sources) {
+      const c = s.category ?? "<root>";
+      counts.set(c, (counts.get(c) ?? 0) + 1);
+    }
+    expect(counts.get("POUs/String") ?? 0).toBeGreaterThanOrEqual(50);
+    expect(counts.get("POUs/Mathematical") ?? 0).toBeGreaterThanOrEqual(50);
+    expect(counts.get("POUs/Time&Date") ?? 0).toBeGreaterThanOrEqual(40);
+  });
+
+  it("structurally extracts documentation from the V3 decl-section slot", () => {
+    // CODESYS reserves a specific slot for each POU's documentation: the
+    // records of the decl sub-object that come AFTER the last END_VAR (or
+    // END_TYPE) of the variables-pane. Body comments live in the impl
+    // sub-object so they can never bleed into this slot, and inline
+    // variable annotations like `(* Laufvariable Stack *)` sit BEFORE
+    // the last END_VAR so they can never shadow the doc either.
+    //
+    // We assert here that the V3 importer attaches the right
+    // `documentation` to each ExtractedPOU directly — without going
+    // through any text-level regex or trigger-word heuristic.
+    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const pous = result.sources;
+    expect(pous.length).toBeGreaterThan(550);
+
+    // Coverage: every POU whose V3 source has a comment in the doc slot
+    // gets that comment as `documentation`. OSCAT's only no-doc POUs are
+    // GVL_0 (the constants-only block dropped by the parser) and a
+    // handful of trivial TYPEs (FRACTION etc.) with no trailing comment.
+    const docCount = pous.filter((p) => p.documentation).length;
+    expect(docCount).toBeGreaterThan(550);
+
+    // Pin the structure of a known FB doc: the slot has version,
+    // programmer, tested by, then a description. The opening `(*` and
+    // closing `*)` are stripped — only the inner text comes through.
+    const dcf = pous.find((p) => p.fileName === "DCF77.st");
+    expect(dcf?.documentation).toBeTypeOf("string");
+    expect(dcf?.documentation).not.toMatch(/\(\*/); // wrapper stripped
+    expect(dcf?.documentation).not.toMatch(/\*\)\s*$/); // wrapper stripped
+    expect(dcf?.documentation).toMatch(/version\s+1\.10/);
+    expect(dcf?.documentation).toMatch(/decoder for a DCF77 signal/);
+
+    // FT_Profile (mixed-case source name → uppercase manifest name).
+    // Pinning this catches a lookup regression where the doc map used
+    // raw source-text casing instead of normalizing to upper-case.
+    const ft = pous.find((p) => p.fileName === "FT_Profile.st");
+    expect(ft?.documentation).toMatch(/FT_Profile generates an output/);
+
+    // Body comments are NOT documentation — even when they happen to
+    // contain trigger-shaped words, the V3 record split keeps body
+    // comments out of the decl-section slot. We verify by picking a
+    // POU whose body has a `(* … *)` block (BUFFER_COMP starts with
+    // `(* search for first character match *)` immediately in its
+    // implementation) and asserting that comment doesn't appear in
+    // the documentation field.
+    const buf = pous.find((p) => p.fileName === "BUFFER_COMP.st");
+    expect(buf?.source).toMatch(/\(\* search for first character match \*\)/);
+    expect(buf?.documentation).toBeTypeOf("string");
+    expect(buf?.documentation).not.toMatch(/search for first character match/);
+  });
+
+  it("compiled OSCAT manifest carries V3-extracted documentation", () => {
+    // End-to-end: structural extraction at the importer surfaces all
+    // the way through the compileStlib pipeline onto manifest entries
+    // (functions / functionBlocks / types).
+    const archive = JSON.parse(
+      readFileSync(
+        resolve(__dirname, "../../libs/oscat-basic.stlib"),
+        "utf-8",
+      ),
+    );
+    const fns: Array<{ documentation?: string }> = archive.manifest.functions;
+    const fbs: Array<{ documentation?: string }> =
+      archive.manifest.functionBlocks;
+    const types: Array<{ documentation?: string }> = archive.manifest.types;
+
+    // FBs and FUNCTIONs all have docs (their slot is always populated).
+    expect(fbs.filter((f) => f.documentation).length).toBe(fbs.length);
+    expect(fns.filter((f) => f.documentation).length).toBe(fns.length);
+    // TYPEs: most have a revision-history comment in the slot; only a
+    // small handful (e.g. FRACTION) ship without any trailing comment.
+    // Just assert "at least most have it" — we don't pin the exact
+    // count to avoid coupling to OSCAT's specific TYPE inventory.
+    expect(types.filter((t) => t.documentation).length).toBeGreaterThanOrEqual(
+      types.length - 2,
+    );
+  });
+
+  it("V2.3 import leaves category undefined (no folders in V2.3 format)", () => {
+    // V2.3 .lib predates the folder feature — the format has no place
+    // to record one. Asserting "no categories" pins this so a future
+    // V2.3 parser change can't silently start emitting them.
+    const result = importCodesysLibrary(OSCAT_V23_PATH);
+    const categorized = result.sources.filter((s) => s.category);
+    expect(categorized.length).toBe(0);
   });
 
   it("V3 POU counts are comparable to V2.3 extraction", () => {

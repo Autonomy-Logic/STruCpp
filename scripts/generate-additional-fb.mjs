@@ -1,21 +1,23 @@
 #!/usr/bin/env node
 /**
- * Generate the IEC 61131-3 Standard FB library `.stlib` archive.
+ * Generate the Additional Function Blocks library `.stlib` archive.
  *
  * Sources of truth (all on disk):
- *   - libs/sources/iec-standard-fb/*.st        — the ST source files
- *   - libs/sources/iec-standard-fb/library.json — manifest metadata + per-block docs
+ *   - libs/sources/additional-function-blocks/*.st        — ST sources
+ *   - libs/sources/additional-function-blocks/library.json — manifest
+ *                                                            metadata
+ *                                                            + per-block
+ *                                                            docs
  *
  * Produces:
- *   - libs/iec-standard-fb.stlib
+ *   - libs/additional-function-blocks.stlib
  *
- * library.json carries everything that isn't derivable from ST: name,
- * version, namespace, description, isBuiltin, and the per-FB
- * documentation prose surfaced in editor hover dialogs. Block names
- * referenced in library.json must match the FBs the compiler emits —
- * the apply step reports any mismatch and fails the build.
+ * Block source order matters for type-resolution: PID's locals are typed
+ * INTEGRAL/DERIVATIVE, so those FBs must be visible when PID is type-
+ * checked. The script enforces a deterministic order rather than relying
+ * on filesystem traversal.
  *
- * Run: npm run build:stdlib
+ * Run: npm run build:additional-fb
  */
 
 import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "fs";
@@ -33,9 +35,9 @@ const { loadLibraryConfig, applyLibraryConfigDocumentation } = await import(
   resolve(projectRoot, "dist/library/library-config.js")
 );
 
-const sourcesDir = resolve(projectRoot, "libs", "sources", "iec-standard-fb");
+const sourcesDir = resolve(projectRoot, "libs", "sources", "additional-function-blocks");
 const libsDir    = resolve(projectRoot, "libs");
-const outPath    = resolve(libsDir, "iec-standard-fb.stlib");
+const outPath    = resolve(libsDir, "additional-function-blocks.stlib");
 
 if (!existsSync(sourcesDir)) {
   console.error(`Error: sources directory not found: ${sourcesDir}`);
@@ -48,11 +50,14 @@ if (!config) {
   process.exit(1);
 }
 
-// Order the .st files explicitly so dependencies resolve. The IEC
-// standard FBs split across four files; counter.st instantiates
-// R_TRIG/F_TRIG from edge_detection.st, so edge_detection must be
-// compiled first. Bistable and timer have no inter-file deps.
-const ORDERED = ["edge_detection.st", "bistable.st", "counter.st", "timer.st"];
+const ORDERED = [
+  "integral.st",
+  "derivative.st",
+  "rtc.st",
+  "pid.st",
+  "ramp.st",
+  "hysteresis.st",
+];
 const onDisk = new Set(readdirSync(sourcesDir).filter((f) => f.endsWith(".st")));
 const missing = ORDERED.filter((f) => !onDisk.has(f));
 if (missing.length > 0) {
@@ -76,7 +81,7 @@ const result = compileStlib(sources, {
 
 if (!result.success) {
   console.error(
-    "Failed to compile standard FB library:",
+    "Failed to compile Additional Function Blocks library:",
     result.errors.map((e) => `\n  - ${e.message}`).join(""),
   );
   process.exit(1);
@@ -91,9 +96,6 @@ if (
   docReport.unknownBlockDocs.length > 0 ||
   docReport.unknownFunctionDocs.length > 0
 ) {
-  // Stale doc entries are a build error: usually means an FB was
-  // renamed/removed in ST without updating library.json, or a typo in
-  // the JSON. Fail loudly so the mismatch can't sneak into a release.
   console.error("Error: library.json references unknown symbols:");
   for (const name of docReport.unknownBlockDocs) {
     console.error(`  - blocks["${name}"] — no FB by that name in the compiled manifest`);
@@ -107,10 +109,10 @@ if (
 mkdirSync(libsDir, { recursive: true });
 writeFileSync(outPath, JSON.stringify(result.archive, null, 2) + "\n", "utf-8");
 
-const fbCount    = result.archive.manifest.functionBlocks.length;
-const docCount   = docReport.blocksDocumented;
-const undoc      = fbCount - docCount;
-const sizeKB     = Math.round(Buffer.byteLength(JSON.stringify(result.archive)) / 1024);
+const fbCount  = result.archive.manifest.functionBlocks.length;
+const docCount = docReport.blocksDocumented;
+const undoc    = fbCount - docCount;
+const sizeKB   = Math.round(Buffer.byteLength(JSON.stringify(result.archive)) / 1024);
 const undocSuffix = undoc > 0 ? `, ${undoc} undocumented` : "";
 console.log(
   `Generated ${outPath} (${fbCount} function blocks, ` +

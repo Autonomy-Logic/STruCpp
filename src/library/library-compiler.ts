@@ -41,6 +41,114 @@ function serializeVarType(
   return entry;
 }
 
+/** Match a top-of-line POU header. */
+const POU_HEADER_RE =
+  /^[ \t]*(FUNCTION_BLOCK|FUNCTION|PROGRAM|TYPE)[ \t]+(\w+)/gm;
+
+/**
+ * Build a "POU name → category" map from categorized source inputs.
+ *
+ * Each .st file may declare multiple POUs (counter.st in iec-standard-fb
+ * holds 15 counter variants in one file). All POUs declared in the same
+ * source file inherit that file's category — by construction each input
+ * file lives in exactly one folder.
+ *
+ * Uses a regex over top-of-line POU declarations rather than running the
+ * parser, which keeps the lookup cheap (~600 sources × cheap regex vs.
+ * Chevrotain re-parse per source).
+ */
+function buildCategoryByPouName(
+  sources: Array<{ source: string; fileName: string; category?: string }>,
+): Map<string, string> {
+  // Manifest entry names come from the parser, which uppercases POU
+  // identifiers. Source-text names preserve original casing (CODESYS
+  // happily exports "FT_Profile" as mixed case). Normalize both sides
+  // by uppercasing the map keys, so we match regardless of the casing
+  // used in the original source.
+  const map = new Map<string, string>();
+  for (const src of sources) {
+    if (!src.category) continue;
+    let m: RegExpExecArray | null;
+    POU_HEADER_RE.lastIndex = 0;
+    while ((m = POU_HEADER_RE.exec(src.source)) !== null) {
+      const name = m[2]!.toUpperCase();
+      if (!map.has(name)) map.set(name, src.category);
+    }
+  }
+  return map;
+}
+
+/**
+ * Build a "POU name → documentation" map from caller-supplied per-source
+ * documentation strings.
+ *
+ * Documentation lives in the source entry rather than in the source text
+ * — only the upstream importer (V3 codesys-importer in particular) knows
+ * which `(* … *)` block in a source is structurally the POU doc and which
+ * is an inline variable annotation. The compiler trusts what the importer
+ * already determined; if `source.documentation` is set, it's the doc.
+ *
+ * For hand-authored .st files (e.g. when `--compile-lib` is pointed at a
+ * directory of .st files without going through the codesys-importer),
+ * `documentation` is unset and the map stays empty — those libraries get
+ * their docs from the `library.json` `blocks` / `functions` maps via
+ * `applyLibraryConfigDocumentation`, which still runs as a post-step.
+ *
+ * Each input source maps to all POU names it declares; the strucpp parser
+ * uppercases identifiers, so we uppercase keys to bridge cases like
+ * OSCAT's `FT_Profile` → manifest `FT_PROFILE`.
+ */
+function buildDocByPouName(
+  sources: Array<{
+    source: string;
+    fileName: string;
+    documentation?: string;
+  }>,
+): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const src of sources) {
+    if (!src.documentation) continue;
+    let m: RegExpExecArray | null;
+    POU_HEADER_RE.lastIndex = 0;
+    while ((m = POU_HEADER_RE.exec(src.source)) !== null) {
+      const name = m[2]!.toUpperCase();
+      if (!map.has(name)) map.set(name, src.documentation);
+    }
+  }
+  return map;
+}
+
+/**
+ * Optionally tag a manifest entry with its category. The field is omitted
+ * entirely when no category was assigned, so an .stlib built from a flat
+ * source layout serializes byte-identical to the pre-hierarchy format.
+ */
+function tagCategory<T extends { name: string; category?: string }>(
+  entry: T,
+  catByName: Map<string, string>,
+): T {
+  const cat = catByName.get(entry.name);
+  if (cat) entry.category = cat;
+  return entry;
+}
+
+/**
+ * Optionally tag a manifest entry with documentation extracted from its
+ * inline source doc-block. Same omit-when-empty contract as `tagCategory`
+ * — entries without a doc block in their source serialize identically to
+ * the pre-extraction shape, so library.json's
+ * `applyLibraryConfigDocumentation` post-processor still works as the
+ * authoritative override mechanism for hand-curated docs.
+ */
+function tagDocumentation<T extends { name: string; documentation?: string }>(
+  entry: T,
+  docByName: Map<string, string>,
+): T {
+  const doc = docByName.get(entry.name);
+  if (doc) entry.documentation = doc;
+  return entry;
+}
+
 /**
  * Compile ST source files into a library.
  *
@@ -49,7 +157,12 @@ function serializeVarType(
  * @returns The compiled library with manifest and C++ code
  */
 export function compileLibrary(
-  sources: Array<{ source: string; fileName: string }>,
+  sources: Array<{
+    source: string;
+    fileName: string;
+    category?: string;
+    documentation?: string;
+  }>,
   options: {
     name: string;
     version: string;
@@ -60,6 +173,8 @@ export function compileLibrary(
     globalConstants?: Record<string, number>;
   },
 ): LibraryCompileResult {
+  const catByName = buildCategoryByPouName(sources);
+  const docByName = buildDocByPouName(sources);
   if (sources.length === 0) {
     return {
       success: false,
@@ -133,57 +248,76 @@ export function compileLibrary(
       name: options.name,
       version: options.version,
       namespace: options.namespace,
-      functions: ast.functions.map((fn) => ({
-        name: fn.name,
-        returnType: fn.returnType.name,
-        parameters: fn.varBlocks.flatMap((block) =>
-          block.declarations.flatMap((decl) =>
-            decl.names.map((name) => ({
-              name,
-              type: decl.type.name,
-              direction:
-                block.blockType === "VAR_OUTPUT"
-                  ? "output"
-                  : block.blockType === "VAR_IN_OUT"
-                    ? "inout"
-                    : "input",
-            })),
+      functions: ast.functions.map((fn) =>
+        tagDocumentation(
+          tagCategory(
+            {
+              name: fn.name,
+              returnType: fn.returnType.name,
+              parameters: fn.varBlocks.flatMap((block) =>
+                block.declarations.flatMap((decl) =>
+                  decl.names.map((name) => ({
+                    name,
+                    type: decl.type.name,
+                    direction:
+                      block.blockType === "VAR_OUTPUT"
+                        ? "output"
+                        : block.blockType === "VAR_IN_OUT"
+                          ? "inout"
+                          : "input",
+                  })),
+                ),
+              ),
+            },
+            catByName,
           ),
+          docByName,
         ),
-      })),
-      functionBlocks: ast.functionBlocks.map((fb) => ({
-        name: fb.name,
-        inputs: fb.varBlocks
-          .filter((b) => b.blockType === "VAR_INPUT")
-          .flatMap((b) =>
-            b.declarations.flatMap((d) =>
-              d.names.map((n) => serializeVarType(n, d.type)),
-            ),
+      ),
+      functionBlocks: ast.functionBlocks.map((fb) =>
+        tagDocumentation(
+          tagCategory(
+            {
+              name: fb.name,
+              inputs: fb.varBlocks
+                .filter((b) => b.blockType === "VAR_INPUT")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) => serializeVarType(n, d.type)),
+                  ),
+                ),
+              outputs: fb.varBlocks
+                .filter((b) => b.blockType === "VAR_OUTPUT")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) => serializeVarType(n, d.type)),
+                  ),
+                ),
+              inouts: fb.varBlocks
+                .filter((b) => b.blockType === "VAR_IN_OUT")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) => serializeVarType(n, d.type)),
+                  ),
+                ),
+            },
+            catByName,
           ),
-        outputs: fb.varBlocks
-          .filter((b) => b.blockType === "VAR_OUTPUT")
-          .flatMap((b) =>
-            b.declarations.flatMap((d) =>
-              d.names.map((n) => serializeVarType(n, d.type)),
-            ),
-          ),
-        inouts: fb.varBlocks
-          .filter((b) => b.blockType === "VAR_IN_OUT")
-          .flatMap((b) =>
-            b.declarations.flatMap((d) =>
-              d.names.map((n) => serializeVarType(n, d.type)),
-            ),
-          ),
-      })),
-      types: ast.types.map((t) => ({
-        name: t.name,
-        kind:
+          docByName,
+        ),
+      ),
+      types: ast.types.map((t) => {
+        const kind: "struct" | "enum" | "alias" =
           t.definition.kind === "StructDefinition"
             ? "struct"
             : t.definition.kind === "EnumDefinition"
               ? "enum"
-              : "alias",
-      })),
+              : "alias";
+        return tagDocumentation(
+          tagCategory({ name: t.name, kind }, catByName),
+          docByName,
+        );
+      }),
       headers: [headerFileName],
       isBuiltin: false,
       sourceFiles: sources.map((s) => s.fileName),
@@ -205,7 +339,12 @@ export function compileLibrary(
  * @returns The compiled `.stlib` archive result
  */
 export function compileStlib(
-  sources: Array<{ source: string; fileName: string }>,
+  sources: Array<{
+    source: string;
+    fileName: string;
+    category?: string;
+    documentation?: string;
+  }>,
   options: {
     name: string;
     version: string;
@@ -278,10 +417,14 @@ export function compileStlib(
     })),
   };
   if (!options.noSource) {
-    archive.sources = sources.map((s) => ({
-      fileName: s.fileName,
-      source: s.source,
-    }));
+    archive.sources = sources.map((s) => {
+      const entry: { fileName: string; source: string; category?: string } = {
+        fileName: s.fileName,
+        source: s.source,
+      };
+      if (s.category) entry.category = s.category;
+      return entry;
+    });
   }
   if (
     options.globalConstants &&

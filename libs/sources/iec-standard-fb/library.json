@@ -1,0 +1,79 @@
+{
+  "name": "iec-standard-fb",
+  "displayName": "Standard Function Blocks",
+  "version": "1.0.0",
+  "namespace": "strucpp",
+  "description": "IEC 61131-3 Standard Function Blocks (auto-generated from ST sources)",
+  "isBuiltin": true,
+  "blocks": {
+    "R_TRIG": {
+      "documentation": "The output produces a single pulse when a rising edge is detected."
+    },
+    "F_TRIG": {
+      "documentation": "The output produces a single pulse when a falling edge is detected."
+    },
+    "SR": {
+      "documentation": "The SR bistable is a latch where the Set dominates."
+    },
+    "RS": {
+      "documentation": "The RS bistable is a latch where the Reset dominates."
+    },
+    "SEMA": {
+      "documentation": "The semaphore provides a mechanism to allow software elements mutually exclusive access to certain resources."
+    },
+    "CTU": {
+      "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
+    },
+    "CTU_DINT": {
+      "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
+    },
+    "CTU_LINT": {
+      "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
+    },
+    "CTU_UDINT": {
+      "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
+    },
+    "CTU_ULINT": {
+      "documentation": "The up-counter can be used to signal when a count has reached a maximum value."
+    },
+    "CTD": {
+      "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
+    },
+    "CTD_DINT": {
+      "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
+    },
+    "CTD_LINT": {
+      "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
+    },
+    "CTD_UDINT": {
+      "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
+    },
+    "CTD_ULINT": {
+      "documentation": "The down-counter can be used to signal when a count has reached zero, on counting down from a preset value."
+    },
+    "CTUD": {
+      "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
+    },
+    "CTUD_DINT": {
+      "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
+    },
+    "CTUD_LINT": {
+      "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
+    },
+    "CTUD_UDINT": {
+      "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
+    },
+    "CTUD_ULINT": {
+      "documentation": "The up-down counter has two inputs CU and CD. It can be used to both count up on one input and down on the other."
+    },
+    "TON": {
+      "documentation": "The on-delay timer can be used to delay setting an output true, for fixed period after an input becomes true."
+    },
+    "TOF": {
+      "documentation": "The off-delay timer can be used to delay setting an output false, for fixed period after input goes false."
+    },
+    "TP": {
+      "documentation": "The pulse timer can be used to generate output pulses of a given time duration."
+    }
+  }
+}

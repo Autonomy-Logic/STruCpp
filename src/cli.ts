@@ -37,7 +37,7 @@ import {
   existsSync,
   statSync,
 } from "fs";
-import { resolve, basename, dirname, join } from "path";
+import { resolve, basename, dirname, join, relative, sep } from "path";
 import { tmpdir, platform } from "os";
 import { execFileSync } from "child_process";
 import { compile, getVersion, compileStlib } from "./index.js";
@@ -474,8 +474,13 @@ function compileLibraryMode(options: CLIOptions): void {
   const libNamespace =
     options.libNamespace ?? options.libName.replace(/[^a-zA-Z0-9_]/g, "_");
 
-  // Collect input files — if an input is a directory, discover .st files recursively
-  const filePaths: string[] = [];
+  // Collect input files — if an input is a directory, discover .st files
+  // recursively. Each entry remembers its discovery root so we can later
+  // derive a category from the path relative to that root: a file at
+  // `<dir>/some_category/foo.st` ends up tagged `some_category` in the
+  // manifest. Files passed directly (not via a directory) carry no
+  // category — they're treated as flat root-level inputs.
+  const filePaths: Array<{ path: string; rootDir?: string }> = [];
   for (const input of options.inputs) {
     const inputPath = resolve(input);
     try {
@@ -488,9 +493,10 @@ function compileLibraryMode(options: CLIOptions): void {
           );
           process.exit(1);
         }
-        filePaths.push(...discovered);
+        for (const p of discovered)
+          filePaths.push({ path: p, rootDir: inputPath });
       } else {
-        filePaths.push(inputPath);
+        filePaths.push({ path: inputPath });
       }
     } catch {
       console.error(`Error: Cannot read input: ${inputPath}`);
@@ -499,13 +505,25 @@ function compileLibraryMode(options: CLIOptions): void {
   }
 
   // Read all source files
-  const sources: Array<{ source: string; fileName: string }> = [];
-  for (const filePath of filePaths) {
+  const sources: Array<{
+    source: string;
+    fileName: string;
+    category?: string;
+  }> = [];
+  for (const { path: filePath, rootDir } of filePaths) {
     try {
-      sources.push({
+      const entry: { source: string; fileName: string; category?: string } = {
         source: readFileSync(filePath, "utf-8"),
         fileName: basename(filePath),
-      });
+      };
+      if (rootDir) {
+        const rel = relative(rootDir, filePath);
+        const parts = rel.split(sep);
+        if (parts.length > 1) {
+          entry.category = parts.slice(0, -1).join("/");
+        }
+      }
+      sources.push(entry);
     } catch {
       console.error(`Error: Cannot read input file: ${filePath}`);
       process.exit(1);
@@ -789,6 +807,12 @@ function runTestMode(options: CLIOptions): void {
 
 /**
  * Decompile mode: extract ST source files from a .stlib archive.
+ *
+ * If the archive carries `category` metadata on its source entries, each
+ * file is written under that subfolder (`outputDir/<category>/<file.st>`),
+ * recreating the folder hierarchy the library was compiled from.
+ * Categoryless entries land at the output root, so flat archives extract
+ * exactly the same way they did before hierarchy support was added.
  */
 function decompileLibMode(options: CLIOptions): void {
   let archive: import("./library/library-manifest.js").StlibArchive;
@@ -810,7 +834,13 @@ function decompileLibMode(options: CLIOptions): void {
   mkdirSync(outputDir, { recursive: true });
 
   for (const src of archive.sources) {
-    const outPath = join(outputDir, src.fileName);
+    // Normalize forward-slash category paths to platform separators and
+    // ensure the destination folder exists before writing.
+    const subdir = src.category
+      ? join(outputDir, ...src.category.split("/"))
+      : outputDir;
+    mkdirSync(subdir, { recursive: true });
+    const outPath = join(subdir, src.fileName);
     writeFileSync(outPath, src.source, "utf-8");
     console.log(`  ${outPath}`);
   }
