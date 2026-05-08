@@ -24,6 +24,8 @@
 #include "iec_traits.hpp"
 #include "iec_retain.hpp"
 #include "iec_ptr.hpp"
+#include "iec_string.hpp"
+#include "iec_wstring.hpp"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
@@ -666,6 +668,72 @@ template<typename T> inline IEC_DT TO_DT(T v) noexcept {
 
 template<typename T> inline IEC_TOD TO_TOD(T v) noexcept {
     return IEC_TOD(static_cast<TOD_t>(iec_unwrap(v)));
+}
+
+// =============================================================================
+// String / Wide String Conversion
+// =============================================================================
+//
+// STRING ↔ WSTRING per IEC 61131-3 §6.5.4.6: codepoint-by-codepoint
+// transcoding. Anything outside the BMP would require surrogate
+// handling that the runtime does not implement; OpenPLC programs in
+// practice deal in 7-bit ASCII or simple Latin-1, so a lossy narrow
+// (truncate the high byte) is documented behaviour rather than a
+// surprise. Callers that need full Unicode round-tripping should keep
+// data in WSTRING throughout.
+
+template<size_t SrcLen>
+inline IECWString<SrcLen> STRING_TO_WSTRING(const IECString<SrcLen>& src) noexcept {
+    IECWString<SrcLen> result;
+    const size_t n = src.length();
+    for (size_t i = 0; i < n; ++i) {
+        // Treat each STRING byte as a codepoint in the U+0000–U+00FF
+        // range. Multi-byte UTF-8 sequences pass through byte-for-byte
+        // and end up as Latin-1 — wrong for non-ASCII, but the IEC
+        // standard doesn't define UTF-8/UTF-16 transcoding either.
+        result.append(static_cast<char16_t>(static_cast<unsigned char>(src[i])));
+    }
+    return result;
+}
+
+// Overload for the per-variable wrapper (handles auto-unwrap).
+template<size_t SrcLen>
+inline IECWString<SrcLen> STRING_TO_WSTRING(const IECStringVar<SrcLen>& src) noexcept {
+    return STRING_TO_WSTRING(iec_unwrap(src));
+}
+
+template<size_t SrcLen>
+inline IECString<SrcLen> WSTRING_TO_STRING(const IECWString<SrcLen>& src) noexcept {
+    IECString<SrcLen> result;
+    const size_t n = src.length();
+    for (size_t i = 0; i < n; ++i) {
+        // Truncate to the low byte. Codepoints > U+00FF lose
+        // information; surrogate pairs (rare in IEC programs) collapse
+        // to garbage. Document as "ASCII / Latin-1 only" round-trip.
+        result.append(static_cast<char>(src[i] & 0xFF));
+    }
+    return result;
+}
+
+template<size_t SrcLen>
+inline IECString<SrcLen> WSTRING_TO_STRING(const IECWStringVar<SrcLen>& src) noexcept {
+    return WSTRING_TO_STRING(iec_unwrap(src));
+}
+
+// `*_TO_*` resolution in the frontend collapses STRING_TO_WSTRING /
+// WSTRING_TO_STRING to plain TO_WSTRING / TO_STRING calls (cppName is
+// `TO_${toType}`), so provide the matching aliases. Templated on the
+// source type so they bind to either the bare class or the *Var
+// wrapper without relying on conversions.
+
+template<typename T>
+inline auto TO_WSTRING(const T& src) noexcept -> decltype(STRING_TO_WSTRING(src)) {
+    return STRING_TO_WSTRING(src);
+}
+
+template<typename T>
+inline auto TO_STRING(const T& src) noexcept -> decltype(WSTRING_TO_STRING(src)) {
+    return WSTRING_TO_STRING(src);
 }
 
 // =============================================================================

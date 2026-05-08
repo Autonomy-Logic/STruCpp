@@ -238,6 +238,80 @@ export interface ProjectModelResult {
  * Parse a TIME literal string to nanoseconds.
  * Supports formats like T#20ms, T#1s, T#100us, TIME#1h2m3s, etc.
  */
+/**
+ * Parse an IEC 61131-3 DATE literal (`D#YYYY-MM-DD` /
+ * `DATE#YYYY-MM-DD`) into nanoseconds since the Unix epoch (UTC).
+ * Strucpp's runtime stores DATE as int64 nanoseconds, the same wire
+ * shape as DT — DATE just truncates the time-of-day component to
+ * 00:00:00. Returns 0 (Unix epoch) for any unparsable input rather
+ * than throwing, mirroring `parseTimeLiteral`.
+ */
+export function parseDateLiteralToNs(literal: string): bigint {
+  const stripped = literal.replace(/^(D|DATE)#/i, "");
+  const m = stripped.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return 0n;
+  const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return BigInt(ms) * 1_000_000n;
+}
+
+/**
+ * Parse an IEC TIME_OF_DAY literal (`TOD#HH:MM:SS[.fff]` /
+ * `TIME_OF_DAY#…`) into nanoseconds since midnight. The optional
+ * fractional-seconds tail is treated as a decimal fraction of a
+ * second, capped at sub-nanosecond precision (extra digits beyond
+ * 9 are truncated, not rounded — there's no IEC-standardised
+ * rounding mode). Returns 0 for unparsable input.
+ */
+export function parseTodLiteralToNs(literal: string): bigint {
+  const stripped = literal.replace(/^(TOD|TIME_OF_DAY)#/i, "");
+  const m = stripped.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?$/);
+  if (!m) return 0n;
+  const hh = m[1] ?? "0";
+  const mm = m[2] ?? "0";
+  const ss = m[3] ?? "0";
+  const frac = m[4] ?? "";
+  const NS_PER_SEC = 1_000_000_000n;
+  const NS_PER_MIN = 60n * NS_PER_SEC;
+  const NS_PER_HOUR = 60n * NS_PER_MIN;
+  const fracPadded = (frac + "000000000").slice(0, 9);
+  return (
+    BigInt(hh) * NS_PER_HOUR +
+    BigInt(mm) * NS_PER_MIN +
+    BigInt(ss) * NS_PER_SEC +
+    BigInt(fracPadded || "0")
+  );
+}
+
+/**
+ * Parse an IEC DATE_AND_TIME literal (`DT#YYYY-MM-DD-HH:MM:SS[.fff]`
+ * / `DATE_AND_TIME#…`) into nanoseconds since the Unix epoch (UTC).
+ * Returns 0 for unparsable input.
+ */
+export function parseDtLiteralToNs(literal: string): bigint {
+  const stripped = literal.replace(/^(DT|DATE_AND_TIME)#/i, "");
+  const m = stripped.match(
+    /^(\d{4})-(\d{2})-(\d{2})-(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?$/,
+  );
+  if (!m) return 0n;
+  const y = m[1] ?? "0";
+  const mo = m[2] ?? "0";
+  const d = m[3] ?? "0";
+  const hh = m[4] ?? "0";
+  const mm = m[5] ?? "0";
+  const ss = m[6] ?? "0";
+  const frac = m[7] ?? "";
+  const ms = Date.UTC(
+    Number(y),
+    Number(mo) - 1,
+    Number(d),
+    Number(hh),
+    Number(mm),
+    Number(ss),
+  );
+  const fracPadded = (frac + "000000000").slice(0, 9);
+  return BigInt(ms) * 1_000_000n + BigInt(fracPadded || "0");
+}
+
 export function parseTimeLiteral(literal: string): TimeValue {
   const rawValue = literal;
   let nanoseconds = 0;

@@ -23,6 +23,7 @@ import type {
   ReferenceType,
   CompilationUnit,
   Statement,
+  VarBlock,
 } from "../frontend/ast.js";
 import type { SymbolTables, Scope } from "./symbol-table.js";
 import type { StdFunctionRegistry } from "./std-function-registry.js";
@@ -141,6 +142,7 @@ export class TypeChecker {
     for (const prog of ast.programs) {
       const scope = this.symbolTables.getProgramScope(prog.name);
       if (scope) {
+        this.checkVarBlocks(prog.varBlocks, scope);
         this.checkStatements(prog.body, scope);
       }
     }
@@ -149,6 +151,7 @@ export class TypeChecker {
     for (const func of ast.functions) {
       const scope = this.symbolTables.getFunctionScope(func.name);
       if (scope) {
+        this.checkVarBlocks(func.varBlocks, scope);
         this.checkStatements(func.body, scope);
       }
     }
@@ -158,6 +161,7 @@ export class TypeChecker {
       const scope = this.symbolTables.getFBScope(fb.name);
       if (scope) {
         // FB body
+        this.checkVarBlocks(fb.varBlocks, scope);
         this.checkStatements(fb.body, scope);
 
         // Method bodies (use method scope for local variable resolution)
@@ -166,6 +170,7 @@ export class TypeChecker {
             fb.name,
             method.name,
           );
+          this.checkVarBlocks(method.varBlocks, methodScope ?? scope);
           this.checkStatements(method.body, methodScope ?? scope);
         }
 
@@ -686,6 +691,45 @@ export class TypeChecker {
   // ===========================================================================
   // Statement Type Validation (Sub-Phase C)
   // ===========================================================================
+
+  /**
+   * Walk variable declarations and validate every initialiser against the
+   * declared type. Without this pass, nonsense like `WSTRING := 'foo'`
+   * (STRING literal into a WSTRING variable) reaches codegen unchecked,
+   * surfacing as a confusing C++ "no matching function for call to
+   * IECWStringVar(const char[N])" instead of a proper IEC type error
+   * pointing at the declaration.
+   *
+   * The check delegates to the same `validateAssignment` used for
+   * assignment statements — no separate compatibility rules — so anything
+   * the standard considers an implicit assignment also passes here.
+   */
+  private checkVarBlocks(blocks: VarBlock[], scope: Scope): void {
+    for (const block of blocks) {
+      for (const decl of block.declarations) {
+        if (!decl.initialValue) continue;
+        const targetType = ELEMENTARY_TYPES[decl.type.name.toUpperCase()];
+        if (!targetType) continue; // Non-elementary types — handled elsewhere
+        const valueType = this.resolveExprType(decl.initialValue, scope);
+        if (!valueType) continue;
+        this.validateAssignment(
+          targetType,
+          valueType,
+          // Synthetic VariableExpression for the diagnostic anchor: gives
+          // validateAssignment a target.name to mention in the error.
+          {
+            kind: "VariableExpression",
+            sourceSpan: decl.sourceSpan,
+            name: decl.names[0] ?? "<unnamed>",
+            fieldAccess: [],
+            subscripts: [],
+            isDereference: false,
+          },
+          decl.initialValue,
+        );
+      }
+    }
+  }
 
   /**
    * Walk statements, resolve all sub-expressions, and validate type rules.

@@ -22,7 +22,12 @@ import type {
 } from "../frontend/ast.js";
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
 import { formatArrayType } from "./codegen-utils.js";
-import { parseTimeLiteral } from "../project-model.js";
+import {
+  parseDateLiteralToNs,
+  parseDtLiteralToNs,
+  parseTimeLiteral,
+  parseTodLiteralToNs,
+} from "../project-model.js";
 import {
   buildEnumMemberMap,
   type EnumMemberEntry,
@@ -521,14 +526,31 @@ export class TypeCodeGenerator {
     switch (expr.literalType) {
       case "BOOL":
         return expr.value === true ? "true" : "false";
-      case "STRING":
-        return `"${expr.rawValue}"`;
-      case "WSTRING":
-        return `L"${expr.rawValue}"`;
+      case "STRING": {
+        // IEC STRING literals carry their surrounding single quotes
+        // in `rawValue` (`'wide hello'`); strip them before wrapping
+        // in C++ double quotes — otherwise we end up with `"'…'"`.
+        const inner = expr.rawValue.replace(/^'|'$/g, "");
+        return `"${inner}"`;
+      }
+      case "WSTRING": {
+        // IEC WSTRING literals are double-quoted; strip either form
+        // for safety. The C++ prefix is `u` (char16_t) — `L"…"`
+        // (wchar_t) is 32-bit on Linux/AVR and wouldn't bind to
+        // IECWStringVar's char16_t* ctor.
+        const inner = expr.rawValue.replace(/^["']|["']$/g, "");
+        return `u"${inner}"`;
+      }
       case "TIME": {
         const timeVal = parseTimeLiteral(String(expr.value));
         return `${timeVal.nanoseconds}LL`;
       }
+      case "DATE":
+        return `${parseDateLiteralToNs(String(expr.value))}LL`;
+      case "TIME_OF_DAY":
+        return `${parseTodLiteralToNs(String(expr.value))}LL`;
+      case "DATE_AND_TIME":
+        return `${parseDtLiteralToNs(String(expr.value))}LL`;
       default:
         return String(expr.value);
     }

@@ -41,7 +41,13 @@ import type {
   ConfigurationDecl,
   ProgramDecl,
 } from "../project-model.js";
-import { getProjectNamespace, parseTimeLiteral } from "../project-model.js";
+import {
+  getProjectNamespace,
+  parseDateLiteralToNs,
+  parseDtLiteralToNs,
+  parseTimeLiteral,
+  parseTodLiteralToNs,
+} from "../project-model.js";
 import { TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator } from "./type-codegen.js";
 import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
@@ -3069,18 +3075,27 @@ export class CodeGenerator {
         return `"${escaped}"`;
       }
       case "WSTRING": {
-        const wInner = expr.rawValue.replace(/^'|'$/g, "");
+        // IEC WSTRING literals are double-quoted in source; strip either
+        // form for safety. The C++ prefix is `u` (char16_t), not `L`
+        // (wchar_t — wchar_t is 32-bit on Linux/AVR, so L"…" wouldn't
+        // bind to IECWStringVar's char16_t* constructor).
+        const wInner = expr.rawValue.replace(/^["']|["']$/g, "");
         const wEscaped = this.translateIECString(wInner);
-        return `L"${wEscaped}"`;
+        return `u"${wEscaped}"`;
       }
       case "TIME": {
         const timeVal = parseTimeLiteral(String(expr.value));
         return `${timeVal.nanoseconds}LL`;
       }
       case "DATE":
+        // DATE: int64 nanoseconds since Unix epoch (UTC), time-of-day 0.
+        return `${parseDateLiteralToNs(String(expr.value))}LL`;
       case "TIME_OF_DAY":
+        // TOD: int64 nanoseconds since midnight.
+        return `${parseTodLiteralToNs(String(expr.value))}LL`;
       case "DATE_AND_TIME":
-        return String(expr.value);
+        // DT: int64 nanoseconds since Unix epoch (UTC).
+        return `${parseDtLiteralToNs(String(expr.value))}LL`;
       case "NULL":
         return "IEC_NULL";
       default:
@@ -4715,11 +4730,24 @@ export class CodeGenerator {
       // Convert IEC BOOL literals to C++ bool literals
       if (upperInit === "TRUE") return "true";
       if (upperInit === "FALSE") return "false";
-      // Convert IEC string literals ('hello') to C++ string literals ("hello")
+      // Convert IEC string literals to the matching C++ literal shape:
+      //   'foo' (STRING)  → "foo"  (const char*)
+      //   "foo" (WSTRING) → u"foo" (const char16_t*, what IECWStringVar
+      //                            binds to — `L"…"` is wchar_t and
+      //                            32-bit on Linux/AVR, wrong type)
+      // The two literal kinds are NOT interchangeable per IEC 61131-3;
+      // a mismatch (e.g. WSTRING := 'foo') is a type error and is the
+      // type-checker's responsibility, not codegen's. Codegen just
+      // mirrors the literal it was handed.
       if (initialValue.startsWith("'") && initialValue.endsWith("'")) {
         const inner = initialValue.slice(1, -1);
         const escaped = this.translateIECString(inner);
         return `"${escaped}"`;
+      }
+      if (initialValue.startsWith('"') && initialValue.endsWith('"')) {
+        const inner = initialValue.slice(1, -1);
+        const escaped = this.translateIECString(inner);
+        return `u"${escaped}"`;
       }
       return initialValue;
     }
@@ -4727,7 +4755,8 @@ export class CodeGenerator {
     const upperType = typeName.toUpperCase();
     if (upperType === "BOOL") return "false";
     if (upperType === "REAL" || upperType === "LREAL") return "0.0";
-    if (upperType === "STRING" || upperType === "WSTRING") return '""';
+    if (upperType === "STRING") return '""';
+    if (upperType === "WSTRING") return 'u""';
 
     // Check if it's an elementary type that uses numeric default
     const numericTypes = [

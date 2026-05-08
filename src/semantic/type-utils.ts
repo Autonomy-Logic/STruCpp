@@ -23,7 +23,20 @@ import type {
   FunctionBlockType,
 } from "../frontend/ast.js";
 import type { TypeConstraint } from "./std-function-registry.js";
-import { IEC_BASE_TYPES } from "./iec-types-data.js";
+import { IEC_BASE_TYPES, lookupBaseType } from "./iec-types-data.js";
+
+/**
+ * Map an IEC type name to its canonical spelling, collapsing aliases
+ * (`TIME_OF_DAY` → `TOD`, `DATE_AND_TIME` → `DT`). Returns the input
+ * unchanged for non-elementary names. Pure passthrough for upper-cased
+ * canonical names (saves the registry lookup).
+ *
+ * Used by assignability / implicit-conversion checks so callers don't
+ * have to remember to normalise on every comparison.
+ */
+export function canonicalElementaryName(name: string): string {
+  return lookupBaseType(name)?.name ?? name.toUpperCase();
+}
 
 // =============================================================================
 // Elementary Type Data
@@ -242,11 +255,16 @@ export function isAssignable(target: IECType, source: IECType): boolean {
     const t = target as ElementaryType;
     const s = source as ElementaryType;
 
-    // Same type is always assignable
-    if (t.name === s.name) return true;
+    // Resolve aliases (TIME_OF_DAY ↔ TOD, DATE_AND_TIME ↔ DT) before
+    // comparison so the parser/AST tag form doesn't matter.
+    const tCanon = canonicalElementaryName(t.name);
+    const sCanon = canonicalElementaryName(s.name);
+
+    // Same canonical type is always assignable
+    if (tCanon === sCanon) return true;
 
     // Use implicit conversion check (includes widening + cross-category)
-    return isImplicitlyConvertible(s.name, t.name);
+    return isImplicitlyConvertible(sCanon, tCanon);
   }
 
   // For reference types, check referenced type compatibility
