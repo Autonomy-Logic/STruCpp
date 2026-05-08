@@ -44,6 +44,7 @@ import {
   LibraryManifestError,
 } from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
+import { annotateErrorsWithPouContext } from "./diagnostic-pou-context.js";
 
 /**
  * Default compilation options
@@ -565,6 +566,16 @@ function runPipeline(
       });
     }
     // In analyze mode, semantic failure is non-fatal — return whatever we have
+  }
+
+  // Annotate errors/warnings with POU + section context so programmatic
+  // consumers (e.g. the OpenPLC Editor) can route diagnostics to the
+  // right POU tab and remap body-line numbers to the user's view.
+  // Skipped silently when no AST is available — the fields remain unset
+  // and downstream code falls back to plain (file, line) display.
+  if (ast) {
+    annotateErrorsWithPouContext(errors, ast);
+    annotateErrorsWithPouContext(warnings, ast);
   }
 
   return {

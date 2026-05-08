@@ -112,6 +112,45 @@ export interface CompileError {
 
   /** Optional suggestion for fixing the error */
   suggestion?: string;
+
+  // ===========================================================================
+  // POU-relative location (populated post-parse when the error sits inside a
+  // POU strucpp parsed). Programmatic consumers like the OpenPLC Editor use
+  // these to surface errors in the right tab and at a line number that
+  // matches what the user sees.  Standalone CLI use ignores them — the
+  // existing `line`/`column`/`file` fields are unchanged.
+  // ===========================================================================
+
+  /** Containing POU name (uppercased per IEC) when known. */
+  pouName?: string;
+
+  /** Containing POU kind. */
+  pouKind?: "PROGRAM" | "FUNCTION" | "FUNCTION_BLOCK";
+
+  /**
+   * Which structural section of the POU the error sits in:
+   *   - 'var-block': inside any VAR…END_VAR block
+   *   - 'body': in the executable body
+   *   - 'interface': in the POU header / between sections (rare)
+   */
+  section?: "var-block" | "body" | "interface";
+
+  /**
+   * 1-indexed line within the POU body (only set when section === 'body').
+   * The OpenPLC Editor's Monaco body view starts at line 1 with the first
+   * body statement, so this matches what the user sees.  For 'var-block'
+   * the editor uses `line` directly because the var block is at the top of
+   * the per-POU file and lines align.
+   */
+  bodyLine?: number;
+
+  /**
+   * Variable name when the diagnostic is anchored to a specific declaration
+   * (e.g. an initial-value type mismatch).  Lets editors highlight the
+   * exact row in a variables-table view rather than guessing from a line
+   * number.
+   */
+  variableName?: string;
 }
 
 /**
