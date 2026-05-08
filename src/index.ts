@@ -919,6 +919,19 @@ export {
 } from "./semantic/type-utils.js";
 export { isElementaryType } from "./semantic/type-registry.js";
 
+// Canonical IEC base-type registry — same data published as
+// libs/iec-types.json. Downstream tooling that prefers a typed
+// import over the JSON artefact can pull these directly.
+export {
+  IEC_BASE_TYPES,
+  lookupBaseType,
+  isBaseTypeName,
+} from "./semantic/iec-types-data.js";
+export type {
+  IECTypeMetadata,
+  IECWireFormat,
+} from "./semantic/iec-types-data.js";
+
 // Re-export project model
 export type { ProjectModel } from "./project-model.js";
 

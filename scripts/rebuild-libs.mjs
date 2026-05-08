@@ -35,6 +35,7 @@ import { execSync } from "child_process";
 import { readFileSync, readdirSync, writeFileSync, existsSync, copyFileSync, statSync } from "fs";
 import { resolve, dirname, relative, sep, posix } from "path";
 import { fileURLToPath } from "url";
+import { buildIecTypesJson } from "./build-iec-types-json.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -488,7 +489,15 @@ export async function setup() {
     });
   }
 
-  // 5. Copy compiled archives into vscode-extension/bundled-libs/. The
+  // 5. iec-types.json — canonical base-type registry. Pure metadata
+  //    derived from `src/semantic/iec-types-data.ts`; downstream tools
+  //    (OpenPLC Editor's variables table / debugger / XML emitter)
+  //    read this rather than maintaining their own type tables.
+  console.log("[rebuild-libs] Building iec-types.json...");
+  await buildIecTypesJson();
+  const iecTypesJsonPath = resolve(libsDir, "iec-types.json");
+
+  // 6. Copy compiled archives into vscode-extension/bundled-libs/. The
   //    extension's esbuild bundler also does this at .vsix package time
   //    — this copy keeps the extension's local development workflow
   //    (`cd vscode-extension && npx vitest run`) working without an
@@ -506,6 +515,9 @@ export async function setup() {
     }
     if (existsSync(stdFnPath)) {
       copyFileSync(stdFnPath, resolve(vscodeLibsDir, "iec-std-functions.stlib"));
+    }
+    if (existsSync(iecTypesJsonPath)) {
+      copyFileSync(iecTypesJsonPath, resolve(vscodeLibsDir, "iec-types.json"));
     }
   }
 

@@ -16,9 +16,14 @@ build/
 # CI rebuilds them before tests via vitest globalSetup; release jobs
 # rebuild them as part of `npm run build`.
 libs/*.stlib
+# iec-types.json is a similar build artefact: derived from
+# `src/semantic/iec-types-data.ts` by `scripts/build-iec-types-json.mjs`,
+# so tracking it would just produce churn whenever the metadata changes.
+libs/iec-types.json
 # Extension-side copy is also a build artifact (vscode-extension's
 # esbuild.mjs syncs it from libs/ at vsix build time).
 vscode-extension/bundled-libs/*.stlib
+vscode-extension/bundled-libs/iec-types.json
 
 # IDE and editors
 .vscode/

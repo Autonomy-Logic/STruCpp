@@ -43,40 +43,18 @@ export interface ValidationWarning {
   message: string;
 }
 
-/**
- * Set of IEC 61131-3 elementary type names
- */
-const ELEMENTARY_TYPES = new Set([
-  "BOOL",
-  "BYTE",
-  "WORD",
-  "DWORD",
-  "LWORD",
-  "SINT",
-  "INT",
-  "DINT",
-  "LINT",
-  "USINT",
-  "UINT",
-  "UDINT",
-  "ULINT",
-  "REAL",
-  "LREAL",
-  "TIME",
-  "DATE",
-  "TIME_OF_DAY",
-  "TOD",
-  "DATE_AND_TIME",
-  "DT",
-  "STRING",
-  "WSTRING",
-]);
+import { isBaseTypeName } from "./iec-types-data.js";
 
 /**
  * Check if a type name is an elementary type
+ *
+ * Delegates to the canonical IEC type registry
+ * (`./iec-types-data.ts`), which is also the source emitted as
+ * `libs/iec-types.json`. Single source of truth — adding a new
+ * elementary type happens in one place.
  */
 export function isElementaryType(name: string): boolean {
-  return ELEMENTARY_TYPES.has(name.toUpperCase());
+  return isBaseTypeName(name);
 }
 
 /**
