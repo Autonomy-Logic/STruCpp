@@ -123,6 +123,9 @@ function compileAndWrite({ sources, config, stlibPath, dependencies, sourcesDir 
     );
   }
 
+  if (config.displayName) {
+    result.archive.manifest.displayName = config.displayName;
+  }
   if (config.description) {
     result.archive.manifest.description = config.description;
   }
@@ -400,6 +403,7 @@ function synthesizeStdFunctionsLibrary({ libDirName, stlibPath }) {
     cppCode: "",
     dependencies: [],
   };
+  if (config.displayName) archive.manifest.displayName = config.displayName;
   if (config.description) archive.manifest.description = config.description;
 
   const docReport = applyLibraryConfigDocumentation(archive, config);

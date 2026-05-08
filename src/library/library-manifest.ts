@@ -115,8 +115,14 @@ export interface LibraryTypeEntry {
  * Library manifest describing a compiled library's public interface.
  */
 export interface LibraryManifest {
-  /** Library name */
+  /** Library name (kebab-case identifier; matches the .stlib filename
+   *  and is what dependency declarations reference). */
   name: string;
+  /** Optional human-readable label for tooling that surfaces libraries
+   *  to end users (editor library trees, package managers). When unset,
+   *  consumers fall back to `name`. Authored in `library.json` and
+   *  carried unchanged through compile. */
+  displayName?: string;
   /** Library version */
   version: string;
   /** Human-readable description */

@@ -1,5 +1,6 @@
 {
   "name": "additional-function-blocks",
+  "displayName": "Additional Function Blocks",
   "version": "1.0.0",
   "namespace": "strucpp",
   "description": "IEC 61131-3 Annex E Additional Function Blocks (RTC, INTEGRAL, DERIVATIVE, PID, RAMP, HYSTERESIS) — auto-generated from ST sources",

@@ -1,5 +1,6 @@
 {
   "name": "iec-standard-fb",
+  "displayName": "Standard Function Blocks",
   "version": "1.0.0",
   "namespace": "strucpp",
   "description": "IEC 61131-3 Standard Function Blocks (auto-generated from ST sources)",

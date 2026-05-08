@@ -1,5 +1,6 @@
 {
   "name": "oscat-basic",
+  "displayName": "OSCAT Basic",
   "version": "335.0.0",
   "namespace": "oscat_basic",
   "description": "OSCAT Basic 3.35 — open-source community automation library (auto-imported from oscat_basic_335.library)",

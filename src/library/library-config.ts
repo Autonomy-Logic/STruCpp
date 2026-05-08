@@ -49,6 +49,9 @@ import type { StlibArchive } from "./library-manifest.js";
 export interface LibraryConfig {
   /** Library identity. Must match what the consumer references. */
   name: string;
+  /** Optional human-readable name for tooling display (editor library
+   *  trees, package manager UIs). Falls back to `name` when unset. */
+  displayName?: string;
   /** SemVer-like version string. */
   version: string;
   /** C++ namespace the compiled archive lives in. */
@@ -112,6 +115,7 @@ function validateLibraryConfig(raw: unknown, path: string): LibraryConfig {
     version: obj.version as string,
     namespace: obj.namespace as string,
   };
+  if (typeof obj.displayName === "string") config.displayName = obj.displayName;
   if (typeof obj.description === "string") config.description = obj.description;
   if (typeof obj.isBuiltin === "boolean") config.isBuiltin = obj.isBuiltin;
   if (typeof obj.codesysSource === "string")

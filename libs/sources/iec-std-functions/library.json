@@ -1,5 +1,6 @@
 {
   "name": "iec-std-functions",
+  "displayName": "Standard Functions",
   "version": "1.0.0",
   "namespace": "strucpp",
   "description": "IEC 61131-3 standard functions (ADD/SUB/MUX/SHL/CONCAT/...) — synthesized from strucpp's StdFunctionRegistry. No ST sources: every function is a compiler+runtime intrinsic. The .stlib exists purely so editor tooling can list, categorize, and type-check standard functions through the same path it uses for ordinary libraries.",
