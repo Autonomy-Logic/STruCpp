@@ -308,10 +308,38 @@ function runPipeline(
     );
     const units: CompilationUnit[] = [primaryAst];
 
-    // Parse additional source files
+    // Parse additional source files. Each gets the same Phase 0
+    // IL→ST transpilation as the primary source — without it, an IL
+    // POU surfaced through `additionalSources` (e.g. the editor's
+    // per-POU split of program.st) would reach the ST parser as
+    // raw IL and fail with a confusing "expecting Identifier but
+    // found 'LD'" error.
     if (mergedOptions.additionalSources) {
       for (const addlSource of mergedOptions.additionalSources) {
-        const addlParseResult = parseSource(addlSource.source);
+        let effectiveAddlSource = addlSource.source;
+        const addlIlResult = transpileILSource(
+          addlSource.source,
+          addlSource.fileName,
+        );
+        if (addlIlResult.hasIL) {
+          effectiveAddlSource = addlIlResult.stSource;
+          for (const err of addlIlResult.errors) {
+            const entry: CompileError = {
+              message: err.message,
+              line: err.line,
+              column: err.column,
+              severity: err.severity,
+            };
+            if (err.file) entry.file = err.file;
+            else entry.file = addlSource.fileName;
+            errors.push(entry);
+          }
+          if (errors.length > 0 && !continueOnError) {
+            continue;
+          }
+        }
+
+        const addlParseResult = parseSource(effectiveAddlSource);
         if (addlParseResult.errors.length > 0) {
           for (const err of addlParseResult.errors) {
             const errObj = err as {
