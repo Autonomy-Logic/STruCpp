@@ -326,6 +326,31 @@ function buildFolderPaths(
 }
 
 /**
+ * Drop the redundant top-level "POUs/" segment from a CODESYS V3 path.
+ *
+ * V3 libraries follow a fixed project-explorer convention: every code
+ * object (FUNCTION_BLOCK, FUNCTION, PROGRAM) lives under a top-level
+ * "POUs" folder, types under "Data types", globals under "Global
+ * Variables". Once the archive is compiled into a single .stlib, that
+ * library IS the POUs container by construction, so re-emitting "POUs"
+ * as a folder inside it nests every block one level deeper than the
+ * editor's library tree should display them. Strip it here so
+ * `POUs/Time&Date/DCF77` becomes `Time&Date/DCF77` and a POU sitting
+ * directly under "POUs" (no subcategory) becomes uncategorized.
+ *
+ * Other top-level folders pass through unchanged — "Data types" and
+ * "Global Variables" carry meaningful classification information for
+ * downstream tooling.
+ *
+ * Returns null when the path collapses to empty (top-level POUs).
+ */
+function stripCodesysCategoryPrefix(path: string): string | null {
+  if (path === "POUs") return null;
+  if (path.startsWith("POUs/")) return path.slice("POUs/".length);
+  return path;
+}
+
+/**
  * Test if a string is a recognized POU/TYPE/GVL header.
  */
 function isHeaderString(s: string): boolean {
@@ -926,7 +951,20 @@ export function parseV3Library(data: Buffer): {
     if (pou && !seenNames.has(pou.name)) {
       const objGuid = name.replace(/\.object$/, "");
       const path = folderPaths.get(objGuid);
-      if (path) pou.category = path;
+      if (path) {
+        // CODESYS V3 always wraps user code in a top-level "POUs"
+        // folder (the project-explorer convention; "Data types" and
+        // "Global Variables" sit alongside it for type definitions
+        // and globals). The compiled library IS the POUs container,
+        // so the prefix is redundant for downstream consumers — drop
+        // it here so OSCAT's `POUs/Time&Date/DCF77` surfaces as
+        // `Time&Date/DCF77` in the .stlib manifest. Non-POUs
+        // top-level folders pass through untouched, since their
+        // labels carry meaningful information ("Data types" tells
+        // tooling these are TYPE definitions).
+        const stripped = stripCodesysCategoryPrefix(path);
+        if (stripped) pou.category = stripped;
+      }
       if (documentation) pou.documentation = documentation;
       seenNames.add(pou.name);
       pous.push(pou);

@@ -446,15 +446,22 @@ describe("V3 integration: OSCAT Basic 335", () => {
     // The importer walks that chain and surfaces a slash-separated
     // `category` on each ExtractedPOU; the well-known POUs below pin
     // the resolved paths against CODESYS's own UI placement.
+    //
+    // Note: the importer strips the redundant top-level "POUs/" segment
+    // (CODESYS V3 wraps every code object in a "POUs" folder by
+    // convention; the compiled .stlib IS the POUs container, so the
+    // prefix nests every block one level deeper than the editor needs).
+    // "Data types" passes through unchanged since it carries meaningful
+    // classification information for tooling.
     const result = importCodesysLibrary(OSCAT_V3_PATH);
     const expected: Record<string, string> = {
-      "DCF77.st": "POUs/Time&Date",
-      "HOLIDAY.st": "POUs/Time&Date",
-      "UTC_TO_LTIME.st": "POUs/Time&Date",
-      "BUFFER_COMP.st": "POUs/Buffer Management",
-      "ACOSH.st": "POUs/Mathematical",
+      "DCF77.st": "Time&Date",
+      "HOLIDAY.st": "Time&Date",
+      "UTC_TO_LTIME.st": "Time&Date",
+      "BUFFER_COMP.st": "Buffer Management",
+      "ACOSH.st": "Mathematical",
       "COMPLEX.st": "Data types",
-      "CRC_GEN.st": "POUs/Logic/Others",
+      "CRC_GEN.st": "Logic/Others",
     };
     for (const [fileName, category] of Object.entries(expected)) {
       const src = result.sources.find((s) => s.fileName === fileName);
@@ -468,9 +475,13 @@ describe("V3 integration: OSCAT Basic 335", () => {
       const c = s.category ?? "<root>";
       counts.set(c, (counts.get(c) ?? 0) + 1);
     }
-    expect(counts.get("POUs/String") ?? 0).toBeGreaterThanOrEqual(50);
-    expect(counts.get("POUs/Mathematical") ?? 0).toBeGreaterThanOrEqual(50);
-    expect(counts.get("POUs/Time&Date") ?? 0).toBeGreaterThanOrEqual(40);
+    expect(counts.get("String") ?? 0).toBeGreaterThanOrEqual(50);
+    expect(counts.get("Mathematical") ?? 0).toBeGreaterThanOrEqual(50);
+    expect(counts.get("Time&Date") ?? 0).toBeGreaterThanOrEqual(40);
+    // No POU should still carry the redundant "POUs" prefix.
+    for (const s of result.sources) {
+      expect(s.category ?? "").not.toMatch(/^POUs(\/|$)/);
+    }
   });
 
   it("structurally extracts documentation from the V3 decl-section slot", () => {
