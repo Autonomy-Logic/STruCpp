@@ -99,29 +99,48 @@ function getSourceLine(source: string, line: number): string | undefined {
 }
 
 /**
+ * Options for {@link formatDiagnostic}.  All fields are optional; the
+ * default rendering matches the long-standing CLI / vscode-extension
+ * behaviour — programmatic consumers opt in to the newer behaviours.
+ */
+export interface FormatDiagnosticOptions {
+  /**
+   * When `true`, body-attributed diagnostics (`error.section === 'body'`
+   * with `error.bodyLine` set) are rendered with the body-relative
+   * line number in both the header column and the snippet gutter,
+   * matching what an editor like the OpenPLC Editor shows in its
+   * Monaco body view.  The source content is still read from the
+   * raw `error.line` in the per-POU file under the hood; only the
+   * displayed numbers change.
+   *
+   * Default: `false` (preserves the absolute file line in every
+   * field — this is what `strucpp` CLI users and the vscode
+   * extension see today).
+   */
+  preferBodyLine?: boolean;
+}
+
+/**
  * Format a single diagnostic in gcc style. Returns a multi-line string with
  * no trailing newline.
  */
 export function formatDiagnostic(
   error: CompileError,
   sourceMap: Map<string, string>,
+  options?: FormatDiagnosticOptions,
 ): string {
   const palette = getPalette();
   const sevColor = severityColor(error.severity, palette);
   const fileLabel = error.file ?? "<input>";
 
-  // When the diagnostic carries a body-relative line (set by the
-  // POU-context annotation pass for errors inside a POU body), prefer
-  // it for the user-visible numbering — that's the line the editor's
-  // Monaco body view shows, and it's what matches the bracketed
-  // `[POU / body line N]` prefix consumers render alongside this
-  // header.  The raw file line is still used to read the source
-  // content from the source map (the text physically lives at
-  // `error.line` in the per-POU file), but we render the gutter and
-  // header column with `displayLine` so a user reading the diagnostic
-  // sees one consistent number throughout.
+  // Body-relative numbering is opt-in: CLI and vscode users keep the
+  // absolute (file, line) reporting they've always had; programmatic
+  // consumers like the OpenPLC Editor pass `preferBodyLine: true` to
+  // get numbers that match their Monaco body view.
   const displayLine =
-    error.section === "body" && error.bodyLine !== undefined
+    options?.preferBodyLine === true &&
+    error.section === "body" &&
+    error.bodyLine !== undefined
       ? error.bodyLine
       : error.line;
 
