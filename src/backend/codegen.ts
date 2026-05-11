@@ -168,6 +168,13 @@ export interface CodeGenOptions {
   /** Override filename used in #line directives (absolute path for debugger).
    *  Falls back to fileName when not set. */
   lineDirectiveFileName?: string;
+
+  /** Emit `//@chunk:begin/end:<kind>:<NAME>` comment markers around each
+   *  top-level declaration in both header and cpp output. The library
+   *  compiler uses these to slice emitted code into per-symbol chunks
+   *  for function-level tree-shaking. Off by default — production
+   *  compiles produce identical output regardless. */
+  emitChunkMarkers?: boolean;
 }
 
 /**
@@ -722,6 +729,31 @@ export class CodeGenerator {
   }
 
   /**
+   * Emit a chunk-boundary marker in the active header stream. No-op
+   * when `emitChunkMarkers` is off. See `CodeGenOptions.emitChunkMarkers`
+   * — the markers exist so the library compiler can slice emitted code
+   * into per-symbol chunks for function-level tree-shaking.
+   */
+  protected emitHeaderChunkMarker(
+    boundary: "begin" | "end",
+    kind: "function" | "functionBlock" | "type" | "inlineGlobal",
+    name: string,
+  ): void {
+    if (!this.options.emitChunkMarkers) return;
+    this.emitHeader(`//@chunk:${boundary}:${kind}:${name}`);
+  }
+
+  /** Emit a chunk-boundary marker in the active cpp stream. */
+  protected emitCppChunkMarker(
+    boundary: "begin" | "end",
+    kind: "function" | "functionBlock" | "type" | "inlineGlobal",
+    name: string,
+  ): void {
+    if (!this.options.emitChunkMarkers) return;
+    this.emit(`//@chunk:${boundary}:${kind}:${name}`);
+  }
+
+  /**
    * Switch the active emit bucket. Creates a new bucket if the file
    * name hasn't been seen before; otherwise resumes appending to the
    * existing one. Caller is responsible for emitting the per-TU
@@ -998,6 +1030,7 @@ export class CodeGenerator {
       const typeCodeGen = new TypeCodeGenerator({
         indent: this.options.indent,
         lineEnding: this.options.lineEnding,
+        emitChunkMarkers: this.options.emitChunkMarkers ?? false,
       });
       const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
       for (const line of typeCode.split(this.options.lineEnding)) {
@@ -1013,6 +1046,7 @@ export class CodeGenerator {
         for (const decl of block.declarations) {
           const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
+            this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
             if (decl.initialValue) {
               const initExpr = this.generateExpression(decl.initialValue);
               this.emitHeader(
@@ -1021,6 +1055,7 @@ export class CodeGenerator {
             } else {
               this.emitHeader(`inline ${cppType} ${name}{};`);
             }
+            this.emitHeaderChunkMarker("end", "inlineGlobal", name);
           }
         }
       }
@@ -1060,30 +1095,56 @@ export class CodeGenerator {
 
     // Generate interface declarations (before FBs since FBs may implement interfaces)
     for (const iface of ast.interfaces) {
+      this.emitHeaderChunkMarker("begin", "type", iface.name);
       this.generateInterfaceHeaderDeclaration(iface);
+      this.emitHeaderChunkMarker("end", "type", iface.name);
     }
 
     // Generate function block class declarations (topologically sorted by dependency)
     for (const fb of this.sortedFBs) {
+      this.emitHeaderChunkMarker("begin", "functionBlock", fb.name);
       this.generateFBHeaderDeclaration(fb);
+      this.emitHeaderChunkMarker("end", "functionBlock", fb.name);
     }
 
     // Generate program class declarations
     if (this.projectModel) {
       // Use project model for enhanced generation with VAR_EXTERNAL support
       for (const prog of this.projectModel.programs.values()) {
+        this.emitHeaderChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramHeaderFromModel(prog);
+        this.emitHeaderChunkMarker(
+          "end",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
       }
     } else {
       // Fallback to AST-based generation
       for (const prog of ast.programs) {
+        this.emitHeaderChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramHeaderDeclaration(prog);
+        this.emitHeaderChunkMarker(
+          "end",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
       }
     }
 
     // Generate function declarations
     for (const func of ast.functions) {
+      this.emitHeaderChunkMarker("begin", "function", func.name);
       this.generateFunctionHeaderDeclaration(func);
+      this.emitHeaderChunkMarker("end", "function", func.name);
     }
 
     // Generate configuration class declarations
@@ -1153,13 +1214,25 @@ export class CodeGenerator {
     if (this.projectModel) {
       for (const prog of this.projectModel.programs.values()) {
         this.startTranslationUnit(this.pouFileName(prog.name));
+        this.emitCppChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramImplementationFromModel(prog);
+        this.emitCppChunkMarker("end", "functionBlock", `Program_${prog.name}`);
         this.endTranslationUnit();
       }
     } else {
       for (const prog of ast.programs) {
         this.startTranslationUnit(this.pouFileName(prog.name));
+        this.emitCppChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramImplementation(prog);
+        this.emitCppChunkMarker("end", "functionBlock", `Program_${prog.name}`);
         this.endTranslationUnit();
       }
     }
@@ -1169,14 +1242,18 @@ export class CodeGenerator {
     //    class declarations); ordering only mattered for the header.
     for (const fb of this.sortedFBs) {
       this.startTranslationUnit(this.pouFileName(fb.name));
+      this.emitCppChunkMarker("begin", "functionBlock", fb.name);
       this.generateFBImplementation(fb);
+      this.emitCppChunkMarker("end", "functionBlock", fb.name);
       this.endTranslationUnit();
     }
 
     // 4. One TU per function.
     for (const func of ast.functions) {
       this.startTranslationUnit(this.pouFileName(func.name));
+      this.emitCppChunkMarker("begin", "function", func.name);
       this.generateFunctionImplementation(func);
+      this.emitCppChunkMarker("end", "function", func.name);
       this.endTranslationUnit();
     }
   }

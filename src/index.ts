@@ -687,6 +687,9 @@ export function compile(
     pouIncludes: pipeline.mergedOptions.pouIncludes ?? [],
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
+    ...(pipeline.mergedOptions.emitChunkMarkers
+      ? { emitChunkMarkers: true }
+      : {}),
   });
   codegen.setProjectModel(pipeline.projectModel!);
 

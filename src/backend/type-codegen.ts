@@ -39,6 +39,11 @@ import {
 export interface TypeCodeGenOptions {
   indent: string;
   lineEnding: string;
+  /** Wrap each generated type's emission with `//@chunk:begin/end:type:<NAME>`
+   *  marker comments. Off by default; the library compiler enables it so
+   *  it can slice per-symbol chunks for tree-shaking. See
+   *  `CodeGenOptions.emitChunkMarkers`. */
+  emitChunkMarkers: boolean;
 }
 
 /**
@@ -47,6 +52,7 @@ export interface TypeCodeGenOptions {
 export const defaultTypeCodeGenOptions: TypeCodeGenOptions = {
   indent: "    ",
   lineEnding: "\n",
+  emitChunkMarkers: false,
 };
 
 /**
@@ -171,7 +177,13 @@ export class TypeCodeGenerator {
     this.emit("");
 
     for (const type of types) {
+      if (this.options.emitChunkMarkers) {
+        this.emit(`//@chunk:begin:type:${type.name}`);
+      }
       this.generateTypeDeclaration(type);
+      if (this.options.emitChunkMarkers) {
+        this.emit(`//@chunk:end:type:${type.name}`);
+      }
     }
 
     return this.output.join(this.options.lineEnding);

@@ -75,6 +75,15 @@ export interface CompileOptions {
    * the debug map's md5 field is left empty.
    */
   md5?: string;
+
+  /**
+   * Wrap each top-level emitted declaration with
+   * `//@chunk:begin/end:<kind>:<NAME>` markers in both header and cpp
+   * output. The library compiler enables this so it can slice emitted
+   * code into per-symbol chunks for function-level tree-shaking.
+   * Production compiles leave it off and see no output change.
+   */
+  emitChunkMarkers?: boolean;
 }
 
 /**
