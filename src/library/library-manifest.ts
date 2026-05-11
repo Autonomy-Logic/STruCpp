@@ -144,6 +144,67 @@ export interface LibraryManifest {
 }
 
 /**
+ * Reference to another symbol from a library chunk's dep graph.
+ *
+ * Recorded by the library compiler when it scans a chunk's body for
+ * cross-symbol references. Codegen walks these edges to compute the
+ * reachable-from-the-user's-AST closure and only emit those chunks.
+ */
+export interface LibraryChunkDep {
+  /** Owning archive name (matches `LibraryManifest.name`). Use the
+   *  literal string `"this"` for same-archive references; the
+   *  consumer-side normaliser resolves it to the chunk's own library
+   *  at graph-construction time. */
+  library: string;
+  /** Referenced symbol's uppercase name (matches `LibraryChunk.name`
+   *  in the target archive). */
+  name: string;
+}
+
+/**
+ * Per-symbol chunk in a compiled library.
+ *
+ * One chunk per top-level declaration: function, function block, type
+ * (struct/enum/alias group), or inline global. `header` + `cpp`
+ * concatenated in chunk-array order reproduce the legacy library-wide
+ * header/cpp blobs — the chunked form is a refinement, not a rewrite,
+ * of what the codegen used to emit as one chunk per library.
+ *
+ * The chunks-and-deps representation is what enables function-level
+ * tree-shaking: codegen walks the user's AST, seeds the closure with
+ * referenced names, BFS-traverses `deps`, then emits only the chunks
+ * in the closure. Symbols that no reachable chunk depends on never
+ * appear in the user's `generated.hpp`/`generated.cpp`.
+ */
+export interface LibraryChunk {
+  /** Symbol name (uppercase). Matches an entry in
+   *  `manifest.functions`, `manifest.functionBlocks`, `manifest.types`,
+   *  or names an inline global owned by this library. */
+  name: string;
+  /** Top-level kind. Drives forward-decl ordering during emission
+   *  (function blocks need forward decls so circular FB-to-FB
+   *  references resolve; types and functions don't). */
+  kind: "function" | "functionBlock" | "type" | "inlineGlobal";
+  /** Slice of this library's emitted header code that declares this
+   *  symbol — class declaration, struct body, function prototype, or
+   *  inline-global definition — plus any same-line `using IEC_X = X;`
+   *  alias that conventionally accompanies it. Concatenating every
+   *  chunk's `header` in array order reproduces the legacy
+   *  library-wide `headerCode` blob byte-for-byte. */
+  header: string;
+  /** Slice of this library's emitted cpp code that implements this
+   *  symbol — constructor + `operator()` bodies for FBs, function
+   *  bodies for free functions. Empty string for types and inline
+   *  globals whose entire materialisation lives in `header`. */
+  cpp: string;
+  /** Symbols this chunk references in its body. Same-archive entries
+   *  use `library: "this"`; cross-archive entries name the owning
+   *  archive's `manifest.name`. The codegen treats these as edges
+   *  in the chunk-reachability graph. */
+  deps: LibraryChunkDep[];
+}
+
+/**
  * Result of compiling a library.
  */
 export interface LibraryCompileResult {
@@ -155,6 +216,11 @@ export interface LibraryCompileResult {
   headerCode: string;
   /** Generated C++ implementation */
   cppCode: string;
+  /** Per-symbol chunks. Populated from Phase 2 onward; Phase 1 ships
+   *  the type definition only so consumers can be migrated
+   *  incrementally. When non-empty, concatenating chunks in array
+   *  order reproduces `headerCode` / `cppCode`. */
+  chunks?: LibraryChunk[];
   /** Compilation errors */
   errors: Array<{ message: string; file?: string; line?: number }>;
 }
@@ -171,6 +237,12 @@ export interface StlibArchive {
   headerCode: string;
   /** Compiled C++ implementations (namespace body only) */
   cppCode: string;
+  /** Per-symbol chunks. Populated from Phase 2 onward; Phase 1 ships
+   *  the field as optional so existing emitters keep producing valid
+   *  archives without yet populating it. From Phase 4 this becomes
+   *  the authoritative emission source and `headerCode` / `cppCode`
+   *  are retired. */
+  chunks?: LibraryChunk[];
   /** Original ST source files (omitted for closed-source distribution).
    *  `category` mirrors the manifest entry category for the POUs declared
    *  in this file so `--decompile-lib` can recreate the folder hierarchy
