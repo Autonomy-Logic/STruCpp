@@ -454,6 +454,14 @@ export function loadStlibArchive(json: unknown): StlibArchive {
     dependencies: obj.dependencies as Array<{ name: string; version: string }>,
   };
 
+  // Optional chunks — populated for libraries built with the
+  // per-symbol chunking emitter (Phase 2+); empty for synthetic
+  // libraries like iec-std-functions that bypass `compileLibrary`.
+  // The consumer codegen tree-shake operates on these.
+  if (Array.isArray(obj.chunks)) {
+    archive.chunks = obj.chunks as NonNullable<StlibArchive["chunks"]>;
+  }
+
   // Optional sources
   if (Array.isArray(obj.sources)) {
     archive.sources = obj.sources as Array<{

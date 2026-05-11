@@ -422,7 +422,7 @@ export function compileStlib(
   }
 
   // Clear manifest.headers — the .stlib archive inlines its C++ code
-  // directly into the consumer's output via addLibraryPreamble(), so
+  // directly into the consumer's output via addLibraryChunks(), so
   // there are no external .hpp files to #include.
   const manifest = { ...libResult.manifest, headers: [] as string[] };
 

@@ -41,6 +41,10 @@ import type {
   ConfigurationDecl,
   ProgramDecl,
 } from "../project-model.js";
+import type {
+  LibraryChunk,
+  StlibArchive,
+} from "../library/library-manifest.js";
 import {
   getProjectNamespace,
   parseDateLiteralToNs,
@@ -60,7 +64,6 @@ import {
   buildEnumMemberMap,
   type EnumMemberEntry,
 } from "../semantic/type-utils.js";
-import type { StlibArchive } from "../library/library-manifest.js";
 
 // =============================================================================
 // Located Variable Support
@@ -374,11 +377,18 @@ export class CodeGenerator {
   /** Topologically sorted function blocks (computed once in generate(), used by header + impl) */
   private sortedFBs: CompilationUnit["functionBlocks"] = [];
 
-  /** Library preamble code blocks injected into header and implementation */
-  private libraryPreambles: Array<{
-    name: string;
-    headerCode: string;
-    cppCode: string;
+  /** Per-archive reachable-chunk emission state.
+   *
+   *  Built by `addLibraryChunks` — one entry per library the consumer
+   *  pulled at least one chunk from. The emission loop iterates this
+   *  in insertion order (= the order index.ts hands archives over,
+   *  which is library load order). For each library, only chunks
+   *  whose name appears in `reachable` are emitted; the array order
+   *  matches the library's `chunks[]` declaration order so symbol
+   *  layout in the user's `generated.hpp` is stable across builds. */
+  private libraryEmissions: Array<{
+    archive: StlibArchive;
+    reachable: Set<string>;
   }> = [];
 
   /** Map of UPPER(fbTypeName) → ordered VAR_INPUT parameter names (UPPER case).
@@ -721,11 +731,16 @@ export class CodeGenerator {
   }
 
   /**
-   * Add library preamble code to inject into the generated header and implementation.
-   * Supports multiple libraries — each is injected in order.
+   * Hand the codegen a library archive and the set of chunk names
+   * the consumer determined to be reachable from the user's AST.
+   * Only those chunks are emitted into the final header/cpp.
+   *
+   * Single per-call entry point: nothing else mutates
+   * `libraryEmissions`. The caller (index.ts) computes the reachable
+   * set via function-level tree-shake before invoking this method.
    */
-  addLibraryPreamble(name: string, headerCode: string, cppCode: string): void {
-    this.libraryPreambles.push({ name, headerCode, cppCode });
+  addLibraryChunks(archive: StlibArchive, reachable: Set<string>): void {
+    this.libraryEmissions.push({ archive, reachable });
   }
 
   /**
@@ -1062,12 +1077,39 @@ export class CodeGenerator {
       this.emitHeader("");
     }
 
-    // Inject library preambles (stdlib + user libraries)
-    for (const lib of this.libraryPreambles) {
-      this.emitHeader(`// Library: ${lib.name}`);
-      for (const line of lib.headerCode.split("\n")) {
-        this.emitHeader(line);
+    // Inject reachable library chunks (header side).
+    //
+    // Per archive: emit `// Library: <name>` header, then `class X;`
+    // forward decls for every reachable functionBlock chunk
+    // (libraries' FB classes are sometimes mutually-referential and
+    // the bodies are emitted in declaration order — the forward
+    // decls ahead of any body keep the layout linkable in every
+    // ordering). Then emit each reachable chunk's `header` slice in
+    // chunk-array order; types come first, FBs next, functions last
+    // because that's the order the library compiler emitted them
+    // before slicing.
+    for (const { archive, reachable } of this.libraryEmissions) {
+      const reachableChunks: LibraryChunk[] = [];
+      for (const chunk of archive.chunks ?? []) {
+        if (chunk.header.length === 0) continue;
+        if (reachable.has(chunk.name)) reachableChunks.push(chunk);
       }
+      if (reachableChunks.length === 0) continue;
+
+      this.emitHeader(`// Library: ${archive.manifest.name}`);
+
+      for (const chunk of reachableChunks) {
+        if (chunk.kind === "functionBlock") {
+          this.emitHeader(`class ${chunk.name};`);
+        }
+      }
+
+      for (const chunk of reachableChunks) {
+        for (const line of chunk.header.split("\n")) {
+          this.emitHeader(line);
+        }
+      }
+
       this.emitHeader("");
     }
 
@@ -1188,10 +1230,23 @@ export class CodeGenerator {
     //    definition of …").
     this.startTranslationUnit("configuration.cpp");
 
-    for (const lib of this.libraryPreambles) {
-      this.emit(`// Library: ${lib.name}`);
-      for (const line of lib.cppCode.split("\n")) {
-        this.emit(line);
+    // Inject reachable library chunks (cpp side). Same per-archive
+    // iteration order as the header side; only chunks whose `cpp`
+    // slice is non-empty get emitted (types and inline globals are
+    // header-only).
+    for (const { archive, reachable } of this.libraryEmissions) {
+      const reachableChunks: LibraryChunk[] = [];
+      for (const chunk of archive.chunks ?? []) {
+        if (chunk.cpp.length === 0) continue;
+        if (reachable.has(chunk.name)) reachableChunks.push(chunk);
+      }
+      if (reachableChunks.length === 0) continue;
+
+      this.emit(`// Library: ${archive.manifest.name}`);
+      for (const chunk of reachableChunks) {
+        for (const line of chunk.cpp.split("\n")) {
+          this.emit(line);
+        }
       }
       this.emit("");
     }
