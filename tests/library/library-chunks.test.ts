@@ -280,8 +280,8 @@ describe("Library chunks", () => {
     });
   });
 
-  describe("archive blob hygiene", () => {
-    it("strips all chunk markers from headerCode and cppCode", () => {
+  describe("archive chunk hygiene", () => {
+    it("never leaks chunk markers into emitted chunk text", () => {
       const result = compileStlib(
         [
           {
@@ -301,8 +301,13 @@ describe("Library chunks", () => {
       );
 
       expect(result.success).toBe(true);
-      expect(result.archive.headerCode).not.toContain("@chunk");
-      expect(result.archive.cppCode).not.toContain("@chunk");
+      // The markers are slicing fenceposts only — every chunk's
+      // header/cpp must be marker-free or downstream emit would
+      // surface "//@chunk:..." comments in the user's generated.hpp.
+      for (const chunk of result.archive.chunks) {
+        expect(chunk.header).not.toContain("@chunk");
+        expect(chunk.cpp).not.toContain("@chunk");
+      }
     });
 
     it("populates the archive's chunks field", () => {

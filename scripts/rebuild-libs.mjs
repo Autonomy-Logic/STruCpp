@@ -400,8 +400,7 @@ function synthesizeStdFunctionsLibrary({ libDirName, stlibPath }) {
       headers: [],
       isBuiltin: config.isBuiltin === true,
     },
-    headerCode: "",
-    cppCode: "",
+    chunks: [],
     dependencies: [],
   };
   if (config.displayName) archive.manifest.displayName = config.displayName;

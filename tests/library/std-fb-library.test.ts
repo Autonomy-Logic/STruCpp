@@ -414,9 +414,14 @@ describe("Standard FB Library", () => {
       );
     });
 
-    it("should have non-empty headerCode and cppCode", () => {
-      expect(stlibArchive.headerCode).toBeTruthy();
-      expect(stlibArchive.cppCode).toBeTruthy();
+    it("should have one chunk per declared FB", () => {
+      expect(stlibArchive.chunks.length).toBeGreaterThan(0);
+      // Every chunk in the stdlib is a function block (no types,
+      // no inline globals, no free functions in iec-standard-fb).
+      for (const chunk of stlibArchive.chunks) {
+        expect(chunk.kind).toBe("functionBlock");
+        expect(chunk.header.length).toBeGreaterThan(0);
+      }
     });
 
     it("should have no functions (only FBs)", () => {
@@ -684,9 +689,14 @@ describe("Standard FB Library", () => {
     });
 
     it("should use pre-compiled stdlib (no runtime recompilation)", () => {
-      // Verify that the stdlib archive has pre-compiled C++ code
-      expect(stlibArchive.headerCode.length).toBeGreaterThan(100);
-      expect(stlibArchive.cppCode.length).toBeGreaterThan(100);
+      // Verify that the stdlib archive has pre-compiled chunks ready
+      // for per-symbol consumption.
+      expect(stlibArchive.chunks.length).toBeGreaterThan(0);
+      const totalHeaderBytes = stlibArchive.chunks.reduce(
+        (n, c) => n + c.header.length,
+        0,
+      );
+      expect(totalHeaderBytes).toBeGreaterThan(100);
 
       // Compile a simple program that uses stdlib FBs
       const source = `

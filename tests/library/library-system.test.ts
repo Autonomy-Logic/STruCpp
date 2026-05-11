@@ -106,7 +106,7 @@ describe("Library System", () => {
   });
 
   describe("compileStlib", () => {
-    it("should produce a valid StlibArchive with headerCode/cppCode populated", () => {
+    it("should produce a valid StlibArchive with chunks populated", () => {
       const result = compileStlib(
         [
           {
@@ -125,8 +125,7 @@ describe("Library System", () => {
       expect(result.success).toBe(true);
       expect(result.archive.formatVersion).toBe(1);
       expect(result.archive.manifest.name).toBe("math-lib");
-      expect(result.archive.headerCode).toBeTruthy();
-      expect(result.archive.cppCode).toBeTruthy();
+      expect(result.archive.chunks.length).toBeGreaterThan(0);
       expect(result.archive.dependencies).toEqual([]);
     });
 
@@ -204,12 +203,14 @@ describe("Library System", () => {
       );
 
       expect(result.success).toBe(true);
-      // Should NOT contain namespace wrapper or includes
-      expect(result.archive.headerCode).not.toContain("#pragma once");
-      expect(result.archive.headerCode).not.toContain("#include");
-      expect(result.archive.headerCode).not.toMatch(/^namespace\s/m);
-      // Should contain actual code
-      expect(result.archive.headerCode).toContain("MATHADD");
+      // Chunks own each symbol's emit slice. Concat them and verify
+      // the resulting text is pure namespace-body content — no
+      // wrapper, no #include — but does contain the function.
+      const concatHeader = result.archive.chunks.map((c) => c.header).join("\n");
+      expect(concatHeader).not.toContain("#pragma once");
+      expect(concatHeader).not.toContain("#include");
+      expect(concatHeader).not.toMatch(/^namespace\s/m);
+      expect(concatHeader).toContain("MATHADD");
     });
   });
 
@@ -371,16 +372,14 @@ describe("Library System", () => {
           headers: [],
           isBuiltin: false,
         },
-        headerCode: "// header",
-        cppCode: "// cpp",
+        chunks: [],
         dependencies: [],
       };
 
       const archive = loadStlibArchive(json);
       expect(archive.formatVersion).toBe(1);
       expect(archive.manifest.name).toBe("test-lib");
-      expect(archive.headerCode).toBe("// header");
-      expect(archive.cppCode).toBe("// cpp");
+      expect(archive.chunks).toEqual([]);
       expect(archive.dependencies).toEqual([]);
     });
 
@@ -397,8 +396,7 @@ describe("Library System", () => {
             headers: [],
             isBuiltin: false,
           },
-          headerCode: "",
-          cppCode: "",
+          chunks: [],
           dependencies: [],
         }),
       ).toThrow("'formatVersion' must be 1");
@@ -418,8 +416,7 @@ describe("Library System", () => {
             headers: [],
             isBuiltin: false,
           },
-          headerCode: "",
-          cppCode: "",
+          chunks: [],
           dependencies: [],
         }),
       ).toThrow("'formatVersion' must be 1");
@@ -429,14 +426,13 @@ describe("Library System", () => {
       expect(() =>
         loadStlibArchive({
           formatVersion: 1,
-          headerCode: "",
-          cppCode: "",
+          chunks: [],
           dependencies: [],
         }),
       ).toThrow("'manifest' must be an object");
     });
 
-    it("should reject missing headerCode", () => {
+    it("should reject missing chunks", () => {
       expect(() =>
         loadStlibArchive({
           formatVersion: 1,
@@ -450,30 +446,9 @@ describe("Library System", () => {
             headers: [],
             isBuiltin: false,
           },
-          cppCode: "",
           dependencies: [],
         }),
-      ).toThrow("'headerCode' must be a string");
-    });
-
-    it("should reject missing cppCode", () => {
-      expect(() =>
-        loadStlibArchive({
-          formatVersion: 1,
-          manifest: {
-            name: "lib",
-            version: "1.0.0",
-            namespace: "ns",
-            functions: [],
-            functionBlocks: [],
-            types: [],
-            headers: [],
-            isBuiltin: false,
-          },
-          headerCode: "",
-          dependencies: [],
-        }),
-      ).toThrow("'cppCode' must be a string");
+      ).toThrow("'chunks' must be an array");
     });
 
     it("should reject missing dependencies", () => {
@@ -490,8 +465,7 @@ describe("Library System", () => {
             headers: [],
             isBuiltin: false,
           },
-          headerCode: "",
-          cppCode: "",
+          chunks: [],
         }),
       ).toThrow("'dependencies' must be an array");
     });
@@ -761,8 +735,7 @@ describe("Library System", () => {
         { name: "counter-lib", version: "1.0.0", namespace: "counter" },
       );
       expect(libResult.success).toBe(true);
-      expect(libResult.archive.headerCode).toBeTruthy();
-      expect(libResult.archive.cppCode).toBeTruthy();
+      expect(libResult.archive.chunks.length).toBeGreaterThan(0);
 
       // Compile user program that uses the library FB
       const mainSource = `
@@ -946,8 +919,15 @@ describe("Library System", () => {
             headers: [],
             isBuiltin: false,
           },
-          headerCode: "// header code",
-          cppCode: "// cpp code",
+          chunks: [
+            {
+              name: "MYFN",
+              kind: "function",
+              header: "// header code",
+              cpp: "// cpp code",
+              deps: [],
+            },
+          ],
           dependencies: [],
         }),
       );
@@ -955,8 +935,8 @@ describe("Library System", () => {
       const archive = loadStlibFromFile(stlibPath);
       expect(archive.formatVersion).toBe(1);
       expect(archive.manifest.name).toBe("file-lib");
-      expect(archive.headerCode).toBe("// header code");
-      expect(archive.cppCode).toBe("// cpp code");
+      expect(archive.chunks).toHaveLength(1);
+      expect(archive.chunks[0]!.name).toBe("MYFN");
     });
 
     it("should throw for nonexistent file", () => {
@@ -1068,8 +1048,7 @@ describe("Library System", () => {
           headers: [],
           isBuiltin: false,
         },
-        headerCode: "",
-        cppCode: "",
+        chunks: [],
         dependencies: [],
       };
       const archive2 = {
@@ -1084,8 +1063,7 @@ describe("Library System", () => {
           headers: [],
           isBuiltin: false,
         },
-        headerCode: "",
-        cppCode: "",
+        chunks: [],
         dependencies: [],
       };
       writeFileSync(join(dir, "lib-a.stlib"), JSON.stringify(archive1));

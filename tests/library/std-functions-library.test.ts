@@ -31,10 +31,10 @@ describe("iec-std-functions.stlib synthesis", () => {
     expect(archive.manifest.functionBlocks).toHaveLength(0);
     expect(archive.manifest.types).toHaveLength(0);
     // No ST sources (intrinsics) and no codegen output (runtime
-    // implements them — the .stlib is pure metadata).
+    // implements them — the .stlib is pure metadata: manifest +
+    // empty chunks array).
     expect(archive.sources).toBeUndefined();
-    expect(archive.headerCode).toBe("");
-    expect(archive.cppCode).toBe("");
+    expect(archive.chunks).toEqual([]);
   });
 
   it("carries every function the StdFunctionRegistry registers", () => {

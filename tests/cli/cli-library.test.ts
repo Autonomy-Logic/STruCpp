@@ -101,8 +101,8 @@ describe("CLI Library Features", () => {
       expect(archive.manifest.version).toBe("1.0.0");
       expect(archive.manifest.functions).toHaveLength(1);
       expect(archive.manifest.functions[0].name).toBe("MATHADD");
-      expect(archive.headerCode).toBeTruthy();
-      expect(archive.cppCode).toBeTruthy();
+      expect(Array.isArray(archive.chunks)).toBe(true);
+      expect(archive.chunks.length).toBeGreaterThan(0);
       expect(archive.dependencies).toEqual([]);
 
       // Should NOT produce separate .hpp/.cpp files

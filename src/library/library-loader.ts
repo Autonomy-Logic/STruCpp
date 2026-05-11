@@ -425,17 +425,12 @@ export function loadStlibArchive(json: unknown): StlibArchive {
   }
   const manifest = loadLibraryManifest(obj.manifest);
 
-  // Validate headerCode
-  if (typeof obj.headerCode !== "string") {
+  // Validate chunks — every per-symbol slice of the library's emitted
+  // C++ output, plus its dep edges. Empty array is valid (synthetic
+  // libraries like iec-std-functions ship only symbol-table entries).
+  if (!Array.isArray(obj.chunks)) {
     throw new LibraryManifestError(
-      "Invalid stlib archive: 'headerCode' must be a string",
-    );
-  }
-
-  // Validate cppCode
-  if (typeof obj.cppCode !== "string") {
-    throw new LibraryManifestError(
-      "Invalid stlib archive: 'cppCode' must be a string",
+      "Invalid stlib archive: 'chunks' must be an array",
     );
   }
 
@@ -449,18 +444,9 @@ export function loadStlibArchive(json: unknown): StlibArchive {
   const archive: StlibArchive = {
     formatVersion: 1,
     manifest,
-    headerCode: obj.headerCode,
-    cppCode: obj.cppCode,
+    chunks: obj.chunks as StlibArchive["chunks"],
     dependencies: obj.dependencies as Array<{ name: string; version: string }>,
   };
-
-  // Optional chunks — populated for libraries built with the
-  // per-symbol chunking emitter (Phase 2+); empty for synthetic
-  // libraries like iec-std-functions that bypass `compileLibrary`.
-  // The consumer codegen tree-shake operates on these.
-  if (Array.isArray(obj.chunks)) {
-    archive.chunks = obj.chunks as NonNullable<StlibArchive["chunks"]>;
-  }
 
   // Optional sources
   if (Array.isArray(obj.sources)) {

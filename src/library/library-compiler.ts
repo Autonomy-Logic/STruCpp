@@ -15,10 +15,6 @@ import type {
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
 import type { LibraryVarType } from "./library-manifest.js";
-import {
-  extractNamespaceBody,
-  stripDependencyPreambles,
-} from "./library-utils.js";
 import type { TypeReference } from "../frontend/ast.js";
 
 /**
@@ -389,36 +385,11 @@ export function compileStlib(
       archive: {
         formatVersion: 1,
         manifest: libResult.manifest,
-        headerCode: "",
-        cppCode: "",
+        chunks: [],
         dependencies: [],
       },
       errors: libResult.errors,
     };
-  }
-
-  let headerBody = extractNamespaceBody(libResult.headerCode);
-  let cppBody = extractNamespaceBody(libResult.cppCode);
-
-  // Strip dependency preamble code from the archive — consumers load
-  // dependencies separately, so baking them in would cause redefinitions.
-  if (options.dependencies && options.dependencies.length > 0) {
-    const depNames = new Set(options.dependencies.map((d) => d.manifest.name));
-    const headerPreambles = new Map<string, Set<string>>();
-    const cppPreambles = new Map<string, Set<string>>();
-    for (const dep of options.dependencies) {
-      headerPreambles.set(
-        dep.manifest.name,
-        new Set(dep.headerCode.split("\n")),
-      );
-      cppPreambles.set(dep.manifest.name, new Set(dep.cppCode.split("\n")));
-    }
-    headerBody = stripDependencyPreambles(
-      headerBody,
-      depNames,
-      headerPreambles,
-    );
-    cppBody = stripDependencyPreambles(cppBody, depNames, cppPreambles);
   }
 
   // Clear manifest.headers — the .stlib archive inlines its C++ code
@@ -426,11 +397,13 @@ export function compileStlib(
   // there are no external .hpp files to #include.
   const manifest = { ...libResult.manifest, headers: [] as string[] };
 
+  // Chunks own each declared symbol's emit slices, so the dep-preamble
+  // strip that used to operate on the library-wide blob is no longer
+  // needed: a chunk only emits its own declaration text, never a
+  // dependency's, by construction.
   const archive: StlibCompileResult["archive"] = {
     formatVersion: 1,
     manifest,
-    headerCode: headerBody,
-    cppCode: cppBody,
     chunks: libResult.chunks ?? [],
     dependencies: (options.dependencies ?? []).map((d) => ({
       name: d.manifest.name,

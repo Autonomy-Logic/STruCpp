@@ -228,22 +228,26 @@ export interface LibraryCompileResult {
 
 /**
  * Single-file `.stlib` archive format containing metadata + compiled C++ code.
+ *
+ * Emission to a consumer is per-symbol via `chunks` — the codegen
+ * tree-shake walks the user's AST and emits only reachable chunks
+ * into the final `generated.hpp` / `generated.cpp`. There is no
+ * library-wide blob field: the legacy `headerCode` / `cppCode` were
+ * retired in Phase 4 of the function-level tree-shaking work.
  */
 export interface StlibArchive {
   /** Format version for forward compatibility */
   formatVersion: 1;
   /** Library metadata (function/FB/type signatures for symbol registration) */
   manifest: LibraryManifest;
-  /** Compiled C++ declarations (namespace body only — no includes/pragma/wrapper) */
-  headerCode: string;
-  /** Compiled C++ implementations (namespace body only) */
-  cppCode: string;
-  /** Per-symbol chunks. Populated from Phase 2 onward; Phase 1 ships
-   *  the field as optional so existing emitters keep producing valid
-   *  archives without yet populating it. From Phase 4 this becomes
-   *  the authoritative emission source and `headerCode` / `cppCode`
-   *  are retired. */
-  chunks?: LibraryChunk[];
+  /** Per-symbol chunks. One entry per top-level declaration emitted
+   *  by the library compiler: function, function block, type, or
+   *  inline global. Each chunk owns its header/cpp slices plus the
+   *  dep edges to other chunks (in this archive or any declared dep).
+   *  Empty for synthetic libraries that bypass `compileLibrary`
+   *  (e.g. `iec-std-functions` is built from the std-function registry
+   *  and contributes only symbol-table entries, no C++ output). */
+  chunks: LibraryChunk[];
   /** Original ST source files (omitted for closed-source distribution).
    *  `category` mirrors the manifest entry category for the POUs declared
    *  in this file so `--decompile-lib` can recreate the folder hierarchy
