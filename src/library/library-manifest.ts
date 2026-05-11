@@ -151,10 +151,11 @@ export interface LibraryManifest {
  * reachable-from-the-user's-AST closure and only emit those chunks.
  */
 export interface LibraryChunkDep {
-  /** Owning archive name (matches `LibraryManifest.name`). Use the
-   *  literal string `"this"` for same-archive references; the
-   *  consumer-side normaliser resolves it to the chunk's own library
-   *  at graph-construction time. */
+  /** Owning archive name (matches `LibraryManifest.name`). The library
+   *  compiler resolves edges at compile time, so this is always the
+   *  actual archive name — including for same-archive deps (no `"this"`
+   *  sentinel). Consumers can index every dep through the
+   *  symbol→archive map without a separate normalisation step. */
   library: string;
   /** Referenced symbol's uppercase name (matches `LibraryChunk.name`
    *  in the target archive). */

@@ -13,6 +13,7 @@ import type {
   StlibArchive,
 } from "./library-manifest.js";
 import { compile } from "../index.js";
+import { buildChunks } from "./library-chunks.js";
 import type { LibraryVarType } from "./library-manifest.js";
 import {
   extractNamespaceBody,
@@ -200,6 +201,12 @@ export function compileLibrary(
 
   const compileOpts: Partial<import("../types.js").CompileOptions> = {
     additionalSources,
+    // Always emit chunk markers when compiling a library — the
+    // archive's `chunks[]` is derived from them. The markers are
+    // stripped from the final `headerCode` / `cppCode` blobs before
+    // they're persisted, so downstream consumers (legacy and
+    // chunk-aware alike) see clean output.
+    emitChunkMarkers: true,
   };
   if (options.dependencies) {
     compileOpts.libraries = options.dependencies;
@@ -241,6 +248,18 @@ export function compileLibrary(
   // Extract manifest entries from the AST
   const ast = result.ast!;
   const headerFileName = `${options.name}.hpp`;
+
+  // Slice emitted code into per-symbol chunks via the boundary
+  // markers; the cleaned (marker-stripped) text replaces the original
+  // `headerCode`/`cppCode` so downstream consumers see no markers.
+  const { chunks, cleanHeader, cleanCpp } = buildChunks(
+    result.headerCode,
+    result.cppCode,
+    "\n",
+    ast,
+    options.name,
+    options.dependencies ?? [],
+  );
 
   return {
     success: true,
@@ -322,8 +341,9 @@ export function compileLibrary(
       isBuiltin: false,
       sourceFiles: sources.map((s) => s.fileName),
     },
-    headerCode: result.headerCode,
-    cppCode: result.cppCode,
+    headerCode: cleanHeader,
+    cppCode: cleanCpp,
+    chunks,
     errors: [],
   };
 }
@@ -411,6 +431,7 @@ export function compileStlib(
     manifest,
     headerCode: headerBody,
     cppCode: cppBody,
+    chunks: libResult.chunks ?? [],
     dependencies: (options.dependencies ?? []).map((d) => ({
       name: d.manifest.name,
       version: d.manifest.version,
