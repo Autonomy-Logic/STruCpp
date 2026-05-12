@@ -3696,10 +3696,21 @@ export class CodeGenerator {
     }
     // Fallback to ad-hoc inference for standalone codegen (tests without semantic analysis)
     switch (expr.kind) {
-      case "VariableExpression":
-        return this.currentScopeVarTypes
-          .get(expr.name.toUpperCase())
-          ?.toUpperCase();
+      case "VariableExpression": {
+        // Walk `fieldAccess` so `FB_INSTANCE.OUTPUT` resolves to the
+        // output's element type rather than the FB's type — without
+        // this, type-driven literal casts (see `harmonizeStdFuncArgs`)
+        // would synthesise `static_cast<IEC_<FB_TYPE>>(literal)`, and
+        // `IEC_<FB_TYPE>` aliases don't exist (only types emit them).
+        let type = this.currentScopeVarTypes.get(expr.name.toUpperCase());
+        if (!type) return undefined;
+        for (const field of expr.fieldAccess ?? []) {
+          const next = this.resolveMemberType(type, field);
+          if (!next) return undefined;
+          type = next;
+        }
+        return type.toUpperCase();
+      }
       case "LiteralExpression": {
         if (expr.typePrefix) return expr.typePrefix.toUpperCase();
         // Map literal types to IEC names
@@ -3914,10 +3925,15 @@ export class CodeGenerator {
 
     // Cast literals to dominant type.
     // Bare literals (no typePrefix) are untyped — castable to dominant unless
-    // this would narrow a REAL/LREAL literal to an integer type (losing precision).
+    // this would narrow a REAL/LREAL literal to an integer type (losing
+    // precision).  When the call also carries a variable argument we must
+    // ALWAYS wrap bare literals: the variable side is an `IECVar<T>` but a
+    // bare literal lowers to a raw `int`/`double`, so C++ template deduction
+    // sees conflicting `T`s (`IECVar<int>` vs `int`) even when both share
+    // the same IEC type name on our side.
     for (const i of literalIndices) {
       const litType = argTypes[i];
-      if (!litType || litType === dominant) continue;
+      if (!litType) continue;
       const expr = argExprs[i]!.value;
       const litCat = getTypeCategory(litType);
       const domCat = getTypeCategory(dominant);
@@ -3925,6 +3941,14 @@ export class CodeGenerator {
       if (litCat === "REAL" && domCat !== "REAL" && this.isBareLiteral(expr)) {
         continue;
       }
+      // Bare literal paired with at least one IEC variable: cast even when
+      // the inferred IEC type matches `dominant`, to lift raw C++ literals
+      // into the IECVar<> template space.
+      if (this.isBareLiteral(expr) && varTypes.length > 0) {
+        args[i] = `static_cast<IEC_${dominant}>(${args[i]})`;
+        continue;
+      }
+      if (litType === dominant) continue;
       if (
         this.isBareLiteral(expr) ||
         this.canImplicitWiden(litType, dominant)
