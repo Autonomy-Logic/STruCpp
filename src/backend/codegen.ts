@@ -996,25 +996,21 @@ export class CodeGenerator {
 
     // Undefine macros that collide with IEC identifiers.
     //
-    // Each platform's standard headers steal short IEC-style names for
-    // their own purposes; the result is preprocessor expansion of
-    // struct fields like `IEC_REAL SP;` into garbage like
-    // `IEC_REAL (*(volatile uint8_t *)(0x3D));`, which never reaches
-    // the C++ compiler in any usable form. The fixes that work
-    // architecturally — wrapping the runtime in a namespace, renaming
-    // the IEC variables — either don't help (macros expand before
-    // namespace resolution) or break IEC standard FB names. So we
-    // unconditionally `#undef` the worst offenders: the cost is zero
-    // on platforms where the macro isn't defined.
+    // `<math.h>` (transitively included via `<cmath>` in iec_std_lib.hpp)
+    // defines `OVERFLOW` as a legacy SVID numeric-error constant on both
+    // glibc/macOS and avr-libc. That collides with several OSCAT FB
+    // struct fields named OVERFLOW, and the preprocessor expansion would
+    // turn those into integer literals before the C++ parser sees them.
+    // The architecturally-correct fixes — wrapping in a namespace,
+    // renaming the IEC identifier — either don't help (macros expand
+    // before scope resolution) or break IEC FB ABI. The `#undef` has
+    // zero cost on platforms where the macro isn't defined.
     //
-    //   OVERFLOW — math.h on macOS / glibc defines it as a numeric
-    //              error constant; collides with several OSCAT FBs.
-    //   SP       — <avr/io.h> defines the AVR Stack Pointer as
-    //              `(*(volatile uint8_t *)(0x3D))`; collides with
-    //              PID's SP (setpoint) and any user variable named SP.
+    // (`<avr/io.h>`'s `SP` macro used to need the same treatment, but
+    // post the Arduino-glue split no TU that parses `generated.hpp`
+    // also pulls in `<avr/io.h>`, so the SP undef was retired.)
     this.emitHeader("");
     this.emitHeader("#undef OVERFLOW");
-    this.emitHeader("#undef SP");
 
     // Emit global constants (before namespace, so they work as template parameters)
     const globalConsts = Object.entries(this.options.globalConstants);
