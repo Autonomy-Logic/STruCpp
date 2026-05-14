@@ -179,6 +179,81 @@ describe("diagnostic-formatter", () => {
     expect(out).toContain("error: msg [E0042]");
   });
 
+  describe("preferBodyLine option (CLI/vscode default unchanged)", () => {
+    it("default (no options) shows the absolute file line — CLI behaviour", () => {
+      const map = buildSourceMap([{ fileName: "Manual_Override.st", source: program }]);
+      const out = formatDiagnostic(
+        {
+          message: "Cannot assign WSTRING to BOOL",
+          file: "Manual_Override.st",
+          line: 6,
+          column: 10,
+          severity: "error",
+          // POU-context fields populated, but caller didn't opt in:
+          pouName: "MANUAL_OVERRIDE",
+          pouKind: "FUNCTION_BLOCK",
+          section: "body",
+          bodyLine: 2,
+        },
+        map,
+      );
+      // Must show 6 (the file line), not 2 (the body line).
+      expect(out).toContain("Manual_Override.st:6:10:");
+      expect(out).toMatch(/\n {3}6 \|/);
+      expect(out).not.toContain(":2:10:");
+      expect(out).not.toMatch(/\n {3}2 \|/);
+    });
+
+    it("`preferBodyLine: true` swaps the displayed line for body-section errors", () => {
+      const map = buildSourceMap([{ fileName: "Manual_Override.st", source: program }]);
+      const out = formatDiagnostic(
+        {
+          message: "Cannot assign WSTRING to BOOL",
+          file: "Manual_Override.st",
+          line: 6,
+          column: 10,
+          severity: "error",
+          pouName: "MANUAL_OVERRIDE",
+          pouKind: "FUNCTION_BLOCK",
+          section: "body",
+          bodyLine: 2,
+        },
+        map,
+        { preferBodyLine: true },
+      );
+      // Header column and gutter both render the body-relative line (2).
+      expect(out).toContain("Manual_Override.st:2:10:");
+      expect(out).toMatch(/\n {3}2 \|/);
+      // But the source content under the gutter is still the actual
+      // line at file line 6 — `count := undefined_var + 1;` is the
+      // 6th line of `program`.
+      expect(out).toContain("count := undefined_var + 1;");
+    });
+
+    it("`preferBodyLine: true` is a no-op for var-block errors (line passes through)", () => {
+      const map = buildSourceMap([{ fileName: "Manual_Override.st", source: program }]);
+      const out = formatDiagnostic(
+        {
+          message: "Cannot assign STRING to WSTRING",
+          file: "Manual_Override.st",
+          line: 3,
+          column: 5,
+          severity: "error",
+          pouName: "MANUAL_OVERRIDE",
+          pouKind: "FUNCTION_BLOCK",
+          section: "var-block",
+          variableName: "FOO",
+          // bodyLine intentionally undefined for var-block
+        },
+        map,
+        { preferBodyLine: true },
+      );
+      // Var-block keeps `error.line` — the editor's vars-text Monaco
+      // view aligns with the per-POU file's line numbering.
+      expect(out).toContain("Manual_Override.st:3:5:");
+    });
+  });
+
   it("formatDiagnostics joins multiple entries with blank lines", () => {
     const out = formatDiagnostics(
       [

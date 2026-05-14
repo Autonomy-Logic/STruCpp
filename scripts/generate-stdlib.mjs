@@ -1,90 +1,118 @@
 #!/usr/bin/env node
 /**
- * Generate the standard FB library `.stlib` archive from ST source files.
+ * Generate the IEC 61131-3 Standard FB library `.stlib` archive.
  *
- * Uses the STruC++ `compileStlib()` API to produce the archive. Sources are
- * read from the existing `.stlib` archive (its embedded `sources` field), so
- * this script works even after the standalone `.st` files have been removed.
+ * Sources of truth (all on disk):
+ *   - libs/sources/iec-standard-fb/*.st        — the ST source files
+ *   - libs/sources/iec-standard-fb/library.json — manifest metadata + per-block docs
  *
- * If the archive does not yet exist (bootstrap), pass .st file paths as args:
- *   node scripts/generate-stdlib.mjs edge_detection.st bistable.st counter.st timer.st
+ * Produces:
+ *   - libs/iec-standard-fb.stlib
  *
- * Run: node scripts/generate-stdlib.mjs
- * Called by: npm run build:stdlib
+ * library.json carries everything that isn't derivable from ST: name,
+ * version, namespace, description, isBuiltin, and the per-FB
+ * documentation prose surfaced in editor hover dialogs. Block names
+ * referenced in library.json must match the FBs the compiler emits —
+ * the apply step reports any mismatch and fails the build.
+ *
+ * Run: npm run build:stdlib
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
-import { resolve, dirname, basename } from "path";
+import { readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync } from "fs";
+import { resolve, dirname } from "path";
 import { fileURLToPath } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const __dirname  = dirname(__filename);
 const projectRoot = resolve(__dirname, "..");
 
-// Import the compiled library compiler from dist/
 const { compileStlib } = await import(
   resolve(projectRoot, "dist/library/library-compiler.js")
 );
+const { loadLibraryConfig, applyLibraryConfigDocumentation } = await import(
+  resolve(projectRoot, "dist/library/library-config.js")
+);
 
-const libsDir = resolve(projectRoot, "libs");
-const outPath = resolve(libsDir, "iec-standard-fb.stlib");
+const sourcesDir = resolve(projectRoot, "libs", "sources", "iec-standard-fb");
+const libsDir    = resolve(projectRoot, "libs");
+const outPath    = resolve(libsDir, "iec-standard-fb.stlib");
 
-// Determine sources: from existing archive, or from CLI args / default files
-let sources;
-const cliFiles = process.argv.slice(2);
-
-if (cliFiles.length > 0) {
-  // Bootstrap mode: read .st files from provided paths
-  sources = cliFiles.map((file) => {
-    const filePath = resolve(file);
-    return {
-      source: readFileSync(filePath, "utf-8"),
-      fileName: basename(filePath),
-    };
-  });
-} else if (existsSync(outPath)) {
-  // Normal mode: read sources from the existing archive
-  const existingArchive = JSON.parse(readFileSync(outPath, "utf-8"));
-  if (!existingArchive.sources || existingArchive.sources.length === 0) {
-    console.error(
-      "Error: Existing .stlib archive has no embedded sources. " +
-      "Provide .st files as arguments to bootstrap."
-    );
-    process.exit(1);
-  }
-  sources = existingArchive.sources;
-} else {
-  console.error(
-    "Error: No existing .stlib archive found and no .st files provided.\n" +
-    "Usage: node scripts/generate-stdlib.mjs [edge_detection.st bistable.st counter.st timer.st]"
-  );
+if (!existsSync(sourcesDir)) {
+  console.error(`Error: sources directory not found: ${sourcesDir}`);
   process.exit(1);
 }
 
+const config = loadLibraryConfig(sourcesDir);
+if (!config) {
+  console.error(`Error: ${sourcesDir}/library.json not found`);
+  process.exit(1);
+}
+
+// Order the .st files explicitly so dependencies resolve. The IEC
+// standard FBs split across four files; counter.st instantiates
+// R_TRIG/F_TRIG from edge_detection.st, so edge_detection must be
+// compiled first. Bistable and timer have no inter-file deps.
+const ORDERED = ["edge_detection.st", "bistable.st", "counter.st", "timer.st"];
+const onDisk = new Set(readdirSync(sourcesDir).filter((f) => f.endsWith(".st")));
+const missing = ORDERED.filter((f) => !onDisk.has(f));
+if (missing.length > 0) {
+  console.error(
+    `Error: missing source files in ${sourcesDir}:\n  ${missing.join("\n  ")}`,
+  );
+  process.exit(1);
+}
+const sources = ORDERED.map((fileName) => ({
+  fileName,
+  source: readFileSync(resolve(sourcesDir, fileName), "utf-8"),
+}));
+
 const result = compileStlib(sources, {
-  name: "iec-standard-fb",
-  version: "1.0.0",
-  namespace: "strucpp",
+  name: config.name,
+  version: config.version,
+  namespace: config.namespace,
   noSource: false,
+  builtin: config.isBuiltin === true,
 });
 
 if (!result.success) {
   console.error(
     "Failed to compile standard FB library:",
-    result.errors.map((e) => e.message).join(", "),
+    result.errors.map((e) => `\n  - ${e.message}`).join(""),
   );
   process.exit(1);
 }
 
-// Override manifest flags for the stdlib
-result.archive.manifest.isBuiltin = true;
-result.archive.manifest.description =
-  "IEC 61131-3 Standard Function Blocks (auto-generated from ST sources)";
+if (config.description) {
+  result.archive.manifest.description = config.description;
+}
+
+const docReport = applyLibraryConfigDocumentation(result.archive, config);
+if (
+  docReport.unknownBlockDocs.length > 0 ||
+  docReport.unknownFunctionDocs.length > 0
+) {
+  // Stale doc entries are a build error: usually means an FB was
+  // renamed/removed in ST without updating library.json, or a typo in
+  // the JSON. Fail loudly so the mismatch can't sneak into a release.
+  console.error("Error: library.json references unknown symbols:");
+  for (const name of docReport.unknownBlockDocs) {
+    console.error(`  - blocks["${name}"] — no FB by that name in the compiled manifest`);
+  }
+  for (const name of docReport.unknownFunctionDocs) {
+    console.error(`  - functions["${name}"] — no function by that name in the compiled manifest`);
+  }
+  process.exit(1);
+}
 
 mkdirSync(libsDir, { recursive: true });
 writeFileSync(outPath, JSON.stringify(result.archive, null, 2) + "\n", "utf-8");
 
+const fbCount    = result.archive.manifest.functionBlocks.length;
+const docCount   = docReport.blocksDocumented;
+const undoc      = fbCount - docCount;
+const sizeKB     = Math.round(Buffer.byteLength(JSON.stringify(result.archive)) / 1024);
+const undocSuffix = undoc > 0 ? `, ${undoc} undocumented` : "";
 console.log(
-  `Generated ${outPath} (${result.archive.manifest.functionBlocks.length} function blocks, ` +
-  `${Math.round(Buffer.byteLength(JSON.stringify(result.archive)) / 1024)}KB)`,
+  `Generated ${outPath} (${fbCount} function blocks, ` +
+    `${docCount} documented${undocSuffix}, ${sizeKB}KB)`,
 );

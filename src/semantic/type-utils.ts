@@ -23,45 +23,53 @@ import type {
   FunctionBlockType,
 } from "../frontend/ast.js";
 import type { TypeConstraint } from "./std-function-registry.js";
+import { IEC_BASE_TYPES, lookupBaseType } from "./iec-types-data.js";
+
+/**
+ * Map an IEC type name to its canonical spelling, collapsing aliases
+ * (`TIME_OF_DAY` → `TOD`, `DATE_AND_TIME` → `DT`). Returns the input
+ * unchanged for non-elementary names. Pure passthrough for upper-cased
+ * canonical names (saves the registry lookup).
+ *
+ * Used by assignability / implicit-conversion checks so callers don't
+ * have to remember to normalise on every comparison.
+ */
+export function canonicalElementaryName(name: string): string {
+  return lookupBaseType(name)?.name ?? name.toUpperCase();
+}
 
 // =============================================================================
 // Elementary Type Data
 // =============================================================================
 
 /**
- * Built-in elementary types with their properties.
+ * Built-in elementary types as `ElementaryType` AST nodes, indexed by
+ * canonical name AND every alias the parser accepts.
+ *
+ * Source of truth is `IEC_BASE_TYPES` in `iec-types-data.ts` (also
+ * shipped as `libs/iec-types.json`). This map is just an AST-shaped
+ * projection: each entry borrows the `bits` field as `sizeBits`
+ * (the IEC logical width — `1` for BOOL, `8` for SINT, …, `0` for
+ * variable-width strings).
+ *
+ * Each alias gets its own row pointing at an ElementaryType whose
+ * name matches the alias spelling — so callers that read back
+ * `.name` get the same string they looked up with.
  */
-export const ELEMENTARY_TYPES: Record<string, ElementaryType> = {
-  BOOL: { typeKind: "elementary", name: "BOOL", sizeBits: 1 },
-  BYTE: { typeKind: "elementary", name: "BYTE", sizeBits: 8 },
-  WORD: { typeKind: "elementary", name: "WORD", sizeBits: 16 },
-  DWORD: { typeKind: "elementary", name: "DWORD", sizeBits: 32 },
-  LWORD: { typeKind: "elementary", name: "LWORD", sizeBits: 64 },
-  SINT: { typeKind: "elementary", name: "SINT", sizeBits: 8 },
-  INT: { typeKind: "elementary", name: "INT", sizeBits: 16 },
-  DINT: { typeKind: "elementary", name: "DINT", sizeBits: 32 },
-  LINT: { typeKind: "elementary", name: "LINT", sizeBits: 64 },
-  USINT: { typeKind: "elementary", name: "USINT", sizeBits: 8 },
-  UINT: { typeKind: "elementary", name: "UINT", sizeBits: 16 },
-  UDINT: { typeKind: "elementary", name: "UDINT", sizeBits: 32 },
-  ULINT: { typeKind: "elementary", name: "ULINT", sizeBits: 64 },
-  REAL: { typeKind: "elementary", name: "REAL", sizeBits: 32 },
-  LREAL: { typeKind: "elementary", name: "LREAL", sizeBits: 64 },
-  TIME: { typeKind: "elementary", name: "TIME", sizeBits: 64 },
-  DATE: { typeKind: "elementary", name: "DATE", sizeBits: 64 },
-  TIME_OF_DAY: { typeKind: "elementary", name: "TIME_OF_DAY", sizeBits: 64 },
-  DATE_AND_TIME: {
-    typeKind: "elementary",
-    name: "DATE_AND_TIME",
-    sizeBits: 64,
-  },
-  // Aliases
-  TOD: { typeKind: "elementary", name: "TOD", sizeBits: 64 },
-  DT: { typeKind: "elementary", name: "DT", sizeBits: 64 },
-  // Variable-width string types — 0 is correct (no fixed bit width)
-  STRING: { typeKind: "elementary", name: "STRING", sizeBits: 0 },
-  WSTRING: { typeKind: "elementary", name: "WSTRING", sizeBits: 0 },
-};
+export const ELEMENTARY_TYPES: Record<string, ElementaryType> = (() => {
+  const out: Record<string, ElementaryType> = {};
+  for (const t of IEC_BASE_TYPES) {
+    out[t.name] = { typeKind: "elementary", name: t.name, sizeBits: t.bits };
+    for (const alias of t.aliases) {
+      out[alias] = {
+        typeKind: "elementary",
+        name: alias,
+        sizeBits: t.bits,
+      };
+    }
+  }
+  return out;
+})();
 
 // =============================================================================
 // Type Categories
@@ -247,11 +255,16 @@ export function isAssignable(target: IECType, source: IECType): boolean {
     const t = target as ElementaryType;
     const s = source as ElementaryType;
 
-    // Same type is always assignable
-    if (t.name === s.name) return true;
+    // Resolve aliases (TIME_OF_DAY ↔ TOD, DATE_AND_TIME ↔ DT) before
+    // comparison so the parser/AST tag form doesn't matter.
+    const tCanon = canonicalElementaryName(t.name);
+    const sCanon = canonicalElementaryName(s.name);
+
+    // Same canonical type is always assignable
+    if (tCanon === sCanon) return true;
 
     // Use implicit conversion check (includes widening + cross-category)
-    return isImplicitlyConvertible(s.name, t.name);
+    return isImplicitlyConvertible(sCanon, tCanon);
   }
 
   // For reference types, check referenced type compatibility

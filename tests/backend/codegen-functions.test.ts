@@ -486,4 +486,91 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toMatch(/SCALE\(3\.14, 0\.0\)/);
     });
   });
+
+  // Regression tests for two GARAGEDO_CTL-era codegen bugs that
+  // produced unbuildable C++ from valid IEC ST:
+  //
+  //   1. Generic std-fn literal-cast inference using the parent FB
+  //      type (`IEC_CTU`) when the operand was an FB output member
+  //      access (`CTU0.CV`). FBs don't have `IEC_<NAME>` aliases —
+  //      only types do — so the generated cast was an unknown
+  //      identifier.  Correct behaviour: walk `fieldAccess` and use
+  //      the field's own type (`IEC_INT` for CV).
+  //
+  //   2. Generic std-fn literal-cast skipped when the literal's
+  //      inferred IEC type matched the dominant variable type (e.g.
+  //      both INT).  C++ template deduction nevertheless failed
+  //      because the variable side lowers to `IECVar<int>` while a
+  //      bare literal lowers to raw `int` — distinct `T`s.  Correct
+  //      behaviour: always cast bare literals when paired with at
+  //      least one IECVar argument.
+  describe("regression: std-fn calls with FB outputs and bare literals", () => {
+    // CTU / CTU_UDINT live in the bundled iec-standard-fb library —
+    // resolve them via libraryPaths so the program type-checks.
+    const LIBS_DIR = "libs";
+
+    function compileWithLibs(source: string) {
+      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      expect(result.success).toBe(true);
+      return result;
+    }
+
+    it("uses the FB output's element type for literal casts, not the FB type itself", () => {
+      const result = compileWithLibs(`
+        PROGRAM Main
+          VAR
+            counter : CTU;
+            x : INT;
+          END_VAR
+          x := DIV(counter.CV, 10);
+        END_PROGRAM
+      `);
+      // counter.CV is INT — literal must cast to IEC_INT, NOT
+      // IEC_CTU (which doesn't exist as an alias).
+      expect(result.cppCode).toContain("static_cast<IEC_INT>(10)");
+      expect(result.cppCode).not.toContain("IEC_CTU>");
+    });
+
+    it("casts bare INT literal even when paired with an INT variable (template deduction)", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR
+            a : INT := 5;
+            r : INT;
+          END_VAR
+          r := MUL(a, 10);
+        END_PROGRAM
+      `);
+      // Without the cast, MUL<T>(T, T) sees IECVar<int> vs int and
+      // fails to deduce.
+      expect(result.cppCode).toContain("static_cast<IEC_INT>(10)");
+    });
+
+    it("casts bare REAL literal paired with a REAL variable", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR
+            a : REAL := 1.5;
+            r : REAL;
+          END_VAR
+          r := MUL(a, 2.0);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("static_cast<IEC_REAL>(2.0)");
+    });
+
+    it("does not synthesise an IEC_<FB-type> cast for CTU_UDINT.CV (UDINT element)", () => {
+      const result = compileWithLibs(`
+        PROGRAM Main
+          VAR
+            counter : CTU_UDINT;
+            x : UDINT;
+          END_VAR
+          x := DIV(counter.CV, 10);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("static_cast<IEC_UDINT>(10)");
+      expect(result.cppCode).not.toContain("IEC_CTU_UDINT>");
+    });
+  });
 });

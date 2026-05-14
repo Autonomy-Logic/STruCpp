@@ -45,13 +45,30 @@ export function formatPOU(pou: ExtractedPOU): string {
 
 /**
  * Convert an array of ExtractedPOUs into source file entries suitable
- * for `compileStlib()`.
+ * for `compileStlib()`. The POU's `category` (folder path inside the
+ * source library) and `documentation` (variables-pane doc block) are
+ * forwarded so the compiler can attach them to the resulting manifest
+ * entries — sources stay flat in the archive, but the manifest carries
+ * the metadata the upstream binary preserved.
  */
-export function pouToSources(
-  pous: ExtractedPOU[],
-): Array<{ fileName: string; source: string }> {
-  return pous.map((pou) => ({
-    fileName: pou.type === "GVL" ? `${pou.name}.gvl.st` : `${pou.name}.st`,
-    source: formatPOU(pou),
-  }));
+export function pouToSources(pous: ExtractedPOU[]): Array<{
+  fileName: string;
+  source: string;
+  category?: string;
+  documentation?: string;
+}> {
+  return pous.map((pou) => {
+    const entry: {
+      fileName: string;
+      source: string;
+      category?: string;
+      documentation?: string;
+    } = {
+      fileName: pou.type === "GVL" ? `${pou.name}.gvl.st` : `${pou.name}.st`,
+      source: formatPOU(pou),
+    };
+    if (pou.category) entry.category = pou.category;
+    if (pou.documentation) entry.documentation = pou.documentation;
+    return entry;
+  });
 }

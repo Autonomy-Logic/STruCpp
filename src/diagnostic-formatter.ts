@@ -99,18 +99,53 @@ function getSourceLine(source: string, line: number): string | undefined {
 }
 
 /**
+ * Options for {@link formatDiagnostic}.  All fields are optional; the
+ * default rendering matches the long-standing CLI / vscode-extension
+ * behaviour — programmatic consumers opt in to the newer behaviours.
+ */
+export interface FormatDiagnosticOptions {
+  /**
+   * When `true`, body-attributed diagnostics (`error.section === 'body'`
+   * with `error.bodyLine` set) are rendered with the body-relative
+   * line number in both the header column and the snippet gutter,
+   * matching what an editor like the OpenPLC Editor shows in its
+   * Monaco body view.  The source content is still read from the
+   * raw `error.line` in the per-POU file under the hood; only the
+   * displayed numbers change.
+   *
+   * Default: `false` (preserves the absolute file line in every
+   * field — this is what `strucpp` CLI users and the vscode
+   * extension see today).
+   */
+  preferBodyLine?: boolean;
+}
+
+/**
  * Format a single diagnostic in gcc style. Returns a multi-line string with
  * no trailing newline.
  */
 export function formatDiagnostic(
   error: CompileError,
   sourceMap: Map<string, string>,
+  options?: FormatDiagnosticOptions,
 ): string {
   const palette = getPalette();
   const sevColor = severityColor(error.severity, palette);
   const fileLabel = error.file ?? "<input>";
+
+  // Body-relative numbering is opt-in: CLI and vscode users keep the
+  // absolute (file, line) reporting they've always had; programmatic
+  // consumers like the OpenPLC Editor pass `preferBodyLine: true` to
+  // get numbers that match their Monaco body view.
+  const displayLine =
+    options?.preferBodyLine === true &&
+    error.section === "body" &&
+    error.bodyLine !== undefined
+      ? error.bodyLine
+      : error.line;
+
   const header =
-    `${palette.bold}${fileLabel}:${error.line}:${error.column}:${palette.reset} ` +
+    `${palette.bold}${fileLabel}:${displayLine}:${error.column}:${palette.reset} ` +
     `${sevColor}${palette.bold}${error.severity}:${palette.reset} ` +
     `${error.message}` +
     (error.code ? ` [${error.code}]` : "");
@@ -125,7 +160,7 @@ export function formatDiagnostic(
 
   // Render gutter with the line number right-aligned to a 4-space minimum,
   // matching gcc's typical output width.
-  const lineNumStr = String(error.line);
+  const lineNumStr = String(displayLine);
   const gutterWidth = Math.max(lineNumStr.length, 4);
   const lineGutter = `${palette.cyan}${lineNumStr.padStart(gutterWidth)} | ${palette.reset}`;
   const blankGutter = `${palette.cyan}${" ".repeat(gutterWidth)} | ${palette.reset}`;

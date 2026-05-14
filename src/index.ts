@@ -44,6 +44,7 @@ import {
   LibraryManifestError,
 } from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
+import { annotateErrorsWithPouContext } from "./diagnostic-pou-context.js";
 
 /**
  * Default compilation options
@@ -82,38 +83,75 @@ function validateCompileOptions(options: CompileOptions): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Determine which libraries are actually used by the user program.
- * Walks the AST to collect all referenced symbol names, then matches them
- * against library manifests to find which libraries are needed.
- * Includes transitive dependencies.
+ * Function-level tree-shake: determine which library chunks are
+ * reachable from the user's AST and need to be emitted into the
+ * final `generated.hpp` / `generated.cpp`.
+ *
+ * Walks every kind of cross-symbol reference the codegen relies on
+ * (function calls, variable & inline-global reads, type references,
+ * FB inheritance / interface implements), maps each name through a
+ * symbol→chunk index built across all archives, then BFS-traverses
+ * the chunk dep graph baked into each archive at library compile
+ * time.
+ *
+ * Returns a `Map<libraryName, Set<chunkName>>` describing the
+ * reachable subset of each archive. Archives whose entry is empty
+ * (or absent) contribute nothing to the user's output.
+ *
+ * Test builds bypass the shake: every chunk of every archive is
+ * declared reachable so the test harness sees the full symbol set
+ * regardless of what the source AST happens to reference.
  */
-function collectUsedLibraries(
+function collectUsedSymbols(
   ast: CompilationUnit,
   archives: StlibArchive[],
-): Set<string> {
-  // Build symbol→library name map (uppercase keys for case-insensitive match)
-  const symbolToLib = new Map<string, string>();
+  includeEverything: boolean,
+): Map<string, Set<string>> {
+  // When asked to include everything (test builds), short-circuit.
+  if (includeEverything) {
+    const all = new Map<string, Set<string>>();
+    for (const archive of archives) {
+      const chunkNames = new Set<string>();
+      for (const chunk of archive.chunks ?? []) {
+        chunkNames.add(chunk.name);
+      }
+      all.set(archive.manifest.name, chunkNames);
+    }
+    return all;
+  }
+
+  // Build symbol→{library, chunk} index across every archive.  Names
+  // are uppercased to match how chunks are keyed (the codegen
+  // normalises every emitted identifier to uppercase before sealing
+  // chunk boundaries).
+  const symbolIndex = new Map<string, { library: string; chunk: string }>();
+  // Per-library chunk-name lookup so the dep BFS can resolve chunks
+  // it already named when the consumer didn't reference them directly.
+  const chunkByKey = new Map<string, { library: string; chunk: string }>();
+
   for (const archive of archives) {
     const libName = archive.manifest.name;
-    for (const fn of archive.manifest.functions) {
-      symbolToLib.set(fn.name.toUpperCase(), libName);
-    }
-    for (const fb of archive.manifest.functionBlocks) {
-      symbolToLib.set(fb.name.toUpperCase(), libName);
-    }
-    for (const t of archive.manifest.types) {
-      symbolToLib.set(t.name.toUpperCase(), libName);
+    for (const chunk of archive.chunks ?? []) {
+      const entry = { library: libName, chunk: chunk.name };
+      symbolIndex.set(chunk.name.toUpperCase(), entry);
+      chunkByKey.set(`${libName}:${chunk.name}`, entry);
     }
   }
 
-  // Collect all symbol names referenced in the AST
+  // Seed the reachable set from names the user AST references.
   const referencedNames = new Set<string>();
-
   walkAST(ast, (node: ASTNode): void => {
     switch (node.kind) {
       case "FunctionCallExpression": {
         const fc = node as FunctionCallExpression;
         referencedNames.add(fc.functionName.toUpperCase());
+        break;
+      }
+      case "VariableExpression": {
+        // Inline-global reads (e.g. `MATH.PI2`) show up as
+        // VariableExpression with name="MATH".
+        const ve = node as unknown as { name: string };
+        referencedNames.add(ve.name.toUpperCase());
         break;
       }
       case "TypeReference": {
@@ -146,39 +184,68 @@ function collectUsedLibraries(
     }
   });
 
-  // Match referenced names to libraries
-  const usedLibs = new Set<string>();
+  // BFS through the chunk dep graph.
+  const reachable = new Set<string>(); // keys: "<library>:<chunk>"
+  const queue: Array<{ library: string; chunk: string }> = [];
+
   for (const name of referencedNames) {
-    const lib = symbolToLib.get(name);
-    if (lib) usedLibs.add(lib);
-  }
-
-  // Add transitive dependencies
-  const depMap = new Map<string, string[]>();
-  for (const archive of archives) {
-    depMap.set(
-      archive.manifest.name,
-      archive.dependencies.map((d) => d.name),
-    );
-  }
-
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const lib of usedLibs) {
-      const deps = depMap.get(lib);
-      if (deps) {
-        for (const dep of deps) {
-          if (!usedLibs.has(dep)) {
-            usedLibs.add(dep);
-            changed = true;
-          }
-        }
+    const entry = symbolIndex.get(name);
+    if (entry) {
+      const key = `${entry.library}:${entry.chunk}`;
+      if (!reachable.has(key)) {
+        reachable.add(key);
+        queue.push(entry);
       }
     }
   }
 
-  return usedLibs;
+  // Build a fast lookup from "<library>:<chunk>" → chunk object so
+  // the BFS can read each chunk's pre-computed deps without rescanning.
+  const chunkLookup = new Map<
+    string,
+    {
+      archive: StlibArchive;
+      chunk: NonNullable<StlibArchive["chunks"]>[number];
+    }
+  >();
+  for (const archive of archives) {
+    for (const chunk of archive.chunks ?? []) {
+      chunkLookup.set(`${archive.manifest.name}:${chunk.name}`, {
+        archive,
+        chunk,
+      });
+    }
+  }
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    const lookup = chunkLookup.get(`${cur.library}:${cur.chunk}`);
+    if (!lookup) continue;
+    for (const dep of lookup.chunk.deps) {
+      const depKey = `${dep.library}:${dep.name}`;
+      if (reachable.has(depKey)) continue;
+      const target = chunkByKey.get(depKey);
+      if (!target) continue;
+      reachable.add(depKey);
+      queue.push(target);
+    }
+  }
+
+  // Group reachable chunks by library.
+  const byLibrary = new Map<string, Set<string>>();
+  for (const key of reachable) {
+    const sepIdx = key.indexOf(":");
+    const lib = key.slice(0, sepIdx);
+    const name = key.slice(sepIdx + 1);
+    let set = byLibrary.get(lib);
+    if (!set) {
+      set = new Set();
+      byLibrary.set(lib, set);
+    }
+    set.add(name);
+  }
+
+  return byLibrary;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,10 +374,38 @@ function runPipeline(
     );
     const units: CompilationUnit[] = [primaryAst];
 
-    // Parse additional source files
+    // Parse additional source files. Each gets the same Phase 0
+    // IL→ST transpilation as the primary source — without it, an IL
+    // POU surfaced through `additionalSources` (e.g. the editor's
+    // per-POU split of program.st) would reach the ST parser as
+    // raw IL and fail with a confusing "expecting Identifier but
+    // found 'LD'" error.
     if (mergedOptions.additionalSources) {
       for (const addlSource of mergedOptions.additionalSources) {
-        const addlParseResult = parseSource(addlSource.source);
+        let effectiveAddlSource = addlSource.source;
+        const addlIlResult = transpileILSource(
+          addlSource.source,
+          addlSource.fileName,
+        );
+        if (addlIlResult.hasIL) {
+          effectiveAddlSource = addlIlResult.stSource;
+          for (const err of addlIlResult.errors) {
+            const entry: CompileError = {
+              message: err.message,
+              line: err.line,
+              column: err.column,
+              severity: err.severity,
+            };
+            if (err.file) entry.file = err.file;
+            else entry.file = addlSource.fileName;
+            errors.push(entry);
+          }
+          if (errors.length > 0 && !continueOnError) {
+            continue;
+          }
+        }
+
+        const addlParseResult = parseSource(effectiveAddlSource);
         if (addlParseResult.errors.length > 0) {
           for (const err of addlParseResult.errors) {
             const errObj = err as {
@@ -567,6 +662,16 @@ function runPipeline(
     // In analyze mode, semantic failure is non-fatal — return whatever we have
   }
 
+  // Annotate errors/warnings with POU + section context so programmatic
+  // consumers (e.g. the OpenPLC Editor) can route diagnostics to the
+  // right POU tab and remap body-line numbers to the user's view.
+  // Skipped silently when no AST is available — the fields remain unset
+  // and downstream code falls back to plain (file, line) display.
+  if (ast) {
+    annotateErrorsWithPouContext(errors, ast);
+    annotateErrorsWithPouContext(warnings, ast);
+  }
+
   return {
     ast,
     projectModel,
@@ -648,32 +753,31 @@ export function compile(
     pouIncludes: pipeline.mergedOptions.pouIncludes ?? [],
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
+    ...(pipeline.mergedOptions.emitChunkMarkers
+      ? { emitChunkMarkers: true }
+      : {}),
   });
   codegen.setProjectModel(pipeline.projectModel!);
 
   // Register all library metadata (FB types, field mappings, enum/struct types)
   codegen.registerLibraryArchives(pipeline.allArchives);
 
-  // Tree-shake: only include libraries whose symbols are referenced by the
-  // program.  Skip for test builds — the test harness (test_main.cpp) may
-  // reference library symbols that aren't in the source AST.
+  // Function-level tree-shake: figure out which library chunks the
+  // user's AST actually reaches (transitively through chunk dep
+  // edges), then hand the reachable subset of each archive to the
+  // codegen for emission. Test builds bypass the shake — the test
+  // harness may reference symbols not present in the source AST.
   const isTestBuild = pipeline.mergedOptions.isTestBuild ?? false;
-  const usedLibs = isTestBuild
-    ? null
-    : collectUsedLibraries(pipeline.ast, pipeline.allArchives);
+  const reachableByArchive = collectUsedSymbols(
+    pipeline.ast,
+    pipeline.allArchives,
+    isTestBuild,
+  );
 
-  // Inject compiled C++ preamble code from libraries
   for (const archive of pipeline.allArchives) {
-    if (
-      archive.headerCode &&
-      (usedLibs === null || usedLibs.has(archive.manifest.name))
-    ) {
-      codegen.addLibraryPreamble(
-        archive.manifest.name,
-        archive.headerCode,
-        archive.cppCode,
-      );
-    }
+    const reachable = reachableByArchive.get(archive.manifest.name);
+    if (!reachable || reachable.size === 0) continue;
+    codegen.addLibraryChunks(archive, reachable);
   }
 
   const codeResult = codegen.generate(pipeline.ast);
@@ -918,6 +1022,19 @@ export {
   getCommonType,
 } from "./semantic/type-utils.js";
 export { isElementaryType } from "./semantic/type-registry.js";
+
+// Canonical IEC base-type registry — same data published as
+// libs/iec-types.json. Downstream tooling that prefers a typed
+// import over the JSON artefact can pull these directly.
+export {
+  IEC_BASE_TYPES,
+  lookupBaseType,
+  isBaseTypeName,
+} from "./semantic/iec-types-data.js";
+export type {
+  IECTypeMetadata,
+  IECWireFormat,
+} from "./semantic/iec-types-data.js";
 
 // Re-export project model
 export type { ProjectModel } from "./project-model.js";

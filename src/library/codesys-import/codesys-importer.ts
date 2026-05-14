@@ -60,6 +60,7 @@ export function importCodesysLibrary(filePath: string): CodesysImportResult {
     return {
       success: false,
       sources: [],
+      globalConstants: {},
       metadata: { format: "v23", pouCount: 0, counts: {} },
       warnings: [],
       errors: [
@@ -73,6 +74,7 @@ export function importCodesysLibrary(filePath: string): CodesysImportResult {
     return {
       success: false,
       sources: [],
+      globalConstants: {},
       metadata: { format: "v23", pouCount: 0, counts: {} },
       warnings: [],
       errors: [
@@ -99,6 +101,7 @@ function importV23(data: Buffer): CodesysImportResult {
     return {
       success: false,
       sources: [],
+      globalConstants: {},
       metadata: { format: "v23", pouCount: 0, counts: {} },
       warnings,
       errors: ["No POUs found in library file."],
@@ -111,6 +114,7 @@ function importV23(data: Buffer): CodesysImportResult {
   return {
     success: true,
     sources,
+    globalConstants: {},
     metadata: { format: "v23", pouCount: pous.length, counts },
     warnings,
     errors: [],
@@ -121,12 +125,13 @@ function importV23(data: Buffer): CodesysImportResult {
  * Import a CODESYS V3 library from pre-read ZIP binary data.
  */
 function importV3(data: Buffer): CodesysImportResult {
-  const { pous, guid, warnings } = parseV3Library(data);
+  const { pous, guid, globalConstants, warnings } = parseV3Library(data);
 
   if (pous.length === 0) {
     return {
       success: false,
       sources: [],
+      globalConstants,
       metadata: { format: "v3", pouCount: 0, guid, counts: {} },
       warnings,
       errors: ["No POUs found in library archive."],
@@ -139,6 +144,7 @@ function importV3(data: Buffer): CodesysImportResult {
   return {
     success: true,
     sources,
+    globalConstants,
     metadata: { format: "v3", pouCount: pous.length, guid, counts },
     warnings,
     errors: [],

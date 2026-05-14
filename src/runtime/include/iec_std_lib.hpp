@@ -24,8 +24,11 @@
 #include "iec_traits.hpp"
 #include "iec_retain.hpp"
 #include "iec_ptr.hpp"
+#include "iec_string.hpp"
+#include "iec_wstring.hpp"
 #include <cmath>
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
@@ -668,6 +671,72 @@ template<typename T> inline IEC_TOD TO_TOD(T v) noexcept {
 }
 
 // =============================================================================
+// String / Wide String Conversion
+// =============================================================================
+//
+// STRING ↔ WSTRING per IEC 61131-3 §6.5.4.6: codepoint-by-codepoint
+// transcoding. Anything outside the BMP would require surrogate
+// handling that the runtime does not implement; OpenPLC programs in
+// practice deal in 7-bit ASCII or simple Latin-1, so a lossy narrow
+// (truncate the high byte) is documented behaviour rather than a
+// surprise. Callers that need full Unicode round-tripping should keep
+// data in WSTRING throughout.
+
+template<size_t SrcLen>
+inline IECWString<SrcLen> STRING_TO_WSTRING(const IECString<SrcLen>& src) noexcept {
+    IECWString<SrcLen> result;
+    const size_t n = src.length();
+    for (size_t i = 0; i < n; ++i) {
+        // Treat each STRING byte as a codepoint in the U+0000–U+00FF
+        // range. Multi-byte UTF-8 sequences pass through byte-for-byte
+        // and end up as Latin-1 — wrong for non-ASCII, but the IEC
+        // standard doesn't define UTF-8/UTF-16 transcoding either.
+        result.append(static_cast<char16_t>(static_cast<unsigned char>(src[i])));
+    }
+    return result;
+}
+
+// Overload for the per-variable wrapper (handles auto-unwrap).
+template<size_t SrcLen>
+inline IECWString<SrcLen> STRING_TO_WSTRING(const IECStringVar<SrcLen>& src) noexcept {
+    return STRING_TO_WSTRING(iec_unwrap(src));
+}
+
+template<size_t SrcLen>
+inline IECString<SrcLen> WSTRING_TO_STRING(const IECWString<SrcLen>& src) noexcept {
+    IECString<SrcLen> result;
+    const size_t n = src.length();
+    for (size_t i = 0; i < n; ++i) {
+        // Truncate to the low byte. Codepoints > U+00FF lose
+        // information; surrogate pairs (rare in IEC programs) collapse
+        // to garbage. Document as "ASCII / Latin-1 only" round-trip.
+        result.append(static_cast<char>(src[i] & 0xFF));
+    }
+    return result;
+}
+
+template<size_t SrcLen>
+inline IECString<SrcLen> WSTRING_TO_STRING(const IECWStringVar<SrcLen>& src) noexcept {
+    return WSTRING_TO_STRING(iec_unwrap(src));
+}
+
+// `*_TO_*` resolution in the frontend collapses STRING_TO_WSTRING /
+// WSTRING_TO_STRING to plain TO_WSTRING / TO_STRING calls (cppName is
+// `TO_${toType}`), so provide the matching aliases. Templated on the
+// source type so they bind to either the bare class or the *Var
+// wrapper without relying on conversions.
+
+template<typename T>
+inline auto TO_WSTRING(const T& src) noexcept -> decltype(STRING_TO_WSTRING(src)) {
+    return STRING_TO_WSTRING(src);
+}
+
+template<typename T>
+inline auto TO_STRING(const T& src) noexcept -> decltype(WSTRING_TO_STRING(src)) {
+    return WSTRING_TO_STRING(src);
+}
+
+// =============================================================================
 // Time Utilities
 // =============================================================================
 
@@ -1041,6 +1110,72 @@ inline int64_t __CURRENT_TIME_NS = 0;
  */
 inline IEC_TIME TIME() {
     return IEC_TIME(static_cast<TIME_t>(__CURRENT_TIME_NS));
+}
+
+/**
+ * Wall-clock date-and-time override slot, in nanoseconds since the
+ * Unix epoch.
+ *
+ * Platform integrations that *can* deliver real wall-clock time
+ * (VPP packages with a DS3231 RTC chip wired up, Wi-Fi targets that
+ * pull NTP, etc.) populate this before each scan and CURRENT_DT()
+ * returns it verbatim. Targets without that capability leave it at 0
+ * and CURRENT_DT() falls back to a meaningful-but-not-wall-clock
+ * value — see the function comment for the full priority order.
+ */
+inline int64_t __CURRENT_DT_NS = 0;
+
+/**
+ * CURRENT_DT() — wall-clock date-and-time.
+ *
+ * Returns the current absolute time as IEC_DT (nanoseconds since the
+ * Unix epoch). Distinct from TIME() which returns the scan-cycle's
+ * monotonic elapsed time, not a date.
+ *
+ * Used by the Additional Function Blocks library's RTC FB, which under
+ * MatIEC consumed a `__CURRENT_TIME` global the runtime injected before
+ * each scan. STruC++ exposes the same capability through this regular
+ * function so RTC's body can call it without compiler-specific pragmas.
+ *
+ * Resolution priority (highest first):
+ *   1. `__CURRENT_DT_NS` when non-zero — the platform integration
+ *      delivered a real wall-clock value (RTC chip, NTP, host syscall
+ *      wired by an OpenPLC v4 runtime, etc.). Honoured on every
+ *      target.
+ *   2. std::chrono::system_clock on hosted targets — covers REPL, test
+ *      runner, and any g++ build that didn't populate
+ *      `__CURRENT_DT_NS`. Inherits CLOCK_REALTIME's quirks (can step
+ *      backwards if the system clock is corrected); code needing
+ *      strict monotonicity should use TIME() instead.
+ *   3. `__CURRENT_TIME_NS` (time since program start) on bare-metal
+ *      targets where std::chrono::system_clock isn't available.
+ *      avr-gcc's libstdc++ ships `<chrono>` but omits `system_clock`,
+ *      so we can't reach for it on Arduino / AVR. Returning uptime
+ *      keeps the IEC_DT value monotonically advancing — programs that
+ *      diff two CURRENT_DT() readings still see meaningful elapsed
+ *      time, just expressed in seconds-since-boot rather than seconds-
+ *      since-1970.
+ *
+ * VPP packages targeting hardware with an RTC override (1) by writing
+ * `__CURRENT_DT_NS` from their platform glue. Nothing else in the
+ * runtime needs to change to enable that path.
+ */
+inline IEC_DT CURRENT_DT() {
+    if (__CURRENT_DT_NS != 0) {
+        return IEC_DT(static_cast<DT_t>(__CURRENT_DT_NS));
+    }
+#ifdef __AVR__
+    // No system_clock on avr-gcc. `__CURRENT_TIME_NS` advances
+    // monotonically as the runtime drives the scan cycle, giving us
+    // time-since-boot — meaningful for diffing timestamps even when
+    // no RTC is wired up.
+    return IEC_DT(static_cast<DT_t>(__CURRENT_TIME_NS));
+#else
+    using namespace std::chrono;
+    auto now = system_clock::now();
+    auto ns  = duration_cast<nanoseconds>(now.time_since_epoch()).count();
+    return IEC_DT(static_cast<DT_t>(ns));
+#endif
 }
 
 // =============================================================================
