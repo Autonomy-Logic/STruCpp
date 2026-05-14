@@ -137,9 +137,14 @@ export interface LibraryArchiveInfo {
         baseType?: string;
       }>;
     };
-    headerCode: string;
-    cppCode: string;
-    sources?: Array<{ fileName: string; source: string }>;
+    chunks: Array<{
+      name: string;
+      kind: "function" | "functionBlock" | "type" | "inlineGlobal";
+      header: string;
+      cpp: string;
+      deps: Array<{ library: string; name: string }>;
+    }>;
+    sources?: Array<{ fileName: string; source: string; category?: string }>;
     dependencies: Array<{ name: string; version: string }>;
   };
 }
