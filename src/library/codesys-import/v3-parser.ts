@@ -535,14 +535,12 @@ function extractFromRecords(
   // still need more impl lines per R0[5].
   const declLines: string[] = [];
   let headerRecIdx = -1;
-  let headerCol = -1;
   for (let i = cursor; i < records.length; i++) {
     const rec = records[i]!;
     const found = findHeaderInRecord(rec, strings);
     if (found) {
       declLines.push(found.header);
       headerRecIdx = i;
-      headerCol = found.col;
       break;
     }
     if (implLines.length < totalImplLines && rec.length > 0) {
@@ -562,7 +560,6 @@ function extractFromRecords(
       declLines.push(strings.get(rec[0]!) ?? "");
     }
   }
-  void headerCol;
 
   // Documentation — pulled structurally from the slot CODESYS reserves
   // for the POU's variables-pane comment (after the last END_VAR /
