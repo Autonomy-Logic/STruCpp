@@ -215,8 +215,15 @@ export class StlibExplorer
     }
 
     if (parsed.category === "cpp") {
-      if (parsed.fileName.endsWith(".hpp")) return info.archive.headerCode;
-      if (parsed.fileName.endsWith(".cpp")) return info.archive.cppCode;
+      // Chunks concatenated in array order reproduce the legacy library-wide
+      // headerCode / cppCode blobs byte-for-byte. The library system overhaul
+      // (PR #105) replaced the blob fields with per-symbol chunk slices.
+      if (parsed.fileName.endsWith(".hpp")) {
+        return info.archive.chunks.map((c) => c.header).join("");
+      }
+      if (parsed.fileName.endsWith(".cpp")) {
+        return info.archive.chunks.map((c) => c.cpp).join("");
+      }
     }
 
     return undefined;
