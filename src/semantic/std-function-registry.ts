@@ -769,6 +769,21 @@ export class StdFunctionRegistry {
       category: "time",
     });
 
+    // CURRENT_DT() - wall-clock date-and-time as IEC_DT.
+    // Used by the Additional Function Blocks library's RTC FB. Distinct
+    // from TIME() (scan-cycle elapsed time): CURRENT_DT() is system clock.
+    this.register({
+      name: "CURRENT_DT",
+      cppName: "CURRENT_DT",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "DT",
+      params: [],
+      isVariadic: false,
+      isConversion: false,
+      category: "time",
+    });
+
     this.register({
       name: "TIME_FROM_MS",
       cppName: "TIME_FROM_MS",

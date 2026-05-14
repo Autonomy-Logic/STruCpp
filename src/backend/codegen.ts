@@ -41,7 +41,17 @@ import type {
   ConfigurationDecl,
   ProgramDecl,
 } from "../project-model.js";
-import { getProjectNamespace, parseTimeLiteral } from "../project-model.js";
+import type {
+  LibraryChunk,
+  StlibArchive,
+} from "../library/library-manifest.js";
+import {
+  getProjectNamespace,
+  parseDateLiteralToNs,
+  parseDtLiteralToNs,
+  parseTimeLiteral,
+  parseTodLiteralToNs,
+} from "../project-model.js";
 import { TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator } from "./type-codegen.js";
 import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
@@ -54,7 +64,6 @@ import {
   buildEnumMemberMap,
   type EnumMemberEntry,
 } from "../semantic/type-utils.js";
-import type { StlibArchive } from "../library/library-manifest.js";
 
 // =============================================================================
 // Located Variable Support
@@ -162,6 +171,13 @@ export interface CodeGenOptions {
   /** Override filename used in #line directives (absolute path for debugger).
    *  Falls back to fileName when not set. */
   lineDirectiveFileName?: string;
+
+  /** Emit `//@chunk:begin/end:<kind>:<NAME>` comment markers around each
+   *  top-level declaration in both header and cpp output. The library
+   *  compiler uses these to slice emitted code into per-symbol chunks
+   *  for function-level tree-shaking. Off by default — production
+   *  compiles produce identical output regardless. */
+  emitChunkMarkers?: boolean;
 }
 
 /**
@@ -361,11 +377,18 @@ export class CodeGenerator {
   /** Topologically sorted function blocks (computed once in generate(), used by header + impl) */
   private sortedFBs: CompilationUnit["functionBlocks"] = [];
 
-  /** Library preamble code blocks injected into header and implementation */
-  private libraryPreambles: Array<{
-    name: string;
-    headerCode: string;
-    cppCode: string;
+  /** Per-archive reachable-chunk emission state.
+   *
+   *  Built by `addLibraryChunks` — one entry per library the consumer
+   *  pulled at least one chunk from. The emission loop iterates this
+   *  in insertion order (= the order index.ts hands archives over,
+   *  which is library load order). For each library, only chunks
+   *  whose name appears in `reachable` are emitted; the array order
+   *  matches the library's `chunks[]` declaration order so symbol
+   *  layout in the user's `generated.hpp` is stable across builds. */
+  private libraryEmissions: Array<{
+    archive: StlibArchive;
+    reachable: Set<string>;
   }> = [];
 
   /** Map of UPPER(fbTypeName) → ordered VAR_INPUT parameter names (UPPER case).
@@ -708,11 +731,41 @@ export class CodeGenerator {
   }
 
   /**
-   * Add library preamble code to inject into the generated header and implementation.
-   * Supports multiple libraries — each is injected in order.
+   * Hand the codegen a library archive and the set of chunk names
+   * the consumer determined to be reachable from the user's AST.
+   * Only those chunks are emitted into the final header/cpp.
+   *
+   * Single per-call entry point: nothing else mutates
+   * `libraryEmissions`. The caller (index.ts) computes the reachable
+   * set via function-level tree-shake before invoking this method.
    */
-  addLibraryPreamble(name: string, headerCode: string, cppCode: string): void {
-    this.libraryPreambles.push({ name, headerCode, cppCode });
+  addLibraryChunks(archive: StlibArchive, reachable: Set<string>): void {
+    this.libraryEmissions.push({ archive, reachable });
+  }
+
+  /**
+   * Emit a chunk-boundary marker in the active header stream. No-op
+   * when `emitChunkMarkers` is off. See `CodeGenOptions.emitChunkMarkers`
+   * — the markers exist so the library compiler can slice emitted code
+   * into per-symbol chunks for function-level tree-shaking.
+   */
+  protected emitHeaderChunkMarker(
+    boundary: "begin" | "end",
+    kind: "function" | "functionBlock" | "type" | "inlineGlobal",
+    name: string,
+  ): void {
+    if (!this.options.emitChunkMarkers) return;
+    this.emitHeader(`//@chunk:${boundary}:${kind}:${name}`);
+  }
+
+  /** Emit a chunk-boundary marker in the active cpp stream. */
+  protected emitCppChunkMarker(
+    boundary: "begin" | "end",
+    kind: "function" | "functionBlock" | "type" | "inlineGlobal",
+    name: string,
+  ): void {
+    if (!this.options.emitChunkMarkers) return;
+    this.emit(`//@chunk:${boundary}:${kind}:${name}`);
   }
 
   /**
@@ -941,7 +994,21 @@ export class CodeGenerator {
       }
     }
 
-    // Undefine macros that collide with IEC identifiers (e.g. macOS math.h OVERFLOW)
+    // Undefine macros that collide with IEC identifiers.
+    //
+    // `<math.h>` (transitively included via `<cmath>` in iec_std_lib.hpp)
+    // defines `OVERFLOW` as a legacy SVID numeric-error constant on both
+    // glibc/macOS and avr-libc. That collides with several OSCAT FB
+    // struct fields named OVERFLOW, and the preprocessor expansion would
+    // turn those into integer literals before the C++ parser sees them.
+    // The architecturally-correct fixes — wrapping in a namespace,
+    // renaming the IEC identifier — either don't help (macros expand
+    // before scope resolution) or break IEC FB ABI. The `#undef` has
+    // zero cost on platforms where the macro isn't defined.
+    //
+    // (`<avr/io.h>`'s `SP` macro used to need the same treatment, but
+    // post the Arduino-glue split no TU that parses `generated.hpp`
+    // also pulls in `<avr/io.h>`, so the SP undef was retired.)
     this.emitHeader("");
     this.emitHeader("#undef OVERFLOW");
 
@@ -974,6 +1041,7 @@ export class CodeGenerator {
       const typeCodeGen = new TypeCodeGenerator({
         indent: this.options.indent,
         lineEnding: this.options.lineEnding,
+        emitChunkMarkers: this.options.emitChunkMarkers ?? false,
       });
       const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
       for (const line of typeCode.split(this.options.lineEnding)) {
@@ -989,6 +1057,7 @@ export class CodeGenerator {
         for (const decl of block.declarations) {
           const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
+            this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
             if (decl.initialValue) {
               const initExpr = this.generateExpression(decl.initialValue);
               this.emitHeader(
@@ -997,18 +1066,46 @@ export class CodeGenerator {
             } else {
               this.emitHeader(`inline ${cppType} ${name}{};`);
             }
+            this.emitHeaderChunkMarker("end", "inlineGlobal", name);
           }
         }
       }
       this.emitHeader("");
     }
 
-    // Inject library preambles (stdlib + user libraries)
-    for (const lib of this.libraryPreambles) {
-      this.emitHeader(`// Library: ${lib.name}`);
-      for (const line of lib.headerCode.split("\n")) {
-        this.emitHeader(line);
+    // Inject reachable library chunks (header side).
+    //
+    // Per archive: emit `// Library: <name>` header, then `class X;`
+    // forward decls for every reachable functionBlock chunk
+    // (libraries' FB classes are sometimes mutually-referential and
+    // the bodies are emitted in declaration order — the forward
+    // decls ahead of any body keep the layout linkable in every
+    // ordering). Then emit each reachable chunk's `header` slice in
+    // chunk-array order; types come first, FBs next, functions last
+    // because that's the order the library compiler emitted them
+    // before slicing.
+    for (const { archive, reachable } of this.libraryEmissions) {
+      const reachableChunks: LibraryChunk[] = [];
+      for (const chunk of archive.chunks ?? []) {
+        if (chunk.header.length === 0) continue;
+        if (reachable.has(chunk.name)) reachableChunks.push(chunk);
       }
+      if (reachableChunks.length === 0) continue;
+
+      this.emitHeader(`// Library: ${archive.manifest.name}`);
+
+      for (const chunk of reachableChunks) {
+        if (chunk.kind === "functionBlock") {
+          this.emitHeader(`class ${chunk.name};`);
+        }
+      }
+
+      for (const chunk of reachableChunks) {
+        for (const line of chunk.header.split("\n")) {
+          this.emitHeader(line);
+        }
+      }
+
       this.emitHeader("");
     }
 
@@ -1036,30 +1133,56 @@ export class CodeGenerator {
 
     // Generate interface declarations (before FBs since FBs may implement interfaces)
     for (const iface of ast.interfaces) {
+      this.emitHeaderChunkMarker("begin", "type", iface.name);
       this.generateInterfaceHeaderDeclaration(iface);
+      this.emitHeaderChunkMarker("end", "type", iface.name);
     }
 
     // Generate function block class declarations (topologically sorted by dependency)
     for (const fb of this.sortedFBs) {
+      this.emitHeaderChunkMarker("begin", "functionBlock", fb.name);
       this.generateFBHeaderDeclaration(fb);
+      this.emitHeaderChunkMarker("end", "functionBlock", fb.name);
     }
 
     // Generate program class declarations
     if (this.projectModel) {
       // Use project model for enhanced generation with VAR_EXTERNAL support
       for (const prog of this.projectModel.programs.values()) {
+        this.emitHeaderChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramHeaderFromModel(prog);
+        this.emitHeaderChunkMarker(
+          "end",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
       }
     } else {
       // Fallback to AST-based generation
       for (const prog of ast.programs) {
+        this.emitHeaderChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramHeaderDeclaration(prog);
+        this.emitHeaderChunkMarker(
+          "end",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
       }
     }
 
     // Generate function declarations
     for (const func of ast.functions) {
+      this.emitHeaderChunkMarker("begin", "function", func.name);
       this.generateFunctionHeaderDeclaration(func);
+      this.emitHeaderChunkMarker("end", "function", func.name);
     }
 
     // Generate configuration class declarations
@@ -1103,10 +1226,23 @@ export class CodeGenerator {
     //    definition of …").
     this.startTranslationUnit("configuration.cpp");
 
-    for (const lib of this.libraryPreambles) {
-      this.emit(`// Library: ${lib.name}`);
-      for (const line of lib.cppCode.split("\n")) {
-        this.emit(line);
+    // Inject reachable library chunks (cpp side). Same per-archive
+    // iteration order as the header side; only chunks whose `cpp`
+    // slice is non-empty get emitted (types and inline globals are
+    // header-only).
+    for (const { archive, reachable } of this.libraryEmissions) {
+      const reachableChunks: LibraryChunk[] = [];
+      for (const chunk of archive.chunks ?? []) {
+        if (chunk.cpp.length === 0) continue;
+        if (reachable.has(chunk.name)) reachableChunks.push(chunk);
+      }
+      if (reachableChunks.length === 0) continue;
+
+      this.emit(`// Library: ${archive.manifest.name}`);
+      for (const chunk of reachableChunks) {
+        for (const line of chunk.cpp.split("\n")) {
+          this.emit(line);
+        }
       }
       this.emit("");
     }
@@ -1129,13 +1265,25 @@ export class CodeGenerator {
     if (this.projectModel) {
       for (const prog of this.projectModel.programs.values()) {
         this.startTranslationUnit(this.pouFileName(prog.name));
+        this.emitCppChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramImplementationFromModel(prog);
+        this.emitCppChunkMarker("end", "functionBlock", `Program_${prog.name}`);
         this.endTranslationUnit();
       }
     } else {
       for (const prog of ast.programs) {
         this.startTranslationUnit(this.pouFileName(prog.name));
+        this.emitCppChunkMarker(
+          "begin",
+          "functionBlock",
+          `Program_${prog.name}`,
+        );
         this.generateProgramImplementation(prog);
+        this.emitCppChunkMarker("end", "functionBlock", `Program_${prog.name}`);
         this.endTranslationUnit();
       }
     }
@@ -1145,14 +1293,18 @@ export class CodeGenerator {
     //    class declarations); ordering only mattered for the header.
     for (const fb of this.sortedFBs) {
       this.startTranslationUnit(this.pouFileName(fb.name));
+      this.emitCppChunkMarker("begin", "functionBlock", fb.name);
       this.generateFBImplementation(fb);
+      this.emitCppChunkMarker("end", "functionBlock", fb.name);
       this.endTranslationUnit();
     }
 
     // 4. One TU per function.
     for (const func of ast.functions) {
       this.startTranslationUnit(this.pouFileName(func.name));
+      this.emitCppChunkMarker("begin", "function", func.name);
       this.generateFunctionImplementation(func);
+      this.emitCppChunkMarker("end", "function", func.name);
       this.endTranslationUnit();
     }
   }
@@ -3051,18 +3203,27 @@ export class CodeGenerator {
         return `"${escaped}"`;
       }
       case "WSTRING": {
-        const wInner = expr.rawValue.replace(/^'|'$/g, "");
+        // IEC WSTRING literals are double-quoted in source; strip either
+        // form for safety. The C++ prefix is `u` (char16_t), not `L`
+        // (wchar_t — wchar_t is 32-bit on Linux/AVR, so L"…" wouldn't
+        // bind to IECWStringVar's char16_t* constructor).
+        const wInner = expr.rawValue.replace(/^["']|["']$/g, "");
         const wEscaped = this.translateIECString(wInner);
-        return `L"${wEscaped}"`;
+        return `u"${wEscaped}"`;
       }
       case "TIME": {
         const timeVal = parseTimeLiteral(String(expr.value));
         return `${timeVal.nanoseconds}LL`;
       }
       case "DATE":
+        // DATE: int64 nanoseconds since Unix epoch (UTC), time-of-day 0.
+        return `${parseDateLiteralToNs(String(expr.value))}LL`;
       case "TIME_OF_DAY":
+        // TOD: int64 nanoseconds since midnight.
+        return `${parseTodLiteralToNs(String(expr.value))}LL`;
       case "DATE_AND_TIME":
-        return String(expr.value);
+        // DT: int64 nanoseconds since Unix epoch (UTC).
+        return `${parseDtLiteralToNs(String(expr.value))}LL`;
       case "NULL":
         return "IEC_NULL";
       default:
@@ -3535,10 +3696,21 @@ export class CodeGenerator {
     }
     // Fallback to ad-hoc inference for standalone codegen (tests without semantic analysis)
     switch (expr.kind) {
-      case "VariableExpression":
-        return this.currentScopeVarTypes
-          .get(expr.name.toUpperCase())
-          ?.toUpperCase();
+      case "VariableExpression": {
+        // Walk `fieldAccess` so `FB_INSTANCE.OUTPUT` resolves to the
+        // output's element type rather than the FB's type — without
+        // this, type-driven literal casts (see `harmonizeStdFuncArgs`)
+        // would synthesise `static_cast<IEC_<FB_TYPE>>(literal)`, and
+        // `IEC_<FB_TYPE>` aliases don't exist (only types emit them).
+        let type = this.currentScopeVarTypes.get(expr.name.toUpperCase());
+        if (!type) return undefined;
+        for (const field of expr.fieldAccess ?? []) {
+          const next = this.resolveMemberType(type, field);
+          if (!next) return undefined;
+          type = next;
+        }
+        return type.toUpperCase();
+      }
       case "LiteralExpression": {
         if (expr.typePrefix) return expr.typePrefix.toUpperCase();
         // Map literal types to IEC names
@@ -3753,10 +3925,15 @@ export class CodeGenerator {
 
     // Cast literals to dominant type.
     // Bare literals (no typePrefix) are untyped — castable to dominant unless
-    // this would narrow a REAL/LREAL literal to an integer type (losing precision).
+    // this would narrow a REAL/LREAL literal to an integer type (losing
+    // precision).  When the call also carries a variable argument we must
+    // ALWAYS wrap bare literals: the variable side is an `IECVar<T>` but a
+    // bare literal lowers to a raw `int`/`double`, so C++ template deduction
+    // sees conflicting `T`s (`IECVar<int>` vs `int`) even when both share
+    // the same IEC type name on our side.
     for (const i of literalIndices) {
       const litType = argTypes[i];
-      if (!litType || litType === dominant) continue;
+      if (!litType) continue;
       const expr = argExprs[i]!.value;
       const litCat = getTypeCategory(litType);
       const domCat = getTypeCategory(dominant);
@@ -3764,6 +3941,14 @@ export class CodeGenerator {
       if (litCat === "REAL" && domCat !== "REAL" && this.isBareLiteral(expr)) {
         continue;
       }
+      // Bare literal paired with at least one IEC variable: cast even when
+      // the inferred IEC type matches `dominant`, to lift raw C++ literals
+      // into the IECVar<> template space.
+      if (this.isBareLiteral(expr) && varTypes.length > 0) {
+        args[i] = `static_cast<IEC_${dominant}>(${args[i]})`;
+        continue;
+      }
+      if (litType === dominant) continue;
       if (
         this.isBareLiteral(expr) ||
         this.canImplicitWiden(litType, dominant)
@@ -4697,11 +4882,24 @@ export class CodeGenerator {
       // Convert IEC BOOL literals to C++ bool literals
       if (upperInit === "TRUE") return "true";
       if (upperInit === "FALSE") return "false";
-      // Convert IEC string literals ('hello') to C++ string literals ("hello")
+      // Convert IEC string literals to the matching C++ literal shape:
+      //   'foo' (STRING)  → "foo"  (const char*)
+      //   "foo" (WSTRING) → u"foo" (const char16_t*, what IECWStringVar
+      //                            binds to — `L"…"` is wchar_t and
+      //                            32-bit on Linux/AVR, wrong type)
+      // The two literal kinds are NOT interchangeable per IEC 61131-3;
+      // a mismatch (e.g. WSTRING := 'foo') is a type error and is the
+      // type-checker's responsibility, not codegen's. Codegen just
+      // mirrors the literal it was handed.
       if (initialValue.startsWith("'") && initialValue.endsWith("'")) {
         const inner = initialValue.slice(1, -1);
         const escaped = this.translateIECString(inner);
         return `"${escaped}"`;
+      }
+      if (initialValue.startsWith('"') && initialValue.endsWith('"')) {
+        const inner = initialValue.slice(1, -1);
+        const escaped = this.translateIECString(inner);
+        return `u"${escaped}"`;
       }
       return initialValue;
     }
@@ -4709,7 +4907,8 @@ export class CodeGenerator {
     const upperType = typeName.toUpperCase();
     if (upperType === "BOOL") return "false";
     if (upperType === "REAL" || upperType === "LREAL") return "0.0";
-    if (upperType === "STRING" || upperType === "WSTRING") return '""';
+    if (upperType === "STRING") return '""';
+    if (upperType === "WSTRING") return 'u""';
 
     // Check if it's an elementary type that uses numeric default
     const numericTypes = [

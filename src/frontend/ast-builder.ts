@@ -2582,12 +2582,56 @@ export class ASTBuilder {
       };
     }
 
+    if (children.WideStringLiteral) {
+      const token = getFirstToken(children.WideStringLiteral)!;
+      return {
+        kind: "LiteralExpression",
+        sourceSpan: tokenToSourceSpan(token),
+        literalType: "WSTRING",
+        value: token.image,
+        rawValue: token.image,
+      };
+    }
+
     if (children.TimeLiteral) {
       const token = getFirstToken(children.TimeLiteral)!;
       return {
         kind: "LiteralExpression",
         sourceSpan: tokenToSourceSpan(token),
         literalType: "TIME",
+        value: token.image,
+        rawValue: token.image,
+      };
+    }
+
+    if (children.DateLiteral) {
+      const token = getFirstToken(children.DateLiteral)!;
+      return {
+        kind: "LiteralExpression",
+        sourceSpan: tokenToSourceSpan(token),
+        literalType: "DATE",
+        value: token.image,
+        rawValue: token.image,
+      };
+    }
+
+    if (children.TimeOfDayLiteral) {
+      const token = getFirstToken(children.TimeOfDayLiteral)!;
+      return {
+        kind: "LiteralExpression",
+        sourceSpan: tokenToSourceSpan(token),
+        literalType: "TIME_OF_DAY",
+        value: token.image,
+        rawValue: token.image,
+      };
+    }
+
+    if (children.DateTimeLiteral) {
+      const token = getFirstToken(children.DateTimeLiteral)!;
+      return {
+        kind: "LiteralExpression",
+        sourceSpan: tokenToSourceSpan(token),
+        literalType: "DATE_AND_TIME",
         value: token.image,
         rawValue: token.image,
       };
