@@ -26,11 +26,61 @@ await esbuild.build({
   external: ["vscode"],
 });
 
-// Server bundle
+// Server bundle (Node-hosted — used by the VS Code extension)
 await esbuild.build({
   ...sharedOptions,
   entryPoints: ["./out/server/src/server.js"],
   outfile: "./out/server.js",
+});
+
+// Browser server bundle (Web Worker — used by Monaco-based editors
+// like openplc-editor and openplc-web).  Build-style commands and
+// fs-touching code paths are absent from server-browser.ts, but
+// strucpp's library-loader and a few sibling modules still
+// statically import Node built-ins.  Those modules ARE pulled into
+// the bundle for transitive reasons (the type-check + tree-shaker
+// can't always prove a re-export branch is unreachable); we alias
+// the Node built-ins to an inert stub so the bundle compiles.
+// Runtime calls into those APIs are impossible from the browser
+// server's code path — the entry point only invokes strucpp's
+// pure exports.  Any attempted invocation throws a clear error.
+const browserNodeStub = path.resolve(
+  __dirname,
+  "server",
+  "browser-stubs",
+  "node-empty.js",
+);
+await esbuild.build({
+  bundle: true,
+  platform: "browser",
+  target: "ES2022",
+  format: "iife",
+  sourcemap: !production,
+  minify: production,
+  entryPoints: ["./out/server/src/server-browser.js"],
+  outfile: "./out/server.browser.js",
+  alias: {
+    fs: browserNodeStub,
+    "node:fs": browserNodeStub,
+    path: browserNodeStub,
+    "node:path": browserNodeStub,
+    os: browserNodeStub,
+    "node:os": browserNodeStub,
+    child_process: browserNodeStub,
+    "node:child_process": browserNodeStub,
+    url: browserNodeStub,
+    "node:url": browserNodeStub,
+    util: browserNodeStub,
+    "node:util": browserNodeStub,
+    zlib: browserNodeStub,
+    "node:zlib": browserNodeStub,
+    stream: browserNodeStub,
+    "node:stream": browserNodeStub,
+    crypto: browserNodeStub,
+    "node:crypto": browserNodeStub,
+    buffer: browserNodeStub,
+    "node:buffer": browserNodeStub,
+  },
 });
 
 // Copy runtime files for .vsix packaging.
