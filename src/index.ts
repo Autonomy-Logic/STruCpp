@@ -915,15 +915,30 @@ export function parse(source: string): {
 
 /**
  * Get the version of the STruC++ compiler.
+ *
+ * Three sources, in priority order:
+ *   1. STRUCPP_VERSION — esbuild --define constant set by
+ *      scripts/bundle.mjs for the standalone binary build.
+ *   2. STRUCPP_VERSION_BUILD — value baked into src/version-build.ts
+ *      by scripts/rebuild-libs.mjs before tsc runs; ships in the
+ *      npm tarball and survives downstream bundling (webpack, asar).
+ *   3. Runtime read of package.json — last-resort fallback for
+ *      unbundled dev environments. Fails inside re-bundled consumers
+ *      because import.meta.url no longer points at the strucpp
+ *      module directory; kept only so a hand-built dist/ without
+ *      version-build.ts still reports something.
  */
 declare const STRUCPP_VERSION: string | undefined;
 
+import { STRUCPP_VERSION_BUILD } from "./version-build.js";
+
 export function getVersion(): string {
-  // Bundled binary: version injected by esbuild --define at build time
   if (typeof STRUCPP_VERSION !== "undefined") {
     return STRUCPP_VERSION;
   }
-  // Development: read from package.json at runtime
+  if (STRUCPP_VERSION_BUILD) {
+    return STRUCPP_VERSION_BUILD;
+  }
   try {
     const dir = dirname(fileURLToPath(import.meta.url));
     const pkg = JSON.parse(
