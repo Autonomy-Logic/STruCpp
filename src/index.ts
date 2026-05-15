@@ -7,9 +7,6 @@
  * This module exports the public API for programmatic usage.
  */
 
-import { readFileSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
 import {
   CompileOptions,
   CompileResult,
@@ -939,15 +936,7 @@ export function getVersion(): string {
   if (STRUCPP_VERSION_BUILD) {
     return STRUCPP_VERSION_BUILD;
   }
-  try {
-    const dir = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(
-      readFileSync(join(dir, "../package.json"), "utf-8"),
-    ) as { version: string };
-    return pkg.version;
-  } catch {
-    return "0.0.0";
-  }
+  return "0.0.0";
 }
 
 // Re-export types
@@ -1069,6 +1058,8 @@ export { compileLibrary, compileStlib } from "./library/library-compiler.js";
 export {
   loadLibraryManifest,
   loadStlibArchive,
+  loadStlibFromString,
+  loadStlibFromBuffer,
   loadStlibFromFile,
   discoverStlibs,
   registerLibrarySymbols,

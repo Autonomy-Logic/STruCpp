@@ -21,6 +21,8 @@ import {
   loadLibraryFromFile,
   discoverLibraries,
   loadStlibArchive,
+  loadStlibFromString,
+  loadStlibFromBuffer,
   loadStlibFromFile,
   discoverStlibs,
   registerLibrarySymbols,
@@ -893,6 +895,102 @@ describe("Library System", () => {
 
       expect(() => loadLibraryFromFile(manifestPath)).toThrow(
         LibraryManifestError,
+      );
+    });
+  });
+
+  describe("loadStlibFromString (browser-safe)", () => {
+    const validArchiveJson = JSON.stringify({
+      formatVersion: 1,
+      manifest: {
+        name: "browser-lib",
+        version: "1.0.0",
+        namespace: "browserlib",
+        functions: [],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      },
+      chunks: [],
+      dependencies: [],
+    });
+
+    it("parses a valid .stlib JSON string", () => {
+      const archive = loadStlibFromString(validArchiveJson);
+      expect(archive.formatVersion).toBe(1);
+      expect(archive.manifest.name).toBe("browser-lib");
+    });
+
+    it("includes the sourceLabel in error messages", () => {
+      expect(() =>
+        loadStlibFromString("{not valid json", "mylib.stlib"),
+      ).toThrow(/Invalid JSON in stlib archive: mylib\.stlib/);
+    });
+
+    it("rejects malformed JSON with LibraryManifestError", () => {
+      expect(() => loadStlibFromString("not json")).toThrow(
+        LibraryManifestError,
+      );
+    });
+
+    it("propagates archive-shape validation errors", () => {
+      const malformed = JSON.stringify({ manifest: {} });
+      expect(() => loadStlibFromString(malformed)).toThrow(
+        LibraryManifestError,
+      );
+    });
+  });
+
+  describe("loadStlibFromBuffer (browser-safe)", () => {
+    const validArchiveJson = JSON.stringify({
+      formatVersion: 1,
+      manifest: {
+        name: "buffer-lib",
+        version: "1.0.0",
+        namespace: "bufferlib",
+        functions: [],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      },
+      chunks: [],
+      dependencies: [],
+    });
+
+    it("parses a valid .stlib byte buffer", () => {
+      const bytes = new TextEncoder().encode(validArchiveJson);
+      const archive = loadStlibFromBuffer(bytes);
+      expect(archive.manifest.name).toBe("buffer-lib");
+    });
+
+    it("decodes UTF-8 content with multi-byte characters", () => {
+      const utf8 = JSON.stringify({
+        formatVersion: 1,
+        manifest: {
+          name: "utf8-lib",
+          version: "1.0.0",
+          namespace: "utf8lib",
+          functions: [],
+          functionBlocks: [],
+          types: [],
+          headers: [],
+          description: "résumé café — naïve façade 中文",
+          isBuiltin: false,
+        },
+        chunks: [],
+        dependencies: [],
+      });
+      const archive = loadStlibFromBuffer(new TextEncoder().encode(utf8));
+      expect(archive.manifest.description).toContain("résumé café");
+      expect(archive.manifest.description).toContain("中文");
+    });
+
+    it("includes the sourceLabel in error messages", () => {
+      const bytes = new TextEncoder().encode("{broken");
+      expect(() => loadStlibFromBuffer(bytes, "remote.stlib")).toThrow(
+        /Invalid JSON in stlib archive: remote\.stlib/,
       );
     });
   });

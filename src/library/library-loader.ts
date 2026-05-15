@@ -481,7 +481,62 @@ export function loadStlibArchive(json: unknown): StlibArchive {
 }
 
 /**
+ * Parse and validate an stlib archive from its raw JSON text.
+ *
+ * Browser-safe sibling of `loadStlibFromFile` — takes a string the
+ * caller already obtained (HTTP fetch, IPC, FileReader, etc.) instead
+ * of touching the filesystem.  Use this in environments without `fs`.
+ *
+ * @param raw - JSON text of the `.stlib` archive
+ * @param sourceLabel - Optional label used in error messages
+ * @returns The validated archive
+ * @throws {LibraryManifestError} if the JSON is malformed or invalid
+ */
+export function loadStlibFromString(
+  raw: string,
+  sourceLabel: string = "<string>",
+): StlibArchive {
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch (e) {
+    throw new LibraryManifestError(
+      `Invalid JSON in stlib archive: ${sourceLabel}: ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  return loadStlibArchive(json);
+}
+
+/**
+ * Parse and validate an stlib archive from raw bytes.
+ *
+ * Browser-safe sibling of `loadStlibFromFile` — accepts the byte
+ * payload of an `.stlib` (UTF-8 encoded JSON).  Suitable for
+ * `fetch(...).then(r => r.arrayBuffer())` flows and for Electron
+ * preload paths that hand the renderer a `Uint8Array` over IPC.
+ *
+ * @param bytes - Raw UTF-8 bytes of the `.stlib` archive
+ * @param sourceLabel - Optional label used in error messages
+ * @returns The validated archive
+ * @throws {LibraryManifestError} if the JSON is malformed or invalid
+ */
+export function loadStlibFromBuffer(
+  bytes: Uint8Array,
+  sourceLabel: string = "<buffer>",
+): StlibArchive {
+  // TextDecoder is available in modern Node (≥11) and every browser /
+  // worker context we care about.  Avoids pulling in `Buffer` so the
+  // browser bundler doesn't have to polyfill it.
+  const raw = new TextDecoder("utf-8").decode(bytes);
+  return loadStlibFromString(raw, sourceLabel);
+}
+
+/**
  * Load a `.stlib` archive from a file on disk.
+ *
+ * Node-only convenience wrapper around `loadStlibFromString`.  Browser
+ * / worker consumers should fetch the bytes themselves and call
+ * `loadStlibFromString` or `loadStlibFromBuffer` instead.
  *
  * @param path - Path to the `.stlib` file
  * @returns The validated archive
@@ -496,17 +551,7 @@ export function loadStlibFromFile(path: string): StlibArchive {
       `Cannot read stlib archive: ${path}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch (e) {
-    throw new LibraryManifestError(
-      `Invalid JSON in stlib archive: ${path}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  return loadStlibArchive(json);
+  return loadStlibFromString(raw, path);
 }
 
 /**
