@@ -8,8 +8,8 @@
  * Discovers all .st files in workspace folders for multi-file projects.
  */
 
-import * as path from "node:path";
 import { URI } from "vscode-uri";
+import { basename, dirname, join } from "./path-ops.js";
 import type {
   AnalysisResult,
   CompileOptions,
@@ -35,7 +35,6 @@ export class DocumentManager {
   private documents = new Map<string, DocumentState>();
   private analyzeFn: AnalyzeFn;
   private workspaceFolders = new Set<string>();
-  private libraryPaths: string[] = [];
   private discoveryCache = new Map<string, string[]>();
   /** Cached library sources keyed by library name, for analyzing strucpp-lib: documents. */
   private librarySources = new Map<string, Array<{ fileName: string; source: string }>>();
@@ -93,12 +92,13 @@ export class DocumentManager {
     this.discoveryCache.clear();
   }
 
-  setLibraryPaths(paths: string[]): void {
-    this.libraryPaths = paths;
-  }
-
-  getLibraryPaths(): string[] {
-    return this.libraryPaths;
+  /**
+   * Snapshot of currently-cached archives, ready to splat into a
+   * `compile({ libraries: ... })` call.  Other consumers that just
+   * want descriptors should use `getCachedLibraries()`.
+   */
+  getLibraryArchives(): StlibArchive[] {
+    return [...this.libraryArchives.values()];
   }
 
   /** Cache a library's source files and archive for strucpp-lib: document analysis. */
@@ -144,7 +144,7 @@ export class DocumentManager {
 
     for (const folder of this.workspaceFolders) {
       for (const stlibPath of this.discoverFiles(folder, /\.stlib$/i)) {
-        dirSet.add(path.dirname(stlibPath));
+        dirSet.add(dirname(stlibPath));
       }
     }
 
@@ -187,7 +187,7 @@ export class DocumentManager {
       // Skip hidden directories (e.g., .git, .vscode)
       if (entry.name.startsWith(".")) continue;
 
-      const fullPath = path.join(dir, entry.name);
+      const fullPath = join(dir, entry.name);
       if (entry.isDirectory || entry.isSymbolicLink) {
         // Skip common non-source directories
         if (
@@ -243,7 +243,7 @@ export class DocumentManager {
       includedPaths.add(filePath);
       sources.push({
         source: state.source,
-        fileName: path.basename(filePath),
+        fileName: basename(filePath),
       });
     }
 
@@ -262,7 +262,7 @@ export class DocumentManager {
         if (isTestFile(source)) continue;
         sources.push({
           source,
-          fileName: path.basename(filePath),
+          fileName: basename(filePath),
         });
       }
     }
@@ -305,13 +305,13 @@ export class DocumentManager {
 
   /** Extract a bare fileName from a URI. */
   getFileName(uri: string): string {
-    return path.basename(uriToFilePath(uri));
+    return basename(uriToFilePath(uri));
   }
 
   /** Map a bare fileName back to a URI among open documents. */
   getUriForFile(fileName: string): string | undefined {
     for (const [uri] of this.documents) {
-      if (path.basename(uriToFilePath(uri)) === fileName) {
+      if (basename(uriToFilePath(uri)) === fileName) {
         return uri;
       }
     }
@@ -417,7 +417,7 @@ export class DocumentManager {
         this.discoveryCache.set(folder, discovered);
       }
       for (const filePath of discovered) {
-        if (path.basename(filePath) === fileName) {
+        if (basename(filePath) === fileName) {
           return URI.file(filePath).toString();
         }
       }
@@ -450,7 +450,7 @@ export class DocumentManager {
 
   private analyzeDocument(state: DocumentState): void {
     const currentFilePath = uriToFilePath(state.uri);
-    const currentFileName = path.basename(currentFilePath);
+    const currentFileName = basename(currentFilePath);
 
     // Build additional sources: open documents + workspace .st files from disk
     const additionalSources: Array<{ source: string; fileName: string }> = [];
@@ -462,7 +462,7 @@ export class DocumentManager {
       // Skip test files — they use a separate parser
       if (isTestFile(otherState.source)) continue;
       const otherPath = uriToFilePath(otherUri);
-      const otherBaseName = path.basename(otherPath);
+      const otherBaseName = basename(otherPath);
       includedPaths.add(otherPath);
       includedPaths.add(otherBaseName);
       additionalSources.push({
@@ -502,24 +502,22 @@ export class DocumentManager {
         if (isTestFile(source)) continue;
         additionalSources.push({
           source,
-          fileName: path.basename(filePath),
+          fileName: basename(filePath),
         });
       }
     }
 
-    // For strucpp-lib: documents, pass pre-loaded archives excluding the
-    // current library to avoid duplicate symbol registration.
+    // Pass pre-loaded archives.  For strucpp-lib: documents, exclude
+    // the current library to avoid duplicate symbol registration.
+    // (The library's own sources are analysed as the primary input.)
     let libraryOption: Partial<CompileOptions> = {};
-    if (libMatch && this.libraryArchives.size > 0) {
-      const currentLib = libMatch[1];
-      const deps = [...this.libraryArchives.entries()]
-        .filter(([name]) => name !== currentLib)
+    if (this.libraryArchives.size > 0) {
+      const archives = [...this.libraryArchives.entries()]
+        .filter(([name]) => !libMatch || name !== libMatch[1])
         .map(([, archive]) => archive);
-      if (deps.length > 0) {
-        libraryOption = { libraries: deps };
+      if (archives.length > 0) {
+        libraryOption = { libraries: archives };
       }
-    } else if (this.libraryPaths.length > 0) {
-      libraryOption = { libraryPaths: this.libraryPaths };
     }
 
     const options: Partial<CompileOptions> = {

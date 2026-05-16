@@ -5,29 +5,34 @@
  *
  * Auto-detects the library format (V2.3 or V3) and extracts ST source files
  * that can be fed directly to `compileStlib()`.
+ *
+ * The importer is bytes-first: callers hand in a `Uint8Array` they
+ * already obtained (HTTP fetch, FileReader, Electron IPC, Node
+ * `readFileSync`).  A Node-only convenience wrapper that takes a
+ * file path lives in `strucpp/node`.
  */
 
-import { readFileSync } from "fs";
-import { resolve } from "path";
+import { bytesEqual, bytesToHex } from "../../byte-utils.js";
+import { isV23Library, parseV23Library } from "./v23-parser.js";
 import type {
-  CodesysImportResult,
   CodesysFormat,
+  CodesysImportResult,
   ExtractedPOU,
 } from "./types.js";
-import { isV23Library, parseV23Library } from "./v23-parser.js";
-import { parseV3Library } from "./v3-parser.js";
 import { pouToSources } from "./pou-formatter.js";
+import { parseV3Library } from "./v3-parser.js";
 
 /** ZIP local file header magic (PK\x03\x04). */
-const ZIP_MAGIC = Buffer.from([0x50, 0x4b, 0x03, 0x04]);
+const ZIP_MAGIC = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
 
 /**
  * Detect the CODESYS library format from binary content.
- * Returns null if the format is unrecognized.
+ * Returns null if the format is unrecognised.
  */
-export function detectFormat(data: Buffer): CodesysFormat | null {
+export function detectFormat(data: Uint8Array): CodesysFormat | null {
   if (isV23Library(data)) return "v23";
-  if (data.length >= 4 && data.subarray(0, 4).equals(ZIP_MAGIC)) return "v3";
+  if (data.length >= 4 && bytesEqual(data.subarray(0, 4), ZIP_MAGIC))
+    return "v3";
   return null;
 }
 
@@ -43,32 +48,19 @@ function countByType(pous: ExtractedPOU[]): Record<string, number> {
 }
 
 /**
- * Import a CODESYS library from a file path.
+ * Import a CODESYS library from raw bytes.
  *
  * Auto-detects V2.3 (.lib) vs V3 (.library) format and extracts
- * all POUs as individual .st source files.
+ * all POUs as individual `.st` sources.  Async because V3 archives
+ * use DEFLATE compression that we decompress through the platform's
+ * `DecompressionStream`.
  *
- * @param filePath - Path to the CODESYS .lib or .library file
+ * @param data - Raw bytes of the CODESYS library file
  * @returns Import result with extracted sources ready for `compileStlib()`
  */
-export function importCodesysLibrary(filePath: string): CodesysImportResult {
-  const resolvedPath = resolve(filePath);
-  let data: Buffer;
-  try {
-    data = readFileSync(resolvedPath);
-  } catch (e) {
-    return {
-      success: false,
-      sources: [],
-      globalConstants: {},
-      metadata: { format: "v23", pouCount: 0, counts: {} },
-      warnings: [],
-      errors: [
-        `Cannot read file: ${resolvedPath}: ${e instanceof Error ? e.message : String(e)}`,
-      ],
-    };
-  }
-
+export async function importCodesysLibraryFromBytes(
+  data: Uint8Array,
+): Promise<CodesysImportResult> {
   const format = detectFormat(data);
   if (!format) {
     return {
@@ -79,7 +71,7 @@ export function importCodesysLibrary(filePath: string): CodesysImportResult {
       warnings: [],
       errors: [
         `Unrecognized file format (not CODESYS V2.3 or V3). ` +
-          `Magic bytes: ${data.subarray(0, 8).toString("hex")}`,
+          `Magic bytes: ${bytesToHex(data.subarray(0, 8))}`,
       ],
     };
   }
@@ -94,7 +86,7 @@ export function importCodesysLibrary(filePath: string): CodesysImportResult {
 /**
  * Import a CODESYS V2.3 library from pre-read binary data.
  */
-function importV23(data: Buffer): CodesysImportResult {
+function importV23(data: Uint8Array): CodesysImportResult {
   const { pous, warnings } = parseV23Library(data);
 
   if (pous.length === 0) {
@@ -124,8 +116,8 @@ function importV23(data: Buffer): CodesysImportResult {
 /**
  * Import a CODESYS V3 library from pre-read ZIP binary data.
  */
-function importV3(data: Buffer): CodesysImportResult {
-  const { pous, guid, globalConstants, warnings } = parseV3Library(data);
+async function importV3(data: Uint8Array): Promise<CodesysImportResult> {
+  const { pous, guid, globalConstants, warnings } = await parseV3Library(data);
 
   if (pous.length === 0) {
     return {

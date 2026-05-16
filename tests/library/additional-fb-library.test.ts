@@ -13,7 +13,7 @@
 import { describe, it, expect } from "vitest";
 import { resolve } from "path";
 import { compileLibrary } from "../../src/library/library-compiler.js";
-import { loadStlibFromFile } from "../../src/library/library-loader.js";
+import { loadStlibFromFile } from "../../src/node/library-loader.js";
 import { compile } from "../../src/index.js";
 
 const LIBS_DIR = resolve(__dirname, "../../libs");

@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import { compile } from "../../src/index.js";
 
 function compileAndCheck(source: string) {
@@ -510,7 +511,7 @@ describe("Codegen - Function Calls", () => {
     const LIBS_DIR = "libs";
 
     function compileWithLibs(source: string) {
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
       expect(result.success).toBe(true);
       return result;
     }

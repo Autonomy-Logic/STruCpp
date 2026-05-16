@@ -18,16 +18,18 @@ import { compileLibrary } from "../../src/library/library-compiler.js";
 import { compileStlib } from "../../src/library/library-compiler.js";
 import {
   loadLibraryManifest,
-  loadLibraryFromFile,
-  discoverLibraries,
   loadStlibArchive,
   loadStlibFromString,
   loadStlibFromBuffer,
-  loadStlibFromFile,
-  discoverStlibs,
   registerLibrarySymbols,
   LibraryManifestError,
 } from "../../src/library/library-loader.js";
+import {
+  loadLibraryFromFile,
+  discoverLibraries,
+  loadStlibFromFile,
+  discoverStlibs,
+} from "../../src/node/library-loader.js";
 import { getBuiltinStdlibManifest } from "../../src/library/builtin-stdlib.js";
 import { SymbolTables } from "../../src/semantic/symbol-table.js";
 import { StdFunctionRegistry } from "../../src/semantic/std-function-registry.js";
@@ -1189,16 +1191,11 @@ describe("Library System", () => {
     });
   });
 
-  describe("compile() with libraryPaths option (.stlib)", () => {
-    beforeAll(() => {
-      if (existsSync(TMP_BASE)) rmSync(TMP_BASE, { recursive: true });
-      mkdirSync(TMP_BASE, { recursive: true });
-    });
-
-    it("should load .stlib archives from libraryPaths and inject C++ code", () => {
-      const dir = freshDir("compile-stlib-libpaths");
-
-      // Compile a library to get a .stlib archive
+  describe("compile() with pre-loaded library archives", () => {
+    it("injects library C++ code into the compiled output", () => {
+      // Library compiled from sources — kept inline so the test
+      // doesn't touch disk; libraries from disk arrive via
+      // strucpp/node's loadStlibFromFile in real consumers.
       const libResult = compileStlib(
         [
           {
@@ -1215,102 +1212,18 @@ describe("Library System", () => {
       );
       expect(libResult.success).toBe(true);
 
-      // Write the .stlib file to disk
-      writeFileSync(
-        join(dir, "ext-lib.stlib"),
-        JSON.stringify(libResult.archive),
-      );
-
-      // Compile a program using the library via -L path
       const source = `
         PROGRAM Main
           VAR result : INT; END_VAR
           result := ExtFunc(x := 42);
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [dir] });
+      const result = compile(source, { libraries: [libResult.archive] });
 
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain("EXTFUNC");
-      // The library C++ code should be injected
       expect(result.headerCode).toContain("Library: ext-lib");
       expect(result.cppCode).toContain("Library: ext-lib");
-    });
-
-    it("should return compile error for invalid libraryPaths", () => {
-      const source = `
-        PROGRAM Main
-          VAR x : INT; END_VAR
-          x := 1;
-        END_PROGRAM
-      `;
-      const result = compile(source, {
-        libraryPaths: [join(TMP_BASE, "does-not-exist")],
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]!.message).toContain(
-        "Cannot read library directory",
-      );
-    });
-
-    it("should combine libraryPaths with explicit libraries", () => {
-      const dir = freshDir("compile-stlib-combined");
-
-      // Library on disk as .stlib
-      const diskLib = compileStlib(
-        [
-          {
-            source: `
-              FUNCTION DiskFunc : INT
-                VAR_INPUT x : INT; END_VAR
-                DiskFunc := x;
-              END_FUNCTION
-            `,
-            fileName: "disk.st",
-          },
-        ],
-        { name: "disk-lib", version: "1.0.0", namespace: "disk" },
-      );
-      expect(diskLib.success).toBe(true);
-      writeFileSync(
-        join(dir, "disk-lib.stlib"),
-        JSON.stringify(diskLib.archive),
-      );
-
-      // Inline library archive
-      const inlineLib = compileStlib(
-        [
-          {
-            source: `
-              FUNCTION InlineFunc : INT
-                VAR_INPUT y : INT; END_VAR
-                InlineFunc := y;
-              END_FUNCTION
-            `,
-            fileName: "inline.st",
-          },
-        ],
-        { name: "inline-lib", version: "1.0.0", namespace: "inline" },
-      );
-      expect(inlineLib.success).toBe(true);
-
-      const source = `
-        PROGRAM Main
-          VAR a : INT; b : INT; END_VAR
-          a := DiskFunc(x := 1);
-          b := InlineFunc(y := 2);
-        END_PROGRAM
-      `;
-      const result = compile(source, {
-        libraryPaths: [dir],
-        libraries: [inlineLib.archive],
-      });
-
-      expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("DISKFUNC");
-      expect(result.cppCode).toContain("INLINEFUNC");
     });
   });
 

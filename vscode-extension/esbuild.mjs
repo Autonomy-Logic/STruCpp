@@ -34,47 +34,14 @@ await esbuild.build({
 });
 
 // Browser server bundle (Web Worker — used by Monaco-based editors
-// like openplc-editor and openplc-web).  Build-style commands and
-// fs-touching code paths are absent from server-browser.ts, but
-// strucpp's library-loader and a few sibling modules still
-// statically import Node built-ins.  Those modules ARE pulled into
-// the bundle for transitive reasons (the type-check + tree-shaker
-// can't always prove a re-export branch is unreachable); we alias
-// the Node built-ins to an inert stub so the bundle compiles.
-// Runtime calls into those APIs are impossible from the browser
-// server's code path — the entry point only invokes strucpp's
-// pure exports.  Any attempted invocation throws a clear error.
-const browserNodeStub = path.resolve(
-  __dirname,
-  "server",
-  "browser-stubs",
-  "node-empty.js",
-);
-// `path` is special: DocumentManager actually invokes
-// `path.basename` / `path.dirname` / `path.join` at runtime to
-// derive friendly file names from in-memory LSP URIs.  Those are
-// pure string operations, so we provide a real implementation
-// instead of routing them through the throw-stub.
-const browserPathShim = path.resolve(
-  __dirname,
-  "server",
-  "browser-stubs",
-  "path-shim.js",
-);
-// The codesys-import path (transitively pulled in via the strucpp
-// top-level `index.js`) seeds magic-byte patterns with module-level
-// `Buffer.from(...)` calls.  Browsers / Web Workers don't expose
-// `Buffer` as a global — without this banner the worker crashes
-// with `ReferenceError: Buffer is not defined` the moment the
-// IIFE evaluates.  The shim provides just enough Buffer surface to
-// let constants initialise; if anything actually invokes a codesys
-// parser at runtime (it shouldn't — server-browser.ts only uses
-// analyze + loadStlib{FromString,FromBuffer}), the call will fail
-// loudly at the use site, which is the right failure mode.
-const bufferBannerJs = fs.readFileSync(
-  path.resolve(__dirname, "server", "browser-stubs", "buffer-banner.js"),
-  "utf-8",
-);
+// like openplc-editor and openplc-web).  The strucpp package is
+// pure-by-default (Node-only helpers live in the `strucpp/node`
+// sub-entry); `server-browser.ts` imports only from the pure
+// surface and the LSP modules under `vscode-extension/server/src/`,
+// so the bundle compiles straight against the browser platform
+// with zero aliases or banners.  If a future Node-only import
+// sneaks in, esbuild will fail loud at bundle time, which is the
+// right behaviour.
 await esbuild.build({
   bundle: true,
   platform: "browser",
@@ -84,29 +51,6 @@ await esbuild.build({
   minify: production,
   entryPoints: ["./out/server/src/server-browser.js"],
   outfile: "./out/server.browser.js",
-  banner: { js: bufferBannerJs },
-  alias: {
-    fs: browserNodeStub,
-    "node:fs": browserNodeStub,
-    path: browserPathShim,
-    "node:path": browserPathShim,
-    os: browserNodeStub,
-    "node:os": browserNodeStub,
-    child_process: browserNodeStub,
-    "node:child_process": browserNodeStub,
-    url: browserNodeStub,
-    "node:url": browserNodeStub,
-    util: browserNodeStub,
-    "node:util": browserNodeStub,
-    zlib: browserNodeStub,
-    "node:zlib": browserNodeStub,
-    stream: browserNodeStub,
-    "node:stream": browserNodeStub,
-    crypto: browserNodeStub,
-    "node:crypto": browserNodeStub,
-    buffer: browserNodeStub,
-    "node:buffer": browserNodeStub,
-  },
 });
 
 // Copy runtime files for .vsix packaging.

@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from "vitest";
 import { resolve } from "path";
-import { loadStlibFromFile } from "../../src/library/library-loader.js";
+import { loadStlibFromFile } from "../../src/node/library-loader.js";
 import { StdFunctionRegistry } from "../../src/semantic/std-function-registry.js";
 
 const LIBS_DIR = resolve(__dirname, "../../libs");

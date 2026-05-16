@@ -49,7 +49,7 @@ let compileStlib;
 let loadStlibFromFile;
 let loadLibraryConfig;
 let applyLibraryConfigDocumentation;
-let importCodesysLibrary;
+let importCodesysLibraryFromBytes;
 let StdFunctionRegistry;
 
 /**
@@ -105,10 +105,13 @@ async function refreshAndLoadCompiler() {
   const compiler = await import(
     resolve(projectRoot, "dist/library/library-compiler.js")
   );
-  const loader = await import(
-    resolve(projectRoot, "dist/library/library-loader.js")
+  const nodeLoader = await import(
+    resolve(projectRoot, "dist/node/library-loader.js")
   );
-  const config = await import(
+  const nodeConfig = await import(
+    resolve(projectRoot, "dist/node/library-config.js")
+  );
+  const pureConfig = await import(
     resolve(projectRoot, "dist/library/library-config.js")
   );
   const codesysImport = await import(
@@ -118,10 +121,10 @@ async function refreshAndLoadCompiler() {
     resolve(projectRoot, "dist/semantic/std-function-registry.js")
   );
   compileStlib = compiler.compileStlib;
-  loadStlibFromFile = loader.loadStlibFromFile;
-  loadLibraryConfig = config.loadLibraryConfig;
-  applyLibraryConfigDocumentation = config.applyLibraryConfigDocumentation;
-  importCodesysLibrary = codesysImport.importCodesysLibrary;
+  loadStlibFromFile = nodeLoader.loadStlibFromFile;
+  loadLibraryConfig = nodeConfig.loadLibraryConfig;
+  applyLibraryConfigDocumentation = pureConfig.applyLibraryConfigDocumentation;
+  importCodesysLibraryFromBytes = codesysImport.importCodesysLibraryFromBytes;
   StdFunctionRegistry = stdFnRegistry.StdFunctionRegistry;
 }
 
@@ -272,7 +275,7 @@ function rebuildLibraryFromDisk({ libDirName, stlibPath, orderedSources, depende
  * sources into compileAndWrite. The .library file is the canonical source
  * of truth — never the .stlib output.
  */
-function rebuildLibraryFromCodesys({ libDirName, stlibPath, dependencies }) {
+async function rebuildLibraryFromCodesys({ libDirName, stlibPath, dependencies }) {
   const sourcesDir = resolve(sourcesRoot, libDirName);
   if (!existsSync(sourcesDir)) {
     throw new Error(`Source directory not found: ${sourcesDir}`);
@@ -293,7 +296,8 @@ function rebuildLibraryFromCodesys({ libDirName, stlibPath, dependencies }) {
     throw new Error(`CODESYS source file not found: ${codesysPath}`);
   }
 
-  const importResult = importCodesysLibrary(codesysPath);
+  const codesysBytes = readFileSync(codesysPath);
+  const importResult = await importCodesysLibraryFromBytes(codesysBytes);
   if (!importResult.success) {
     throw new Error(
       `Failed to import ${codesysPath}:\n  ${importResult.errors.join("\n  ")}`,
@@ -495,7 +499,7 @@ export async function setup() {
   if (existsSync(resolve(sourcesRoot, "oscat-basic"))) {
     console.log("[rebuild-libs] Rebuilding oscat-basic.stlib (from codesys)...");
     const iecArchive = loadStlibFromFile(iecPath);
-    rebuildLibraryFromCodesys({
+    await rebuildLibraryFromCodesys({
       libDirName: "oscat-basic",
       stlibPath: oscatPath,
       dependencies: [iecArchive],

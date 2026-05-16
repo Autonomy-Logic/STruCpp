@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Autonomy / OpenPLC Project
 import { describe, it, expect } from "vitest";
+import { splitCxxFlags } from "../../dist/cxx-flags.js";
 import {
-  splitCxxFlags,
-  isCompilerAvailable,
   findRuntimeIncludeDir,
-} from "../../dist/index.js";
+  isCompilerAvailable,
+} from "../../dist/node/build-utils.js";
 
 describe("splitCxxFlags", () => {
   it("splits simple flags", () => {

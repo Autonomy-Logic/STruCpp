@@ -5,6 +5,17 @@
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./node": {
+      "types": "./dist/node/index.d.ts",
+      "default": "./dist/node/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "build": "node scripts/rebuild-libs.mjs",
     "build:tsc-only": "tsc",
@@ -26,13 +37,14 @@
     "format": "prettier --write src/",
     "format:check": "prettier --check src/",
     "typecheck": "tsc --noEmit",
+    "check:purity": "node scripts/check-purity.mjs",
     "clean": "rm -rf dist/ libs/*.stlib libs/iec-types.json vscode-extension/bundled-libs/*.stlib vscode-extension/bundled-libs/iec-types.json",
     "prepack": "npm run build && npm run build:browser-server",
     "prepublishOnly": "npm run build && npm run build:browser-server",
     "prepare": "husky"
   },
   "bin": {
-    "strucpp": "./dist/cli.js"
+    "strucpp": "./dist/node/cli.js"
   },
   "files": [
     "dist/",

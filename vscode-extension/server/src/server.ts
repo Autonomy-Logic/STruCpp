@@ -26,18 +26,17 @@ import {
 import { TextDocument } from "vscode-languageserver-textdocument";
 import {
   analyze,
-  compile,
-  generateReplMain,
-  compileStlib,
-  loadStlibFromFile,
-  parseTestFile,
   analyzeTestFile,
-  generateTestMain,
   buildPOUInfoFromAST,
-  getCxxEnv,
-  splitCxxFlags,
+  compile,
+  compileStlib,
   ELEMENTARY_TYPES,
+  generateReplMain,
+  generateTestMain,
+  parseTestFile,
+  splitCxxFlags,
 } from "strucpp";
+import { getCxxEnv, loadStlibFromFile } from "strucpp/node";
 import {
   CompileRequest,
   BuildRequest,
@@ -151,7 +150,6 @@ function updateLibraryPaths(): void {
     }
   }
 
-  docManager.setLibraryPaths(merged);
   cacheLibraryArchives(merged);
 }
 
@@ -360,8 +358,8 @@ connection.onRequest(CompileRequest, (params): CompileResponse => {
     fileName,
     headerFileName: fileName.replace(/\.(st|iecst)$/i, ".hpp"),
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(docManager.getLibraryPaths().length > 0
-      ? { libraryPaths: docManager.getLibraryPaths() }
+    ...(docManager.getLibraryArchives().length > 0
+      ? { libraries: docManager.getLibraryArchives() }
       : {}),
     ...(Object.keys(currentSettings.globalConstants).length > 0
       ? { globalConstants: currentSettings.globalConstants }
@@ -431,8 +429,8 @@ connection.onRequest(BuildRequest, (params): BuildResponse => {
     fileName,
     headerFileName,
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(docManager.getLibraryPaths().length > 0
-      ? { libraryPaths: docManager.getLibraryPaths() }
+    ...(docManager.getLibraryArchives().length > 0
+      ? { libraries: docManager.getLibraryArchives() }
       : {}),
     ...(Object.keys(currentSettings.globalConstants).length > 0
       ? { globalConstants: currentSettings.globalConstants }
@@ -534,8 +532,8 @@ connection.onRequest(DebugBuildRequest, (params): DebugBuildResponse => {
     lineDirectiveFileName: absolutePath,
     lineMapping: true,
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(docManager.getLibraryPaths().length > 0
-      ? { libraryPaths: docManager.getLibraryPaths() }
+    ...(docManager.getLibraryArchives().length > 0
+      ? { libraries: docManager.getLibraryArchives() }
       : {}),
     ...(Object.keys(currentSettings.globalConstants).length > 0
       ? { globalConstants: currentSettings.globalConstants }
@@ -672,24 +670,9 @@ connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
     };
   }
 
-  // Load dependency libraries from configured paths
-  const depArchives: import("strucpp").StlibArchive[] = [];
-  for (const libDir of docManager.getLibraryPaths()) {
-    try {
-      const entries = fs.readdirSync(libDir);
-      for (const entry of entries) {
-        if (entry.endsWith(".stlib")) {
-          try {
-            depArchives.push(loadStlibFromFile(path.join(libDir, entry)));
-          } catch {
-            // Skip unreadable library files
-          }
-        }
-      }
-    } catch {
-      // Skip unreadable directories
-    }
-  }
+  // Dependency libraries arrive already loaded in the document
+  // manager's cache (populated by updateLibraryPaths at init/change).
+  const depArchives = docManager.getLibraryArchives();
 
   const result = compileStlib(sources, {
     name: libName,
@@ -767,14 +750,14 @@ connection.onRequest(RunTestsRequest, async (params: RunTestsParams): Promise<Ru
   // 3. Compile sources with isTestBuild flag
   const primarySource = workspaceSources[0]!;
   const additionalSources = workspaceSources.slice(1);
-  const libraryPaths = docManager.getLibraryPaths();
+  const libraries = docManager.getLibraryArchives();
 
   const compileResult = compile(primarySource.source, {
     fileName: primarySource.fileName,
     headerFileName: "generated.hpp",
     isTestBuild: true,
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(libraryPaths.length > 0 ? { libraryPaths } : {}),
+    ...(libraries.length > 0 ? { libraries } : {}),
   });
 
   if (!compileResult.success) {
