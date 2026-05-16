@@ -50,6 +50,17 @@ const browserNodeStub = path.resolve(
   "browser-stubs",
   "node-empty.js",
 );
+// `path` is special: DocumentManager actually invokes
+// `path.basename` / `path.dirname` / `path.join` at runtime to
+// derive friendly file names from in-memory LSP URIs.  Those are
+// pure string operations, so we provide a real implementation
+// instead of routing them through the throw-stub.
+const browserPathShim = path.resolve(
+  __dirname,
+  "server",
+  "browser-stubs",
+  "path-shim.js",
+);
 // The codesys-import path (transitively pulled in via the strucpp
 // top-level `index.js`) seeds magic-byte patterns with module-level
 // `Buffer.from(...)` calls.  Browsers / Web Workers don't expose
@@ -77,8 +88,8 @@ await esbuild.build({
   alias: {
     fs: browserNodeStub,
     "node:fs": browserNodeStub,
-    path: browserNodeStub,
-    "node:path": browserNodeStub,
+    path: browserPathShim,
+    "node:path": browserPathShim,
     os: browserNodeStub,
     "node:os": browserNodeStub,
     child_process: browserNodeStub,
