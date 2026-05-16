@@ -50,6 +50,20 @@ const browserNodeStub = path.resolve(
   "browser-stubs",
   "node-empty.js",
 );
+// The codesys-import path (transitively pulled in via the strucpp
+// top-level `index.js`) seeds magic-byte patterns with module-level
+// `Buffer.from(...)` calls.  Browsers / Web Workers don't expose
+// `Buffer` as a global — without this banner the worker crashes
+// with `ReferenceError: Buffer is not defined` the moment the
+// IIFE evaluates.  The shim provides just enough Buffer surface to
+// let constants initialise; if anything actually invokes a codesys
+// parser at runtime (it shouldn't — server-browser.ts only uses
+// analyze + loadStlib{FromString,FromBuffer}), the call will fail
+// loudly at the use site, which is the right failure mode.
+const bufferBannerJs = fs.readFileSync(
+  path.resolve(__dirname, "server", "browser-stubs", "buffer-banner.js"),
+  "utf-8",
+);
 await esbuild.build({
   bundle: true,
   platform: "browser",
@@ -59,6 +73,7 @@ await esbuild.build({
   minify: production,
   entryPoints: ["./out/server/src/server-browser.js"],
   outfile: "./out/server.browser.js",
+  banner: { js: bufferBannerJs },
   alias: {
     fs: browserNodeStub,
     "node:fs": browserNodeStub,
