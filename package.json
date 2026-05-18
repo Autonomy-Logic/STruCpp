@@ -14,6 +14,8 @@
       "types": "./dist/node/index.d.ts",
       "default": "./dist/node/index.js"
     },
+    "./libs/*": "./libs/*",
+    "./dist/*": "./dist/*",
     "./package.json": "./package.json"
   },
   "scripts": {
