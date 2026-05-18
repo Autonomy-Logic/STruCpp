@@ -75,47 +75,47 @@ export function getCompletions(
 function getTopLevelCompletions(): CompletionItem[] {
   return [
     {
-      label: "PROGRAM",
+      label: "program",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "PROGRAM ${1:Name}\n  VAR\n    $0\n  END_VAR\nEND_PROGRAM",
+      insertText: "program ${1:Name}\n  var\n    $0\n  end_var\nend_program",
       sortText: "0",
     },
     {
-      label: "FUNCTION_BLOCK",
+      label: "function_block",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
       insertText:
-        "FUNCTION_BLOCK ${1:Name}\n  VAR_INPUT\n    $0\n  END_VAR\nEND_FUNCTION_BLOCK",
+        "function_block ${1:Name}\n  var_input\n    $0\n  end_var\nend_function_block",
       sortText: "0",
     },
     {
-      label: "FUNCTION",
+      label: "function",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
       insertText:
-        "FUNCTION ${1:Name} : ${2:INT}\n  VAR_INPUT\n    $0\n  END_VAR\nEND_FUNCTION",
+        "function ${1:Name} : ${2:INT}\n  var_input\n    $0\n  end_var\nend_function",
       sortText: "0",
     },
     {
-      label: "TYPE",
+      label: "type",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "TYPE ${1:Name} :\n  STRUCT\n    $0\n  END_STRUCT;\nEND_TYPE",
+      insertText: "type ${1:Name} :\n  struct\n    $0\n  end_struct;\nend_type",
       sortText: "0",
     },
     {
-      label: "INTERFACE",
+      label: "interface",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "INTERFACE ${1:IName}\n  METHOD ${2:MethodName}\n    $0\n  END_METHOD\nEND_INTERFACE",
+      insertText: "interface ${1:IName}\n  method ${2:MethodName}\n    $0\n  end_method\nend_interface",
       sortText: "0",
     },
     {
-      label: "VAR_GLOBAL",
+      label: "var_global",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "VAR_GLOBAL\n  $0\nEND_VAR",
+      insertText: "var_global\n  $0\nend_var",
       sortText: "0",
     },
   ];
@@ -128,7 +128,7 @@ function getTopLevelCompletions(): CompletionItem[] {
 function getVarBlockCompletions(): CompletionItem[] {
   return [
     {
-      label: "END_VAR",
+      label: "end_var",
       kind: CompletionItemKind.Keyword,
       sortText: "0",
     },
@@ -177,19 +177,19 @@ function getTypeAnnotationCompletions(analysis: AnalysisResult): CompletionItem[
 
   // ARRAY snippet
   items.push({
-    label: "ARRAY",
+    label: "array",
     kind: CompletionItemKind.Keyword,
     insertTextFormat: InsertTextFormat.Snippet,
-    insertText: "ARRAY[${1:0}..${2:9}] OF ${3:INT}",
+    insertText: "array[${1:0}..${2:9}] of ${3:INT}",
     sortText: "2",
   });
 
   // REF_TO snippet
   items.push({
-    label: "REF_TO",
+    label: "ref_to",
     kind: CompletionItemKind.Keyword,
     insertTextFormat: InsertTextFormat.Snippet,
-    insertText: "REF_TO ${1:INT}",
+    insertText: "ref_to ${1:INT}",
     sortText: "2",
   });
 
@@ -595,51 +595,63 @@ function getBodyCompletions(
 
 function getStatementKeywordCompletions(): CompletionItem[] {
   return [
+    // Snippet starters
     {
-      label: "IF",
+      label: "if",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "IF ${1:condition} THEN\n  $0\nEND_IF;",
+      insertText: "if ${1:condition} then\n  $0\nend_if;",
       sortText: "0",
     },
     {
-      label: "FOR",
+      label: "for",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "FOR ${1:i} := ${2:0} TO ${3:10} DO\n  $0\nEND_FOR;",
+      insertText: "for ${1:i} := ${2:0} to ${3:10} do\n  $0\nend_for;",
       sortText: "0",
     },
     {
-      label: "WHILE",
+      label: "while",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "WHILE ${1:condition} DO\n  $0\nEND_WHILE;",
+      insertText: "while ${1:condition} do\n  $0\nend_while;",
       sortText: "0",
     },
     {
-      label: "REPEAT",
+      label: "repeat",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "REPEAT\n  $0\nUNTIL ${1:condition}\nEND_REPEAT;",
+      insertText: "repeat\n  $0\nuntil ${1:condition}\nend_repeat;",
       sortText: "0",
     },
     {
-      label: "CASE",
+      label: "case",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "CASE ${1:expr} OF\n  ${2:0}:\n    $0\nEND_CASE;",
+      insertText: "case ${1:expr} of\n  ${2:0}:\n    $0\nend_case;",
       sortText: "0",
     },
-    {
-      label: "RETURN",
-      kind: CompletionItemKind.Keyword,
-      sortText: "0",
-    },
-    {
-      label: "EXIT",
-      kind: CompletionItemKind.Keyword,
-      sortText: "0",
-    },
+    { label: "return", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "exit", kind: CompletionItemKind.Keyword, sortText: "0" },
+    // Mid-statement keywords — surface them as plain completions so
+    // typing the start of the closer (`end`, `else`, `then`, …)
+    // matches even when the user wrote the opener by hand instead of
+    // using the snippet starter.
+    { label: "then", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "else", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "elsif", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "do", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "of", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "to", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "by", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "until", kind: CompletionItemKind.Keyword, sortText: "0" },
+    // Block closers — required so `end<TAB>` works for every
+    // hand-typed opener.
+    { label: "end_if", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "end_for", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "end_while", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "end_repeat", kind: CompletionItemKind.Keyword, sortText: "0" },
+    { label: "end_case", kind: CompletionItemKind.Keyword, sortText: "0" },
   ];
 }
 
@@ -651,24 +663,24 @@ function getStatementKeywordCompletions(): CompletionItem[] {
 function getTestTopLevelCompletions(): CompletionItem[] {
   return [
     {
-      label: "TEST",
+      label: "test",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "TEST '${1:test name}'\n  $0\nEND_TEST",
+      insertText: "test '${1:test name}'\n  $0\nend_test",
       sortText: "0",
     },
     {
-      label: "SETUP",
+      label: "setup",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "SETUP\n  VAR\n    $0\n  END_VAR\nEND_SETUP",
+      insertText: "setup\n  var\n    $0\n  end_var\nend_setup",
       sortText: "0",
     },
     {
-      label: "TEARDOWN",
+      label: "teardown",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "TEARDOWN\n  $0\nEND_TEARDOWN",
+      insertText: "teardown\n  $0\nend_teardown",
       sortText: "0",
     },
   ];
