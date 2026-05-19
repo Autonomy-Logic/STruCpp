@@ -73,12 +73,17 @@ export function getCompletions(
 // ---------------------------------------------------------------------------
 
 function getTopLevelCompletions(): CompletionItem[] {
+  // Snippets use literal tab characters (`\t`) rather than space
+  // sequences so Monaco's snippet engine substitutes them per the
+  // editor's `tabSize` / `insertSpaces` options.  In the OpenPLC
+  // editor that lands as 4 spaces; in any other host it follows
+  // that host's indentation policy automatically.
   return [
     {
       label: "program",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "program ${1:Name}\n  var\n    $0\n  end_var\nend_program",
+      insertText: "program ${1:Name}\n\tvar\n\t\t$0\n\tend_var\nend_program",
       sortText: "0",
     },
     {
@@ -86,7 +91,7 @@ function getTopLevelCompletions(): CompletionItem[] {
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
       insertText:
-        "function_block ${1:Name}\n  var_input\n    $0\n  end_var\nend_function_block",
+        "function_block ${1:Name}\n\tvar_input\n\t\t$0\n\tend_var\nend_function_block",
       sortText: "0",
     },
     {
@@ -94,28 +99,28 @@ function getTopLevelCompletions(): CompletionItem[] {
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
       insertText:
-        "function ${1:Name} : ${2:INT}\n  var_input\n    $0\n  end_var\nend_function",
+        "function ${1:Name} : ${2:INT}\n\tvar_input\n\t\t$0\n\tend_var\nend_function",
       sortText: "0",
     },
     {
       label: "type",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "type ${1:Name} :\n  struct\n    $0\n  end_struct;\nend_type",
+      insertText: "type ${1:Name} :\n\tstruct\n\t\t$0\n\tend_struct;\nend_type",
       sortText: "0",
     },
     {
       label: "interface",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "interface ${1:IName}\n  method ${2:MethodName}\n    $0\n  end_method\nend_interface",
+      insertText: "interface ${1:IName}\n\tmethod ${2:MethodName}\n\t\t$0\n\tend_method\nend_interface",
       sortText: "0",
     },
     {
       label: "var_global",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "var_global\n  $0\nend_var",
+      insertText: "var_global\n\t$0\nend_var",
       sortText: "0",
     },
   ];
@@ -595,40 +600,42 @@ function getBodyCompletions(
 
 function getStatementKeywordCompletions(): CompletionItem[] {
   return [
-    // Snippet starters
+    // Snippet starters (indents use `\t` so Monaco substitutes per
+    // the editor's tab-size setting; see comment in
+    // `getTopLevelCompletions`).
     {
       label: "if",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "if ${1:condition} then\n  $0\nend_if;",
+      insertText: "if ${1:condition} then\n\t$0\nend_if;",
       sortText: "0",
     },
     {
       label: "for",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "for ${1:i} := ${2:0} to ${3:10} do\n  $0\nend_for;",
+      insertText: "for ${1:i} := ${2:0} to ${3:10} do\n\t$0\nend_for;",
       sortText: "0",
     },
     {
       label: "while",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "while ${1:condition} do\n  $0\nend_while;",
+      insertText: "while ${1:condition} do\n\t$0\nend_while;",
       sortText: "0",
     },
     {
       label: "repeat",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "repeat\n  $0\nuntil ${1:condition}\nend_repeat;",
+      insertText: "repeat\n\t$0\nuntil ${1:condition}\nend_repeat;",
       sortText: "0",
     },
     {
       label: "case",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "case ${1:expr} of\n  ${2:0}:\n    $0\nend_case;",
+      insertText: "case ${1:expr} of\n\t${2:0}:\n\t\t$0\nend_case;",
       sortText: "0",
     },
     { label: "return", kind: CompletionItemKind.Keyword, sortText: "0" },
@@ -666,21 +673,21 @@ function getTestTopLevelCompletions(): CompletionItem[] {
       label: "test",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "test '${1:test name}'\n  $0\nend_test",
+      insertText: "test '${1:test name}'\n\t$0\nend_test",
       sortText: "0",
     },
     {
       label: "setup",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "setup\n  var\n    $0\n  end_var\nend_setup",
+      insertText: "setup\n\tvar\n\t\t$0\n\tend_var\nend_setup",
       sortText: "0",
     },
     {
       label: "teardown",
       kind: CompletionItemKind.Keyword,
       insertTextFormat: InsertTextFormat.Snippet,
-      insertText: "teardown\n  $0\nend_teardown",
+      insertText: "teardown\n\t$0\nend_teardown",
       sortText: "0",
     },
   ];
