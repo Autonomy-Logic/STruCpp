@@ -7,9 +7,6 @@
  * This module exports the public API for programmatic usage.
  */
 
-import { readFileSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
 import {
   CompileOptions,
   CompileResult,
@@ -38,11 +35,7 @@ import type {
 } from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
 import { walkAST } from "./ast-utils.js";
-import {
-  registerLibrarySymbols,
-  discoverStlibs,
-  LibraryManifestError,
-} from "./library/library-loader.js";
+import { registerLibrarySymbols } from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
 import { annotateErrorsWithPouContext } from "./diagnostic-pou-context.js";
 
@@ -550,23 +543,9 @@ function runPipeline(
     };
   }
 
-  // Phase 4: Library loading
+  // Phase 4: Library loading.  Archives arrive pre-loaded;
+  // fs-based discovery lives in `strucpp/node`.
   allArchives.push(...(mergedOptions.libraries ?? []));
-  for (const libPath of mergedOptions.libraryPaths ?? []) {
-    try {
-      allArchives.push(...discoverStlibs(libPath));
-    } catch (e) {
-      errors.push({
-        message:
-          e instanceof LibraryManifestError
-            ? e.message
-            : `Library loading failed: ${e instanceof Error ? e.message : String(e)}`,
-        line: 0,
-        column: 0,
-        severity: "error",
-      });
-    }
-  }
 
   if (!continueOnError && errors.length > 0) {
     return {
@@ -939,15 +918,7 @@ export function getVersion(): string {
   if (STRUCPP_VERSION_BUILD) {
     return STRUCPP_VERSION_BUILD;
   }
-  try {
-    const dir = dirname(fileURLToPath(import.meta.url));
-    const pkg = JSON.parse(
-      readFileSync(join(dir, "../package.json"), "utf-8"),
-    ) as { version: string };
-    return pkg.version;
-  } catch {
-    return "0.0.0";
-  }
+  return "0.0.0";
 }
 
 // Re-export types
@@ -1069,8 +1040,8 @@ export { compileLibrary, compileStlib } from "./library/library-compiler.js";
 export {
   loadLibraryManifest,
   loadStlibArchive,
-  loadStlibFromFile,
-  discoverStlibs,
+  loadStlibFromBuffer,
+  loadStlibFromString,
   registerLibrarySymbols,
   LibraryManifestError,
 } from "./library/library-loader.js";
@@ -1088,26 +1059,20 @@ export type {
 
 // Re-export CODESYS import
 export {
-  importCodesysLibrary,
   detectFormat,
+  importCodesysLibraryFromBytes,
 } from "./library/codesys-import/index.js";
 export type {
-  CodesysImportResult,
   CodesysFormat,
+  CodesysImportResult,
 } from "./library/codesys-import/index.js";
 
 // REPL main generator (for build command)
 export { generateReplMain } from "./backend/repl-main-gen.js";
 export type { ReplMainGenOptions } from "./backend/repl-main-gen.js";
 
-// Build utilities (for extension client)
-export {
-  getCxxEnv,
-  splitCxxFlags,
-  isCompilerAvailable,
-  findRuntimeIncludeDir,
-  findBundledLibsDir,
-} from "./build-utils.js";
+// Pure C++ flag parsers (Node-only build helpers live in `strucpp/node`).
+export { extractIncludePaths, splitCxxFlags } from "./cxx-flags.js";
 
 // Test framework
 export { parseTestFile } from "./testing/test-parser.js";

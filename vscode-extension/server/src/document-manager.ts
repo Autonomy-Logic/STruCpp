@@ -8,9 +8,8 @@
  * Discovers all .st files in workspace folders for multi-file projects.
  */
 
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { URI } from "vscode-uri";
+import { basename, dirname, join } from "./path-ops.js";
 import type {
   AnalysisResult,
   CompileOptions,
@@ -18,6 +17,7 @@ import type {
 } from "strucpp";
 import { parseTestFile, analyzeTestFile } from "strucpp";
 import { isTestFile } from "../../shared/test-utils.js";
+import { NullWorkspaceFs, type WorkspaceFs } from "./workspace-fs.js";
 
 export interface DocumentState {
   uri: string;
@@ -35,7 +35,6 @@ export class DocumentManager {
   private documents = new Map<string, DocumentState>();
   private analyzeFn: AnalyzeFn;
   private workspaceFolders = new Set<string>();
-  private libraryPaths: string[] = [];
   private discoveryCache = new Map<string, string[]>();
   /** Cached library sources keyed by library name, for analyzing strucpp-lib: documents. */
   private librarySources = new Map<string, Array<{ fileName: string; source: string }>>();
@@ -43,6 +42,15 @@ export class DocumentManager {
   private libraryArchives = new Map<string, StlibArchive>();
   /** Cached file paths for library archives, keyed by library name. */
   private libraryFilePaths = new Map<string, string>();
+  /**
+   * Filesystem adapter for workspace .st discovery.  The Node server
+   * injects a real fs-backed implementation; the browser server uses
+   * `NullWorkspaceFs` so discovery short-circuits and every source
+   * must arrive through LSP `didOpen`.  Defaults to `NullWorkspaceFs`
+   * so callers that haven't migrated yet get safe no-op behaviour
+   * rather than a silent fs crash.
+   */
+  private workspaceFs: WorkspaceFs;
 
   /**
    * Case map: UPPERCASE identifier → first-seen original casing.
@@ -51,8 +59,9 @@ export class DocumentManager {
    */
   private _caseMap = new Map<string, string>();
 
-  constructor(analyzeFn: AnalyzeFn) {
+  constructor(analyzeFn: AnalyzeFn, workspaceFs: WorkspaceFs = NullWorkspaceFs) {
     this.analyzeFn = analyzeFn;
+    this.workspaceFs = workspaceFs;
   }
 
   /** Get the workspace-wide case map for identifier casing restoration. */
@@ -83,12 +92,13 @@ export class DocumentManager {
     this.discoveryCache.clear();
   }
 
-  setLibraryPaths(paths: string[]): void {
-    this.libraryPaths = paths;
-  }
-
-  getLibraryPaths(): string[] {
-    return this.libraryPaths;
+  /**
+   * Snapshot of currently-cached archives, ready to splat into a
+   * `compile({ libraries: ... })` call.  Other consumers that just
+   * want descriptors should use `getCachedLibraries()`.
+   */
+  getLibraryArchives(): StlibArchive[] {
+    return [...this.libraryArchives.values()];
   }
 
   /** Cache a library's source files and archive for strucpp-lib: document analysis. */
@@ -133,12 +143,67 @@ export class DocumentManager {
     const dirSet = new Set<string>();
 
     for (const folder of this.workspaceFolders) {
-      for (const stlibPath of discoverFiles(folder, /\.stlib$/i)) {
-        dirSet.add(path.dirname(stlibPath));
+      for (const stlibPath of this.discoverFiles(folder, /\.stlib$/i)) {
+        dirSet.add(dirname(stlibPath));
       }
     }
 
     return [...dirSet];
+  }
+
+  /** Discover all .st / .iecst / .il source files recursively. */
+  private discoverStFiles(dir: string): string[] {
+    return this.discoverFiles(dir, ST_FILE_PATTERN);
+  }
+
+  /**
+   * Recursively discover files matching a pattern in a directory.
+   * Guards against unbounded recursion (max depth), symlink cycles, and hidden dirs.
+   * Returns an empty list when the workspace filesystem can't see disk
+   * (e.g. browser mode with NullWorkspaceFs).
+   */
+  private discoverFiles(
+    dir: string,
+    pattern: RegExp,
+    depth: number = 0,
+    seenReal?: Set<string>,
+  ): string[] {
+    if (depth > MAX_DISCOVERY_DEPTH) return [];
+
+    const seen = seenReal ?? new Set<string>();
+
+    // Resolve real path to detect symlink cycles.  `null` means the
+    // adapter has no disk access (browser) or the dir doesn't exist.
+    const realDir = this.workspaceFs.realpath(dir);
+    if (realDir === null) return [];
+    if (seen.has(realDir)) return [];
+    seen.add(realDir);
+
+    const entries = this.workspaceFs.readDir(dir);
+    if (entries === null) return [];
+
+    const results: string[] = [];
+    for (const entry of entries) {
+      // Skip hidden directories (e.g., .git, .vscode)
+      if (entry.name.startsWith(".")) continue;
+
+      const fullPath = join(dir, entry.name);
+      if (entry.isDirectory || entry.isSymbolicLink) {
+        // Skip common non-source directories
+        if (
+          entry.name === "node_modules" ||
+          entry.name === "dist" ||
+          entry.name === "out" ||
+          entry.name === "build"
+        ) {
+          continue;
+        }
+        results.push(...this.discoverFiles(fullPath, pattern, depth + 1, seen));
+      } else if (pattern.test(entry.name)) {
+        results.push(fullPath);
+      }
+    }
+    return results;
   }
 
   /**
@@ -178,7 +243,7 @@ export class DocumentManager {
       includedPaths.add(filePath);
       sources.push({
         source: state.source,
-        fileName: path.basename(filePath),
+        fileName: basename(filePath),
       });
     }
 
@@ -186,22 +251,19 @@ export class DocumentManager {
     for (const folder of this.workspaceFolders) {
       let discovered = this.discoveryCache.get(folder);
       if (!discovered) {
-        discovered = discoverStFiles(folder);
+        discovered = this.discoverStFiles(folder);
         this.discoveryCache.set(folder, discovered);
       }
       for (const filePath of discovered) {
         if (filePath === excludePath || includedPaths.has(filePath)) continue;
         includedPaths.add(filePath);
-        try {
-          const source = fs.readFileSync(filePath, "utf-8");
-          if (isTestFile(source)) continue;
-          sources.push({
-            source,
-            fileName: path.basename(filePath),
-          });
-        } catch {
-          // Skip unreadable files
-        }
+        const source = this.workspaceFs.readFile(filePath);
+        if (source === null) continue;
+        if (isTestFile(source)) continue;
+        sources.push({
+          source,
+          fileName: basename(filePath),
+        });
       }
     }
 
@@ -243,13 +305,13 @@ export class DocumentManager {
 
   /** Extract a bare fileName from a URI. */
   getFileName(uri: string): string {
-    return path.basename(uriToFilePath(uri));
+    return basename(uriToFilePath(uri));
   }
 
   /** Map a bare fileName back to a URI among open documents. */
   getUriForFile(fileName: string): string | undefined {
     for (const [uri] of this.documents) {
-      if (path.basename(uriToFilePath(uri)) === fileName) {
+      if (basename(uriToFilePath(uri)) === fileName) {
         return uri;
       }
     }
@@ -351,11 +413,11 @@ export class DocumentManager {
     for (const folder of this.workspaceFolders) {
       let discovered = this.discoveryCache.get(folder);
       if (!discovered) {
-        discovered = discoverStFiles(folder);
+        discovered = this.discoverStFiles(folder);
         this.discoveryCache.set(folder, discovered);
       }
       for (const filePath of discovered) {
-        if (path.basename(filePath) === fileName) {
+        if (basename(filePath) === fileName) {
           return URI.file(filePath).toString();
         }
       }
@@ -388,7 +450,7 @@ export class DocumentManager {
 
   private analyzeDocument(state: DocumentState): void {
     const currentFilePath = uriToFilePath(state.uri);
-    const currentFileName = path.basename(currentFilePath);
+    const currentFileName = basename(currentFilePath);
 
     // Build additional sources: open documents + workspace .st files from disk
     const additionalSources: Array<{ source: string; fileName: string }> = [];
@@ -400,7 +462,7 @@ export class DocumentManager {
       // Skip test files — they use a separate parser
       if (isTestFile(otherState.source)) continue;
       const otherPath = uriToFilePath(otherUri);
-      const otherBaseName = path.basename(otherPath);
+      const otherBaseName = basename(otherPath);
       includedPaths.add(otherPath);
       includedPaths.add(otherBaseName);
       additionalSources.push({
@@ -427,40 +489,35 @@ export class DocumentManager {
     for (const folder of this.workspaceFolders) {
       let discovered = this.discoveryCache.get(folder);
       if (!discovered) {
-        discovered = discoverStFiles(folder);
+        discovered = this.discoverStFiles(folder);
         this.discoveryCache.set(folder, discovered);
       }
       for (const filePath of discovered) {
         // Skip the current file and files already included from open docs
         if (filePath === currentFilePath || includedPaths.has(filePath)) continue;
         includedPaths.add(filePath);
-        try {
-          const source = fs.readFileSync(filePath, "utf-8");
-          // Skip test files — they use a separate parser (TEST/END_TEST syntax)
-          if (isTestFile(source)) continue;
-          additionalSources.push({
-            source,
-            fileName: path.basename(filePath),
-          });
-        } catch {
-          // Skip unreadable files
-        }
+        const source = this.workspaceFs.readFile(filePath);
+        if (source === null) continue;
+        // Skip test files — they use a separate parser (TEST/END_TEST syntax)
+        if (isTestFile(source)) continue;
+        additionalSources.push({
+          source,
+          fileName: basename(filePath),
+        });
       }
     }
 
-    // For strucpp-lib: documents, pass pre-loaded archives excluding the
-    // current library to avoid duplicate symbol registration.
+    // Pass pre-loaded archives.  For strucpp-lib: documents, exclude
+    // the current library to avoid duplicate symbol registration.
+    // (The library's own sources are analysed as the primary input.)
     let libraryOption: Partial<CompileOptions> = {};
-    if (libMatch && this.libraryArchives.size > 0) {
-      const currentLib = libMatch[1];
-      const deps = [...this.libraryArchives.entries()]
-        .filter(([name]) => name !== currentLib)
+    if (this.libraryArchives.size > 0) {
+      const archives = [...this.libraryArchives.entries()]
+        .filter(([name]) => !libMatch || name !== libMatch[1])
         .map(([, archive]) => archive);
-      if (deps.length > 0) {
-        libraryOption = { libraries: deps };
+      if (archives.length > 0) {
+        libraryOption = { libraries: archives };
       }
-    } else if (this.libraryPaths.length > 0) {
-      libraryOption = { libraryPaths: this.libraryPaths };
     }
 
     const options: Partial<CompileOptions> = {
@@ -526,64 +583,6 @@ const MAX_DISCOVERY_DEPTH = 10;
 
 /** Pattern matching .st and .iecst source files */
 const ST_FILE_PATTERN = /\.(st|iecst|il)$/i;
-
-/**
- * Recursively discover files matching a pattern in a directory.
- * Guards against unbounded recursion (max depth), symlink cycles, and hidden dirs.
- */
-function discoverFiles(
-  dir: string,
-  pattern: RegExp,
-  depth: number = 0,
-  seenReal?: Set<string>,
-): string[] {
-  if (depth > MAX_DISCOVERY_DEPTH) return [];
-
-  const seen = seenReal ?? new Set<string>();
-
-  // Resolve real path to detect symlink cycles
-  let realDir: string;
-  try {
-    realDir = fs.realpathSync(dir);
-  } catch {
-    return [];
-  }
-  if (seen.has(realDir)) return [];
-  seen.add(realDir);
-
-  const results: string[] = [];
-  try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      // Skip hidden directories (e.g., .git, .vscode)
-      if (entry.name.startsWith(".")) continue;
-
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory() || entry.isSymbolicLink()) {
-        // Skip common non-source directories
-        if (
-          entry.name === "node_modules" ||
-          entry.name === "dist" ||
-          entry.name === "out" ||
-          entry.name === "build"
-        ) {
-          continue;
-        }
-        results.push(...discoverFiles(fullPath, pattern, depth + 1, seen));
-      } else if (pattern.test(entry.name)) {
-        results.push(fullPath);
-      }
-    }
-  } catch {
-    // Skip unreadable directories
-  }
-  return results;
-}
-
-/** Discover all .st / .iecst files recursively. */
-function discoverStFiles(dir: string): string[] {
-  return discoverFiles(dir, ST_FILE_PATTERN);
-}
 
 function uriToFilePath(uri: string): string {
   try {

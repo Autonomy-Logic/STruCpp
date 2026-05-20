@@ -13,10 +13,10 @@ import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import {
-  loadLibraryConfig,
   applyLibraryConfigDocumentation,
   type LibraryConfig,
 } from "../../src/library/library-config.js";
+import { loadLibraryConfig } from "../../src/node/library-config.js";
 import type { StlibArchive } from "../../src/library/library-manifest.js";
 
 let tmp: string;

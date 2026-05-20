@@ -30,7 +30,8 @@ import { describe, it, expect } from "vitest";
 import { join } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
-import { compile, loadStlibFromFile } from "../../src/index.js";
+import { compile } from "../../src/index.js";
+import { loadStlibFromFile } from "../../src/node/library-loader.js";
 import type { StlibArchive } from "../../src/library/library-manifest.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

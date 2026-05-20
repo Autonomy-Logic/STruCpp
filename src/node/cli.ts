@@ -40,21 +40,21 @@ import {
 import { resolve, basename, dirname, join, relative, sep } from "path";
 import { tmpdir, platform } from "os";
 import { execFileSync } from "child_process";
-import { compile, getVersion, compileStlib } from "./index.js";
+import { compile, getVersion, compileStlib } from "../index.js";
 import {
   formatDiagnostic,
   buildSourceMap,
   type DiagnosticSource,
-} from "./diagnostic-formatter.js";
-import { loadStlibFromFile, discoverStlibs } from "./library/library-loader.js";
-import { discoverSTFiles } from "./library/library-utils.js";
-import { generateReplMain } from "./backend/repl-main-gen.js";
-import { parseTestFile } from "./testing/test-parser.js";
+} from "../diagnostic-formatter.js";
+import { discoverStlibs, loadStlibFromFile } from "./library-loader.js";
+import { discoverSTFiles } from "./library-utils.js";
+import { generateReplMain } from "../backend/repl-main-gen.js";
+import { parseTestFile } from "../testing/test-parser.js";
 import {
   generateTestMain,
   buildPOUInfoFromAST,
-} from "./backend/test-main-gen.js";
-import { analyzeTestFile } from "./semantic/analyzer.js";
+} from "../backend/test-main-gen.js";
+import { analyzeTestFile } from "../semantic/analyzer.js";
 import {
   getCxxEnv,
   splitCxxFlags,
@@ -62,8 +62,8 @@ import {
   findRuntimeIncludeDir,
   findBundledLibsDir,
 } from "./build-utils.js";
-import type { CompileError, CompileOptions } from "./types.js";
-import { importCodesysLibrary } from "./library/codesys-import/index.js";
+import type { CompileError, CompileOptions } from "../types.js";
+import { importCodesysLibraryFromBytes } from "../library/codesys-import/index.js";
 
 interface CLIOptions {
   inputs: string[];
@@ -99,6 +99,10 @@ interface CLIOptions {
  * the loop. Used by every CLI mode that surfaces compile/parse/analyze
  * errors so the formatting (and the spacing) stays consistent.
  */
+/** CLI-time color decision: TTY-attached stderr without NO_COLOR. */
+const enableColor =
+  process.env.NO_COLOR === undefined && process.stderr.isTTY === true;
+
 function printDiagnostics(
   errors: ReadonlyArray<CompileError>,
   sources: DiagnosticSource[],
@@ -107,7 +111,7 @@ function printDiagnostics(
   const map = buildSourceMap(sources);
   const out = stream === "warn" ? console.warn : console.error;
   for (const err of errors) {
-    out(formatDiagnostic(err, map));
+    out(formatDiagnostic(err, map, { enableColor }));
     out("");
   }
 }
@@ -542,7 +546,7 @@ function compileLibraryMode(options: CLIOptions): void {
   // Load dependency libraries from explicit -L paths only.
   // Unlike normal compilation, library compilation should not auto-add
   // bundled system libraries as dependencies — only user-specified paths.
-  const dependencies: import("./library/library-manifest.js").StlibArchive[] =
+  const dependencies: import("../library/library-manifest.js").StlibArchive[] =
     [];
   for (const libPath of options.libraryPaths) {
     try {
@@ -629,7 +633,9 @@ function runTestMode(options: CLIOptions): void {
     compileOptions.additionalSources = additionalSources;
   }
   if (effectiveLibPaths.length > 0) {
-    compileOptions.libraryPaths = effectiveLibPaths;
+    compileOptions.libraries = effectiveLibPaths.flatMap((p) =>
+      discoverStlibs(p),
+    );
   }
   if (Object.keys(options.defines).length > 0) {
     compileOptions.globalConstants = options.defines;
@@ -649,7 +655,7 @@ function runTestMode(options: CLIOptions): void {
   const { pous } = result.ast ? buildPOUInfoFromAST(result.ast) : { pous: [] };
 
   // 3. Parse test files
-  const testFiles: import("./testing/test-model.js").TestFile[] = [];
+  const testFiles: import("../testing/test-model.js").TestFile[] = [];
   const testSources: DiagnosticSource[] = [];
   for (const testPath of options.test) {
     const resolvedPath = resolve(testPath);
@@ -695,7 +701,7 @@ function runTestMode(options: CLIOptions): void {
   }
 
   // 4. Generate test_main.cpp
-  const testMainOpts: import("./backend/test-main-gen.js").TestMainGenOptions =
+  const testMainOpts: import("../backend/test-main-gen.js").TestMainGenOptions =
     {
       headerFileName: "generated.hpp",
       pous,
@@ -815,7 +821,7 @@ function runTestMode(options: CLIOptions): void {
  * exactly the same way they did before hierarchy support was added.
  */
 function decompileLibMode(options: CLIOptions): void {
-  let archive: import("./library/library-manifest.js").StlibArchive;
+  let archive: import("../library/library-manifest.js").StlibArchive;
   try {
     archive = loadStlibFromFile(resolve(options.decompileLib!));
   } catch (e) {
@@ -853,7 +859,7 @@ function decompileLibMode(options: CLIOptions): void {
  * Import mode: convert a CODESYS .lib/.library file into a .stlib archive.
  * Extracts ST source from the binary, then compiles via compileStlib().
  */
-function importLibMode(options: CLIOptions): void {
+async function importLibMode(options: CLIOptions): Promise<void> {
   if (!options.libName) {
     console.error("Error: --lib-name is required with --import-lib");
     process.exit(1);
@@ -866,7 +872,9 @@ function importLibMode(options: CLIOptions): void {
 
   console.log(`Importing CODESYS library: ${options.importLib!}`);
 
-  const importResult = importCodesysLibrary(options.importLib!);
+  const libPath = resolve(options.importLib!);
+  const libBytes = readFileSync(libPath);
+  const importResult = await importCodesysLibraryFromBytes(libBytes);
 
   if (!importResult.success) {
     for (const err of importResult.errors) {
@@ -894,7 +902,7 @@ function importLibMode(options: CLIOptions): void {
     options.libNamespace ?? options.libName.replace(/[^a-zA-Z0-9_]/g, "_");
 
   // Load dependency libraries from explicit -L paths only
-  const dependencies: import("./library/library-manifest.js").StlibArchive[] =
+  const dependencies: import("../library/library-manifest.js").StlibArchive[] =
     [];
   for (const libPath of options.libraryPaths) {
     try {
@@ -939,7 +947,7 @@ function importLibMode(options: CLIOptions): void {
   console.log("Import successful!");
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const options = parseArgs(args);
 
@@ -961,7 +969,7 @@ function main(): void {
 
   // Import CODESYS library mode
   if (options.importLib) {
-    importLibMode(options);
+    await importLibMode(options);
     return;
   }
 
@@ -1029,7 +1037,9 @@ function main(): void {
     compileOptions.additionalSources = additionalSources;
   }
   if (effectiveLibPaths.length > 0) {
-    compileOptions.libraryPaths = effectiveLibPaths;
+    compileOptions.libraries = effectiveLibPaths.flatMap((p) =>
+      discoverStlibs(p),
+    );
   }
   if (Object.keys(options.defines).length > 0) {
     compileOptions.globalConstants = options.defines;
@@ -1180,4 +1190,9 @@ function main(): void {
   }
 }
 
-main();
+main().catch((err) => {
+  console.error(
+    err instanceof Error ? (err.stack ?? err.message) : String(err),
+  );
+  process.exit(1);
+});

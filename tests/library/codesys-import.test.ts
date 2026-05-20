@@ -7,7 +7,7 @@ import { readFileSync, existsSync, writeFileSync, unlinkSync } from "fs";
 import { execFileSync } from "child_process";
 import { resolve } from "path";
 import {
-  importCodesysLibrary,
+  importCodesysLibraryFromBytes,
   detectFormat,
   parseV23Library,
   isV23Library,
@@ -17,7 +17,32 @@ import {
   formatPOU,
   pouToSources,
 } from "../../dist/library/codesys-import/index.js";
-import type { ExtractedPOU } from "../../dist/library/codesys-import/index.js";
+import type {
+  CodesysImportResult,
+  ExtractedPOU,
+} from "../../dist/library/codesys-import/index.js";
+
+// Tests previously called `await importCodesysLibrary(path)`; the public
+// API is now bytes-first so the file read sits in the test harness.
+// This helper preserves the original ergonomics so the per-test
+// changes stay minimal.
+function importCodesysLibrary(path: string): Promise<CodesysImportResult> {
+  try {
+    const bytes = readFileSync(path);
+    return importCodesysLibraryFromBytes(bytes);
+  } catch (e) {
+    return Promise.resolve({
+      success: false,
+      sources: [],
+      globalConstants: {},
+      metadata: { format: "v23", pouCount: 0, counts: {} },
+      warnings: [],
+      errors: [
+        `Cannot read file: ${path}: ${e instanceof Error ? e.message : String(e)}`,
+      ],
+    });
+  }
+}
 
 // Path to CODESYS library fixtures checked into the repository.
 // The V3 .library file is the canonical source for the bundled OSCAT
@@ -32,12 +57,12 @@ const OSCAT_V3_PATH = resolve(
 const V23_REFERENCE_DIR = resolve(FIXTURES_DIR, "v23-reference");
 
 describe("detectFormat", () => {
-  it("detects V2.3 format from CoDeSys+ magic", () => {
+  it("detects V2.3 format from CoDeSys+ magic", async () => {
     const data = Buffer.from("CoDeSys+" + "\x00".repeat(100), "ascii");
     expect(detectFormat(data)).toBe("v23");
   });
 
-  it("detects V3 format from ZIP magic (PK header)", () => {
+  it("detects V3 format from ZIP magic (PK header)", async () => {
     const data = Buffer.alloc(100);
     data[0] = 0x50; // P
     data[1] = 0x4b; // K
@@ -46,38 +71,38 @@ describe("detectFormat", () => {
     expect(detectFormat(data)).toBe("v3");
   });
 
-  it("returns null for unknown format", () => {
+  it("returns null for unknown format", async () => {
     const data = Buffer.from("UNKNOWN_FORMAT", "ascii");
     expect(detectFormat(data)).toBeNull();
   });
 });
 
 describe("isV23Library", () => {
-  it("returns true for valid V2.3 header", () => {
+  it("returns true for valid V2.3 header", async () => {
     const data = Buffer.from("CoDeSys+" + "\x00".repeat(10), "ascii");
     expect(isV23Library(data)).toBe(true);
   });
 
-  it("returns false for short buffer", () => {
+  it("returns false for short buffer", async () => {
     const data = Buffer.from("CoDe");
     expect(isV23Library(data)).toBe(false);
   });
 
-  it("returns false for wrong magic", () => {
+  it("returns false for wrong magic", async () => {
     const data = Buffer.from("NotCoDeSys", "ascii");
     expect(isV23Library(data)).toBe(false);
   });
 });
 
 describe("readLEB128", () => {
-  it("decodes single-byte values (< 128)", () => {
+  it("decodes single-byte values (< 128)", async () => {
     const buf = Buffer.from([42]);
     const [value, offset] = readLEB128(buf, 0);
     expect(value).toBe(42);
     expect(offset).toBe(1);
   });
 
-  it("decodes multi-byte values (>= 128)", () => {
+  it("decodes multi-byte values (>= 128)", async () => {
     // 300 = 0b100101100 → LEB128: 0xAC 0x02
     const buf = Buffer.from([0xac, 0x02]);
     const [value, offset] = readLEB128(buf, 0);
@@ -85,14 +110,14 @@ describe("readLEB128", () => {
     expect(offset).toBe(2);
   });
 
-  it("decodes zero", () => {
+  it("decodes zero", async () => {
     const buf = Buffer.from([0]);
     const [value, offset] = readLEB128(buf, 0);
     expect(value).toBe(0);
     expect(offset).toBe(1);
   });
 
-  it("decodes from non-zero offset", () => {
+  it("decodes from non-zero offset", async () => {
     const buf = Buffer.from([0xff, 42, 0xff]);
     const [value, offset] = readLEB128(buf, 1);
     expect(value).toBe(42);
@@ -101,7 +126,7 @@ describe("readLEB128", () => {
 });
 
 describe("parseStringTable", () => {
-  it("parses a minimal valid string table", () => {
+  it("parses a minimal valid string table", async () => {
     // Build: magic(2) + flag(1) + guidLen(1) + guid(4) + entry(idx=1, len=5, "hello")
     const magic = Buffer.from([0xfa, 0x53]);
     const flag = Buffer.from([0x00]);
@@ -117,14 +142,14 @@ describe("parseStringTable", () => {
     expect(result.strings.get(1)).toBe("hello");
   });
 
-  it("throws on invalid magic", () => {
+  it("throws on invalid magic", async () => {
     const data = Buffer.from([0x00, 0x00, 0x00, 0x00]);
     expect(() => parseStringTable(data)).toThrow("Invalid string table magic");
   });
 });
 
 describe("formatPOU", () => {
-  it("formats a FUNCTION with declaration and implementation", () => {
+  it("formats a FUNCTION with declaration and implementation", async () => {
     const pou: ExtractedPOU = {
       type: "FUNCTION",
       name: "ADD_TWO",
@@ -141,7 +166,7 @@ describe("formatPOU", () => {
     expect(result).not.toContain("\r\n");
   });
 
-  it("formats a FUNCTION_BLOCK with END_FUNCTION_BLOCK", () => {
+  it("formats a FUNCTION_BLOCK with END_FUNCTION_BLOCK", async () => {
     const pou: ExtractedPOU = {
       type: "FUNCTION_BLOCK",
       name: "MY_FB",
@@ -153,7 +178,7 @@ describe("formatPOU", () => {
     expect(result).toContain("END_FUNCTION_BLOCK");
   });
 
-  it("formats TYPE declarations without adding END marker", () => {
+  it("formats TYPE declarations without adding END marker", async () => {
     const pou: ExtractedPOU = {
       type: "TYPE",
       name: "MY_STRUCT",
@@ -168,7 +193,7 @@ describe("formatPOU", () => {
     expect(result.match(/END_TYPE/g)?.length).toBe(1);
   });
 
-  it("formats GVL declarations without adding END marker", () => {
+  it("formats GVL declarations without adding END marker", async () => {
     const pou: ExtractedPOU = {
       type: "GVL",
       name: "GVL_0",
@@ -183,7 +208,7 @@ describe("formatPOU", () => {
 });
 
 describe("pouToSources", () => {
-  it("generates correct filenames for different POU types", () => {
+  it("generates correct filenames for different POU types", async () => {
     const pous: ExtractedPOU[] = [
       {
         type: "FUNCTION",
@@ -208,7 +233,7 @@ describe("pouToSources", () => {
 });
 
 describe("parseV23Library", () => {
-  it("returns warning for non-V2.3 data", () => {
+  it("returns warning for non-V2.3 data", async () => {
     const data = Buffer.from("NOT_CODESYS_FORMAT", "ascii");
     const result = parseV23Library(data);
     expect(result.pous).toHaveLength(0);
@@ -218,18 +243,18 @@ describe("parseV23Library", () => {
 });
 
 describe("importCodesysLibrary", () => {
-  it("returns error for non-existent file", () => {
-    const result = importCodesysLibrary("/tmp/nonexistent.lib");
+  it("returns error for non-existent file", async () => {
+    const result = await importCodesysLibrary("/tmp/nonexistent.lib");
     expect(result.success).toBe(false);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain("Cannot read file");
   });
 
-  it("returns error for unrecognized format", () => {
+  it("returns error for unrecognized format", async () => {
     const tmpPath = "/tmp/test_garbage.lib";
     writeFileSync(tmpPath, "GARBAGE_DATA_NOT_CODESYS");
     try {
-      const result = importCodesysLibrary(tmpPath);
+      const result = await importCodesysLibrary(tmpPath);
       expect(result.success).toBe(false);
       expect(result.errors[0]).toContain("Unrecognized file format");
     } finally {
@@ -242,7 +267,7 @@ describe("importCodesysLibrary", () => {
 // V2.3 Integration Tests (OSCAT binary fixtures in repo)
 // ============================================================
 describe("V2.3 integration: OSCAT Basic 335", () => {
-  it("extracts POUs from real .lib file", () => {
+  it("extracts POUs from real .lib file", async () => {
     const data = readFileSync(OSCAT_V23_PATH);
     const { pous, warnings } = parseV23Library(data);
 
@@ -271,8 +296,8 @@ describe("V2.3 integration: OSCAT Basic 335", () => {
     expect(acosh!.implementation).toContain("LN");
   });
 
-  it("importCodesysLibrary produces valid sources", () => {
-    const result = importCodesysLibrary(OSCAT_V23_PATH);
+  it("importCodesysLibrary produces valid sources", async () => {
+    const result = await importCodesysLibrary(OSCAT_V23_PATH);
     expect(result.success).toBe(true);
     expect(result.metadata.format).toBe("v23");
     expect(result.metadata.pouCount).toBeGreaterThan(500);
@@ -291,8 +316,8 @@ describe("V2.3 integration: OSCAT Basic 335", () => {
     expect(acoshSrc!.source).toContain("END_FUNCTION");
   });
 
-  it("extracted source matches reference files", () => {
-    const result = importCodesysLibrary(OSCAT_V23_PATH);
+  it("extracted source matches reference files", async () => {
+    const result = await importCodesysLibrary(OSCAT_V23_PATH);
     expect(result.success).toBe(true);
 
     const testNames = ["ACOSH", "ALARM_2", "DAY_OF_YEAR", "FT_AVG"];
@@ -313,14 +338,14 @@ describe("V2.3 integration: OSCAT Basic 335", () => {
 // V3 Integration Tests (OSCAT binary fixtures in repo)
 // ============================================================
 describe("V3 integration: OSCAT Basic 335", () => {
-  it("detects V3 format from real .library file", () => {
+  it("detects V3 format from real .library file", async () => {
     const data = readFileSync(OSCAT_V3_PATH);
     expect(detectFormat(data)).toBe("v3");
   });
 
-  it("extracts POUs from real .library file", () => {
+  it("extracts POUs from real .library file", async () => {
     const data = readFileSync(OSCAT_V3_PATH);
-    const { pous, guid, warnings } = parseV3Library(data);
+    const { pous, guid, warnings } = await parseV3Library(data);
 
     // Should extract a library GUID
     expect(guid).toBeTruthy();
@@ -355,8 +380,8 @@ describe("V3 integration: OSCAT Basic 335", () => {
     expect(calendar!.declaration).toContain("STRUCT");
   });
 
-  it("importCodesysLibrary produces valid V3 result", () => {
-    const result = importCodesysLibrary(OSCAT_V3_PATH);
+  it("importCodesysLibrary produces valid V3 result", async () => {
+    const result = await importCodesysLibrary(OSCAT_V3_PATH);
     expect(result.success).toBe(true);
     expect(result.metadata.format).toBe("v3");
     expect(result.metadata.guid).toBeTruthy();
@@ -389,7 +414,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     expect(constLang!.source).toContain("TYPE CONSTANTS_LANGUAGE");
   });
 
-  it("extracts the OSCAT VAR_GLOBAL block instantiating CONSTANTS_*", () => {
+  it("extracts the OSCAT VAR_GLOBAL block instantiating CONSTANTS_*", async () => {
     // The V3 .library encodes a GVL the same way as a POU at the
     // structural level — header in column B of a 4-varint record,
     // body lines in column A of subsequent records — but with the
@@ -400,7 +425,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     // `LANGUAGE.WEEKDAYS[…]` (HOLIDAY / SUN_POS / the date helpers)
     // with undeclared globals downstream. This test pins the GVL
     // extraction so a regex regression surfaces here.
-    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const result = await importCodesysLibrary(OSCAT_V3_PATH);
     const gvls = result.sources.filter((s) => /\bVAR_GLOBAL\b/.test(s.source));
     expect(gvls.length).toBeGreaterThanOrEqual(1);
 
@@ -417,7 +442,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     expect(constantsGvl!.source).toMatch(/END_VAR/);
   });
 
-  it("promotes the OSCAT VAR_GLOBAL CONSTANT integers to globalConstants", () => {
+  it("promotes the OSCAT VAR_GLOBAL CONSTANT integers to globalConstants", async () => {
     // OSCAT's compile-time integer constants live in a `VAR_GLOBAL
     // CONSTANT` block in the V3 source. They must be surfaced on the
     // import result's `globalConstants` map (not as a runtime GVL),
@@ -426,7 +451,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     // which require a constexpr — a runtime GVL can't satisfy that.
     // The originating GVL is dropped from the source list to avoid a
     // duplicate definition when compileStlib also sees globalConstants.
-    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const result = await importCodesysLibrary(OSCAT_V3_PATH);
     expect(result.globalConstants.STRING_LENGTH).toBeTypeOf("number");
     expect(result.globalConstants.LIST_LENGTH).toBeTypeOf("number");
     const constGvl = result.sources.find((s) =>
@@ -439,7 +464,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     ).toBeUndefined();
   });
 
-  it("extracts the OSCAT folder hierarchy from .meta files", () => {
+  it("extracts the OSCAT folder hierarchy from .meta files", async () => {
     // OSCAT's V3 .library encodes its project-explorer tree
     // (POUs/Time&Date, POUs/Buffer Management, Data types, …) as
     // .meta+.object pairs whose .meta carries a parent-folder GUID.
@@ -453,7 +478,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     // prefix nests every block one level deeper than the editor needs).
     // "Data types" passes through unchanged since it carries meaningful
     // classification information for tooling.
-    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const result = await importCodesysLibrary(OSCAT_V3_PATH);
     const expected: Record<string, string> = {
       "DCF77.st": "Time&Date",
       "HOLIDAY.st": "Time&Date",
@@ -484,7 +509,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     }
   });
 
-  it("structurally extracts documentation from the V3 decl-section slot", () => {
+  it("structurally extracts documentation from the V3 decl-section slot", async () => {
     // CODESYS reserves a specific slot for each POU's documentation: the
     // records of the decl sub-object that come AFTER the last END_VAR (or
     // END_TYPE) of the variables-pane. Body comments live in the impl
@@ -495,7 +520,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     // We assert here that the V3 importer attaches the right
     // `documentation` to each ExtractedPOU directly — without going
     // through any text-level regex or trigger-word heuristic.
-    const result = importCodesysLibrary(OSCAT_V3_PATH);
+    const result = await importCodesysLibrary(OSCAT_V3_PATH);
     const pous = result.sources;
     expect(pous.length).toBeGreaterThan(550);
 
@@ -535,7 +560,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
     expect(buf?.documentation).not.toMatch(/search for first character match/);
   });
 
-  it("compiled OSCAT manifest carries V3-extracted documentation", () => {
+  it("compiled OSCAT manifest carries V3-extracted documentation", async () => {
     // End-to-end: structural extraction at the importer surfaces all
     // the way through the compileStlib pipeline onto manifest entries
     // (functions / functionBlocks / types).
@@ -562,18 +587,18 @@ describe("V3 integration: OSCAT Basic 335", () => {
     );
   });
 
-  it("V2.3 import leaves category undefined (no folders in V2.3 format)", () => {
+  it("V2.3 import leaves category undefined (no folders in V2.3 format)", async () => {
     // V2.3 .lib predates the folder feature — the format has no place
     // to record one. Asserting "no categories" pins this so a future
     // V2.3 parser change can't silently start emitting them.
-    const result = importCodesysLibrary(OSCAT_V23_PATH);
+    const result = await importCodesysLibrary(OSCAT_V23_PATH);
     const categorized = result.sources.filter((s) => s.category);
     expect(categorized.length).toBe(0);
   });
 
-  it("V3 POU counts are comparable to V2.3 extraction", () => {
-    const v23Result = importCodesysLibrary(OSCAT_V23_PATH);
-    const v3Result = importCodesysLibrary(OSCAT_V3_PATH);
+  it("V3 POU counts are comparable to V2.3 extraction", async () => {
+    const v23Result = await importCodesysLibrary(OSCAT_V23_PATH);
+    const v3Result = await importCodesysLibrary(OSCAT_V3_PATH);
 
     // Both should succeed
     expect(v23Result.success).toBe(true);
@@ -596,9 +621,9 @@ describe("V3 integration: OSCAT Basic 335", () => {
     expect(v3types).toBe(v23types); // Types should match exactly
   });
 
-  it("V3 import preserves variable direction", () => {
+  it("V3 import preserves variable direction", async () => {
     const data = readFileSync(OSCAT_V3_PATH);
-    const { pous } = parseV3Library(data);
+    const { pous } = await parseV3Library(data);
 
     // FT_Profile has VAR_INPUT, VAR_INPUT CONSTANT, VAR_OUTPUT, and VAR
     const ftProfile = pous.find((p) => p.name === "FT_Profile");
@@ -619,7 +644,7 @@ describe("V3 integration: OSCAT Basic 335", () => {
 // CLI Integration Test (end-to-end --import-lib)
 // ============================================================
 describe("CLI --import-lib", () => {
-  it("shows extraction summary for V2.3 file", () => {
+  it("shows extraction summary for V2.3 file", async () => {
     try {
       const output = execFileSync(
         "node",

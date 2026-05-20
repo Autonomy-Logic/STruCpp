@@ -18,14 +18,18 @@ import { compileLibrary } from "../../src/library/library-compiler.js";
 import { compileStlib } from "../../src/library/library-compiler.js";
 import {
   loadLibraryManifest,
-  loadLibraryFromFile,
-  discoverLibraries,
   loadStlibArchive,
-  loadStlibFromFile,
-  discoverStlibs,
+  loadStlibFromString,
+  loadStlibFromBuffer,
   registerLibrarySymbols,
   LibraryManifestError,
 } from "../../src/library/library-loader.js";
+import {
+  loadLibraryFromFile,
+  discoverLibraries,
+  loadStlibFromFile,
+  discoverStlibs,
+} from "../../src/node/library-loader.js";
 import { getBuiltinStdlibManifest } from "../../src/library/builtin-stdlib.js";
 import { SymbolTables } from "../../src/semantic/symbol-table.js";
 import { StdFunctionRegistry } from "../../src/semantic/std-function-registry.js";
@@ -897,6 +901,102 @@ describe("Library System", () => {
     });
   });
 
+  describe("loadStlibFromString (browser-safe)", () => {
+    const validArchiveJson = JSON.stringify({
+      formatVersion: 1,
+      manifest: {
+        name: "browser-lib",
+        version: "1.0.0",
+        namespace: "browserlib",
+        functions: [],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      },
+      chunks: [],
+      dependencies: [],
+    });
+
+    it("parses a valid .stlib JSON string", () => {
+      const archive = loadStlibFromString(validArchiveJson);
+      expect(archive.formatVersion).toBe(1);
+      expect(archive.manifest.name).toBe("browser-lib");
+    });
+
+    it("includes the sourceLabel in error messages", () => {
+      expect(() =>
+        loadStlibFromString("{not valid json", "mylib.stlib"),
+      ).toThrow(/Invalid JSON in stlib archive: mylib\.stlib/);
+    });
+
+    it("rejects malformed JSON with LibraryManifestError", () => {
+      expect(() => loadStlibFromString("not json")).toThrow(
+        LibraryManifestError,
+      );
+    });
+
+    it("propagates archive-shape validation errors", () => {
+      const malformed = JSON.stringify({ manifest: {} });
+      expect(() => loadStlibFromString(malformed)).toThrow(
+        LibraryManifestError,
+      );
+    });
+  });
+
+  describe("loadStlibFromBuffer (browser-safe)", () => {
+    const validArchiveJson = JSON.stringify({
+      formatVersion: 1,
+      manifest: {
+        name: "buffer-lib",
+        version: "1.0.0",
+        namespace: "bufferlib",
+        functions: [],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      },
+      chunks: [],
+      dependencies: [],
+    });
+
+    it("parses a valid .stlib byte buffer", () => {
+      const bytes = new TextEncoder().encode(validArchiveJson);
+      const archive = loadStlibFromBuffer(bytes);
+      expect(archive.manifest.name).toBe("buffer-lib");
+    });
+
+    it("decodes UTF-8 content with multi-byte characters", () => {
+      const utf8 = JSON.stringify({
+        formatVersion: 1,
+        manifest: {
+          name: "utf8-lib",
+          version: "1.0.0",
+          namespace: "utf8lib",
+          functions: [],
+          functionBlocks: [],
+          types: [],
+          headers: [],
+          description: "résumé café — naïve façade 中文",
+          isBuiltin: false,
+        },
+        chunks: [],
+        dependencies: [],
+      });
+      const archive = loadStlibFromBuffer(new TextEncoder().encode(utf8));
+      expect(archive.manifest.description).toContain("résumé café");
+      expect(archive.manifest.description).toContain("中文");
+    });
+
+    it("includes the sourceLabel in error messages", () => {
+      const bytes = new TextEncoder().encode("{broken");
+      expect(() => loadStlibFromBuffer(bytes, "remote.stlib")).toThrow(
+        /Invalid JSON in stlib archive: remote\.stlib/,
+      );
+    });
+  });
+
   describe("loadStlibFromFile", () => {
     beforeAll(() => {
       mkdirSync(TMP_BASE, { recursive: true });
@@ -1091,16 +1191,11 @@ describe("Library System", () => {
     });
   });
 
-  describe("compile() with libraryPaths option (.stlib)", () => {
-    beforeAll(() => {
-      if (existsSync(TMP_BASE)) rmSync(TMP_BASE, { recursive: true });
-      mkdirSync(TMP_BASE, { recursive: true });
-    });
-
-    it("should load .stlib archives from libraryPaths and inject C++ code", () => {
-      const dir = freshDir("compile-stlib-libpaths");
-
-      // Compile a library to get a .stlib archive
+  describe("compile() with pre-loaded library archives", () => {
+    it("injects library C++ code into the compiled output", () => {
+      // Library compiled from sources — kept inline so the test
+      // doesn't touch disk; libraries from disk arrive via
+      // strucpp/node's loadStlibFromFile in real consumers.
       const libResult = compileStlib(
         [
           {
@@ -1117,102 +1212,18 @@ describe("Library System", () => {
       );
       expect(libResult.success).toBe(true);
 
-      // Write the .stlib file to disk
-      writeFileSync(
-        join(dir, "ext-lib.stlib"),
-        JSON.stringify(libResult.archive),
-      );
-
-      // Compile a program using the library via -L path
       const source = `
         PROGRAM Main
           VAR result : INT; END_VAR
           result := ExtFunc(x := 42);
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [dir] });
+      const result = compile(source, { libraries: [libResult.archive] });
 
       expect(result.success).toBe(true);
       expect(result.cppCode).toContain("EXTFUNC");
-      // The library C++ code should be injected
       expect(result.headerCode).toContain("Library: ext-lib");
       expect(result.cppCode).toContain("Library: ext-lib");
-    });
-
-    it("should return compile error for invalid libraryPaths", () => {
-      const source = `
-        PROGRAM Main
-          VAR x : INT; END_VAR
-          x := 1;
-        END_PROGRAM
-      `;
-      const result = compile(source, {
-        libraryPaths: [join(TMP_BASE, "does-not-exist")],
-      });
-
-      expect(result.success).toBe(false);
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors[0]!.message).toContain(
-        "Cannot read library directory",
-      );
-    });
-
-    it("should combine libraryPaths with explicit libraries", () => {
-      const dir = freshDir("compile-stlib-combined");
-
-      // Library on disk as .stlib
-      const diskLib = compileStlib(
-        [
-          {
-            source: `
-              FUNCTION DiskFunc : INT
-                VAR_INPUT x : INT; END_VAR
-                DiskFunc := x;
-              END_FUNCTION
-            `,
-            fileName: "disk.st",
-          },
-        ],
-        { name: "disk-lib", version: "1.0.0", namespace: "disk" },
-      );
-      expect(diskLib.success).toBe(true);
-      writeFileSync(
-        join(dir, "disk-lib.stlib"),
-        JSON.stringify(diskLib.archive),
-      );
-
-      // Inline library archive
-      const inlineLib = compileStlib(
-        [
-          {
-            source: `
-              FUNCTION InlineFunc : INT
-                VAR_INPUT y : INT; END_VAR
-                InlineFunc := y;
-              END_FUNCTION
-            `,
-            fileName: "inline.st",
-          },
-        ],
-        { name: "inline-lib", version: "1.0.0", namespace: "inline" },
-      );
-      expect(inlineLib.success).toBe(true);
-
-      const source = `
-        PROGRAM Main
-          VAR a : INT; b : INT; END_VAR
-          a := DiskFunc(x := 1);
-          b := InlineFunc(y := 2);
-        END_PROGRAM
-      `;
-      const result = compile(source, {
-        libraryPaths: [dir],
-        libraries: [inlineLib.archive],
-      });
-
-      expect(result.success).toBe(true);
-      expect(result.cppCode).toContain("DISKFUNC");
-      expect(result.cppCode).toContain("INLINEFUNC");
     });
   });
 

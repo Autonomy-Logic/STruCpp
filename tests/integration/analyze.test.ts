@@ -88,24 +88,6 @@ describe("analyze() API", () => {
     expect(result.ast).toBeDefined();
   });
 
-  it("handles invalid library paths without crashing", () => {
-    const result = analyze(
-      `
-      PROGRAM Main
-        VAR x : INT; END_VAR
-        x := 1;
-      END_PROGRAM
-    `,
-      {
-        libraryPaths: ["/nonexistent/path/to/libs"],
-      },
-    );
-
-    // Should still return a defined result (may or may not have errors)
-    expect(result).toBeDefined();
-    expect(result.ast).toBeDefined();
-  });
-
   it("returns a defined result for empty/whitespace input", () => {
     const result = analyze("");
     expect(result).toBeDefined();

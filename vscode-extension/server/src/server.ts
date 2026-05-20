@@ -26,18 +26,17 @@ import {
 import { TextDocument } from "vscode-languageserver-textdocument";
 import {
   analyze,
-  compile,
-  generateReplMain,
-  compileStlib,
-  loadStlibFromFile,
-  parseTestFile,
   analyzeTestFile,
-  generateTestMain,
   buildPOUInfoFromAST,
-  getCxxEnv,
-  splitCxxFlags,
+  compile,
+  compileStlib,
   ELEMENTARY_TYPES,
+  generateReplMain,
+  generateTestMain,
+  parseTestFile,
+  splitCxxFlags,
 } from "strucpp";
+import { getCxxEnv, loadStlibFromFile } from "strucpp/node";
 import {
   CompileRequest,
   BuildRequest,
@@ -59,24 +58,15 @@ import {
 } from "../../shared/protocol.js";
 import { parseTestJson } from "../../shared/test-result.js";
 import { DocumentManager } from "./document-manager.js";
-import { toLspDiagnostics } from "./diagnostics.js";
+import { NodeWorkspaceFs } from "./node-workspace-fs.js";
+import { registerAnalysisHandlers } from "./register-analysis-handlers.js";
 import { lspPositionToCompiler } from "./lsp-utils.js";
 import { resolveSymbolAtPosition as resolveSymbolAtPositionFn } from "./resolve-symbol.js";
-import { getDocumentSymbols, getWorkspaceSymbols } from "./symbols.js";
-import { getHover } from "./hover.js";
-import { getDefinition, getTypeDefinition } from "./definition.js";
-import { getCompletions } from "./completion.js";
-import { getSignatureHelp } from "./signature-help.js";
-import { getReferences } from "./references.js";
-import { prepareRename, getRenameEdits } from "./rename.js";
-import { getSemanticTokens, getTestFileSemanticTokens, TOKEN_TYPES, TOKEN_MODIFIERS } from "./semantic-tokens.js";
-import { isTestFile } from "../../shared/test-utils.js";
-import { getCodeActions } from "./code-actions.js";
-import { formatDocument } from "./formatting.js";
+import { TOKEN_TYPES, TOKEN_MODIFIERS } from "./semantic-tokens.js";
 
 const connection = createConnection(ProposedFeatures.all);
 const textDocuments = new TextDocuments(TextDocument);
-const docManager = new DocumentManager(analyze);
+const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
 
 /** Default extension settings */
 const DEFAULT_SETTINGS: ExtensionSettings = {
@@ -94,9 +84,10 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
 
 let currentSettings: ExtensionSettings = { ...DEFAULT_SETTINGS };
 
-/** Debounce timeout for re-analysis on document change (ms) */
+/** Debounce timeout for re-analysis on document change (ms) — read
+ *  by registerAnalysisHandlers via the getAnalysisDebounceMs
+ *  callback, mutated when settings change. */
 let analysisDebounceMs = currentSettings.analyzeDelay;
-const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 /**
  * Fetch settings from the client and update internal state.
@@ -159,7 +150,6 @@ function updateLibraryPaths(): void {
     }
   }
 
-  docManager.setLibraryPaths(merged);
   cacheLibraryArchives(merged);
 }
 
@@ -327,245 +317,16 @@ connection.onInitialized(async () => {
   });
 });
 
-textDocuments.onDidOpen((event) => {
-  const { uri } = event.document;
-  const state = docManager.onDocumentOpen(uri, event.document.getText());
-  publishDiagnostics(uri, state.analysisResult);
-});
-
-textDocuments.onDidChangeContent((event) => {
-  const { uri } = event.document;
-
-  // Debounce re-analysis
-  const existing = debounceTimers.get(uri);
-  if (existing) clearTimeout(existing);
-
-  debounceTimers.set(
-    uri,
-    setTimeout(() => {
-      debounceTimers.delete(uri);
-      const state = docManager.onDocumentChange(
-        uri,
-        event.document.getText(),
-        event.document.version,
-      );
-      if (state) {
-        publishDiagnostics(uri, state.analysisResult);
-      }
-    }, analysisDebounceMs),
-  );
-});
-
-textDocuments.onDidClose((event) => {
-  const { uri } = event.document;
-  const timer = debounceTimers.get(uri);
-  if (timer) {
-    clearTimeout(timer);
-    debounceTimers.delete(uri);
-  }
-  docManager.onDocumentClose(uri);
-  // Clear diagnostics for closed files
-  connection.sendDiagnostics({ uri, diagnostics: [] });
-});
-
-// ---------------------------------------------------------------------------
-// Phase 2 handlers: Document Symbols, Hover, Go to Definition
-// ---------------------------------------------------------------------------
-
-connection.onDocumentSymbol((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return [];
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  return getDocumentSymbols(state.analysisResult, fileName, docManager.getCaseMap());
-});
-
-connection.onWorkspaceSymbol((params) => {
-  const allAnalyses = new Map<string, import("strucpp").AnalysisResult>();
-  for (const doc of docManager.getAllDocuments()) {
-    if (doc.analysisResult) {
-      allAnalyses.set(doc.uri, doc.analysisResult);
-    }
-  }
-  return getWorkspaceSymbols(allAnalyses, params.query, docManager.getCaseMap());
-});
-
-connection.onHover((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return null;
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-  const source =
-    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
-  return getHover(state.analysisResult, fileName, line, column, docManager.getCaseMap(), source);
-});
-
-connection.onDefinition((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return null;
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-  const source =
-    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
-  return getDefinition(
-    state.analysisResult,
-    fileName,
-    line,
-    column,
-    params.textDocument.uri,
-    (fn) => docManager.resolveFileNameToUri(fn),
-    (name) => docManager.findSymbolInLibrarySources(name),
-    source,
-  );
-});
-
-connection.onTypeDefinition((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return null;
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-  return getTypeDefinition(
-    state.analysisResult,
-    fileName,
-    line,
-    column,
-    params.textDocument.uri,
-    (fn) => docManager.resolveFileNameToUri(fn),
-    (name) => docManager.findSymbolInLibrarySources(name),
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Phase 3 handlers: Completion, Signature Help
-// ---------------------------------------------------------------------------
-
-connection.onCompletion((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return [];
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-  // Use live document text (updates synchronously) rather than state.source
-  // which is debounced and may be stale when a trigger character fires.
-  const source =
-    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
-  return getCompletions(
-    state.analysisResult,
-    fileName,
-    line,
-    column,
-    source,
-    docManager.getCaseMap(),
-  );
-});
-
-connection.onSignatureHelp((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return null;
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-  const source =
-    textDocuments.get(params.textDocument.uri)?.getText() ?? state.source;
-  return getSignatureHelp(state.analysisResult, fileName, line, column, source);
-});
-
-// ---------------------------------------------------------------------------
-// Phase 4 handlers: References, Rename, Semantic Tokens
-// ---------------------------------------------------------------------------
-
-connection.onReferences((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return [];
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-
-  // Build document map for cross-file reference search
-  const allDocs = new Map<string, { uri: string; analysisResult?: import("strucpp").AnalysisResult }>();
-  for (const doc of docManager.getAllDocuments()) {
-    allDocs.set(doc.uri, doc);
-  }
-
-  return getReferences(
-    state.analysisResult,
-    fileName,
-    line,
-    column,
-    params.textDocument.uri,
-    allDocs,
-    (fn) => docManager.resolveFileNameToUri(fn),
-    params.context.includeDeclaration,
-  );
-});
-
-connection.onPrepareRename((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return null;
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-  return prepareRename(state.analysisResult, fileName, line, column, docManager.getCaseMap());
-});
-
-connection.onRenameRequest((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state?.analysisResult) return null;
-  const fileName = docManager.getFileName(params.textDocument.uri);
-  const { line, column } = lspPositionToCompiler(params.position);
-
-  const allDocs = new Map<string, { uri: string; analysisResult?: import("strucpp").AnalysisResult }>();
-  for (const doc of docManager.getAllDocuments()) {
-    allDocs.set(doc.uri, doc);
-  }
-
-  return getRenameEdits(
-    state.analysisResult,
-    fileName,
-    line,
-    column,
-    params.newName,
-    params.textDocument.uri,
-    allDocs,
-    (fn) => docManager.resolveFileNameToUri(fn),
-  );
-});
-
-connection.languages.semanticTokens.on((params) => {
-  const uri = params.textDocument.uri;
-  let state = docManager.getState(uri);
-  if (!state) return { data: [] };
-
-  // If the live document text differs from the last analyzed source
-  // (e.g. after a rename edit, before the debounce fires), re-analyze
-  // immediately so token positions match the current text.
-  const liveDoc = textDocuments.get(uri);
-  if (liveDoc && liveDoc.getText() !== state.source) {
-    state = docManager.onDocumentChange(uri, liveDoc.getText(), liveDoc.version) ?? state;
-  }
-
-  if (!state.analysisResult) return { data: [] };
-  const fileName = docManager.getFileName(uri);
-  const data = isTestFile(state.source)
-    ? getTestFileSemanticTokens(state.analysisResult, state.source)
-    : getSemanticTokens(state.analysisResult, fileName, state.source);
-  return { data };
-});
-
-// ---------------------------------------------------------------------------
-// Phase 5 handlers: Code Actions, Document Formatting
-// ---------------------------------------------------------------------------
-
-connection.onCodeAction((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state) return [];
-  return getCodeActions(
-    params.context.diagnostics,
-    state.source,
-    params.textDocument.uri,
-    state.analysisResult,
-  );
-});
-
-connection.onDocumentFormatting((params) => {
-  const state = docManager.getState(params.textDocument.uri);
-  if (!state) return [];
-  return formatDocument(state.source, params.options);
+// Pure-analysis handlers (open/change/close, hover, definition,
+// completion, references, rename, semantic-tokens, code-actions,
+// formatting) live in the shared module so the browser language
+// server registers byte-identical providers.  Anything Node-only
+// (build commands, REPL, test runner) stays below.
+const { publishDiagnostics } = registerAnalysisHandlers({
+  connection,
+  textDocuments,
+  docManager,
+  getAnalysisDebounceMs: () => analysisDebounceMs,
 });
 
 // ---------------------------------------------------------------------------
@@ -597,8 +358,8 @@ connection.onRequest(CompileRequest, (params): CompileResponse => {
     fileName,
     headerFileName: fileName.replace(/\.(st|iecst)$/i, ".hpp"),
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(docManager.getLibraryPaths().length > 0
-      ? { libraryPaths: docManager.getLibraryPaths() }
+    ...(docManager.getLibraryArchives().length > 0
+      ? { libraries: docManager.getLibraryArchives() }
       : {}),
     ...(Object.keys(currentSettings.globalConstants).length > 0
       ? { globalConstants: currentSettings.globalConstants }
@@ -668,8 +429,8 @@ connection.onRequest(BuildRequest, (params): BuildResponse => {
     fileName,
     headerFileName,
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(docManager.getLibraryPaths().length > 0
-      ? { libraryPaths: docManager.getLibraryPaths() }
+    ...(docManager.getLibraryArchives().length > 0
+      ? { libraries: docManager.getLibraryArchives() }
       : {}),
     ...(Object.keys(currentSettings.globalConstants).length > 0
       ? { globalConstants: currentSettings.globalConstants }
@@ -771,8 +532,8 @@ connection.onRequest(DebugBuildRequest, (params): DebugBuildResponse => {
     lineDirectiveFileName: absolutePath,
     lineMapping: true,
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(docManager.getLibraryPaths().length > 0
-      ? { libraryPaths: docManager.getLibraryPaths() }
+    ...(docManager.getLibraryArchives().length > 0
+      ? { libraries: docManager.getLibraryArchives() }
       : {}),
     ...(Object.keys(currentSettings.globalConstants).length > 0
       ? { globalConstants: currentSettings.globalConstants }
@@ -909,24 +670,9 @@ connection.onRequest(CompileLibRequest, (params): CompileLibResponse => {
     };
   }
 
-  // Load dependency libraries from configured paths
-  const depArchives: import("strucpp").StlibArchive[] = [];
-  for (const libDir of docManager.getLibraryPaths()) {
-    try {
-      const entries = fs.readdirSync(libDir);
-      for (const entry of entries) {
-        if (entry.endsWith(".stlib")) {
-          try {
-            depArchives.push(loadStlibFromFile(path.join(libDir, entry)));
-          } catch {
-            // Skip unreadable library files
-          }
-        }
-      }
-    } catch {
-      // Skip unreadable directories
-    }
-  }
+  // Dependency libraries arrive already loaded in the document
+  // manager's cache (populated by updateLibraryPaths at init/change).
+  const depArchives = docManager.getLibraryArchives();
 
   const result = compileStlib(sources, {
     name: libName,
@@ -1004,14 +750,14 @@ connection.onRequest(RunTestsRequest, async (params: RunTestsParams): Promise<Ru
   // 3. Compile sources with isTestBuild flag
   const primarySource = workspaceSources[0]!;
   const additionalSources = workspaceSources.slice(1);
-  const libraryPaths = docManager.getLibraryPaths();
+  const libraries = docManager.getLibraryArchives();
 
   const compileResult = compile(primarySource.source, {
     fileName: primarySource.fileName,
     headerFileName: "generated.hpp",
     isTestBuild: true,
     ...(additionalSources.length > 0 ? { additionalSources } : {}),
-    ...(libraryPaths.length > 0 ? { libraryPaths } : {}),
+    ...(libraries.length > 0 ? { libraries } : {}),
   });
 
   if (!compileResult.success) {
@@ -1166,16 +912,6 @@ connection.onRequest(RunTestsRequest, async (params: RunTestsParams): Promise<Ru
     }
   }
 });
-
-function publishDiagnostics(
-  uri: string,
-  result?: import("strucpp").AnalysisResult,
-): void {
-  if (!result) return;
-  const fileName = docManager.getFileName(uri);
-  const diagnostics = toLspDiagnostics(result.errors, result.warnings, fileName);
-  connection.sendDiagnostics({ uri, diagnostics });
-}
 
 /**
  * Find the runtime include and repl directories from the strucpp package.

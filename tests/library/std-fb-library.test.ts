@@ -10,7 +10,8 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "path";
 import { compileLibrary } from "../../src/library/library-compiler.js";
 import { registerLibrarySymbols } from "../../src/library/library-loader.js";
-import { loadStlibFromFile } from "../../src/library/library-loader.js";
+import { discoverStlibs, loadStlibFromFile } from "../../src/node/library-loader.js";
+
 import { SymbolTables } from "../../src/semantic/symbol-table.js";
 import { compile } from "../../src/index.js";
 
@@ -596,7 +597,7 @@ describe("Standard FB Library", () => {
           edgeDetected := rising.Q;
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -615,7 +616,7 @@ describe("Standard FB Library", () => {
           timerDone := delayTimer.Q;
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -635,7 +636,7 @@ describe("Standard FB Library", () => {
           batchComplete := partCounter.Q;
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -664,7 +665,7 @@ describe("Standard FB Library", () => {
           latch(S1 := rising.Q, R := falling.Q);
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -682,7 +683,7 @@ describe("Standard FB Library", () => {
           done := bigCounter.Q;
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
 
       expect(result.success).toBe(true);
       expect(result.errors).toHaveLength(0);
@@ -705,7 +706,7 @@ describe("Standard FB Library", () => {
           timer1(IN := TRUE, PT := T#1s);
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
       expect(result.success).toBe(true);
 
       // Verify the stdlib C++ code is injected in the output
@@ -720,7 +721,7 @@ describe("Standard FB Library", () => {
           timer1(IN := TRUE, PT := T#1s);
         END_PROGRAM
       `;
-      const result = compile(source, { libraryPaths: [LIBS_DIR] });
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
       expect(result.success).toBe(true);
       expect(result.resolvedLibraries).toBeDefined();
       expect(result.resolvedLibraries!.length).toBeGreaterThan(0);

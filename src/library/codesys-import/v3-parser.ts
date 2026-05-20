@@ -58,17 +58,24 @@
  *   reference-frequency: they're the most-referenced GUIDs in the file.
  */
 
-import { inflateRawSync } from "zlib";
+import {
+  bytesEqual,
+  bytesToHex,
+  bytesToUtf8,
+  inflateRaw,
+  readUInt16LE,
+  readUInt32LE,
+} from "../../byte-utils.js";
 import type { ExtractedPOU, POUType } from "./types.js";
 
 /** String table magic bytes: 0xFA 0x53. */
-const STRING_TABLE_MAGIC = Buffer.from([0xfa, 0x53]);
+const STRING_TABLE_MAGIC = new Uint8Array([0xfa, 0x53]);
 
 /** String table filename within the ZIP archive. */
 const STRING_TABLE_NAME = "__shared_data_storage_string_table__.auxiliary";
 
 /** 8 zero bytes used as record delimiter in object files. */
-const RECORD_DELIMITER = Buffer.alloc(8, 0);
+const RECORD_DELIMITER = new Uint8Array(8);
 
 /** Object file header size (magic + padding + length field). */
 const OBJECT_HEADER_SIZE = 20;
@@ -90,7 +97,7 @@ const GVL_DECL_RE = /^VAR_GLOBAL/;
  * Returns the decoded value and the new offset.
  * Limited to 28-bit shift to stay within JS 32-bit signed integer range.
  */
-export function readLEB128(data: Buffer, offset: number): [number, number] {
+export function readLEB128(data: Uint8Array, offset: number): [number, number] {
   let value = 0;
   let shift = 0;
   while (offset < data.length) {
@@ -111,18 +118,21 @@ export function readLEB128(data: Buffer, offset: number): [number, number] {
  *   [0xFA 0x53] [flag byte] [GUID length byte] [GUID ASCII string]
  *   Repeated: [LEB128 index] [LEB128 length] [UTF-8 string bytes]
  */
-export function parseStringTable(data: Buffer): {
+export function parseStringTable(data: Uint8Array): {
   strings: Map<number, string>;
   guid: string;
 } {
-  if (data.length < 4 || !data.subarray(0, 2).equals(STRING_TABLE_MAGIC)) {
+  if (data.length < 4 || !bytesEqual(data.subarray(0, 2), STRING_TABLE_MAGIC)) {
     throw new Error(
-      `Invalid string table magic: ${data.subarray(0, 2).toString("hex")}`,
+      `Invalid string table magic: ${bytesToHex(data.subarray(0, 2))}`,
     );
   }
 
   const guidLen = data[3]!;
-  const guid = data.subarray(4, 4 + guidLen).toString("ascii");
+  // GUIDs are ASCII (subset of UTF-8); decoding as UTF-8 is correct
+  // for any printable ASCII string and side-steps the absence of an
+  // explicit "ascii" TextDecoder label.
+  const guid = bytesToUtf8(data.subarray(4, 4 + guidLen));
   let offset = 4 + guidLen;
 
   const strings = new Map<number, string>();
@@ -131,7 +141,7 @@ export function parseStringTable(data: Buffer): {
     const [length, o2] = readLEB128(data, o1);
     offset = o2;
     if (offset + length > data.length) break;
-    strings.set(idx, data.subarray(offset, offset + length).toString("utf-8"));
+    strings.set(idx, bytesToUtf8(data.subarray(offset, offset + length)));
     offset += length;
   }
 
@@ -141,7 +151,7 @@ export function parseStringTable(data: Buffer): {
 /**
  * Decode all LEB128-encoded values from a binary buffer.
  */
-export function decodeObjectIndices(data: Buffer): number[] {
+export function decodeObjectIndices(data: Uint8Array): number[] {
   const indices: number[] = [];
   let offset = 0;
   while (offset < data.length) {
@@ -156,7 +166,7 @@ export function decodeObjectIndices(data: Buffer): number[] {
  * Parse an object file into records delimited by 8 zero bytes.
  * Skips the 20-byte header.
  */
-function parseObjectRecords(data: Buffer): number[][] {
+function parseObjectRecords(data: Uint8Array): number[][] {
   if (data.length < OBJECT_HEADER_SIZE) return [];
 
   let offset = OBJECT_HEADER_SIZE;
@@ -171,7 +181,7 @@ function parseObjectRecords(data: Buffer): number[][] {
     // Check for 8-zero-byte record delimiter
     if (
       offset + 7 <= data.length &&
-      data.subarray(offset, offset + 8).equals(RECORD_DELIMITER)
+      bytesEqual(data.subarray(offset, offset + 8), RECORD_DELIMITER)
     ) {
       records.push(current);
       current = [];
@@ -205,7 +215,7 @@ interface MetaInfo {
  * Decode every LEB128 varint in a binary buffer (skipping the 20-byte
  * header that .meta files share with .object files).
  */
-function decodeVarintsAfterHeader(data: Buffer): number[] {
+function decodeVarintsAfterHeader(data: Uint8Array): number[] {
   if (data.length < OBJECT_HEADER_SIZE) return [];
   const out: number[] = [];
   let offset = OBJECT_HEADER_SIZE;
@@ -228,7 +238,7 @@ function decodeVarintsAfterHeader(data: Buffer): number[] {
  *   GUIDs that appear in EVERY meta (filtered separately by frequency).
  */
 function parseMetaInfo(
-  data: Buffer,
+  data: Uint8Array,
   ownGuid: string,
   strings: Map<number, string>,
 ): MetaInfo {
@@ -264,7 +274,7 @@ function parseMetaInfo(
  * stripped) just produce empty paths — every POU lives at the root.
  */
 function buildFolderPaths(
-  entries: Map<string, Buffer>,
+  entries: Map<string, Uint8Array>,
   strings: Map<number, string>,
 ): Map<string, string> {
   // Pass 1: parse every .meta, count GUID-reference frequency.
@@ -805,36 +815,37 @@ function handleBareGVL(
 }
 
 /**
- * Unzip entries from a buffer using Node.js built-in zlib.
+ * Unzip entries from a buffer using the platform's `DecompressionStream`.
  * Handles Stored (method 0) and Deflated (method 8) entries.
+ *
+ * Async because `DecompressionStream` is async by spec; the same
+ * API works in browser workers and Node 18+.
  */
-function* unzipEntries(
-  data: Buffer,
-): Generator<{ name: string; data: Buffer }> {
+async function* unzipEntries(
+  data: Uint8Array,
+): AsyncGenerator<{ name: string; data: Uint8Array }> {
   let offset = 0;
   const LOCAL_FILE_HEADER = 0x04034b50;
 
   while (offset + 30 <= data.length) {
-    const sig = data.readUInt32LE(offset);
+    const sig = readUInt32LE(data, offset);
     if (sig !== LOCAL_FILE_HEADER) break;
 
-    const compressionMethod = data.readUInt16LE(offset + 8);
-    const compressedSize = data.readUInt32LE(offset + 18);
-    const nameLen = data.readUInt16LE(offset + 26);
-    const extraLen = data.readUInt16LE(offset + 28);
+    const compressionMethod = readUInt16LE(data, offset + 8);
+    const compressedSize = readUInt32LE(data, offset + 18);
+    const nameLen = readUInt16LE(data, offset + 26);
+    const extraLen = readUInt16LE(data, offset + 28);
 
     const nameStart = offset + 30;
-    const name = data
-      .subarray(nameStart, nameStart + nameLen)
-      .toString("utf-8");
+    const name = bytesToUtf8(data.subarray(nameStart, nameStart + nameLen));
     const dataStart = nameStart + nameLen + extraLen;
 
-    let entryData: Buffer;
+    let entryData: Uint8Array;
     if (compressionMethod === 0) {
       entryData = data.subarray(dataStart, dataStart + compressedSize);
     } else if (compressionMethod === 8) {
       const compressed = data.subarray(dataStart, dataStart + compressedSize);
-      entryData = inflateRawSync(compressed) as Buffer;
+      entryData = await inflateRaw(compressed);
     } else {
       offset = dataStart + compressedSize;
       continue;
@@ -855,18 +866,18 @@ function* unzipEntries(
  * @param data - Raw binary content of the .library ZIP archive
  * @returns Array of extracted POUs, library GUID, and any warnings
  */
-export function parseV3Library(data: Buffer): {
+export async function parseV3Library(data: Uint8Array): Promise<{
   pous: ExtractedPOU[];
   guid: string;
   globalConstants: Record<string, number>;
   warnings: string[];
-} {
+}> {
   const warnings: string[] = [];
   const globalConstants: Record<string, number> = {};
 
   // Extract all ZIP entries
-  const entries = new Map<string, Buffer>();
-  for (const entry of unzipEntries(data)) {
+  const entries = new Map<string, Uint8Array>();
+  for await (const entry of unzipEntries(data)) {
     entries.set(entry.name, entry.data);
   }
 

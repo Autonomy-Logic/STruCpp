@@ -6,6 +6,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { analyze } from "strucpp";
 import { DocumentManager } from "../../server/src/document-manager.js";
+import { NodeWorkspaceFs } from "../../server/src/node-workspace-fs.js";
 
 describe("discoverWorkspaceLibraries", () => {
   let tempDir: string;
@@ -13,7 +14,7 @@ describe("discoverWorkspaceLibraries", () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-libtest-"));
-    docManager = new DocumentManager(analyze);
+    docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     docManager.setWorkspaceFolders([tempDir]);
   });
 
@@ -95,7 +96,7 @@ describe("library path merging", () => {
 
 describe("findSymbolInLibrarySources", () => {
   it("finds a FUNCTION_BLOCK declaration in library sources", () => {
-    const docManager = new DocumentManager(analyze);
+    const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     docManager.setLibraryArchiveCache("mylib", {
       formatVersion: 1,
       manifest: {
@@ -122,7 +123,7 @@ describe("findSymbolInLibrarySources", () => {
   });
 
   it("finds a FUNCTION declaration", () => {
-    const docManager = new DocumentManager(analyze);
+    const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     docManager.setLibraryArchiveCache("mathlib", {
       formatVersion: 1,
       manifest: {
@@ -148,13 +149,13 @@ describe("findSymbolInLibrarySources", () => {
   });
 
   it("returns undefined for symbols not in any library", () => {
-    const docManager = new DocumentManager(analyze);
+    const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     const result = docManager.findSymbolInLibrarySources("NonExistent");
     expect(result).toBeUndefined();
   });
 
   it("is case-insensitive for keyword matching", () => {
-    const docManager = new DocumentManager(analyze);
+    const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     docManager.setLibraryArchiveCache("lib", {
       formatVersion: 1,
       manifest: { name: "lib", version: "1.0.0", namespace: "lib", functions: [], functionBlocks: [], types: [] },
@@ -174,7 +175,7 @@ describe("findSymbolInLibrarySources", () => {
 
 describe("resolveFileNameToUri with library sources", () => {
   it("resolves bare fileName to strucpp-lib: URI", () => {
-    const docManager = new DocumentManager(analyze);
+    const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     docManager.setLibraryArchiveCache("mylib", {
       formatVersion: 1,
       manifest: { name: "mylib", version: "1.0.0", namespace: "mylib", functions: [], functionBlocks: [], types: [] },
@@ -191,7 +192,7 @@ describe("resolveFileNameToUri with library sources", () => {
   });
 
   it("returns undefined for unknown file names", () => {
-    const docManager = new DocumentManager(analyze);
+    const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     const uri = docManager.resolveFileNameToUri("Unknown.st");
     expect(uri).toBeUndefined();
   });
@@ -199,7 +200,7 @@ describe("resolveFileNameToUri with library sources", () => {
 
 describe("clearLibraryArchiveCache", () => {
   it("clears all cached library data", () => {
-    const docManager = new DocumentManager(analyze);
+    const docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     docManager.setLibraryArchiveCache("lib", {
       formatVersion: 1,
       manifest: { name: "lib", version: "1.0.0", namespace: "lib", functions: [], functionBlocks: [], types: [] },
@@ -225,7 +226,7 @@ describe("buildWorkspaceSources", () => {
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-wstest-"));
-    docManager = new DocumentManager(analyze);
+    docManager = new DocumentManager(analyze, NodeWorkspaceFs);
     docManager.setWorkspaceFolders([tempDir]);
   });
 

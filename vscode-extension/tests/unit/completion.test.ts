@@ -44,7 +44,9 @@ describe("getCompletions", () => {
         1,
         FIXTURE,
       );
-      const labels = items.map((i) => i.label);
+      // Labels are lower-case by convention; compare case-
+      // insensitively so the test survives either casing.
+      const labels = upperLabels(items);
       expect(labels).toContain("PROGRAM");
       expect(labels).toContain("FUNCTION_BLOCK");
       expect(labels).toContain("FUNCTION");
@@ -144,7 +146,7 @@ describe("getCompletions", () => {
       const sqrtItem = items.find(
         (i) => i.label.toUpperCase() === "SQRT",
       );
-      const ifItem = items.find((i) => i.label === "IF");
+      const ifItem = items.find((i) => i.label.toUpperCase() === "IF");
 
       expect(ifItem?.sortText).toBe("0"); // keywords first
       expect(playerItem?.sortText).toBe("1"); // local vars
@@ -261,7 +263,7 @@ describe("getCompletions", () => {
       expect(labels).toContain("position");
     });
 
-    it("keeps keywords uppercase", () => {
+    it("emits keywords lower-case", () => {
       const analysis = getAnalysis();
       const pos = findPosition("counter := counter + 1");
       const items = getCompletions(
@@ -272,10 +274,12 @@ describe("getCompletions", () => {
         FIXTURE,
       );
       const labels = items.map((i) => i.label);
-      // Keywords should remain uppercase
-      expect(labels).toContain("IF");
-      expect(labels).toContain("FOR");
-      expect(labels).toContain("WHILE");
+      // Statement keywords ship lower-case so the inserted snippet
+      // text matches the surface label.  ST is case-insensitive at
+      // the parser level, so this is purely a typographic choice.
+      expect(labels).toContain("if");
+      expect(labels).toContain("for");
+      expect(labels).toContain("while");
     });
   });
 

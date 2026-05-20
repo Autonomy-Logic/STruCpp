@@ -21,6 +21,7 @@ import type {
   TypeReference,
   VarBlock,
   VarDeclaration,
+  VariableExpression,
   Statement,
   TestFile,
   TestStatement,
@@ -256,6 +257,30 @@ export class SemanticAnalyzer {
           declaration: typeDecl,
           resolvedType,
         });
+
+        // Surface each enum member as a separate `EnumValueSymbol`
+        // in the global scope.  Type-checking uses the
+        // `enumMemberMap` built below for resolution, but
+        // autocomplete walks `scope.getAllSymbols()` — without
+        // these entries, bare enum values (`Stopped`, `Running`, …)
+        // never appear in the suggestion list even though the
+        // language accepts them.  Skip names already claimed by a
+        // real symbol (e.g. a global variable with the same
+        // identifier) to avoid silently shadowing them.
+        if (typeDecl.definition.kind === "EnumDefinition") {
+          typeDecl.definition.members.forEach((member, index) => {
+            if (this.symbolTables.globalScope.hasLocal(member.name)) return;
+            this.symbolTables.globalScope.defineOrReplace({
+              name: member.name,
+              kind: "enumValue",
+              enumType: typeDecl.name,
+              // Ordinal default; explicit values (`MEMBER := 5`) are
+              // resolved by the analyzer's expression pass elsewhere
+              // and not consumed by autocomplete.
+              value: index,
+            });
+          });
+        }
       } catch (err) {
         if (err instanceof Error) {
           this.addError(
@@ -2474,6 +2499,16 @@ export class SemanticAnalyzer {
     switch (expr.kind) {
       case "VariableExpression":
         this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan);
+        // Reject member access on a type-level symbol (FB / program / type).
+        // Resolves the bug where `RED_YELLOW_GREEN.GREENTIME := …` is
+        // silently accepted by the analyzer but blows up at C++
+        // compile time as `expected unqualified-id before '.' token`,
+        // because strucpp's codegen emits the FB name as a struct
+        // type, not a struct instance.  Locally-shadowed names (a
+        // `VAR foo : Foo;` declaration of the same identifier) are
+        // honoured because `scope.lookup` walks the chain — the
+        // shadowing variable wins.
+        this.checkInstanceAccess(expr, scope);
         if (expr.accessChain) {
           // accessChain is the authoritative ordered chain — walk its subscripts
           for (const step of expr.accessChain) {
@@ -2540,6 +2575,54 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * Reject `Type.member` patterns where `Type` is a type-level
+   * symbol (function block, program, or user-defined TYPE) rather
+   * than an instance.  In IEC 61131-3 a function block can only be
+   * accessed through an instance variable — `VAR x : MyFB;` then
+   * `x.member` — never via the FB name directly.  Strucpp's codegen
+   * emits the FB name as a C++ struct type, so `MyFB.member` lands
+   * in g++ as `expected unqualified-id before '.' token`; catching
+   * it here lets the diagnostic point at the actual ST line.
+   *
+   * Locally-shadowed names (a `VAR foo : Foo;` declaration of the
+   * same identifier) are honoured because `scope.lookup` walks the
+   * chain — the shadowing variable wins and no error fires.
+   *
+   * `enumValue` symbols also live in the global scope (for
+   * autocomplete) but they're values, not types; member access on
+   * them is rejected by the type system elsewhere, so we skip them
+   * here.
+   */
+  private checkInstanceAccess(expr: VariableExpression, scope: Scope): void {
+    const hasFieldAccess =
+      expr.fieldAccess.length > 0 ||
+      (expr.accessChain?.some((step) => step.kind === "field") ?? false);
+    if (!hasFieldAccess) return;
+
+    const sym = scope.lookup(expr.name);
+    if (!sym) return; // undeclared — separate diagnostic from checkNameDeclared
+
+    let noun: string | null = null;
+    if (sym.kind === "functionBlock") noun = "function block";
+    else if (sym.kind === "program") noun = "program";
+    // Enum TYPEs intentionally allow `EnumType.Member` qualified
+    // access — that's how the language disambiguates a member
+    // shared between two enums.  Only flag non-enum type symbols
+    // (STRUCT, ARRAY, SUBRANGE, …) where bare `.member` is
+    // genuinely invalid.
+    else if (sym.kind === "type" && sym.resolvedType?.typeKind !== "enum")
+      noun = "type";
+    if (noun === null) return;
+
+    this.addError(
+      `Cannot access members of ${noun} '${expr.name}' directly — declare a variable of type '${expr.name}' first.`,
+      expr.sourceSpan.startLine,
+      expr.sourceSpan.startCol,
+      expr.sourceSpan.file,
+    );
+  }
+
+  /**
    * Check whether a name is declared in the current scope chain or context.
    */
   private checkNameDeclared(
@@ -2550,8 +2633,15 @@ export class SemanticAnalyzer {
   ): void {
     const upper = name.toUpperCase();
 
-    // 1. Scope chain lookup (local → parent → globalScope)
-    if (scope.lookup(upper)) return;
+    // 1. Scope chain lookup (local → parent → globalScope).
+    //    `enumValue` hits are deliberately ignored here — the symbol
+    //    table only carries them for autocomplete; the ambiguity-
+    //    aware resolution path at step 6 (via `enumMemberMap`) is
+    //    the source of truth for bare enum references.  Letting an
+    //    enumValue match short-circuit here would swallow the
+    //    "Ambiguous enum member" diagnostic.
+    const scopeHit = scope.lookup(upper);
+    if (scopeHit && scopeHit.kind !== "enumValue") return;
 
     // 1b. Inherited FB member variables (walk EXTENDS chain)
     if (ctx.fbName) {

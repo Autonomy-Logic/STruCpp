@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -75,7 +76,7 @@ describe.skipIf(!hasGpp)("Library E2E Pipeline", () => {
       END_PROGRAM
     `;
     const result = compile(userSource, {
-      libraryPaths: [libDir],
+      libraries: discoverStlibs(libDir),
     });
     expect(result.success).toBe(true);
     expect(result.headerCode).toBeTruthy();
@@ -160,7 +161,7 @@ END_TEST
       isTestBuild: true,
       tempDirPrefix: "strucpp-lib-e2e-mul-",
       compileOptions: {
-        libraryPaths: [libDir],
+        libraries: discoverStlibs(libDir),
       },
     });
 
@@ -253,7 +254,7 @@ END_TEST
       END_PROGRAM
     `;
     const result = compile(userSource, {
-      libraryPaths: [libDir],
+      libraries: discoverStlibs(libDir),
     });
     expect(result.success).toBe(true);
 
@@ -313,7 +314,7 @@ END_TEST
       isTestBuild: true,
       tempDirPrefix: "strucpp-lib-e2e-stdlib-",
       compileOptions: {
-        libraryPaths: [LIBS_DIR],
+        libraries: discoverStlibs(LIBS_DIR),
       },
     });
 

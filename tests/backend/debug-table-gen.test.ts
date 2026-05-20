@@ -6,6 +6,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import { compile } from "../../src/index.js";
 import { tagNameForTypeName, sizeForTypeName, TAG } from "../../src/backend/debug-table-gen.js";
 
@@ -188,7 +189,7 @@ CONFIGURATION Config0
   END_RESOURCE
 END_CONFIGURATION
 `;
-    const result = compile(tonSource, { libraryPaths: ["libs"] });
+    const result = compile(tonSource, { libraries: discoverStlibs("libs") });
     expect(result.success).toBe(true);
 
     const paths = result.debugMap!.leaves.map((l) => l.path);
