@@ -407,6 +407,13 @@ export class STParser extends CstParser {
 
   /**
    * Single variable declaration
+   *
+   * IEC 61131-3 puts the `AT %X…` location directive between the
+   * variable name and the colon (`v AT %QX0.0 : BOOL;`).  Several
+   * real-world editors — OpenPLC among them — emit the location
+   * after the type instead (`v : BOOL AT %QX0.0;`).  Accept both
+   * forms so the parser doesn't bail on the second form and skip
+   * every subsequent declaration in the VAR block.
    */
   public varDeclaration = this.RULE("varDeclaration", () => {
     this.AT_LEAST_ONE_SEP({
@@ -430,6 +437,11 @@ export class STParser extends CstParser {
       },
       { ALT: () => this.SUBRULE(this.dataType) },
     ]);
+    // Non-standard but widely-used: AT directive after the type.
+    this.OPTION3(() => {
+      this.CONSUME2(tokens.AT);
+      this.CONSUME2(tokens.DirectAddress);
+    });
     this.OPTION2(() => {
       this.CONSUME(tokens.Assign);
       this.SUBRULE(this.initializerExpression);
