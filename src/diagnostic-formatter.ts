@@ -53,15 +53,8 @@ const ANSI_PALETTE: ColorPalette = {
   green: "\x1b[32m",
 };
 
-function getPalette(): ColorPalette {
-  // Evaluated per-call so NO_COLOR / TTY changes during the process lifetime
-  // (notably between tests) take effect immediately.
-  if (typeof process === "undefined") return NO_COLOR_PALETTE;
-  if (process.env.NO_COLOR !== undefined) return NO_COLOR_PALETTE;
-  if (process.stderr === undefined || process.stderr.isTTY !== true) {
-    return NO_COLOR_PALETTE;
-  }
-  return ANSI_PALETTE;
+function getPalette(enableColor: boolean): ColorPalette {
+  return enableColor ? ANSI_PALETTE : NO_COLOR_PALETTE;
 }
 
 function severityColor(severity: Severity, palette: ColorPalette): string {
@@ -118,6 +111,15 @@ export interface FormatDiagnosticOptions {
    * extension see today).
    */
   preferBodyLine?: boolean;
+
+  /**
+   * When `true`, the formatter wraps severity / location / source
+   * markers in ANSI escape sequences.  Default `false` so a
+   * formatter call from a browser or a test always returns plain
+   * text.  The CLI flips this based on `process.env.NO_COLOR` /
+   * `process.stderr.isTTY`.
+   */
+  enableColor?: boolean;
 }
 
 /**
@@ -129,7 +131,7 @@ export function formatDiagnostic(
   sourceMap: Map<string, string>,
   options?: FormatDiagnosticOptions,
 ): string {
-  const palette = getPalette();
+  const palette = getPalette(options?.enableColor === true);
   const sevColor = severityColor(error.severity, palette);
   const fileLabel = error.file ?? "<input>";
 
@@ -198,7 +200,8 @@ export function formatDiagnostic(
 export function formatDiagnostics(
   errors: CompileError[],
   sources: DiagnosticSource[],
+  options?: FormatDiagnosticOptions,
 ): string {
   const map = buildSourceMap(sources);
-  return errors.map((e) => formatDiagnostic(e, map)).join("\n");
+  return errors.map((e) => formatDiagnostic(e, map, options)).join("\n");
 }

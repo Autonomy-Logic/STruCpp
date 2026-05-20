@@ -12,15 +12,23 @@
  * Magic: "CoDeSys+" (8 bytes)
  */
 
+import {
+  bytesEqual,
+  bytesToHex,
+  bytesToLatin1,
+  findSubArray,
+  readUInt32LE,
+  utf8ToBytes,
+} from "../../byte-utils.js";
 import type { ExtractedPOU } from "./types.js";
 
-const CODESYS_V23_MAGIC = Buffer.from("CoDeSys+", "ascii");
+const CODESYS_V23_MAGIC = utf8ToBytes("CoDeSys+");
 
 /** Keyword patterns to scan for in the binary data. */
-const POU_PATTERNS: Array<{ bytes: Buffer; type: ExtractedPOU["type"] }> = [
-  { bytes: Buffer.from("FUNCTION_BLOCK ", "ascii"), type: "FUNCTION_BLOCK" },
-  { bytes: Buffer.from("FUNCTION ", "ascii"), type: "FUNCTION" },
-  { bytes: Buffer.from("PROGRAM ", "ascii"), type: "PROGRAM" },
+const POU_PATTERNS: Array<{ bytes: Uint8Array; type: ExtractedPOU["type"] }> = [
+  { bytes: utf8ToBytes("FUNCTION_BLOCK "), type: "FUNCTION_BLOCK" },
+  { bytes: utf8ToBytes("FUNCTION "), type: "FUNCTION" },
+  { bytes: utf8ToBytes("PROGRAM "), type: "PROGRAM" },
 ];
 
 /** Regex for extracting POU names from declaration text. */
@@ -36,21 +44,21 @@ const GVL_RE = /VAR_GLOBAL(?:\s+\w+)?\s*\r?\n.*?END_VAR/gs;
 /**
  * Validate that a buffer starts with the CODESYS V2.3 magic bytes.
  */
-export function isV23Library(data: Buffer): boolean {
-  return data.length >= 8 && data.subarray(0, 8).equals(CODESYS_V23_MAGIC);
+export function isV23Library(data: Uint8Array): boolean {
+  return data.length >= 8 && bytesEqual(data.subarray(0, 8), CODESYS_V23_MAGIC);
 }
 
 /**
  * Find all FUNCTION / FUNCTION_BLOCK / PROGRAM declarations in the binary.
  */
-function findPOUDeclarations(data: Buffer): ExtractedPOU[] {
+function findPOUDeclarations(data: Uint8Array): ExtractedPOU[] {
   const pous: ExtractedPOU[] = [];
   const seen = new Set<number>(); // track offsets to avoid duplicates
 
   for (const { bytes: pattern, type } of POU_PATTERNS) {
     let offset = 0;
     for (;;) {
-      const idx = data.indexOf(pattern, offset);
+      const idx = findSubArray(data, pattern, offset);
       if (idx === -1) break;
       offset = idx + 1;
 
@@ -70,7 +78,7 @@ function findPOUDeclarations(data: Buffer): ExtractedPOU[] {
 
       // Verify by reading the 4-byte LE length field before the text start
       if (textStart < 4) continue;
-      const declLen = data.readUInt32LE(textStart - 4);
+      const declLen = readUInt32LE(data, textStart - 4);
 
       // Sanity check: reasonable length range
       if (declLen < 10 || declLen > 100000) continue;
@@ -84,7 +92,7 @@ function findPOUDeclarations(data: Buffer): ExtractedPOU[] {
       const declText = data.subarray(textStart, textStart + declLen);
       let declStr: string;
       try {
-        declStr = declText.toString("latin1");
+        declStr = bytesToLatin1(declText);
       } catch {
         continue;
       }
@@ -103,11 +111,11 @@ function findPOUDeclarations(data: Buffer): ExtractedPOU[] {
       if (implOffset < data.length) {
         const sep = data[implOffset];
         if (sep === 0x12 && implOffset + 5 <= data.length) {
-          const implLen = data.readUInt32LE(implOffset + 1);
+          const implLen = readUInt32LE(data, implOffset + 1);
           if (implLen < 500000 && implOffset + 5 + implLen <= data.length) {
-            implStr = data
-              .subarray(implOffset + 5, implOffset + 5 + implLen)
-              .toString("latin1");
+            implStr = bytesToLatin1(
+              data.subarray(implOffset + 5, implOffset + 5 + implLen),
+            );
           }
         }
       }
@@ -130,8 +138,8 @@ function findPOUDeclarations(data: Buffer): ExtractedPOU[] {
 /**
  * Find TYPE declarations (structs, enums) in the binary data.
  */
-function findTypeDeclarations(data: Buffer): ExtractedPOU[] {
-  const text = data.toString("latin1");
+function findTypeDeclarations(data: Uint8Array): ExtractedPOU[] {
+  const text = bytesToLatin1(data);
   const types: ExtractedPOU[] = [];
 
   TYPE_RE.lastIndex = 0;
@@ -152,8 +160,8 @@ function findTypeDeclarations(data: Buffer): ExtractedPOU[] {
 /**
  * Find Global Variable Lists in the binary data.
  */
-function findGVLDeclarations(data: Buffer): ExtractedPOU[] {
-  const text = data.toString("latin1");
+function findGVLDeclarations(data: Uint8Array): ExtractedPOU[] {
+  const text = bytesToLatin1(data);
   const gvls: ExtractedPOU[] = [];
 
   GVL_RE.lastIndex = 0;
@@ -186,17 +194,15 @@ function findGVLDeclarations(data: Buffer): ExtractedPOU[] {
  * @param data - Raw binary content of the .lib file
  * @returns Array of extracted POUs sorted by offset
  */
-export function parseV23Library(data: Buffer): {
+export function parseV23Library(data: Uint8Array): {
   pous: ExtractedPOU[];
   warnings: string[];
 } {
-  const warnings: string[] = [];
-
   if (!isV23Library(data)) {
     return {
       pous: [],
       warnings: [
-        `Not a CODESYS V2.3 library (magic: ${data.subarray(0, 8).toString("hex")})`,
+        `Not a CODESYS V2.3 library (magic: ${bytesToHex(data.subarray(0, 8))})`,
       ],
     };
   }
@@ -209,5 +215,5 @@ export function parseV23Library(data: Buffer): {
   const all = [...pous, ...types, ...gvls];
   all.sort((a, b) => a.offset - b.offset);
 
-  return { pous: all, warnings };
+  return { pous: all, warnings: [] };
 }

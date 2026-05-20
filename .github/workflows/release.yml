@@ -305,6 +305,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Install vscode-extension dependencies
+        # Required so the browser-server bundle can build during prepack.
+        run: npm ci
+        working-directory: vscode-extension
+
       - name: Inject version
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
 
@@ -312,6 +317,9 @@ jobs:
         run: npm run build
 
       - name: Create npm tarball
+        # `npm pack` triggers `prepack`, which builds the browser-server
+        # bundle into `dist/browser-server.js` so it ships in the tarball
+        # alongside the Node compiler output.
         run: npm pack
 
       - uses: actions/upload-artifact@v4

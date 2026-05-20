@@ -1,16 +1,27 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Autonomy / OpenPLC Project
 /**
- * Build Utilities
+ * Node-only build orchestration helpers.
  *
- * Functions extracted from cli.ts for reuse by the VSCode extension and other consumers.
- * Handles compiler detection, runtime include discovery, and C++ flag parsing.
+ * These spawn external processes (`xcrun`, `g++`) and probe the
+ * filesystem to locate the strucpp runtime headers and bundled
+ * library archives.  They're used by the CLI and by editor
+ * integrations that orchestrate C++ compilation; the browser LSP
+ * doesn't compile to binaries and never needs any of this.
+ *
+ * Pure C++ flag parsing (`splitCxxFlags`, `extractIncludePaths`)
+ * lives in `src/cxx-flags.ts` — re-exported here for convenience
+ * so Node consumers can grab the whole surface from one place.
  */
 
-import { existsSync, statSync } from "fs";
-import { resolve, dirname, join } from "path";
-import { platform } from "os";
-import { execFileSync } from "child_process";
+import { execFileSync } from "node:child_process";
+import { existsSync, statSync } from "node:fs";
+import { platform } from "node:os";
+import { dirname, join, resolve } from "node:path";
+
+import { extractIncludePaths } from "../cxx-flags.js";
+
+export { extractIncludePaths, splitCxxFlags } from "../cxx-flags.js";
 
 /**
  * On macOS, newer Xcode CLT versions move libc++ headers to the SDK.
@@ -31,36 +42,6 @@ export function getCxxEnv(): NodeJS.ProcessEnv | undefined {
     /* xcrun not available */
   }
   return undefined;
-}
-
-/**
- * Split a --cxx-flags string into individual arguments,
- * respecting double-quoted segments (e.g. '-I"/path with spaces"').
- */
-export function splitCxxFlags(flags: string): string[] {
-  if (!flags || !flags.trim()) return [];
-  const parts = flags.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
-  return parts.map((p) => p.replace(/^"|"$/g, ""));
-}
-
-/**
- * Extract -I include paths from a compiler flags string.
- * Handles: -I/path, -I /path, -I"/path with spaces"
- */
-export function extractIncludePaths(flags: string): string[] {
-  const paths: string[] = [];
-  const parts = flags.match(/(?:[^\s"]+|"[^"]*")+/g) ?? [];
-  for (let i = 0; i < parts.length; i++) {
-    const raw = parts[i] ?? "";
-    const part = raw.replace(/^"|"$/g, "");
-    if (part === "-I" && i + 1 < parts.length) {
-      i++;
-      paths.push((parts[i] ?? "").replace(/^"|"$/g, ""));
-    } else if (part.startsWith("-I")) {
-      paths.push(part.slice(2));
-    }
-  }
-  return paths;
 }
 
 /**
@@ -144,10 +125,9 @@ export function findBundledLibsDir(): string | null {
   try {
     if (typeof import.meta?.url === "string") {
       const scriptDir = dirname(new URL(import.meta.url).pathname);
-      // src/build-utils.ts → ../libs/  or  dist/build-utils.js → ../libs/
-      candidates.push(resolve(scriptDir, "..", "libs"));
-      // dist/build-utils.js → ../../libs/
+      // src/node/build-utils.ts → ../../libs/  or  dist/node/build-utils.js → ../../libs/
       candidates.push(resolve(scriptDir, "..", "..", "libs"));
+      candidates.push(resolve(scriptDir, "..", "libs"));
     }
   } catch {
     // unavailable in CJS bundle / pkg binary
@@ -155,8 +135,8 @@ export function findBundledLibsDir(): string | null {
 
   // From __dirname (CJS bundle via esbuild)
   if (typeof __dirname === "string") {
-    candidates.push(resolve(__dirname, "..", "libs"));
     candidates.push(resolve(__dirname, "..", "..", "libs"));
+    candidates.push(resolve(__dirname, "..", "libs"));
     candidates.push(resolve(__dirname, "libs"));
   }
 

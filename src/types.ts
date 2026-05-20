@@ -52,10 +52,15 @@ export interface CompileOptions {
     fileName: string;
   }>;
 
-  /** Library search paths — discovers *.stlib files */
-  libraryPaths?: string[];
-
-  /** Pre-loaded .stlib library archives */
+  /**
+   * Pre-loaded .stlib library archives.  The compiler used to also
+   * accept a `libraryPaths: string[]` option for fs-based discovery;
+   * that option is removed — callers running on Node load archives
+   * themselves via `strucpp/node`'s `discoverStlibs(dir)` (or
+   * `loadStlibFromFile(path)`) and pass them through here.  Browser
+   * consumers fetch archive bytes and parse with
+   * `loadStlibFromBuffer` / `loadStlibFromString`.
+   */
   libraries?: import("./library/library-manifest.js").StlibArchive[];
 
   /** Skip source inclusion when compiling libraries (closed-source) */

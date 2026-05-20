@@ -532,4 +532,60 @@ describe("Undeclared Variables - Enum members", () => {
     );
     expect(ambiguousErrors).toHaveLength(0);
   });
+
+  it("should reject member access on a FUNCTION_BLOCK type used as instance", () => {
+    // Repro for the bug where `RED_YELLOW_GREEN.GREENTIME :=` was
+    // accepted by the analyzer and only blew up at C++ compile time.
+    const result = analyzeSource(`
+      FUNCTION_BLOCK MyFB
+        VAR_INPUT FOO : INT; END_VAR
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        MyFB.FOO := 1;
+      END_PROGRAM
+    `);
+    const errors = result.errors.filter((e) =>
+      e.message.includes("Cannot access members of function block"),
+    );
+    expect(errors).toHaveLength(1);
+    // Identifiers are upper-cased by the analyzer for diagnostic display.
+    expect(errors[0]!.message.toUpperCase()).toContain("MYFB");
+  });
+
+  it("should accept member access through a local FB instance", () => {
+    // A variable with the same name as the FB type shadows the type
+    // in scope.lookup — the access is on the instance, not the type.
+    const result = analyzeSource(`
+      FUNCTION_BLOCK MyFB
+        VAR_INPUT FOO : INT; END_VAR
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR inst : MyFB; END_VAR
+        inst.FOO := 1;
+      END_PROGRAM
+    `);
+    const errors = result.errors.filter((e) =>
+      e.message.includes("Cannot access members of"),
+    );
+    expect(errors).toHaveLength(0);
+  });
+
+  it("should reject member access on a STRUCT type used as instance", () => {
+    const result = analyzeSource(`
+      TYPE
+        Point : STRUCT
+          X : INT;
+          Y : INT;
+        END_STRUCT;
+      END_TYPE
+      PROGRAM Main
+        Point.X := 0;
+      END_PROGRAM
+    `);
+    const errors = result.errors.filter((e) =>
+      e.message.includes("Cannot access members of type"),
+    );
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message.toUpperCase()).toContain("POINT");
+  });
 });

@@ -12,7 +12,7 @@ import { build } from "esbuild";
 const pkg = JSON.parse(readFileSync("package.json", "utf-8"));
 
 await build({
-  entryPoints: ["dist/cli.js"],
+  entryPoints: ["dist/node/cli.js"],
   bundle: true,
   platform: "node",
   target: "node18",

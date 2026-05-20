@@ -98,6 +98,28 @@ describe('Phase 2.3 - Located Variables', () => {
       expect(result.ast?.programs[0].varBlocks[0].declarations[0].address).toBe('%ML0');
     });
 
+    it('should parse address declared AFTER the type (non-standard but widely used)', () => {
+      // IEC 61131-3 puts `AT %X…` between the variable name and the
+      // colon (`v AT %QX0.0 : BOOL;`).  Editors like OpenPLC emit it
+      // after the type (`v : BOOL AT %QX0.0;`).  Accept both — the
+      // alternative form is the only one some real-world projects
+      // ever see, and bailing on it skips every subsequent
+      // declaration in the VAR block.
+      const source = `
+        PROGRAM Main
+          VAR
+            valve : BOOL AT %QX1.4;
+            counter : INT AT %MW100 := 5;
+          END_VAR
+        END_PROGRAM
+      `;
+      const result = parse(source);
+      expect(result.errors).toHaveLength(0);
+      const decls = result.ast?.programs[0].varBlocks[0].declarations;
+      expect(decls?.[0].address).toBe('%QX1.4');
+      expect(decls?.[1].address).toBe('%MW100');
+    });
+
     it('should parse lowercase address (uppercased by lexer)', () => {
       const source = `
         PROGRAM Main

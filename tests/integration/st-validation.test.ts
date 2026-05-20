@@ -11,7 +11,7 @@ import { describe, it, expect } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { hasGpp, runE2ETestPipeline } from "./test-helpers.js";
-import { loadStlibFromFile } from "../../src/library/library-loader.js";
+import { loadStlibFromFile } from "../../src/node/library-loader.js";
 
 const VALIDATION_DIR = path.resolve(__dirname, "../st-validation");
 

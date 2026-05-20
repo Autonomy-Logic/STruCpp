@@ -7,8 +7,6 @@
  * for cross-library function resolution.
  */
 
-import { readFileSync, readdirSync } from "fs";
-import { resolve, join } from "path";
 import type {
   LibraryManifest,
   LibraryVarType,
@@ -224,62 +222,6 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
 }
 
 /**
- * Load a library manifest from a `.stlib.json` file on disk.
- *
- * @param manifestPath - Path to the `.stlib.json` file
- * @returns The validated library manifest
- * @throws {LibraryManifestError} if the file cannot be read or is invalid
- */
-export function loadLibraryFromFile(manifestPath: string): LibraryManifest {
-  let raw: string;
-  try {
-    raw = readFileSync(manifestPath, "utf-8");
-  } catch (e) {
-    throw new LibraryManifestError(
-      `Cannot read library manifest: ${manifestPath}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  let json: unknown;
-  try {
-    json = JSON.parse(raw);
-  } catch (e) {
-    throw new LibraryManifestError(
-      `Invalid JSON in library manifest: ${manifestPath}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  return loadLibraryManifest(json);
-}
-
-/**
- * Discover and load all library manifests (`*.stlib.json`) in a directory.
- *
- * @param dirPath - Directory to scan for `.stlib.json` files
- * @returns Array of loaded library manifests
- * @throws {LibraryManifestError} if any manifest fails validation
- */
-export function discoverLibraries(dirPath: string): LibraryManifest[] {
-  const resolvedDir = resolve(dirPath);
-  let entries: string[];
-  try {
-    entries = readdirSync(resolvedDir);
-  } catch (e) {
-    throw new LibraryManifestError(
-      `Cannot read library directory: ${resolvedDir}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  const manifests: LibraryManifest[] = [];
-  for (const entry of entries) {
-    if (entry.endsWith(".stlib.json")) {
-      manifests.push(loadLibraryFromFile(join(resolvedDir, entry)));
-    }
-  }
-  return manifests;
-}
-
-/**
  * Register a library's symbols into the compiler's symbol tables.
  * This makes library functions, FBs, and types available for semantic analysis.
  */
@@ -481,57 +423,59 @@ export function loadStlibArchive(json: unknown): StlibArchive {
 }
 
 /**
- * Load a `.stlib` archive from a file on disk.
+ * Parse and validate an stlib archive from its raw JSON text.
  *
- * @param path - Path to the `.stlib` file
+ * Browser-safe sibling of `loadStlibFromFile` — takes a string the
+ * caller already obtained (HTTP fetch, IPC, FileReader, etc.) instead
+ * of touching the filesystem.  Use this in environments without `fs`.
+ *
+ * @param raw - JSON text of the `.stlib` archive
+ * @param sourceLabel - Optional label used in error messages
  * @returns The validated archive
- * @throws {LibraryManifestError} if the file cannot be read or is invalid
+ * @throws {LibraryManifestError} if the JSON is malformed or invalid
  */
-export function loadStlibFromFile(path: string): StlibArchive {
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf-8");
-  } catch (e) {
-    throw new LibraryManifestError(
-      `Cannot read stlib archive: ${path}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
+export function loadStlibFromString(
+  raw: string,
+  sourceLabel: string = "<string>",
+): StlibArchive {
   let json: unknown;
   try {
     json = JSON.parse(raw);
   } catch (e) {
     throw new LibraryManifestError(
-      `Invalid JSON in stlib archive: ${path}: ${e instanceof Error ? e.message : String(e)}`,
+      `Invalid JSON in stlib archive: ${sourceLabel}: ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-
   return loadStlibArchive(json);
 }
 
 /**
- * Discover and load all `.stlib` archives in a directory (non-recursive).
+ * Parse and validate an stlib archive from raw bytes.
  *
- * @param dirPath - Directory to scan for `.stlib` files
- * @returns Array of loaded archives
- * @throws {LibraryManifestError} if any archive fails validation
+ * Browser-safe sibling of `loadStlibFromFile` — accepts the byte
+ * payload of an `.stlib` (UTF-8 encoded JSON).  Suitable for
+ * `fetch(...).then(r => r.arrayBuffer())` flows and for Electron
+ * preload paths that hand the renderer a `Uint8Array` over IPC.
+ *
+ * @param bytes - Raw UTF-8 bytes of the `.stlib` archive
+ * @param sourceLabel - Optional label used in error messages
+ * @returns The validated archive
+ * @throws {LibraryManifestError} if the JSON is malformed or invalid
  */
-export function discoverStlibs(dirPath: string): StlibArchive[] {
-  const resolvedDir = resolve(dirPath);
-  let entries: string[];
-  try {
-    entries = readdirSync(resolvedDir);
-  } catch (e) {
-    throw new LibraryManifestError(
-      `Cannot read library directory: ${resolvedDir}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
-
-  const archives: StlibArchive[] = [];
-  for (const entry of entries) {
-    if (entry.endsWith(".stlib")) {
-      archives.push(loadStlibFromFile(join(resolvedDir, entry)));
-    }
-  }
-  return archives;
+export function loadStlibFromBuffer(
+  bytes: Uint8Array,
+  sourceLabel: string = "<buffer>",
+): StlibArchive {
+  // TextDecoder is available in modern Node (≥11) and every browser /
+  // worker context we care about.  Avoids pulling in `Buffer` so the
+  // browser bundler doesn't have to polyfill it.
+  const raw = new TextDecoder("utf-8").decode(bytes);
+  return loadStlibFromString(raw, sourceLabel);
 }
+
+// File-shaped wrappers (`loadStlibFromFile`, `discoverStlibs`,
+// `loadLibraryFromFile`, `discoverLibraries`) live in
+// `src/node/library-loader.ts`.  Browser / worker consumers fetch
+// bytes themselves and call the pure `loadStlibFromString` /
+// `loadStlibFromBuffer` / `loadStlibArchive` / `loadLibraryManifest`
+// helpers above.

@@ -12,7 +12,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { compile } from "../../src/index.js";
-import { loadStlibFromFile } from "../../src/library/library-loader.js";
+import { loadStlibFromFile, discoverStlibs } from "../../src/node/library-loader.js";
 import type { StlibArchive } from "../../src/library/library-manifest.js";
 import { parseTestFile } from "../../src/testing/test-parser.js";
 import {
@@ -81,7 +81,7 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
         const result = compile(dummyST, {
           headerFileName: "oscat_all.hpp",
           fileName: "_dummy.st",
-          libraryPaths: [LIBS_DIR],
+          libraries: discoverStlibs(LIBS_DIR),
           isTestBuild: true,
         });
 
@@ -155,7 +155,7 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
         const dummyResult = compile(dummyST, {
           headerFileName: "oscat_all.hpp",
           fileName: "_dummy.st",
-          libraryPaths: [LIBS_DIR],
+          libraries: discoverStlibs(LIBS_DIR),
           isTestBuild: true,
         });
         const { pous } = dummyResult.ast

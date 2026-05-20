@@ -29,9 +29,6 @@
  * absent, and the caller falls back to its own constants.
  */
 
-import { readFileSync, existsSync } from "fs";
-import { resolve } from "path";
-
 import type { StlibArchive } from "./library-manifest.js";
 
 /**
@@ -77,26 +74,26 @@ export interface LibraryConfig {
 }
 
 /**
- * Read the `library.json` sitting at `<sourcesDir>/library.json`. Returns
- * `null` if the file is absent — callers fall back to their own defaults.
+ * Parse a `library.json` payload that the caller has already
+ * obtained from somewhere (disk, HTTP fetch, IPC, …).  `sourceLabel`
+ * rides on diagnostics so a malformed config still points at a
+ * meaningful location.
  *
- * Throws on parse errors (malformed JSON) and on schema violations
- * (missing required fields, wrong type) so build failures are loud and
- * pinpoint the misconfigured file.
+ * Throws on parse errors and on schema violations so build failures
+ * are loud and pinpoint the misconfigured input.
  */
-export function loadLibraryConfig(sourcesDir: string): LibraryConfig | null {
-  const path = resolve(sourcesDir, "library.json");
-  if (!existsSync(path)) return null;
-
+export function loadLibraryConfigFromString(
+  json: string,
+  sourceLabel: string,
+): LibraryConfig {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(path, "utf-8"));
+    raw = JSON.parse(json);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`${path}: invalid JSON — ${msg}`);
+    throw new Error(`${sourceLabel}: invalid JSON — ${msg}`);
   }
-
-  return validateLibraryConfig(raw, path);
+  return validateLibraryConfig(raw, sourceLabel);
 }
 
 function validateLibraryConfig(raw: unknown, path: string): LibraryConfig {

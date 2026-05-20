@@ -19,10 +19,8 @@ import {
   type DebugBuildResponse,
   type CompileLibResponse,
 } from "../../shared/protocol.js";
-import {
-  getCxxEnv,
-  splitCxxFlags,
-} from "strucpp";
+import { splitCxxFlags } from "strucpp";
+import { getCxxEnv } from "strucpp/node";
 import { buildSetupCommands, buildDebugConfig } from "./debug-config-builder.js";
 
 const outputChannel = vscode.window.createOutputChannel("STruC++");

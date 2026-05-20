@@ -26,11 +26,31 @@ await esbuild.build({
   external: ["vscode"],
 });
 
-// Server bundle
+// Server bundle (Node-hosted — used by the VS Code extension)
 await esbuild.build({
   ...sharedOptions,
   entryPoints: ["./out/server/src/server.js"],
   outfile: "./out/server.js",
+});
+
+// Browser server bundle (Web Worker — used by Monaco-based editors
+// like openplc-editor and openplc-web).  The strucpp package is
+// pure-by-default (Node-only helpers live in the `strucpp/node`
+// sub-entry); `server-browser.ts` imports only from the pure
+// surface and the LSP modules under `vscode-extension/server/src/`,
+// so the bundle compiles straight against the browser platform
+// with zero aliases or banners.  If a future Node-only import
+// sneaks in, esbuild will fail loud at bundle time, which is the
+// right behaviour.
+await esbuild.build({
+  bundle: true,
+  platform: "browser",
+  target: "ES2022",
+  format: "iife",
+  sourcemap: !production,
+  minify: production,
+  entryPoints: ["./out/server/src/server-browser.js"],
+  outfile: "./out/server.browser.js",
 });
 
 // Copy runtime files for .vsix packaging.
