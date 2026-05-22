@@ -371,13 +371,28 @@ inline auto SEL(IEC_BOOL g, T in0, U in1) noexcept {
 }
 
 /**
- * MUX - Multiplexer (select from multiple inputs)
- * Input: ANY_INT selector, ANY values, Output: ANY (same type as inputs)
- * Note: This is a simplified 2-input version.
+ * MUX - Multiplexer (extensible — IEC 61131-3 minArgs=3, K + at least
+ * two inputs).  Returns the input selected by the zero-based `k`:
+ *
+ *     MUX(0, A, B, C, D) == A
+ *     MUX(2, A, B, C, D) == C
+ *
+ * The single-input terminator `MUX(k, in0)` exists only to anchor
+ * the variadic recursion; callers should not invoke it directly
+ * (the IEC contract requires K + ≥2 inputs).  When `k` is out of
+ * range we fall through to the last input, matching the editor's
+ * legacy 2-input behaviour and consistent with how CODESYS clamps
+ * over-range selectors.
  */
 template<typename T>
-inline T MUX(IEC_INT k, T in0, T in1) noexcept {
-    return iec_unwrap(k) == 0 ? in0 : in1;
+inline T MUX([[maybe_unused]] IEC_INT k, T in0) noexcept {
+    return in0;
+}
+
+template<typename T, typename... Args>
+inline T MUX(IEC_INT k, T in0, T in1, Args... rest) noexcept {
+    if (iec_unwrap(k) == 0) return in0;
+    return MUX(IEC_INT(iec_unwrap(k) - 1), in1, rest...);
 }
 
 // =============================================================================
@@ -469,6 +484,61 @@ inline IEC_BOOL LT(A a, B b) noexcept {
 template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
 inline IEC_BOOL NE(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) != iec_unwrap(b));
+}
+
+// ---------------------------------------------------------------------------
+// Variadic chain forms for GT / GE / EQ / LE / LT / NE
+// ---------------------------------------------------------------------------
+//
+// IEC 61131-3 defines the comparison functions as extensible:
+// `GT(a, b, c)` means `(a > b) AND (b > c)`.  These overloads
+// implement the chain semantic and live alongside the binary forms
+// above so the codegen can emit the same C++ name for any arity.
+//
+// Same heterogeneous-type signature as the binary forms — every
+// adjacent pair goes through `iec_unwrap` independently so mixed
+// IECVar / underlying types compare cleanly.
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL GT(A a, B b, C c, Rest... rest) noexcept {
+    if (!(iec_unwrap(a) > iec_unwrap(b))) return IEC_BOOL(false);
+    return GT(b, c, rest...);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL GE(A a, B b, C c, Rest... rest) noexcept {
+    if (!(iec_unwrap(a) >= iec_unwrap(b))) return IEC_BOOL(false);
+    return GE(b, c, rest...);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL EQ(A a, B b, C c, Rest... rest) noexcept {
+    if (!(iec_unwrap(a) == iec_unwrap(b))) return IEC_BOOL(false);
+    return EQ(b, c, rest...);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL LE(A a, B b, C c, Rest... rest) noexcept {
+    if (!(iec_unwrap(a) <= iec_unwrap(b))) return IEC_BOOL(false);
+    return LE(b, c, rest...);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL LT(A a, B b, C c, Rest... rest) noexcept {
+    if (!(iec_unwrap(a) < iec_unwrap(b))) return IEC_BOOL(false);
+    return LT(b, c, rest...);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_elementary<A, B> = 0>
+inline IEC_BOOL NE(A a, B b, C c, Rest... rest) noexcept {
+    if (!(iec_unwrap(a) != iec_unwrap(b))) return IEC_BOOL(false);
+    return NE(b, c, rest...);
 }
 
 // =============================================================================
@@ -953,23 +1023,6 @@ inline T MIN(T first, T second, Args... rest) noexcept {
 }
 
 /**
- * MUX - Multiplexer (variadic)
- * Input: ANY_INT selector, ANY values, Output: ANY (same type as inputs)
- * Selects one of multiple inputs based on selector k
- * k=0 returns first input, k=1 returns second, etc.
- */
-template<typename T>
-inline T MUX_V([[maybe_unused]] IEC_INT k, T in0) noexcept {
-    return in0;
-}
-
-template<typename T, typename... Args>
-inline T MUX_V(IEC_INT k, T in0, Args... rest) noexcept {
-    if (iec_unwrap(k) == 0) return in0;
-    return MUX_V(IEC_INT(iec_unwrap(k) - 1), rest...);
-}
-
-/**
  * MOVE - Copy value (identity function)
  * Input: ANY, Output: ANY (same type)
  * Used for explicit value copying in ST
@@ -977,115 +1030,6 @@ inline T MUX_V(IEC_INT k, T in0, Args... rest) noexcept {
 template<typename T>
 inline T MOVE(T value) noexcept {
     return value;
-}
-
-// =============================================================================
-// Variadic Comparison Functions (Chain Support) (ANY_ELEMENTARY -> BOOL)
-// =============================================================================
-
-/**
- * GT_CHAIN - Greater than chain
- * Input: ANY_ELEMENTARY, Output: BOOL
- * Returns TRUE if all values are in strictly decreasing order
- * GT_CHAIN(a, b, c) = (a > b) AND (b > c)
- */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL GT_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(iec_unwrap(a) > iec_unwrap(b));
-}
-
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL GT_CHAIN(T first, T second, Args... rest) noexcept {
-    if (iec_unwrap(first) <= iec_unwrap(second)) return IEC_BOOL(false);
-    if constexpr (sizeof...(rest) > 0) {
-        return GT_CHAIN(second, rest...);
-    } else {
-        return IEC_BOOL(true);
-    }
-}
-
-/**
- * GE_CHAIN - Greater than or equal chain
- * Input: ANY_ELEMENTARY, Output: BOOL
- * Returns TRUE if all values are in non-increasing order
- * GE_CHAIN(a, b, c) = (a >= b) AND (b >= c)
- */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL GE_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(iec_unwrap(a) >= iec_unwrap(b));
-}
-
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL GE_CHAIN(T first, T second, Args... rest) noexcept {
-    if (iec_unwrap(first) < iec_unwrap(second)) return IEC_BOOL(false);
-    if constexpr (sizeof...(rest) > 0) {
-        return GE_CHAIN(second, rest...);
-    } else {
-        return IEC_BOOL(true);
-    }
-}
-
-/**
- * EQ_CHAIN - Equality chain
- * Input: ANY_ELEMENTARY, Output: BOOL
- * Returns TRUE if all values are equal
- * EQ_CHAIN(a, b, c) = (a == b) AND (b == c)
- */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL EQ_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(iec_unwrap(a) == iec_unwrap(b));
-}
-
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL EQ_CHAIN(T first, T second, Args... rest) noexcept {
-    if (iec_unwrap(first) != iec_unwrap(second)) return IEC_BOOL(false);
-    if constexpr (sizeof...(rest) > 0) {
-        return EQ_CHAIN(second, rest...);
-    } else {
-        return IEC_BOOL(true);
-    }
-}
-
-/**
- * LE_CHAIN - Less than or equal chain
- * Input: ANY_ELEMENTARY, Output: BOOL
- * Returns TRUE if all values are in non-decreasing order
- * LE_CHAIN(a, b, c) = (a <= b) AND (b <= c)
- */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL LE_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(iec_unwrap(a) <= iec_unwrap(b));
-}
-
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL LE_CHAIN(T first, T second, Args... rest) noexcept {
-    if (iec_unwrap(first) > iec_unwrap(second)) return IEC_BOOL(false);
-    if constexpr (sizeof...(rest) > 0) {
-        return LE_CHAIN(second, rest...);
-    } else {
-        return IEC_BOOL(true);
-    }
-}
-
-/**
- * LT_CHAIN - Less than chain
- * Input: ANY_ELEMENTARY, Output: BOOL
- * Returns TRUE if all values are in strictly increasing order
- * LT_CHAIN(a, b, c) = (a < b) AND (b < c)
- */
-template<typename T, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL LT_CHAIN(T a, T b) noexcept {
-    return IEC_BOOL(iec_unwrap(a) < iec_unwrap(b));
-}
-
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline IEC_BOOL LT_CHAIN(T first, T second, Args... rest) noexcept {
-    if (iec_unwrap(first) >= iec_unwrap(second)) return IEC_BOOL(false);
-    if constexpr (sizeof...(rest) > 0) {
-        return LT_CHAIN(second, rest...);
-    } else {
-        return IEC_BOOL(true);
-    }
 }
 
 // =============================================================================

@@ -608,14 +608,23 @@ TEST(IECStdLibTest, MIN_Variadic) {
     EXPECT_EQ(MIN(a, b, c, d).get(), 5);
 }
 
-TEST(IECStdLibTest, MUX_V) {
+TEST(IECStdLibTest, MUX_Variadic) {
     IEC_INT a(100);
     IEC_INT b(200);
     IEC_INT c(300);
-    
-    EXPECT_EQ(MUX_V(IEC_INT(0), a, b, c).get(), 100);
-    EXPECT_EQ(MUX_V(IEC_INT(1), a, b, c).get(), 200);
-    EXPECT_EQ(MUX_V(IEC_INT(2), a, b, c).get(), 300);
+
+    // Strucpp uses a single `MUX` template that handles K + any
+    // number of inputs ≥2 — formerly split between `MUX(k, in0,
+    // in1)` and a separate `MUX_V` for 3+.  Verify the unified
+    // path still selects correctly across the chain.
+    EXPECT_EQ(MUX(IEC_INT(0), a, b, c).get(), 100);
+    EXPECT_EQ(MUX(IEC_INT(1), a, b, c).get(), 200);
+    EXPECT_EQ(MUX(IEC_INT(2), a, b, c).get(), 300);
+
+    IEC_INT d(400);
+    IEC_INT e(500);
+    EXPECT_EQ(MUX(IEC_INT(3), a, b, c, d, e).get(), 400);
+    EXPECT_EQ(MUX(IEC_INT(4), a, b, c, d, e).get(), 500);
 }
 
 TEST(IECStdLibTest, MOVE) {
@@ -623,75 +632,94 @@ TEST(IECStdLibTest, MOVE) {
     EXPECT_EQ(MOVE(val).get(), 42);
 }
 
-TEST(IECStdLibTest, GT_CHAIN) {
+// Variadic-chain comparisons formerly lived under `*_CHAIN` names.
+// Strucpp now exposes them as additional overloads of the canonical
+// IEC names (GT, GE, EQ, LE, LT, NE) so the generated C++ can call
+// e.g. `GT(a, b, c)` directly.
+
+TEST(IECStdLibTest, GT_Variadic) {
     IEC_INT a(30);
     IEC_INT b(20);
     IEC_INT c(10);
     IEC_INT d(5);
-    
-    EXPECT_TRUE(GT_CHAIN(a, b).get());
-    EXPECT_TRUE(GT_CHAIN(a, b, c).get());
-    EXPECT_TRUE(GT_CHAIN(a, b, c, d).get());
-    
+
+    EXPECT_TRUE(GT(a, b).get());
+    EXPECT_TRUE(GT(a, b, c).get());
+    EXPECT_TRUE(GT(a, b, c, d).get());
+
     // Not strictly decreasing
     IEC_INT e(10);
-    EXPECT_FALSE(GT_CHAIN(a, b, c, e).get());  // c == e
+    EXPECT_FALSE(GT(a, b, c, e).get());  // c == e
 }
 
-TEST(IECStdLibTest, GE_CHAIN) {
+TEST(IECStdLibTest, GE_Variadic) {
     IEC_INT a(30);
     IEC_INT b(20);
     IEC_INT c(20);
     IEC_INT d(10);
-    
-    EXPECT_TRUE(GE_CHAIN(a, b).get());
-    EXPECT_TRUE(GE_CHAIN(a, b, c).get());  // b == c is OK
-    EXPECT_TRUE(GE_CHAIN(a, b, c, d).get());
-    
+
+    EXPECT_TRUE(GE(a, b).get());
+    EXPECT_TRUE(GE(a, b, c).get());  // b == c is OK
+    EXPECT_TRUE(GE(a, b, c, d).get());
+
     // Increasing
-    EXPECT_FALSE(GE_CHAIN(d, c, b, a).get());
+    EXPECT_FALSE(GE(d, c, b, a).get());
 }
 
-TEST(IECStdLibTest, EQ_CHAIN) {
+TEST(IECStdLibTest, EQ_Variadic) {
     IEC_INT a(10);
     IEC_INT b(10);
     IEC_INT c(10);
-    
-    EXPECT_TRUE(EQ_CHAIN(a, b).get());
-    EXPECT_TRUE(EQ_CHAIN(a, b, c).get());
-    
+
+    EXPECT_TRUE(EQ(a, b).get());
+    EXPECT_TRUE(EQ(a, b, c).get());
+
     IEC_INT d(20);
-    EXPECT_FALSE(EQ_CHAIN(a, b, d).get());
+    EXPECT_FALSE(EQ(a, b, d).get());
 }
 
-TEST(IECStdLibTest, LE_CHAIN) {
+TEST(IECStdLibTest, LE_Variadic) {
     IEC_INT a(10);
     IEC_INT b(20);
     IEC_INT c(20);
     IEC_INT d(30);
-    
-    EXPECT_TRUE(LE_CHAIN(a, b).get());
-    EXPECT_TRUE(LE_CHAIN(a, b, c).get());  // b == c is OK
-    EXPECT_TRUE(LE_CHAIN(a, b, c, d).get());
-    
+
+    EXPECT_TRUE(LE(a, b).get());
+    EXPECT_TRUE(LE(a, b, c).get());  // b == c is OK
+    EXPECT_TRUE(LE(a, b, c, d).get());
+
     // Decreasing
-    EXPECT_FALSE(LE_CHAIN(d, c, b, a).get());
+    EXPECT_FALSE(LE(d, c, b, a).get());
 }
 
-TEST(IECStdLibTest, LT_CHAIN) {
+TEST(IECStdLibTest, LT_Variadic) {
     IEC_INT a(10);
     IEC_INT b(20);
     IEC_INT c(30);
     IEC_INT d(40);
-    
-    EXPECT_TRUE(LT_CHAIN(a, b).get());
-    EXPECT_TRUE(LT_CHAIN(a, b, c).get());
-    EXPECT_TRUE(LT_CHAIN(a, b, c, d).get());
-    
+
+    EXPECT_TRUE(LT(a, b).get());
+    EXPECT_TRUE(LT(a, b, c).get());
+    EXPECT_TRUE(LT(a, b, c, d).get());
+
     // Not strictly increasing
     IEC_INT e(30);
-    EXPECT_FALSE(LT_CHAIN(a, b, c, e).get());  // c == e
+    EXPECT_FALSE(LT(a, b, c, e).get());  // c == e
 }
+
+TEST(IECStdLibTest, NE_Variadic) {
+    IEC_INT a(10);
+    IEC_INT b(20);
+    IEC_INT c(30);
+
+    EXPECT_TRUE(NE(a, b).get());
+    EXPECT_TRUE(NE(a, b, c).get());
+
+    // Any adjacent equal pair breaks the chain
+    IEC_INT d(20);
+    EXPECT_FALSE(NE(a, b, d).get());  // b == d
+}
+
 
 // =============================================================================
 // Pointer (REF_TO) Tests
