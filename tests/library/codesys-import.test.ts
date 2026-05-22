@@ -649,7 +649,7 @@ describe("CLI --import-lib", () => {
       const output = execFileSync(
         "node",
         [
-          "dist/cli.js",
+          "dist/node/cli.js",
           "--import-lib",
           OSCAT_V23_PATH,
           "-o",
