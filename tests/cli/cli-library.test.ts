@@ -3,7 +3,7 @@
  *
  * Tests for --compile-lib mode (single .stlib output), -L library paths,
  * folder input, --no-source flag, and multiple .st file inputs.
- * These tests invoke the CLI via the compiled dist/cli.js.
+ * These tests invoke the CLI via the compiled dist/node/cli.js.
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
@@ -18,7 +18,7 @@ import {
 import { resolve, join } from "path";
 import { tmpdir } from "os";
 
-const CLI_PATH = resolve(__dirname, "../../dist/cli.js");
+const CLI_PATH = resolve(__dirname, "../../dist/node/cli.js");
 const TMP_BASE = join(tmpdir(), "strucpp-cli-tests");
 
 /** Run the CLI and return stdout. Throws on non-zero exit. */
@@ -53,7 +53,7 @@ function freshDir(name: string): string {
 
 describe("CLI Library Features", () => {
   beforeAll(() => {
-    // Ensure dist/cli.js exists
+    // Ensure dist/node/cli.js exists
     if (!existsSync(CLI_PATH)) {
       throw new Error(
         `CLI not built: ${CLI_PATH} not found. Run "npm run build" first.`,
