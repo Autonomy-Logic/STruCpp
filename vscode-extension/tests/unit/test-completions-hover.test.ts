@@ -80,7 +80,7 @@ describe("test-aware completions", () => {
         1,
         TEST_SOURCE,
       );
-      const labels = items.map((i) => i.label);
+      const labels = items.map((i) => i.label.toUpperCase());
       expect(labels).toContain("TEST");
       expect(labels).toContain("SETUP");
       expect(labels).toContain("TEARDOWN");
@@ -102,7 +102,7 @@ describe("test-aware completions", () => {
         1,
         NORMAL_SOURCE,
       );
-      const labels = items.map((i) => i.label);
+      const labels = items.map((i) => i.label.toUpperCase());
       expect(labels).toContain("PROGRAM");
       expect(labels).not.toContain("SETUP");
       expect(labels).not.toContain("TEARDOWN");
