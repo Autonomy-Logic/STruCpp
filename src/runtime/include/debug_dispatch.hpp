@@ -177,16 +177,17 @@ inline constexpr TypeOps type_ops[TAG__COUNT] = {
 };
 
 // ---------------------------------------------------------------------------
-// Per-project tables — DECLARED here, DEFINED by generated_debug.cpp.
-// Using `extern` so the linker ties them together without the runtime header
-// needing to know the array counts at compile time.
+// Per-project tables are declared in `debug_table.hpp` (which we
+// include above).  They live there — not here — because the table-emit
+// translation unit (`generated_debug.cpp`) needs the `extern`
+// declarations to force external linkage on its `const` definitions,
+// and pulling `debug_dispatch.hpp` into generated_debug.cpp drags
+// `<avr/pgmspace.h>` → `<avr/io.h>` into a TU that names user
+// variables.  See debug_table.hpp's preamble for the rationale.
 //
-// On AVR these are in PROGMEM; the accessors below use pgm_read_*_far() to
-// work regardless of flash location.
+// On AVR these tables are in PROGMEM; the accessors below use
+// pgm_read_*_far() to work regardless of flash location.
 // ---------------------------------------------------------------------------
-extern const Entry* const debug_arrays[]     STRUCPP_DEBUG_FLASH;
-extern const uint16_t     debug_array_counts[] STRUCPP_DEBUG_FLASH;
-extern const uint8_t      debug_array_count;
 
 // ---------------------------------------------------------------------------
 // read_entry(): fetches Entry for (array_idx, elem_idx).
