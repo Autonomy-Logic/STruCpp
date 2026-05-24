@@ -82,7 +82,13 @@ END_CONFIGURATION
   it("emits valid C++ source with the expected pointer expressions", () => {
     const result = compile(simpleBlinkSource);
     const cpp = result.debugTableCpp!;
-    expect(cpp).toContain("#include \"debug_dispatch.hpp\"");
+    // Emitted file includes the AVR-clean `debug_table.hpp` subset, NOT
+    // `debug_dispatch.hpp` — pulling the dispatch header here would
+    // drag in `<avr/pgmspace.h>` → `<avr/io.h>` and AVR's register
+    // macros (e.g. `SP`) would mangle user variable references like
+    // PID's `SP` setpoint.  See runtime/include/debug_table.hpp.
+    expect(cpp).toContain("#include \"debug_table.hpp\"");
+    expect(cpp).not.toContain("#include \"debug_dispatch.hpp\"");
     expect(cpp).toContain("extern ::strucpp::Configuration_CONFIG0 g_config;");
     expect(cpp).toContain("namespace strucpp { namespace debug {");
     expect(cpp).toContain("const Entry debug_arr_0[");

@@ -562,7 +562,13 @@ function renderCpp(
   lines.push("// strucpp::debug::handle_*() in debug_dispatch.hpp.");
   lines.push("");
   lines.push('#include "generated.hpp"');
-  lines.push('#include "debug_dispatch.hpp"');
+  // `debug_table.hpp` carries the AVR-clean subset (Entry, TypeTag,
+  // STRUCPP_DEBUG_FLASH).  Including `debug_dispatch.hpp` here would
+  // pull `<avr/pgmspace.h>` → `<avr/io.h>` into the only TU that
+  // names user variables — AVR register macros (`SP`, `SREG`, …)
+  // would then mangle identifiers like PID's `SP` setpoint.  See
+  // runtime/include/debug_table.hpp.
+  lines.push('#include "debug_table.hpp"');
   lines.push("");
   lines.push(
     `// The sketch/runtime must define this global with external linkage:`,
