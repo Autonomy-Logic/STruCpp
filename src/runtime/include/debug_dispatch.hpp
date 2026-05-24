@@ -19,6 +19,15 @@
 
 #pragma once
 
+// `debug_table.hpp` is the AVR-clean header generated_debug.cpp also
+// includes — it carries the Entry / TypeTag / STRUCPP_DEBUG_FLASH bits
+// shared between the table emitter and the dispatch helpers.  Importing
+// it here (rather than redefining) keeps the ABI definitions in exactly
+// one place.  See debug_table.hpp's preamble for why
+// `<avr/pgmspace.h>` no longer lives in the same TU as user variable
+// references.
+#include "debug_table.hpp"
+
 #include "iec_types.hpp"
 #include "iec_traits.hpp"
 #include "iec_var.hpp"
@@ -26,58 +35,17 @@
 #include <cstddef>
 #include <cstring>
 
-// ---------------------------------------------------------------------------
-// Flash-placement macro for per-project pointer tables.
-// Defined here so generated_debug.cpp stays target-neutral — the runtime
-// header decides the placement attribute.
-// ---------------------------------------------------------------------------
 #ifdef __AVR__
+// `read_entry` and friends use `pgm_read_word_far` / `pgm_read_byte` /
+// `pgm_get_far_address`, which live here.  Only the runtime translation
+// unit (arduino_runtime_glue.cpp / runtime_v4_entry.cpp) ever needs
+// this dispatch header; `generated_debug.cpp` consumes only
+// `debug_table.hpp` so it never sees the AVR register-macro contamination
+// `<avr/io.h>` brings in transitively.
 #include <avr/pgmspace.h>
-#define STRUCPP_DEBUG_FLASH PROGMEM
-#else
-#define STRUCPP_DEBUG_FLASH
 #endif
 
 namespace strucpp { namespace debug {
-
-// ---------------------------------------------------------------------------
-// Type tags. Order is ABI — matches the indices generated into
-// generated_debug.cpp's Entry{.tag} fields, and must match type_ops[] below.
-// ---------------------------------------------------------------------------
-enum TypeTag : uint8_t {
-    TAG_BOOL    = 0,
-    TAG_SINT    = 1,
-    TAG_USINT   = 2,
-    TAG_INT     = 3,
-    TAG_UINT    = 4,
-    TAG_DINT    = 5,
-    TAG_UDINT   = 6,
-    TAG_LINT    = 7,
-    TAG_ULINT   = 8,
-    TAG_REAL    = 9,
-    TAG_LREAL   = 10,
-    TAG_BYTE    = 11,
-    TAG_WORD    = 12,
-    TAG_DWORD   = 13,
-    TAG_LWORD   = 14,
-    TAG_TIME    = 15,
-    TAG_DATE    = 16,
-    TAG_TOD     = 17,
-    TAG_DT      = 18,
-    TAG_STRING  = 19,
-    TAG_WSTRING = 20,
-    TAG__COUNT
-};
-
-// ---------------------------------------------------------------------------
-// Debug entry: one per leaf variable. 4 bytes on 16-bit-pointer AVR,
-// 16 bytes on 64-bit platforms (pad absorbs alignment).
-// ---------------------------------------------------------------------------
-struct Entry {
-    void* ptr;
-    uint8_t tag;
-    uint8_t _pad;
-};
 
 // ---------------------------------------------------------------------------
 // Status codes used by the protocol helpers below.
