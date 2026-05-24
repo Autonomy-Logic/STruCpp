@@ -101,4 +101,32 @@ struct Entry {
     uint8_t _pad;
 };
 
+// ---------------------------------------------------------------------------
+// Per-project tables — DECLARED here, DEFINED by generated_debug.cpp.
+//
+// These MUST be declared `extern` here even though generated_debug.cpp's
+// definitions are themselves `const`.  C++ rule: a namespace-scope `const`
+// variable gets INTERNAL linkage by default — which would hide the
+// definitions from every other translation unit (debug_dispatch.hpp's
+// `read_entry` / `handle_*` accessors, the runtime entry, the simulator's
+// ModbusSlave) and the linker would fail with `undefined reference to
+// strucpp::debug::debug_arrays`.  Putting the `extern` declaration
+// FIRST in the TU forces external linkage for the subsequent `const`
+// definitions.
+//
+// The decls live here (not in debug_dispatch.hpp) because
+// `generated_debug.cpp` includes only this header — pulling in
+// `debug_dispatch.hpp` from the table-emit TU drags `<avr/pgmspace.h>`
+// → `<avr/io.h>` into user-variable land, which is the whole reason
+// this header exists.  Consumers that need the accessors (read_entry,
+// handle_set, …) include `debug_dispatch.hpp` separately and get the
+// extern declarations transitively through this header.
+//
+// `STRUCPP_DEBUG_FLASH` placement is part of the declared signature so
+// the linker sees matching `__attribute__((__progmem__))` on both sides.
+// ---------------------------------------------------------------------------
+extern const Entry* const debug_arrays[]       STRUCPP_DEBUG_FLASH;
+extern const uint16_t     debug_array_counts[] STRUCPP_DEBUG_FLASH;
+extern const uint8_t      debug_array_count;
+
 } } // namespace strucpp::debug
