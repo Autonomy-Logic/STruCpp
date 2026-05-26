@@ -14,6 +14,7 @@ import {
   AnalysisResult,
 } from "./types.js";
 import { parse as parseSource } from "./frontend/parser.js";
+import { suggestionForParseError } from "./frontend/parser-error-message-provider.js";
 import { buildAST } from "./frontend/ast-builder.js";
 import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
@@ -311,10 +312,25 @@ function runPipeline(
   const parseResult = parseSource(effectiveSource);
   if (parseResult.errors.length > 0) {
     for (const err of parseResult.errors) {
+      // Chevrotain's IRecognitionException — only the fields we
+      // actually read are typed here.  `context.ruleStack` is the
+      // chain of rules being parsed at the failure point; the
+      // innermost rule (last entry) drives the suggestion lookup.
       const errObj = err as {
         message?: string;
-        token?: { startLine?: number; startColumn?: number };
+        token?: {
+          startLine?: number;
+          startColumn?: number;
+          tokenType?: { name?: string };
+        };
+        context?: { ruleStack?: string[] };
       };
+      const ruleStack = errObj.context?.ruleStack ?? [];
+      const ruleName = ruleStack[ruleStack.length - 1] ?? "";
+      const suggestion = suggestionForParseError(
+        ruleName,
+        errObj.token as Parameters<typeof suggestionForParseError>[1],
+      );
       const entry: CompileError = {
         message: errObj.message ?? "Parse error",
         line: errObj.token?.startLine ?? 0,
@@ -322,6 +338,7 @@ function runPipeline(
         severity: "error",
       };
       if (mergedOptions.fileName) entry.file = mergedOptions.fileName;
+      if (suggestion) entry.suggestion = suggestion;
       errors.push(entry);
     }
     // In analyze mode, continue with partial CST from Chevrotain recovery.

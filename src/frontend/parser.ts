@@ -9,6 +9,7 @@
 
 import { CstParser, CstNode, type TokenType } from "chevrotain";
 import * as tokens from "./lexer.js";
+import { resolveErrorMessageProvider } from "./parser-error-message-provider.js";
 
 /**
  * STruC++ Parser for IEC 61131-3 Structured Text.
@@ -18,9 +19,17 @@ import * as tokens from "./lexer.js";
  */
 export class STParser extends CstParser {
   constructor(tokenVocabulary?: import("chevrotain").TokenType[]) {
+    // `errorMessageProvider` swaps chevrotain's default
+    // alternation-path dump (1,400+ lines for a top-level statement
+    // failure) for a rule-aware sentence.  `resolveErrorMessageProvider`
+    // returns `undefined` when `STRUCPP_VERBOSE_PARSER_ERRORS=1` is set
+    // in the env, falling back to chevrotain's default for
+    // grammar-debugging.  See parser-error-message-provider.ts.
+    const errorMessageProvider = resolveErrorMessageProvider();
     super(tokenVocabulary ?? tokens.allTokens, {
       recoveryEnabled: true,
       maxLookahead: 3,
+      ...(errorMessageProvider ? { errorMessageProvider } : {}),
     });
 
     this.performSelfAnalysis();
