@@ -106,8 +106,11 @@ const MATCHERS: ActionMatcher[] = [
   },
 
   // 2. Missing semicolon
+  //
+  // The house-style provider (`buildMismatchTokenMessage`) renders
+  // missing-terminal-token errors as ``Expected `Semicolon`, found …``.
   {
-    pattern: /Expecting token of type --> Semicolon <--|Expecting.*Semicolon.*but found/,
+    pattern: /Expected `Semicolon`/,
     produce: (_match, diag, source, uri) => {
       // The error points at the unexpected token; the semicolon belongs
       // at the end of the preceding non-blank, non-comment code line
@@ -211,8 +214,11 @@ const MATCHERS: ActionMatcher[] = [
   },
 
   // 5. Missing END_* keyword
+  //
+  // The house-style provider emits ``Expected `END_IF`, found …``
+  // for any missing block terminator.
   {
-    pattern: /Expecting.*\b(END_IF|END_FOR|END_WHILE|END_REPEAT|END_CASE|END_FUNCTION|END_FUNCTION_BLOCK|END_PROGRAM|END_METHOD|END_VAR)\b/,
+    pattern: /Expected `(END_IF|END_FOR|END_WHILE|END_REPEAT|END_CASE|END_FUNCTION|END_FUNCTION_BLOCK|END_PROGRAM|END_METHOD|END_VAR)`/,
     produce: (match, diag, source, uri) => {
       const keyword = match[1];
       const lines = source.split("\n");

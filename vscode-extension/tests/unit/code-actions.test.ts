@@ -107,7 +107,7 @@ END_PROGRAM`;
   x := 2;
 END_PROGRAM`;
       const { diagnostics, analysis } = getDiagnostics(source);
-      // Look for Chevrotain's "Expecting ... Semicolon" message
+      // The house-style provider emits ``Expected `Semicolon`, found …``.
       const semiDiag = diagnostics.find((d) => /Semicolon/i.test(d.message));
       if (!semiDiag) return; // Parser recovery may vary
 
@@ -180,6 +180,29 @@ END_PROGRAM`;
       expect(edit.newText).toContain("TYPE MyPoint");
       expect(edit.newText).toContain("STRUCT");
       expect(edit.newText).toContain("END_TYPE");
+    });
+  });
+
+  describe("Missing END_* keyword", () => {
+    it("inserts END_IF for missing IF terminator", () => {
+      // Body of IF never closes — parser fails on END_PROGRAM where
+      // END_IF was expected.  The house-style provider emits
+      // ``Expected `END_IF`, found `END_PROGRAM`.``.
+      const source = `PROGRAM Main
+  VAR
+    x : BOOL;
+  END_VAR
+  IF x THEN
+    x := FALSE;
+END_PROGRAM`;
+      const { diagnostics, analysis } = getDiagnostics(source);
+      const endIfDiag = diagnostics.find((d) => /END_IF/.test(d.message));
+      if (!endIfDiag) return; // Parser recovery may vary
+
+      const actions = getCodeActions([endIfDiag], source, URI, analysis);
+      const action = actions.find((a) => a.title === "Add missing 'END_IF'");
+      expect(action).toBeDefined();
+      expect(action!.edit!.changes![URI][0].newText).toContain("END_IF;");
     });
   });
 
