@@ -186,19 +186,33 @@ inline constexpr TypeOps type_ops[TAG__COUNT] = {
 // variables.  See debug_table.hpp's preamble for the rationale.
 //
 // On AVR these tables are in PROGMEM; the accessors below use
-// pgm_read_*_far() to work regardless of flash location.
+// pgm_read_*_far() when the chip exposes RAMPZ (Mega2560, ATmega32U4,
+// ATmega1280, etc.) and fall back to near pgm_read_word() on the
+// atmega328p / atmega168 family (Uno, Nano, Pro Mini), whose entire
+// flash always fits in 16 bits.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // read_entry(): fetches Entry for (array_idx, elem_idx).
-// On AVR uses far PROGMEM reads; elsewhere a plain array access.
-// Returns {nullptr, 0} on out-of-bounds so callers can cheaply check.
+// On AVR uses PROGMEM reads (far when the chip has RAMPZ, near otherwise);
+// elsewhere a plain array access. Returns {nullptr, 0} on out-of-bounds so
+// callers can cheaply check.
+//
+// `defined(RAMPZ)` is the same predicate avr-libc's <avr/pgmspace.h> uses to
+// gate declarations of `pgm_read_*_far` and `pgm_get_far_address`. Chips
+// without RAMPZ (atmega328p / atmega168 family — Uno, Nano, Pro Mini) lack
+// the ELPM instruction and the avr-libc headers don't expose the _far
+// variants, so referencing them is a hard compile error. Chips with RAMPZ
+// (atmega2560 — Mega, atmega1280, atmega32u4 — Micro / Leonardo, etc.)
+// keep the far-addressing path since their tables may live above 64 KB
+// (Mega) or because the same code is benign-but-correct when flash is
+// ≤64 KB (32u4: ELPM with RAMPZ=0 behaves as LPM).
 // ---------------------------------------------------------------------------
 inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     Entry out{nullptr, 0, 0};
     if (arr >= debug_array_count) return out;
 
-#ifdef __AVR__
+#if defined(__AVR__) && defined(RAMPZ)
     // Fetch elem count (uint16_t in PROGMEM) first
     uint32_t counts_base = pgm_get_far_address(debug_array_counts);
     uint16_t count = pgm_read_word_far(counts_base + arr * sizeof(uint16_t));
@@ -215,6 +229,18 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     // it's past, we would need pgm_read_word_far on the element too. For
     // Phase 4a we accept the <64 KB constraint per entry array.
     const uint8_t* entry_addr = reinterpret_cast<const uint8_t*>(table_ptr) + elem * sizeof(Entry);
+    uintptr_t ptr_val = pgm_read_word(entry_addr);
+    uint8_t tag_val   = pgm_read_byte(entry_addr + sizeof(void*));
+    out.ptr = reinterpret_cast<void*>(ptr_val);
+    out.tag = tag_val;
+#elif defined(__AVR__)
+    // AVR without RAMPZ — flash is ≤64 KB on these chips, so every PROGMEM
+    // address fits in a 16-bit pointer and near accessors are sufficient.
+    uint16_t count = pgm_read_word(&debug_array_counts[arr]);
+    if (elem >= count) return out;
+
+    const Entry* table = reinterpret_cast<const Entry*>(pgm_read_word(&debug_arrays[arr]));
+    const uint8_t* entry_addr = reinterpret_cast<const uint8_t*>(table) + elem * sizeof(Entry);
     uintptr_t ptr_val = pgm_read_word(entry_addr);
     uint8_t tag_val   = pgm_read_byte(entry_addr + sizeof(void*));
     out.ptr = reinterpret_cast<void*>(ptr_val);
@@ -289,12 +315,16 @@ inline uint8_t handle_array_count() noexcept {
     return debug_array_count;
 }
 
-/** Element count for a given array — 0 if `arr` out-of-bounds. */
+/** Element count for a given array — 0 if `arr` out-of-bounds.
+ *  AVR branch mirrors `read_entry` above: RAMPZ-equipped chips use far
+ *  accessors, others fall back to near reads. */
 inline uint16_t handle_elem_count(uint8_t arr) noexcept {
     if (arr >= debug_array_count) return 0;
-#ifdef __AVR__
+#if defined(__AVR__) && defined(RAMPZ)
     uint32_t counts_base = pgm_get_far_address(debug_array_counts);
     return pgm_read_word_far(counts_base + arr * sizeof(uint16_t));
+#elif defined(__AVR__)
+    return pgm_read_word(&debug_array_counts[arr]);
 #else
     return debug_array_counts[arr];
 #endif
