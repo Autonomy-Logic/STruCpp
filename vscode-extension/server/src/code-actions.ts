@@ -109,13 +109,8 @@ const MATCHERS: ActionMatcher[] = [
   //
   // The house-style provider (`buildMismatchTokenMessage`) renders
   // missing-terminal-token errors as ``Expected `Semicolon`, found …``.
-  // Chevrotain's verbose default — only seen when the user sets
-  // `STRUCPP_VERBOSE_PARSER_ERRORS=1` — uses ``Expecting token of
-  // type --> Semicolon <--`` instead.  Match both so the quick-fix
-  // works either way; the test's `/Semicolon/i` diagnostic filter
-  // also matches both, so behaviour stays in sync.
   {
-    pattern: /Expected `Semicolon`|Expecting token of type --> Semicolon <--|Expecting.*Semicolon.*but found/,
+    pattern: /Expected `Semicolon`/,
     produce: (_match, diag, source, uri) => {
       // The error points at the unexpected token; the semicolon belongs
       // at the end of the preceding non-blank, non-comment code line
@@ -220,16 +215,12 @@ const MATCHERS: ActionMatcher[] = [
 
   // 5. Missing END_* keyword
   //
-  // Same dual-format coverage as the semicolon matcher: the
-  // house-style provider emits ``Expected `END_IF`, found …`` while
-  // the verbose chevrotain default emits ``Expecting … END_IF …``.
+  // The house-style provider emits ``Expected `END_IF`, found …``
+  // for any missing block terminator.
   {
-    pattern: /Expected `(END_IF|END_FOR|END_WHILE|END_REPEAT|END_CASE|END_FUNCTION|END_FUNCTION_BLOCK|END_PROGRAM|END_METHOD|END_VAR)`|Expecting.*\b(END_IF|END_FOR|END_WHILE|END_REPEAT|END_CASE|END_FUNCTION|END_FUNCTION_BLOCK|END_PROGRAM|END_METHOD|END_VAR)\b/,
+    pattern: /Expected `(END_IF|END_FOR|END_WHILE|END_REPEAT|END_CASE|END_FUNCTION|END_FUNCTION_BLOCK|END_PROGRAM|END_METHOD|END_VAR)`/,
     produce: (match, diag, source, uri) => {
-      // The keyword can land in capture group 1 (new house-style
-      // ``Expected `END_*`, …``) or 2 (verbose chevrotain default),
-      // depending on which alternation branch matched.
-      const keyword = match[1] ?? match[2];
+      const keyword = match[1];
       const lines = source.split("\n");
 
       // Insert at the diagnostic line with appropriate indentation

@@ -107,10 +107,7 @@ END_PROGRAM`;
   x := 2;
 END_PROGRAM`;
       const { diagnostics, analysis } = getDiagnostics(source);
-      // The house-style provider emits ``Expected `Semicolon`, found …``;
-      // STRUCPP_VERBOSE_PARSER_ERRORS=1 keeps the old chevrotain default
-      // ``Expecting … Semicolon …``.  Both contain "Semicolon" so this
-      // filter survives the format swap.
+      // The house-style provider emits ``Expected `Semicolon`, found …``.
       const semiDiag = diagnostics.find((d) => /Semicolon/i.test(d.message));
       if (!semiDiag) return; // Parser recovery may vary
 
