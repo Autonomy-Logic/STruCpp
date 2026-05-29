@@ -135,104 +135,127 @@ TEST(StdLibTest, TypeConversions) {
     EXPECT_DOUBLE_EQ(TO_LREAL(val42).get(), 42.0);
 }
 
-TEST(TimeValueTest, Construction) {
-    IEC_TIME_Value t1;
-    EXPECT_EQ(t1.to_nanoseconds(), 0);
-    
-    IEC_TIME_Value t2 = MAKE_TIME_MS(1000);
-    EXPECT_EQ(t2.to_milliseconds(), 1000);
-    
-    IEC_TIME_Value t3 = MAKE_TIME_S(5);
-    EXPECT_EQ(t3.to_seconds(), 5);
+// =============================================================================
+// IEC TIME / DATE / TOD / DT standard-library tests
+// =============================================================================
+//
+// These exercise the IECVar-based surface (the only one codegen emits), so
+// passing here means generated POU code that calls `ADD_TIME` etc. will
+// link.  Time literals in IEC code lower to raw `int64_t` nanoseconds; we
+// mirror that by constructing IEC_TIME directly from a literal `LL` count
+// (no separate value-class helper).
+
+TEST(TimeTest, Arithmetic) {
+    IEC_TIME t1(10LL * NS_PER_S);
+    IEC_TIME t2(5LL * NS_PER_S);
+
+    EXPECT_EQ(TIME_TO_S(ADD_TIME(t1, t2)), 15);
+    EXPECT_EQ(TIME_TO_S(SUB_TIME(t1, t2)), 5);
+    EXPECT_EQ(TIME_TO_S(MUL_TIME(t1, 2)), 20);
+    EXPECT_EQ(TIME_TO_S(DIV_TIME(t1, 2)), 5);
+    EXPECT_EQ(DIVTIME(t1, t2), 2);
+    EXPECT_EQ(TIME_TO_S(ABS_TIME(IEC_TIME(-5LL * NS_PER_S))), 5);
 }
 
-TEST(TimeValueTest, Components) {
-    auto t = IEC_TIME_Value::from_components(1, 2, 30, 45, 500);
-    EXPECT_EQ(t.days_component(), 1);
-    EXPECT_EQ(t.hours_component(), 2);
-    EXPECT_EQ(t.minutes_component(), 30);
-    EXPECT_EQ(t.seconds_component(), 45);
-    EXPECT_EQ(t.milliseconds_component(), 500);
+TEST(TimeTest, Comparison) {
+    IEC_TIME t1(10LL * NS_PER_S);
+    IEC_TIME t2(5LL * NS_PER_S);
+    IEC_TIME t3(10LL * NS_PER_S);
+
+    EXPECT_TRUE(GT_TIME(t1, t2));
+    EXPECT_TRUE(LT_TIME(t2, t1));
+    EXPECT_TRUE(EQ_TIME(t1, t3));
+    EXPECT_TRUE(GE_TIME(t1, t3));
+    EXPECT_TRUE(LE_TIME(t1, t3));
+    EXPECT_TRUE(NE_TIME(t1, t2));
 }
 
-TEST(TimeValueTest, Arithmetic) {
-    auto t1 = MAKE_TIME_S(10);
-    auto t2 = MAKE_TIME_S(5);
-    
-    EXPECT_EQ((t1 + t2).to_seconds(), 15);
-    EXPECT_EQ((t1 - t2).to_seconds(), 5);
-    EXPECT_EQ((t1 * 2).to_seconds(), 20);
-    EXPECT_EQ((t1 / 2).to_seconds(), 5);
+TEST(TimeTest, UnitConversion) {
+    IEC_TIME t(static_cast<TIME_t>(NS_PER_D + 2 * NS_PER_H + 30 * NS_PER_M + 45 * NS_PER_S + 500 * NS_PER_MS));
+    EXPECT_EQ(TIME_TO_D(t), 1);
+    EXPECT_EQ(TIME_TO_H(t), 26);
+    EXPECT_EQ(TIME_TO_M(t), 26 * 60 + 30);
+    EXPECT_EQ(TIME_TO_S(t), 26LL * 3600LL + 30 * 60 + 45);
 }
 
-TEST(TimeValueTest, Comparison) {
-    auto t1 = MAKE_TIME_S(10);
-    auto t2 = MAKE_TIME_S(5);
-    auto t3 = MAKE_TIME_S(10);
-    
-    EXPECT_TRUE(t1 > t2);
-    EXPECT_TRUE(t2 < t1);
-    EXPECT_TRUE(t1 == t3);
-    EXPECT_TRUE(t1 >= t3);
-    EXPECT_TRUE(t1 <= t3);
-    EXPECT_TRUE(t1 != t2);
+TEST(DateTest, Construction) {
+    IEC_DATE d = DATE_FROM_YMD(2024, 6, 15);
+    // 2024-06-15 is 19888 days since 1970-01-01.
+    EXPECT_EQ(DATE_TO_DAYS(d), 19888);
 }
 
-TEST(DateValueTest, Construction) {
-    auto d = DATE_FROM_YMD(2024, 6, 15);
-    EXPECT_EQ(d.year(), 2024);
-    EXPECT_EQ(d.month(), 6);
-    EXPECT_EQ(d.day(), 15);
+TEST(DateTest, Arithmetic) {
+    IEC_DATE d1 = DATE_FROM_YMD(2024, 6, 15);
+    IEC_DATE d2 = ADD_DATE(d1, 10);
+    EXPECT_EQ(DATE_TO_DAYS(d2), DATE_TO_DAYS(d1) + 10);
+    EXPECT_EQ(DATE_TO_DAYS(SUB_DATE(d1, 1)), DATE_TO_DAYS(d1) - 1);
+
+    IEC_DATE d3 = DATE_FROM_YMD(2024, 6, 20);
+    EXPECT_EQ(DIFF_DATE(d3, d1), 5);
 }
 
-TEST(DateValueTest, Arithmetic) {
-    auto d1 = DATE_FROM_YMD(2024, 6, 15);
-    auto d2 = d1 + static_cast<int64_t>(10);
-    EXPECT_EQ(d2.day(), 25);
-    
-    auto d3 = DATE_FROM_YMD(2024, 6, 20);
-    EXPECT_EQ(d3 - d1, 5);
+TEST(DateTest, Comparison) {
+    IEC_DATE early = DATE_FROM_YMD(2024, 1, 1);
+    IEC_DATE late = DATE_FROM_YMD(2024, 12, 31);
+
+    EXPECT_TRUE(LT_DATE(early, late));
+    EXPECT_TRUE(GT_DATE(late, early));
+    EXPECT_TRUE(EQ_DATE(early, DATE_FROM_YMD(2024, 1, 1)));
+    EXPECT_TRUE(NE_DATE(early, late));
 }
 
-TEST(DateValueTest, DayOfWeek) {
-    auto d = DATE_FROM_YMD(2024, 1, 1);
-    int dow = d.day_of_week();
-    EXPECT_GE(dow, 0);
-    EXPECT_LE(dow, 6);
+TEST(TodTest, Construction) {
+    // 14:30:45 → 14*3600 + 30*60 + 45 = 52245 seconds = 52245 * 10^9 ns.
+    IEC_TOD tod = TOD_FROM_HMS(14, 30, 45);
+    EXPECT_EQ(TOD_TO_NS(tod), 52245LL * 1000000000LL);
 }
 
-TEST(TodValueTest, Construction) {
-    auto tod = TOD_FROM_HMS(14, 30, 45);
-    EXPECT_EQ(tod.hour(), 14);
-    EXPECT_EQ(tod.minute(), 30);
-    EXPECT_EQ(tod.second(), 45);
+TEST(TodTest, ArithmeticNormalises) {
+    IEC_TOD ten_am = TOD_FROM_HMS(10, 0, 0);
+    // +5h crosses noon but not midnight.
+    IEC_TOD plus5h = ADD_TOD(ten_am, 5LL * 3600LL * 1000000000LL);
+    EXPECT_EQ(TOD_TO_NS(plus5h), 15LL * 3600LL * 1000000000LL);
+
+    // +20h wraps past midnight: 10am + 20h = 6am next day → normalised to 6am.
+    IEC_TOD next_morning = ADD_TOD(ten_am, 20LL * 3600LL * 1000000000LL);
+    EXPECT_EQ(TOD_TO_NS(next_morning), 6LL * 3600LL * 1000000000LL);
 }
 
-TEST(TodValueTest, Comparison) {
-    auto tod1 = TOD_FROM_HMS(10, 0, 0);
-    auto tod2 = TOD_FROM_HMS(14, 0, 0);
-    
-    EXPECT_TRUE(tod1 < tod2);
-    EXPECT_TRUE(tod2 > tod1);
+TEST(TodTest, Comparison) {
+    IEC_TOD tod1 = TOD_FROM_HMS(10, 0, 0);
+    IEC_TOD tod2 = TOD_FROM_HMS(14, 0, 0);
+
+    EXPECT_TRUE(LT_TOD(tod1, tod2));
+    EXPECT_TRUE(GT_TOD(tod2, tod1));
 }
 
-TEST(DtValueTest, Construction) {
-    auto dt = DT_FROM_COMPONENTS(2024, 6, 15, 14, 30, 45);
-    EXPECT_EQ(dt.year(), 2024);
-    EXPECT_EQ(dt.month(), 6);
-    EXPECT_EQ(dt.day(), 15);
-    EXPECT_EQ(dt.hour(), 14);
-    EXPECT_EQ(dt.minute(), 30);
-    EXPECT_EQ(dt.second(), 45);
+TEST(DtTest, Construction) {
+    IEC_DT dt = DT_FROM_COMPONENTS(2024, 6, 15, 14, 30, 45);
+    // 2024-06-15 14:30:45 UTC = days_to_epoch * 86400 + 14*3600 + 30*60 + 45 seconds.
+    const int64_t expected_seconds = 19888LL * 86400LL + 14LL * 3600LL + 30LL * 60LL + 45LL;
+    EXPECT_EQ(DT_TO_SECONDS(dt), expected_seconds);
+    EXPECT_EQ(DT_TO_NS(dt), expected_seconds * 1000000000LL);
 }
 
-TEST(DtValueTest, DateAndTod) {
-    auto dt = DT_FROM_COMPONENTS(2024, 6, 15, 14, 30, 45);
-    auto date = dt.date();
-    auto tod = dt.time_of_day();
-    
-    EXPECT_EQ(date.year(), 2024);
-    EXPECT_EQ(tod.hour(), 14);
+TEST(DtTest, DateAndTodRoundTrip) {
+    IEC_DT dt = DT_FROM_COMPONENTS(2024, 6, 15, 14, 30, 45);
+    IEC_DATE date = DATE_OF_DT(dt);
+    IEC_TOD tod = TOD_OF_DT(dt);
+
+    EXPECT_TRUE(EQ_DATE(date, DATE_FROM_YMD(2024, 6, 15)));
+    EXPECT_EQ(TOD_TO_NS(tod), TOD_TO_NS(TOD_FROM_HMS(14, 30, 45)));
+
+    // CONCAT_DATE_TOD rebuilds the original DT from the split parts.
+    IEC_DT rebuilt = CONCAT_DATE_TOD(date, tod);
+    EXPECT_TRUE(EQ_DT(rebuilt, dt));
+}
+
+TEST(DtTest, Arithmetic) {
+    IEC_DT base = DT_FROM_COMPONENTS(2024, 6, 15, 14, 30, 45);
+    const int64_t one_minute_ns = 60LL * 1000000000LL;
+    IEC_DT later = ADD_DT(base, one_minute_ns);
+    EXPECT_EQ(DIFF_DT(later, base), one_minute_ns);
+    EXPECT_TRUE(EQ_DT(SUB_DT(later, one_minute_ns), base));
 }
 
 TEST(StringTest, Construction) {
@@ -347,19 +370,22 @@ TEST(CharTest, Conversions) {
 }
 
 TEST(TimeVarTest, Forcing) {
-    IEC_TIME_Var tv(MAKE_TIME_S(10));
-    EXPECT_EQ(tv.get().to_seconds(), 10);
-    
-    tv.force(MAKE_TIME_S(99));
+    // IEC_TIME is just `IECVar<TIME_t>`, so debugger forcing works the
+    // same way it does for any other elementary type — no per-type
+    // wrapper.  This pins that the IECVar surface is enough.
+    IEC_TIME tv(10LL * NS_PER_S);
+    EXPECT_EQ(TIME_TO_S(tv), 10);
+
+    tv.force(99LL * NS_PER_S);
     EXPECT_TRUE(tv.is_forced());
-    EXPECT_EQ(tv.get().to_seconds(), 99);
-    
-    tv.set(MAKE_TIME_S(20));
-    EXPECT_EQ(tv.get().to_seconds(), 99);
-    EXPECT_EQ(tv.get_underlying().to_seconds(), 20);
-    
+    EXPECT_EQ(TIME_TO_S(tv), 99);
+
+    tv.set(20LL * NS_PER_S);
+    EXPECT_EQ(TIME_TO_S(tv), 99);  // forced value still wins
+    EXPECT_EQ(tv.get_underlying() / NS_PER_S, 20);
+
     tv.unforce();
-    EXPECT_EQ(tv.get().to_seconds(), 20);
+    EXPECT_EQ(TIME_TO_S(tv), 20);
 }
 
 TEST(StringVarTest, Forcing) {

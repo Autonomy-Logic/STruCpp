@@ -32,23 +32,6 @@ public:
     virtual const char* type_name() const noexcept { return "STRUCT"; }
 };
 
-/**
- * Macro for declaring struct fields with forcing support.
- * Usage: IEC_STRUCT_FIELD(INT, counter)
- * Expands to: IECVar<INT_t> counter
- *
- * This macro is provided for convenience but generated code may
- * use the explicit IECVar<T> syntax directly.
- */
-#define IEC_STRUCT_FIELD(type, name) IECVar<type##_t> name
-
-/**
- * Macro for declaring struct fields with value types (TIME, DATE, etc.)
- * Usage: IEC_STRUCT_VALUE_FIELD(IEC_TIME_Value, timestamp)
- * Expands to: IEC_TIME_Var timestamp
- */
-#define IEC_STRUCT_VALUE_FIELD(value_type, name) IECVar<value_type> name
-
 /*
  * Example generated structure:
  *

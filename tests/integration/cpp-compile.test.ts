@@ -119,6 +119,81 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(cppResult.success).toBe(true);
   });
 
+  /**
+   * Regression: ADD_TIME (and the rest of the IEC TIME / DATE / DT / TOD
+   * standard functions) used to fail at the C++ compile step with
+   * `'ADD_TIME' was not declared in this scope` — `iec_std_lib.hpp`
+   * didn't transitively pull in `iec_time.hpp`, so the symbol was
+   * never reachable from the generated `pou_*.cpp` TUs that did
+   * `#include "generated.hpp"`.  A deeper bug followed: the time-
+   * family functions were templated on `TimeValue<T>` (a dead value
+   * class) instead of `IECVar<T>` (the wrapper codegen actually emits
+   * for TIME variables), so even with the include in place the
+   * overload couldn't bind.  Both branches are fixed; this test pins
+   * the end-to-end behaviour on the canonical IECVar surface.
+   *
+   * See https://github.com/Autonomy-Logic/STruCpp/pull/<TBD> for the
+   * full diagnosis.
+   */
+  it('compiles IEC TIME / DATE / DT / TOD standard arithmetic (regression)', () => {
+    const source = `
+      FUNCTION_BLOCK Scheduler
+        VAR_INPUT
+          enable : BOOL;
+        END_VAR
+        VAR_OUTPUT
+          elapsed     : TIME;
+          next_day    : DATE;
+          next_moment : DATE_AND_TIME;
+          next_tod    : TIME_OF_DAY;
+          duration_s  : LINT;
+        END_VAR
+        VAR
+          base_time : TIME := T#5s;
+          one_hour  : TIME := T#1h;
+          today     : DATE;
+          moment    : DATE_AND_TIME;
+          now       : TIME_OF_DAY;
+        END_VAR
+        IF enable THEN
+          elapsed     := ADD_TIME(base_time, one_hour);
+          next_day    := ADD_DATE(today, 1);
+          next_moment := ADD_DT(moment, T#1h);
+          next_tod    := ADD_TOD(now, T#30m);
+          duration_s  := TIME_TO_S(elapsed);
+        END_IF;
+      END_FUNCTION_BLOCK
+
+      PROGRAM main
+        VAR sched : Scheduler; END_VAR
+        sched(enable := TRUE);
+      END_PROGRAM
+
+      CONFIGURATION cfg
+        RESOURCE res ON cpu
+          TASK fast(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM mainInst WITH fast : main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    // The fix lives in `iec_std_lib.hpp` (it now transitively includes
+    // the time-family headers).  Generated header still emits the same
+    // single include, so the regression guard is that the resulting
+    // C++ compiles — not that the include list changed shape.
+    expect(result.headerCode).toContain('#include "iec_std_lib.hpp"');
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'iec_time_date_dt_tod_arith');
+    expect(cppResult.success).toBe(true);
+    if (!cppResult.success) {
+      // Surface the g++ diagnostic so the failure mode is obvious if
+      // this test ever regresses.
+      console.error(cppResult.error);
+    }
+  });
+
   // UDT syntax-only tests (struct, enum, array, multi-dim) removed —
   // covered by st-validation/data_types/ behavioral tests.
 

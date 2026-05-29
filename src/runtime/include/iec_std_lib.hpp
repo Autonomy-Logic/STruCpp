@@ -26,12 +26,45 @@
 #include "iec_ptr.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
+// IEC 61131-3 temporal types — pulled in here so the standard
+// library entry point exposes every standard function (`ADD_TIME`,
+// `ADD_DATE`, `ADD_DT`, `ADD_TOD`, `CONCAT_DATE_TOD`, etc.) without
+// the caller having to chase the right per-type header.  `codegen.ts`
+// emits a single `#include "iec_std_lib.hpp"` into every
+// generated.hpp, so the only way a generated POU using TIME or
+// calendar arithmetic can resolve those symbols is through this
+// transitive chain.  Header guards make each include idempotent.
+#include "iec_time.hpp"
+#include "iec_date.hpp"
+#include "iec_dt.hpp"
+#include "iec_tod.hpp"
 #include <cmath>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <type_traits>
+
+// Undefine AVR `<time.h>` macros that collide with common IEC
+// identifiers.  `<chrono>` above pulls in `<ctime>` → `<time.h>`,
+// and AVR-libc's `time.h` defines a handful of all-caps duration /
+// epoch constants that would silently rewrite a user's similarly-
+// named variable into a numeric literal before the C++ parser sees
+// it.  The collisions surface as cryptic `expected unqualified-id
+// before numeric constant` errors on lines like
+// `IEC_TIME ONE_HOUR;`.
+//
+// Same pattern as the `#undef OVERFLOW` codegen emits into every
+// `generated.hpp` to neutralise `<math.h>`'s SVID error code.
+// Header guards make each include idempotent, so doing the undef
+// right after the time-family includes is fine: any later include
+// of `<time.h>` directly would re-define the macros, but no
+// strucpp-side header does that.
+#undef ONE_HOUR
+#undef ONE_DEGREE
+#undef ONE_DAY
+#undef UNIX_OFFSET
+#undef NTP_OFFSET
 
 namespace strucpp {
 
