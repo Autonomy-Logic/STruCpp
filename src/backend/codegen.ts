@@ -47,7 +47,7 @@ import type {
 } from "../library/library-manifest.js";
 import {
   getProjectNamespace,
-  parseDateLiteralToNs,
+  parseDateLiteralToDays,
   parseDtLiteralToNs,
   parseTimeLiteral,
   parseTodLiteralToNs,
@@ -179,6 +179,31 @@ export interface CodeGenOptions {
    *  compiles produce identical output regardless. */
   emitChunkMarkers?: boolean;
 }
+
+/**
+ * Numeric and bit-string targets for the `TO_*` family — i.e. every
+ * elementary type whose runtime representation is "just an integer or
+ * a float."  Used by `wrapTemporalArgForNumericConversion` to gate
+ * the temporal→ms scaling: STRING / WSTRING and temporal targets need
+ * different handling and stay out of this set.
+ */
+const NUMERIC_OR_BIT_CONVERSION_TARGETS = new Set([
+  "BOOL",
+  "SINT",
+  "INT",
+  "DINT",
+  "LINT",
+  "USINT",
+  "UINT",
+  "UDINT",
+  "ULINT",
+  "REAL",
+  "LREAL",
+  "BYTE",
+  "WORD",
+  "DWORD",
+  "LWORD",
+]);
 
 /**
  * Default code generation options.
@@ -3216,8 +3241,11 @@ export class CodeGenerator {
         return `${timeVal.nanoseconds}LL`;
       }
       case "DATE":
-        // DATE: int64 nanoseconds since Unix epoch (UTC), time-of-day 0.
-        return `${parseDateLiteralToNs(String(expr.value))}LL`;
+        // DATE: int64 days since Unix epoch (UTC).  `iec_date.hpp`
+        // stores DATE as days (see `DT_FROM_DATE_AND_TOD`'s
+        // `iec_unwrap(date) * DT_NS_PER_DAY` math).  Lowering to ns
+        // here would break every conversion / arithmetic helper.
+        return `${parseDateLiteralToDays(String(expr.value))}LL`;
       case "TIME_OF_DAY":
         // TOD: int64 nanoseconds since midnight.
         return `${parseTodLiteralToNs(String(expr.value))}LL`;
@@ -3854,6 +3882,76 @@ export class CodeGenerator {
   }
 
   /**
+   * Wrap a temporal-typed argument with the right `*_TO_MS` helper
+   * before it's handed to a numeric / bit-string `TO_*` conversion.
+   *
+   * Why this lives in codegen and not in the runtime:
+   *  - `IEC_TIME`, `IEC_LTIME`, `IEC_TOD`, `IEC_LTOD`, `IEC_DT`,
+   *    `IEC_LDT`, `IEC_DATE`, `IEC_LDATE` are all
+   *    `using ... = IECVar<int64_t>` aliases in `iec_var.hpp` — they
+   *    collapse to the same C++ type after preprocessing.
+   *  - A runtime overload `TO_UINT(IEC_TIME)` therefore CANNOT be
+   *    distinguished from `TO_UINT(IEC_DATE)` by the C++ compiler;
+   *    both bind to the same generic template and the raw `int64_t`
+   *    underlying value gets `static_cast`ed straight to the target
+   *    integer (low 16 / 32 bits of a nanosecond count for TIME).
+   *  - The IEC type label only survives at the language layer.  So
+   *    the scaling has to happen at the call site, before the type
+   *    identity is erased.
+   *
+   * Scaling chosen (matches `TO_TIME(integer)`'s established
+   * "integer means milliseconds" convention from OSCAT/CODESYS):
+   *  - TIME / LTIME → `TIME_TO_MS`           (ns since 0   → ms)
+   *  - TOD / TIME_OF_DAY / LTOD / LTIME_OF_DAY → `TOD_TO_MS`
+   *    (ns since midnight  → ms since midnight, [0, 86_400_000))
+   *  - DT / DATE_AND_TIME / LDT / LDATE_AND_TIME → `DT_TO_MS`
+   *    (ns since epoch  → ms since epoch)
+   *  - DATE / LDATE: NOT scaled — DATE is already stored as whole
+   *    days, and "days since 1970-01-01" is the natural integer
+   *    answer for `DATE_TO_INT` / etc.  Callers wanting a different
+   *    unit can compose with `DATE_TO_DAYS` (today, the identity).
+   *
+   * No wrap on temporal-target conversions (`TO_TIME(TIME)`,
+   * `INT_TO_TIME(ms)`, etc.) — those are either pass-through (same
+   * family) or handled by the existing `TO_TIME(integer)` runtime
+   * template which scales ms→ns going the other way.  No wrap on
+   * non-temporal sources either (the generic numeric path already
+   * does the right thing).
+   */
+  private wrapTemporalArgForNumericConversion(
+    argExpr: string,
+    fromTypeUpper: string,
+    toTypeUpper: string,
+  ): string {
+    // Only the numeric / bit-string targets — temporal targets stay
+    // pass-through and STRING targets need a separate format pipeline
+    // (out of scope for this helper).
+    if (!NUMERIC_OR_BIT_CONVERSION_TARGETS.has(toTypeUpper)) {
+      return argExpr;
+    }
+    if (fromTypeUpper === "TIME" || fromTypeUpper === "LTIME") {
+      return `TIME_TO_MS(${argExpr})`;
+    }
+    if (
+      fromTypeUpper === "TOD" ||
+      fromTypeUpper === "TIME_OF_DAY" ||
+      fromTypeUpper === "LTOD" ||
+      fromTypeUpper === "LTIME_OF_DAY"
+    ) {
+      return `TOD_TO_MS(${argExpr})`;
+    }
+    if (
+      fromTypeUpper === "DT" ||
+      fromTypeUpper === "DATE_AND_TIME" ||
+      fromTypeUpper === "LDT" ||
+      fromTypeUpper === "LDATE_AND_TIME"
+    ) {
+      return `DT_TO_MS(${argExpr})`;
+    }
+    return argExpr;
+  }
+
+  /**
    * For std-lib template functions (like LIMIT, MAX, MIN) where all params
    * share the same generic constraint, harmonize argument types so C++ template
    * deduction succeeds. Casts literals to the dominant variable type, or widens
@@ -4034,18 +4132,53 @@ export class CodeGenerator {
     // 1. Check for *_TO_* conversion pattern (e.g., INT_TO_REAL -> TO_REAL)
     const conversion = this.stdRegistry.resolveConversion(nameUpper);
     if (conversion) {
-      const args = expr.arguments.map((arg) =>
-        this.generateExpression(arg.value),
-      );
+      const args = expr.arguments.map((arg, idx) => {
+        const generated = this.generateExpression(arg.value);
+        if (idx !== 0) return generated;
+        // Type-aware scaling for temporal sources.  See the helper for
+        // the full rationale — short version: the C++ runtime aliases
+        // every temporal type to `IECVar<int64_t>` (so a `TIME` and a
+        // `DATE` are literally the same C++ type after compilation),
+        // and the only place that still knows "this expression is a
+        // TIME" is the codegen layer.  We have to wrap the argument
+        // with `TIME_TO_MS` / `TOD_TO_MS` / `DT_TO_MS` here, otherwise
+        // `TO_UINT(time_var)` lowers to a `static_cast<uint16_t>(raw_ns)`
+        // and the user sees the low 16 bits of the nanosecond count
+        // instead of the milliseconds they asked for.
+        return this.wrapTemporalArgForNumericConversion(
+          generated,
+          conversion.fromType.toUpperCase(),
+          conversion.toType.toUpperCase(),
+        );
+      });
       return `${conversion.cppName}(${args.join(", ")})`;
     }
 
     // 2. Check for standard function (may have different cppName)
     const stdFunc = this.stdRegistry.lookup(nameUpper);
     if (stdFunc) {
-      const args = expr.arguments.map((arg) =>
-        this.generateExpression(arg.value),
-      );
+      const args = expr.arguments.map((arg, idx) => {
+        let generated = this.generateExpression(arg.value);
+        // For the bare `TO_xxx(temporal_var)` spelling, `nameUpper` is
+        // a registered std function (not a `*_TO_*` form) so the source
+        // type isn't in the name — infer it from the argument's IEC
+        // type and apply the same temporal→ms wrap as the conversion
+        // branch above.  Conversion std functions advertise
+        // `isConversion: true` and carry the target in
+        // `specificReturnType`, so we have everything needed without
+        // adding a new schema field.
+        if (idx === 0 && stdFunc.isConversion && stdFunc.specificReturnType) {
+          const fromType = this.inferExprType(arg.value);
+          if (fromType) {
+            generated = this.wrapTemporalArgForNumericConversion(
+              generated,
+              fromType.toUpperCase(),
+              stdFunc.specificReturnType.toUpperCase(),
+            );
+          }
+        }
+        return generated;
+      });
       this.harmonizeStdFuncArgs(args, expr.arguments, stdFunc);
       return `${stdFunc.cppName}(${args.join(", ")})`;
     }
@@ -4878,6 +5011,30 @@ export class CodeGenerator {
       ) {
         const timeVal = parseTimeLiteral(initialValue);
         return `${timeVal.nanoseconds}LL`;
+      }
+      // Convert temporal calendar literals at the PROGRAM-init path —
+      // FB initialisers route through `generateExpression` which
+      // handles these in `generateLiteralExpression`, but PROGRAM VAR
+      // initialisers come through this helper with the literal as a
+      // raw string.  Without these branches the PROGRAM constructor
+      // emits `D(DATE#1970-01-15)` verbatim and the C++ side fails
+      // to compile.  Lowering rule matches the literal-expression
+      // path: DATE → days, TOD → ns since midnight, DT → ns since
+      // epoch.  Same rule the runtime helpers consume.
+      if (upperInit.startsWith("D#") || upperInit.startsWith("DATE#")) {
+        return `${parseDateLiteralToDays(initialValue)}LL`;
+      }
+      if (
+        upperInit.startsWith("TOD#") ||
+        upperInit.startsWith("TIME_OF_DAY#")
+      ) {
+        return `${parseTodLiteralToNs(initialValue)}LL`;
+      }
+      if (
+        upperInit.startsWith("DT#") ||
+        upperInit.startsWith("DATE_AND_TIME#")
+      ) {
+        return `${parseDtLiteralToNs(initialValue)}LL`;
       }
       // Convert IEC BOOL literals to C++ bool literals
       if (upperInit === "TRUE") return "true";
