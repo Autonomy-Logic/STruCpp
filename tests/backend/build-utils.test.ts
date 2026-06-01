@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2025 Autonomy / OpenPLC Project
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { splitCxxFlags } from "../../dist/cxx-flags.js";
 import {
@@ -53,15 +55,38 @@ describe("findRuntimeIncludeDir", () => {
     expect(dir).toContain("include");
   });
 
-  it("returns null when not found and no -I flags", () => {
-    // Override CWD to a temp dir where runtime doesn't exist
+  it("locates the runtime via the package layout when cwd is elsewhere (#134)", () => {
+    // Regression for #134: on a global/npm install the cwd is the user's
+    // project, not the package, so the cwd-relative candidate can't help.
+    // The package-relative candidates (import.meta / __dirname) must still
+    // resolve the shipped src/runtime/include — the bundle runs from
+    // dist/node, so it has to climb two levels (../../src/runtime/include),
+    // not one.
     const origCwd = process.cwd;
     process.cwd = () => "/tmp";
     try {
-      // This may or may not find it via __dirname / import.meta.url
-      // Just verify it doesn't throw
       const dir = findRuntimeIncludeDir("");
-      expect(typeof dir === "string" || dir === null).toBe(true);
+      expect(dir).not.toBeNull();
+      expect(dir).toContain("runtime");
+      expect(dir).toContain("include");
+      // And it must actually contain the canonical runtime header.
+      expect(existsSync(resolve(dir!, "iec_types.hpp"))).toBe(true);
+    } finally {
+      process.cwd = origCwd;
+    }
+  });
+
+  it("falls back to a -I path from cxx-flags when auto-discovery misses", () => {
+    const origCwd = process.cwd;
+    process.cwd = () => "/tmp";
+    try {
+      const real = findRuntimeIncludeDir("");
+      expect(real).not.toBeNull();
+      // Point auto-discovery at nothing useful, but supply the real dir
+      // via -I; the flag fallback should recover it.
+      const viaFlag = findRuntimeIncludeDir(`-I${real}`);
+      expect(viaFlag).not.toBeNull();
+      expect(existsSync(resolve(viaFlag!, "iec_types.hpp"))).toBe(true);
     } finally {
       process.cwd = origCwd;
     }
