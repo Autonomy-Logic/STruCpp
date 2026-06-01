@@ -16,11 +16,11 @@ import {
   readLEB128,
   formatPOU,
   pouToSources,
-} from "../../dist/library/codesys-import/index.js";
+} from "../../src/library/codesys-import/index.js";
 import type {
   CodesysImportResult,
   ExtractedPOU,
-} from "../../dist/library/codesys-import/index.js";
+} from "../../src/library/codesys-import/index.js";
 
 // Tests previously called `await importCodesysLibrary(path)`; the public
 // API is now bytes-first so the file read sits in the test harness.

@@ -3,11 +3,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, it, expect } from "vitest";
-import { splitCxxFlags } from "../../dist/cxx-flags.js";
+import { splitCxxFlags } from "../../src/cxx-flags.js";
 import {
   findRuntimeIncludeDir,
   isCompilerAvailable,
-} from "../../dist/node/build-utils.js";
+} from "../../src/node/build-utils.js";
 
 describe("splitCxxFlags", () => {
   it("splits simple flags", () => {
