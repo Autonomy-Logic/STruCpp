@@ -831,6 +831,16 @@ export class ProjectModelBuilder {
       const lit = expr;
       return lit.rawValue;
     }
+    if (
+      expr.kind === "UnaryExpression" &&
+      (expr.operator === "-" || expr.operator === "+")
+    ) {
+      // Preserve the sign on numeric literal initialisers (e.g. -5).
+      // Without this the operand is dropped and the initialiser silently
+      // falls back to the type's default (0). Codegen lowers the result.
+      const inner = this.expressionToString(expr.operand);
+      return inner === "" ? "" : `${expr.operator}${inner}`;
+    }
     if (expr.kind === "VariableExpression") {
       if (expr.fieldAccess.length > 0) {
         return `${expr.name}.${expr.fieldAccess.join(".")}`;
