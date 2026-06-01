@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../dist/index.js";
+import { compile } from "../../src/index.js";
 
 /** Compile a program body and return just the `run()` method text. */
 function runBody(statements: string, vars: string): string {
