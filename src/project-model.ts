@@ -240,18 +240,26 @@ export interface ProjectModelResult {
  */
 /**
  * Parse an IEC 61131-3 DATE literal (`D#YYYY-MM-DD` /
- * `DATE#YYYY-MM-DD`) into nanoseconds since the Unix epoch (UTC).
- * Strucpp's runtime stores DATE as int64 nanoseconds, the same wire
- * shape as DT — DATE just truncates the time-of-day component to
- * 00:00:00. Returns 0 (Unix epoch) for any unparsable input rather
- * than throwing, mirroring `parseTimeLiteral`.
+ * `DATE#YYYY-MM-DD`) into **days since the Unix epoch (UTC)**.
+ *
+ * Why days and not nanoseconds: `iec_date.hpp` stores `IEC_DATE` as
+ * signed days, and helpers like `DT_FROM_DATE_AND_TOD` multiply the
+ * raw stored value by `DT_NS_PER_DAY` to compose a DT — that math
+ * only works if DATE is days.  An earlier version of this helper
+ * lowered to nanoseconds, which silently broke `DATE_TO_DAYS`,
+ * `DT_FROM_DATE_AND_TOD`, and every `TO_<int>(DATE)` conversion
+ * (they'd return the raw ns count instead of the day count).
+ *
+ * Returns `0n` (Unix epoch) for any unparsable input rather than
+ * throwing, mirroring `parseTimeLiteral`.
  */
-export function parseDateLiteralToNs(literal: string): bigint {
+export function parseDateLiteralToDays(literal: string): bigint {
   const stripped = literal.replace(/^(D|DATE)#/i, "");
   const m = stripped.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!m) return 0n;
+  const MS_PER_DAY = 86_400_000n;
   const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  return BigInt(ms) * 1_000_000n;
+  return BigInt(ms) / MS_PER_DAY;
 }
 
 /**

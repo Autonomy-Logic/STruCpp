@@ -840,6 +840,154 @@ inline auto TO_STRING(const T& src) noexcept -> decltype(WSTRING_TO_STRING(src))
 }
 
 // =============================================================================
+// WSTRING → Numeric Conversions
+// =============================================================================
+//
+// IEC 61131-3: WSTRING_TO_INT / WSTRING_TO_REAL / etc. all route through
+// WSTRING_TO_STRING (lossy narrow-to-ASCII; same caveat the standard
+// transcoding helpers document) and then reuse the STRING parsers
+// already defined in iec_string.hpp.  This keeps the parsing semantics
+// (strtoul / strtol / strtod) byte-identical between the STRING and
+// WSTRING surfaces, and the narrow conversion is correct for the
+// numeric ASCII / Latin-1 subset users actually write into STRING
+// literals.
+
+template<size_t N>
+inline IEC_BOOL TO_BOOL(const IECWString<N>& s) noexcept {
+    return TO_BOOL(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_BOOL TO_BOOL(const IECWStringVar<N>& s) noexcept {
+    return TO_BOOL(s.get());
+}
+
+template<size_t N>
+inline IEC_SINT TO_SINT(const IECWString<N>& s) noexcept {
+    return TO_SINT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_SINT TO_SINT(const IECWStringVar<N>& s) noexcept {
+    return TO_SINT(s.get());
+}
+
+template<size_t N>
+inline IEC_INT TO_INT(const IECWString<N>& s) noexcept {
+    return TO_INT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_INT TO_INT(const IECWStringVar<N>& s) noexcept {
+    return TO_INT(s.get());
+}
+
+template<size_t N>
+inline IEC_DINT TO_DINT(const IECWString<N>& s) noexcept {
+    return TO_DINT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_DINT TO_DINT(const IECWStringVar<N>& s) noexcept {
+    return TO_DINT(s.get());
+}
+
+template<size_t N>
+inline IEC_LINT TO_LINT(const IECWString<N>& s) noexcept {
+    return TO_LINT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_LINT TO_LINT(const IECWStringVar<N>& s) noexcept {
+    return TO_LINT(s.get());
+}
+
+template<size_t N>
+inline IEC_USINT TO_USINT(const IECWString<N>& s) noexcept {
+    return TO_USINT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_USINT TO_USINT(const IECWStringVar<N>& s) noexcept {
+    return TO_USINT(s.get());
+}
+
+template<size_t N>
+inline IEC_UINT TO_UINT(const IECWString<N>& s) noexcept {
+    return TO_UINT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_UINT TO_UINT(const IECWStringVar<N>& s) noexcept {
+    return TO_UINT(s.get());
+}
+
+template<size_t N>
+inline IEC_UDINT TO_UDINT(const IECWString<N>& s) noexcept {
+    return TO_UDINT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_UDINT TO_UDINT(const IECWStringVar<N>& s) noexcept {
+    return TO_UDINT(s.get());
+}
+
+template<size_t N>
+inline IEC_ULINT TO_ULINT(const IECWString<N>& s) noexcept {
+    return TO_ULINT(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_ULINT TO_ULINT(const IECWStringVar<N>& s) noexcept {
+    return TO_ULINT(s.get());
+}
+
+template<size_t N>
+inline IEC_REAL TO_REAL(const IECWString<N>& s) noexcept {
+    return TO_REAL(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_REAL TO_REAL(const IECWStringVar<N>& s) noexcept {
+    return TO_REAL(s.get());
+}
+
+template<size_t N>
+inline IEC_LREAL TO_LREAL(const IECWString<N>& s) noexcept {
+    return TO_LREAL(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_LREAL TO_LREAL(const IECWStringVar<N>& s) noexcept {
+    return TO_LREAL(s.get());
+}
+
+template<size_t N>
+inline IEC_BYTE TO_BYTE(const IECWString<N>& s) noexcept {
+    return TO_BYTE(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_BYTE TO_BYTE(const IECWStringVar<N>& s) noexcept {
+    return TO_BYTE(s.get());
+}
+
+template<size_t N>
+inline IEC_WORD TO_WORD(const IECWString<N>& s) noexcept {
+    return TO_WORD(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_WORD TO_WORD(const IECWStringVar<N>& s) noexcept {
+    return TO_WORD(s.get());
+}
+
+template<size_t N>
+inline IEC_DWORD TO_DWORD(const IECWString<N>& s) noexcept {
+    return TO_DWORD(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_DWORD TO_DWORD(const IECWStringVar<N>& s) noexcept {
+    return TO_DWORD(s.get());
+}
+
+template<size_t N>
+inline IEC_LWORD TO_LWORD(const IECWString<N>& s) noexcept {
+    return TO_LWORD(WSTRING_TO_STRING(s));
+}
+template<size_t N>
+inline IEC_LWORD TO_LWORD(const IECWStringVar<N>& s) noexcept {
+    return TO_LWORD(s.get());
+}
+
+// =============================================================================
 // Time Utilities
 // =============================================================================
 
