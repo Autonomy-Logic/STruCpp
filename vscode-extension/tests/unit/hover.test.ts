@@ -169,3 +169,44 @@ END_PROGRAM
     }
   });
 });
+
+describe("getHover — built-in IEC data type docs (#55)", () => {
+  it("shows type documentation when hovering a built-in type name", () => {
+    const source = [
+      "PROGRAM P",
+      "  VAR",
+      "    n : INT;",
+      "    t : TIME;",
+      "  END_VAR",
+      "  n := n;",
+      "END_PROGRAM",
+      "",
+    ].join("\n");
+    const analysis = analyze(source, { fileName: "types.st" });
+    const lines = source.split("\n");
+
+    const intLine = lines.findIndex((l) => l.includes(": INT")) + 1;
+    const intCol = lines[intLine - 1].indexOf("INT") + 1;
+    const intHover = getHover(analysis, "types.st", intLine, intCol, undefined, source);
+    expect(intHover).not.toBeNull();
+    const intValue = (intHover!.contents as { value: string }).value;
+    expect(intValue).toContain("**INT**");
+    expect(intValue).toContain("16 bits");
+
+    const timeLine = lines.findIndex((l) => l.includes(": TIME")) + 1;
+    const timeCol = lines[timeLine - 1].indexOf("TIME") + 1;
+    const timeHover = getHover(analysis, "types.st", timeLine, timeCol, undefined, source);
+    expect((timeHover!.contents as { value: string }).value).toContain("nanoseconds");
+  });
+
+  it("does not hijack hover on a variable name", () => {
+    const source = "PROGRAM P\n  VAR n : INT; END_VAR\n  n := n;\nEND_PROGRAM\n";
+    const analysis = analyze(source, { fileName: "v.st" });
+    const col = source.split("\n")[2].indexOf("n") + 1; // the 'n' in 'n := n'
+    const hover = getHover(analysis, "v.st", 3, col, undefined, source);
+    if (hover) {
+      const value = (hover.contents as { value: string }).value;
+      expect(value).not.toContain("Signed 16-bit integer");
+    }
+  });
+});
