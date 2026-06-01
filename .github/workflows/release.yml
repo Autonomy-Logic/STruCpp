@@ -64,12 +64,12 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node18-linux-x64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --target node22-linux-x64 --output dist/bin/strucpp --compress GZip
 
-      - name: Verify binary
+      - name: Smoke-test binary
         run: |
           file dist/bin/strucpp
-          dist/bin/strucpp --help || true
+          node scripts/smoke-test.mjs dist/bin/strucpp
 
       - name: Package
         run: |
@@ -114,12 +114,12 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node18-linux-arm64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --target node22-linux-arm64 --output dist/bin/strucpp --compress GZip
 
-      - name: Verify binary
+      - name: Smoke-test binary
         run: |
           file dist/bin/strucpp
-          dist/bin/strucpp --help || true
+          node scripts/smoke-test.mjs dist/bin/strucpp
 
       - name: Package
         run: |
@@ -164,12 +164,12 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node18-macos-x64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --target node22-macos-x64 --output dist/bin/strucpp --compress GZip
 
-      - name: Verify binary
+      - name: Smoke-test binary
         run: |
           file dist/bin/strucpp
-          arch -x86_64 dist/bin/strucpp --help || true
+          node scripts/smoke-test.mjs dist/bin/strucpp arch -x86_64
 
       - name: Package
         run: |
@@ -214,12 +214,12 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node18-macos-arm64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --target node22-macos-arm64 --output dist/bin/strucpp --compress GZip
 
-      - name: Verify binary
+      - name: Smoke-test binary
         run: |
           file dist/bin/strucpp
-          dist/bin/strucpp --help || true
+          node scripts/smoke-test.mjs dist/bin/strucpp
 
       - name: Package
         run: |
@@ -264,9 +264,11 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node18-win-x64 --output dist/bin/strucpp.exe --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --target node22-win-x64 --output dist/bin/strucpp.exe --compress GZip
 
       - name: Verify binary
+        # Cross-built on Linux — cannot execute here. The produced .exe is
+        # smoke-tested natively in the `smoke-windows` job below.
         run: file dist/bin/strucpp.exe
 
       - name: Package
@@ -284,6 +286,34 @@ jobs:
         with:
           name: strucpp-win32-x64
           path: strucpp-win32-x64.zip
+
+  # ---------------------------------------------------------------------------
+  # Windows smoke test — the .exe is cross-built on Linux and can't run there,
+  # so execute it natively on a Windows runner and fail the release if it can't
+  # start (guards against the issue #132 class of bug on Windows).
+  # ---------------------------------------------------------------------------
+  smoke-windows:
+    needs: build-windows-x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: strucpp-win32-x64
+
+      - name: Unpack binary
+        shell: bash
+        run: unzip -o strucpp-win32-x64.zip -d unpacked
+
+      - name: Smoke-test binary
+        shell: bash
+        run: node scripts/smoke-test.mjs unpacked/strucpp/strucpp.exe
 
   # ---------------------------------------------------------------------------
   # npm tarball (platform-independent — used by OpenPLC Editor)
@@ -373,6 +403,7 @@ jobs:
       - build-darwin-x64
       - build-darwin-arm64
       - build-windows-x64
+      - smoke-windows
       - build-npm
       - build-vsix
     runs-on: ubuntu-latest

@@ -124,3 +124,33 @@ jobs:
           name: dist
           path: dist/
           retention-days: 7
+
+  binary-smoke:
+    # Build the standalone binary the way `release.yml` does and actually run
+    # it. Catches the issue #132 class of bug (binary ships a different
+    # Node/ICU build than dev/CI and crashes at startup) on every PR, instead
+    # of only discovering it after a release. One target is enough here; the
+    # full 5-target + Windows matrix runs in release.yml.
+    name: Binary Smoke Test
+    runs-on: ubuntu-latest
+    needs: [test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bundle
+        run: npm run build:bundle
+
+      - name: Build standalone binary
+        run: npx pkg dist/strucpp-bundle.cjs --target node22-linux-x64 --output dist/bin/strucpp --compress GZip
+
+      - name: Smoke-test binary
+        run: node scripts/smoke-test.mjs dist/bin/strucpp
