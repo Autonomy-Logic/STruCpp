@@ -124,10 +124,14 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
         const cppPath = path.join(tempDir, "oscat_all.cpp");
 
         if (!fs.existsSync(hppPath) || !fs.existsSync(cppPath)) {
-          console.warn(
-            "Skipping — no transpiled output available from previous step",
+          // The suite is already gated on g++/stlib availability
+          // (describe.skipIf above), so reaching here means the preceding
+          // transpile test failed to emit output. That is a real failure —
+          // fail loudly rather than returning and passing vacuously.
+          expect.fail(
+            "No transpiled OSCAT output (oscat_all.hpp/.cpp) from the " +
+              "previous step — the transpile test must have failed.",
           );
-          return;
         }
 
         // Generate test .st that instantiates every FB from the archive manifest
@@ -209,7 +213,6 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
           expect.fail(
             `g++ full compile+link failed with ${errorLines.length} errors`,
           );
-          return;
         }
 
         // Run the binary
