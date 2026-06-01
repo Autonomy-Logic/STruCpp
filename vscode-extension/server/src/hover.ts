@@ -25,6 +25,7 @@ import { typeName } from "strucpp";
 import { resolveSymbolAtPosition, lookupSymbolByName } from "./resolve-symbol.js";
 import { sourceSpanToRange, restoreCase } from "./lsp-utils.js";
 import { isTestFile, getWordAt } from "../../shared/test-utils.js";
+import { getIecTypeDoc } from "./iec-type-docs.js";
 
 /** Shorthand: restore casing via the case map. */
 type CaseMap = ReadonlyMap<string, string>;
@@ -44,6 +45,18 @@ export function getHover(
   if (source && isTestFile(source)) {
     const testHover = getTestKeywordHover(source, line, column);
     if (testHover) return testHover;
+  }
+
+  // Built-in IEC data type hover (INT, TIME, LREAL, …). Type names are
+  // reserved keywords, so the word under the cursor can never also be a
+  // user symbol — resolve this directly from the source text, independent
+  // of AST symbol resolution (type references often have no symbol node).
+  if (source !== undefined) {
+    const w = getWordAt(source, line, column);
+    if (w !== undefined) {
+      const typeDoc = getIecTypeDoc(w.word);
+      if (typeDoc !== null) return makeHover(typeDoc);
+    }
   }
 
   const resolved = resolveSymbolAtPosition(analysis, fileName, line, column);
