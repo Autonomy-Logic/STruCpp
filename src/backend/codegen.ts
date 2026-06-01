@@ -5058,6 +5058,18 @@ export class CodeGenerator {
         const escaped = this.translateIECString(inner);
         return `u"${escaped}"`;
       }
+      // Lower IEC numeric literals (based 16#FF/8#17/2#1010, decimals
+      // with underscore separators, typed prefixes like INT#5, optional
+      // sign). PROGRAM/GLOBAL VAR initialisers arrive here as raw IEC
+      // strings; without this they're emitted verbatim (`X(16#FF)`,
+      // `X(1_000)`, `X(INT#5)`) and the C++ build fails. Mirrors the
+      // expression-statement path (formatIntegerLiteral). Returns null
+      // for non-numeric initialisers (enum names, constants), which then
+      // pass through unchanged.
+      const numeric = this.lowerNumericInitializer(initialValue);
+      if (numeric !== null) {
+        return numeric;
+      }
       return initialValue;
     }
 
@@ -5099,6 +5111,45 @@ export class CodeGenerator {
     // User-defined types (structs, enums, arrays, subranges, type aliases)
     // use default initialization - return empty string to skip in initializer list
     return "";
+  }
+
+  /**
+   * Lower an IEC numeric literal initializer string to a C++ literal.
+   *
+   * Handles based literals (16#FF, 8#17, 2#1010), decimals/reals with
+   * IEC underscore separators (1_000, 16#FF_FF), an optional leading
+   * sign (-5, +3), and an optional IEC type prefix (INT#5, BYTE#16#AB,
+   * REAL#1.5). Reuses {@link iecBaseToCppLiteral}, the same helper the
+   * expression path uses, so declaration initialisers and statement
+   * bodies lower identically.
+   *
+   * Returns `null` when `raw` is not a recognised numeric literal, so
+   * non-numeric initialisers (enum names, named constants) pass through
+   * unchanged at the call site.
+   */
+  private lowerNumericInitializer(raw: string): string | null {
+    let s = raw.trim();
+    let sign = "";
+    if (s.startsWith("-") || s.startsWith("+")) {
+      sign = s[0]!;
+      s = s.slice(1).trimStart();
+    }
+    // Strip an optional IEC type prefix (TYPE#...). The leading
+    // identifier must start with a letter/underscore, which excludes
+    // radix markers like `16#` whose left side is numeric.
+    const typePrefix = /^[A-Za-z_][A-Za-z0-9_]*#(.+)$/.exec(s);
+    if (typePrefix) {
+      s = typePrefix[1]!;
+    }
+    const isNumeric =
+      /^16#[0-9A-Fa-f][0-9A-Fa-f_]*$/.test(s) ||
+      /^8#[0-7][0-7_]*$/.test(s) ||
+      /^2#[01][01_]*$/.test(s) ||
+      /^[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?$/.test(s);
+    if (!isNumeric) {
+      return null;
+    }
+    return sign + iecBaseToCppLiteral(s);
   }
 
   /**
