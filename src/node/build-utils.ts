@@ -69,6 +69,11 @@ export function findRuntimeIncludeDir(cxxFlags: string): string | null {
     if (typeof import.meta?.url === "string") {
       const scriptDir = dirname(new URL(import.meta.url).pathname);
       candidates.push(resolve(scriptDir, "runtime", "include"));
+      // npm/built layout: dist/node/ → ../../src/runtime/include.
+      // (src/node/ dev layout resolves to the same src/runtime/include.)
+      candidates.push(
+        resolve(scriptDir, "..", "..", "src", "runtime", "include"),
+      );
       candidates.push(resolve(scriptDir, "..", "src", "runtime", "include"));
     }
   } catch {
@@ -78,6 +83,9 @@ export function findRuntimeIncludeDir(cxxFlags: string): string | null {
   // From __dirname (CJS bundle via esbuild)
   if (typeof __dirname === "string") {
     candidates.push(resolve(__dirname, "runtime", "include"));
+    candidates.push(
+      resolve(__dirname, "..", "..", "src", "runtime", "include"),
+    );
     candidates.push(resolve(__dirname, "..", "src", "runtime", "include"));
   }
 
