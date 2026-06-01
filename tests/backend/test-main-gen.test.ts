@@ -5,9 +5,9 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { generateTestMain } from "../../dist/backend/test-main-gen.js";
-import type { POUInfo } from "../../dist/backend/test-main-gen.js";
-import type { TestFile } from "../../dist/testing/test-model.js";
+import { generateTestMain } from "../../src/backend/test-main-gen.js";
+import type { POUInfo } from "../../src/backend/test-main-gen.js";
+import type { TestFile } from "../../src/testing/test-model.js";
 
 /** Helper to create a basic POUInfo for a program */
 function programPOU(name: string, vars: Record<string, string> = {}): POUInfo {

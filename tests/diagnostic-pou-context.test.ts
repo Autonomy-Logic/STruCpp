@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../dist/index.js";
+import { compile } from "../src/index.js";
 
 describe("CompileError POU annotation", () => {
   describe("var-block errors", () => {

@@ -31,7 +31,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile, parse } from "../../dist/index.js";
+import { compile, parse } from "../../src/index.js";
 
 describe("WSTRING literal handling", () => {
   describe("parser", () => {

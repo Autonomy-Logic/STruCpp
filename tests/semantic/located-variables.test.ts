@@ -203,7 +203,14 @@ describe('Phase 2.3 - Located Variables', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(false);
-      expect(result.errors.some(e => e.message.includes('FUNCTION_BLOCK'))).toBe(true);
+      // Anchor on the distinctive rule text rather than the generic token
+      // 'FUNCTION_BLOCK' (which any unrelated FB error would satisfy), so the
+      // test fails if a *different* error fires or the located-var check stops.
+      expect(
+        result.errors.some(e =>
+          e.message.includes('Located variables can only be declared'),
+        ),
+      ).toBe(true);
     });
 
     it('should allow located variable in program', () => {

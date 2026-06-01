@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../dist/index.js";
+import { compile } from "../../src/index.js";
 
 describe("IL transpilation across additionalSources", () => {
   it("compiles an IL POU passed via additionalSources alongside an ST primary", () => {
