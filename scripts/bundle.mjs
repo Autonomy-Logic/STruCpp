@@ -15,7 +15,7 @@ await build({
   entryPoints: ["dist/node/cli.js"],
   bundle: true,
   platform: "node",
-  target: "node18",
+  target: "node22",
   outfile: "dist/strucpp-bundle.cjs",
   format: "cjs",
   define: {

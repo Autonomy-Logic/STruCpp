@@ -204,6 +204,33 @@ export function isTypeInCategory(
   return categories?.includes(category) ?? false;
 }
 
+/** The IEC generic type-group names (ANY, ANY_BIT, ANY_NUM, ...). */
+const GENERIC_TYPE_NAMES: ReadonlySet<string> = new Set([
+  "ANY",
+  "ANY_DERIVED",
+  "ANY_ELEMENTARY",
+  "ANY_MAGNITUDE",
+  "ANY_NUM",
+  "ANY_REAL",
+  "ANY_INT",
+  "ANY_BIT",
+  "ANY_STRING",
+  "ANY_DATE",
+]);
+
+/**
+ * Whether a resolved type is one of the IEC generic type groups rather than a
+ * concrete type. Overloaded standard functions are published with one of these
+ * as their declared return type (e.g. NOT -> ANY_BIT); such a result must be
+ * refined to a concrete type at the call site before it can be used.
+ */
+export function isGenericGroupType(type: IECType): boolean {
+  return (
+    type.typeKind === "elementary" &&
+    GENERIC_TYPE_NAMES.has((type as ElementaryType).name.toUpperCase())
+  );
+}
+
 /**
  * Check if a type name matches a StdFunctionRegistry TypeConstraint.
  */

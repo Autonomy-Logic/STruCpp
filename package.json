@@ -1,6 +1,6 @@
 {
   "name": "strucpp",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "description": "IEC 61131-3 Structured Text to C++ Compiler",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -26,10 +26,11 @@
     "build:libs": "node scripts/rebuild-libs.mjs",
     "build:browser-server": "node scripts/build-browser-server.mjs",
     "build:bundle": "npm run build && node scripts/bundle.mjs",
-    "build:pkg": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node18-linux-x64,node18-win-x64,node18-macos-x64 --out-path dist/bin --compress GZip",
-    "build:pkg:linux": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node18-linux-x64 --output dist/bin/strucpp-linux --compress GZip",
-    "build:pkg:win": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node18-win-x64 --output dist/bin/strucpp-win.exe --compress GZip",
-    "build:pkg:macos": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node18-macos-x64 --output dist/bin/strucpp-macos --compress GZip",
+    "build:pkg": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node22-linux-x64,node22-win-x64,node22-macos-x64 --out-path dist/bin --compress GZip",
+    "build:pkg:linux": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node22-linux-x64 --output dist/bin/strucpp-linux --compress GZip",
+    "build:pkg:win": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node22-win-x64 --output dist/bin/strucpp-win.exe --compress GZip",
+    "build:pkg:macos": "npm run build:bundle && pkg dist/strucpp-bundle.cjs --targets node22-macos-x64 --output dist/bin/strucpp-macos --compress GZip",
+    "smoke:bin": "node scripts/smoke-test.mjs",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -72,7 +73,7 @@
   },
   "homepage": "https://github.com/Autonomy-Logic/STruCpp#readme",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "chevrotain": "^11.0.0"
@@ -89,11 +90,11 @@
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
     "@vitest/coverage-v8": "^1.0.0",
+    "@yao-pkg/pkg": "^6.20.0",
     "esbuild": "^0.27.0",
     "eslint": "^8.0.0",
     "husky": "^9.1.7",
     "lint-staged": "^15.5.2",
-    "pkg": "^5.8.1",
     "prettier": "^3.0.0",
     "typescript": "^5.0.0",
     "vitest": "^1.0.0"

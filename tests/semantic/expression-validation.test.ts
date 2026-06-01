@@ -292,4 +292,21 @@ describe("Semantic Analyzer - EN/ENO Argument Counting", () => {
     );
     expect(enoErrors.length).toBeGreaterThan(0);
   });
+
+  it("accepts NOT(BOOL) as an EN input — overloaded std result refines to BOOL", () => {
+    // Regression: ladder-generated `MOVE(EN := NOT(led), ...)`. NOT is an
+    // overloaded standard function published with a generic ANY_BIT return;
+    // it must refine to the concrete operand type (BOOL) so the EN check
+    // (which requires BOOL) passes instead of erroring with "got ANY_BIT".
+    const result = analyzeSource(`
+      PROGRAM Main
+        VAR led : BOOL; q : UINT; eno : BOOL; END_VAR
+        q := MOVE(EN := NOT(led), IN := UINT#0, ENO => eno);
+      END_PROGRAM
+    `);
+    const enErrors = result.errors.filter((e) =>
+      e.message.includes("'EN' input must be a BOOL"),
+    );
+    expect(enErrors).toHaveLength(0);
+  });
 });
