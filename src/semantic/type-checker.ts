@@ -38,6 +38,7 @@ import {
   resolveFieldType,
   resolveArrayElementType,
   typeName as typeNameUtil,
+  isGenericGroupType,
 } from "./type-utils.js";
 import { stripEnEno } from "../ast-utils.js";
 
@@ -569,8 +570,23 @@ export class TypeChecker {
     // Check user-defined functions in symbol tables
     const funcSymbol = this.symbolTables.lookupFunction(expr.functionName);
     if (funcSymbol !== undefined) {
-      expr.resolvedType = funcSymbol.returnType;
-      return funcSymbol.returnType;
+      let returnType = funcSymbol.returnType;
+      // Overloaded standard functions are published in the builtin stdlib
+      // manifest with their generic return *constraint* (e.g. NOT -> ANY_BIT,
+      // ADD -> ANY_NUM). When the IEC signature says the result type matches
+      // the first argument, refine that generic to the concrete operand type
+      // so downstream checks see a real type — e.g. NOT(BOOL) -> BOOL, which
+      // the EN-input check (and bit/num operand rules) require.
+      if (returnType && isGenericGroupType(returnType) && this.stdRegistry) {
+        const desc = this.stdRegistry.lookup(nameUpper);
+        if (desc?.returnMatchesFirstParam) {
+          const userArgs = stripEnEno(expr.arguments);
+          const firstArgType = userArgs[0]?.value.resolvedType;
+          if (firstArgType) returnType = firstArgType;
+        }
+      }
+      expr.resolvedType = returnType;
+      return returnType;
     }
 
     // Validate standard function argument types (after resolving args)
