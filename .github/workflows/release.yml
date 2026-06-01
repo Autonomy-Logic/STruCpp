@@ -64,7 +64,7 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node22-linux-x64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-linux-x64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
         run: |
@@ -114,7 +114,7 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node22-linux-arm64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-linux-arm64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
         run: |
@@ -164,7 +164,7 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node22-macos-x64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-macos-x64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
         run: |
@@ -214,7 +214,7 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node22-macos-arm64 --output dist/bin/strucpp --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-macos-arm64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
         run: |
@@ -264,7 +264,7 @@ jobs:
         run: npm run build:bundle
 
       - name: Build standalone binary
-        run: npx pkg dist/strucpp-bundle.cjs --target node22-win-x64 --output dist/bin/strucpp.exe --compress GZip
+        run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-win-x64 --output dist/bin/strucpp.exe --compress GZip
 
       - name: Verify binary
         # Cross-built on Linux — cannot execute here. The produced .exe is
