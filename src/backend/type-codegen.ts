@@ -23,7 +23,7 @@ import type {
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
 import { formatArrayType } from "./codegen-utils.js";
 import {
-  parseDateLiteralToNs,
+  parseDateLiteralToDays,
   parseDtLiteralToNs,
   parseTimeLiteral,
   parseTodLiteralToNs,
@@ -558,7 +558,7 @@ export class TypeCodeGenerator {
         return `${timeVal.nanoseconds}LL`;
       }
       case "DATE":
-        return `${parseDateLiteralToNs(String(expr.value))}LL`;
+        return `${parseDateLiteralToDays(String(expr.value))}LL`;
       case "TIME_OF_DAY":
         return `${parseTodLiteralToNs(String(expr.value))}LL`;
       case "DATE_AND_TIME":

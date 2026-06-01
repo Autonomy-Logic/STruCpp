@@ -110,6 +110,10 @@ inline int64_t DT_TO_NS(IEC_DT dt) noexcept {
     return iec_unwrap(dt);
 }
 
+inline int64_t DT_TO_MS(IEC_DT dt) noexcept {
+    return iec_unwrap(dt) / 1000000LL;
+}
+
 inline int64_t DT_TO_SECONDS(IEC_DT dt) noexcept {
     return iec_unwrap(dt) / 1000000000LL;
 }

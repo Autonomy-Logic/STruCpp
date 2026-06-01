@@ -124,6 +124,131 @@ describe("Codegen - Function Calls", () => {
 
       expect(result.cppCode).toContain("TO_DINT(");
     });
+
+    // -------------------------------------------------------------------------
+    // Temporal → numeric scaling
+    // -------------------------------------------------------------------------
+    // The C++ runtime aliases every temporal type to `IECVar<int64_t>`, so
+    // `TO_UINT(time_var)` without codegen help would `static_cast` the raw
+    // nanosecond representation and lose all millisecond semantics.  The
+    // codegen layer wraps the argument with the matching `*_TO_MS` helper
+    // before emitting the conversion so the C++ side sees an `int64_t` count
+    // of milliseconds — which is the inverse of `TO_TIME(ms_integer)`'s
+    // existing "ms input → ns storage" scaling.
+
+    it("wraps TIME variable with TIME_TO_MS before TO_UINT (regression for low-16-bit-of-ns bug)", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR t : TIME := T#5s; u : UINT; END_VAR
+          u := TO_UINT(t);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("TO_UINT(TIME_TO_MS(");
+    });
+
+    it("wraps TIME variable with TIME_TO_MS for the explicit TIME_TO_UINT spelling", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR t : TIME := T#5s; u : UINT; END_VAR
+          u := TIME_TO_UINT(t);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("TO_UINT(TIME_TO_MS(");
+    });
+
+    it("wraps TIME variable with TIME_TO_MS for TO_REAL (returns ms as a float)", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR t : TIME := T#5s; r : REAL; END_VAR
+          r := TO_REAL(t);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("TO_REAL(TIME_TO_MS(");
+    });
+
+    it("wraps TIME variable with TIME_TO_MS for every numeric / bit target", () => {
+      // One sweep across the elementary numeric + bit targets — if any
+      // target ever forgets to go through the temporal scaler the
+      // assertion below pins it down.
+      const targets = [
+        "SINT", "INT", "DINT", "LINT",
+        "USINT", "UDINT", "ULINT",
+        "LREAL",
+        "BYTE", "WORD", "DWORD", "LWORD",
+      ];
+      for (const target of targets) {
+        const result = compileAndCheck(`
+          PROGRAM Main
+            VAR t : TIME := T#5s; out : ${target}; END_VAR
+            out := TO_${target}(t);
+          END_PROGRAM
+        `);
+        expect(result.cppCode).toContain(`TO_${target}(TIME_TO_MS(`);
+      }
+    });
+
+    it("wraps TOD variable with TOD_TO_MS for numeric conversions", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR t : TOD := TOD#01:00:00; u : UDINT; END_VAR
+          u := TO_UDINT(t);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("TO_UDINT(TOD_TO_MS(");
+    });
+
+    it("wraps DT variable with DT_TO_MS for numeric conversions", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR d : DT := DT#1970-01-01-00:00:01; l : LINT; END_VAR
+          l := TO_LINT(d);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("TO_LINT(DT_TO_MS(");
+    });
+
+    it("does NOT wrap DATE (days are the natural unit for DATE→numeric)", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR d : DATE := DATE#1970-01-15; u : UINT; END_VAR
+          u := TO_UINT(d);
+        END_PROGRAM
+      `);
+      // DATE's int64_t storage is "days since 1970-01-01" — no scaling.
+      expect(result.cppCode).not.toContain("DATE_TO_MS");
+      expect(result.cppCode).not.toContain("TIME_TO_MS");
+    });
+
+    it("does NOT wrap on temporal-target conversions (avoid double-scaling)", () => {
+      // Temporal-target conversions stay pass-through at the C++ level
+      // (both sides are `IECVar<int64_t>`).  Wrapping the source with
+      // `TIME_TO_MS` would double-scale; the inverse `TO_TIME(int_ms)`
+      // runtime template also relies on this branch staying out of its
+      // way for `INT_TO_TIME(ms_int)` to keep working.
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR ms : DINT := 5000; t : TIME; END_VAR
+          t := DINT_TO_TIME(ms);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("TO_TIME(");
+      // No wrap because the target is TIME — `TO_TIME(integer)`
+      // already scales ms → ns on the C++ side.
+      expect(result.cppCode).not.toContain("TIME_TO_MS");
+    });
+
+    it("does NOT wrap when the source is plain numeric (existing behaviour preserved)", () => {
+      const result = compileAndCheck(`
+        PROGRAM Main
+          VAR i : INT := 5000; u : UINT; END_VAR
+          u := TO_UINT(i);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("TO_UINT(");
+      expect(result.cppCode).not.toContain("TIME_TO_MS");
+      expect(result.cppCode).not.toContain("TOD_TO_MS");
+      expect(result.cppCode).not.toContain("DT_TO_MS");
+    });
   });
 
   describe("function with VAR_OUTPUT", () => {
