@@ -121,8 +121,16 @@ const IEC_NAME_TO_SIZE: Record<string, number> = {
   DT: 8,
   DATE_AND_TIME: 8,
   LDT: 8,
-  STRING: 0, // variable-length — Phase 4b
-  WSTRING: 0, // variable-length — Phase 4b
+  // STRING / WSTRING wire widths match `DEBUG_STRING_WIDTH` /
+  // `DEBUG_WSTRING_WIDTH` in `runtime/include/debug_dispatch.hpp`.
+  // The runtime always writes a full fixed-width window
+  // (1 byte length + 126 bytes UTF-8 / 252 bytes UTF-16LE); the
+  // editor decoder reads `min(length, 126)` from the prefix and
+  // skips the remainder.  Pinning the same constants here keeps the
+  // editor's batch-byte arithmetic aligned with what the runtime
+  // actually sends per entry.
+  STRING: 127,
+  WSTRING: 253,
 };
 
 // ---------------------------------------------------------------------------
@@ -227,12 +235,6 @@ export function generateDebugTable(
       return;
     }
     const size = IEC_NAME_TO_SIZE[iecName.toUpperCase()] ?? 0;
-    // Phase 4a: skip STRING/WSTRING because variable-length encoding isn't
-    // defined yet.
-    if (tagName === "STRING" || tagName === "WSTRING") {
-      skipped.push({ path, reason: `string types deferred to Phase 4b` });
-      return;
-    }
     ensureRoom();
     const bucket = tail();
     const arrIdx = arrays.length - 1;
