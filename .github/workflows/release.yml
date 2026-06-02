@@ -67,6 +67,8 @@ jobs:
         run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-linux-x64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
+        env:
+          STRUCPP_EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           file dist/bin/strucpp
           node scripts/smoke-test.mjs dist/bin/strucpp
@@ -117,6 +119,8 @@ jobs:
         run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-linux-arm64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
+        env:
+          STRUCPP_EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           file dist/bin/strucpp
           node scripts/smoke-test.mjs dist/bin/strucpp
@@ -167,6 +171,8 @@ jobs:
         run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-macos-x64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
+        env:
+          STRUCPP_EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           file dist/bin/strucpp
           node scripts/smoke-test.mjs dist/bin/strucpp arch -x86_64
@@ -217,6 +223,8 @@ jobs:
         run: npx pkg dist/strucpp-bundle.cjs --no-bytecode --public-packages "*" --public --target node22-macos-arm64 --output dist/bin/strucpp --compress GZip
 
       - name: Smoke-test binary
+        env:
+          STRUCPP_EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           file dist/bin/strucpp
           node scripts/smoke-test.mjs dist/bin/strucpp
@@ -293,7 +301,7 @@ jobs:
   # start (guards against the issue #132 class of bug on Windows).
   # ---------------------------------------------------------------------------
   smoke-windows:
-    needs: build-windows-x64
+    needs: [prepare, build-windows-x64]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -313,6 +321,14 @@ jobs:
 
       - name: Smoke-test binary
         shell: bash
+        env:
+          # Job runs on a fresh runner with a clean source checkout — the
+          # `npm version` bump done by `build-windows-x64` only lived in
+          # that build job's filesystem.  Pass the canonical version from
+          # `prepare.outputs.version` so the smoke-test asserts against
+          # what we ASKED the pipeline to build, not whatever happens to
+          # be committed in `package.json` at the tagged commit.
+          STRUCPP_EXPECTED_VERSION: ${{ needs.prepare.outputs.version }}
         run: node scripts/smoke-test.mjs unpacked/strucpp/strucpp.exe
 
   # ---------------------------------------------------------------------------
