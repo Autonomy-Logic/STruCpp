@@ -433,6 +433,22 @@ public:
         return *this;
     }
 
+    // Read-through proxies into the inner IECWString.  Mirror of the
+    // IECStringVar proxy set — see `iec_string.hpp` for the design
+    // rationale, including why comparison operators are intentionally
+    // NOT proxied (free-function `==` / `!=` overloads already cover
+    // every cross-class compare path, and adding member operators
+    // would risk overload ambiguity at ST call sites).
+    constexpr size_t length() const noexcept {
+        return (forced_ ? forced_value_ : value_).length();
+    }
+    const char16_t* c_str() const noexcept {
+        return (forced_ ? forced_value_ : value_).c_str();
+    }
+    char16_t operator[](size_t index) const noexcept {
+        return (forced_ ? forced_value_ : value_)[index];
+    }
+
 private:
     value_type value_;
     bool forced_;

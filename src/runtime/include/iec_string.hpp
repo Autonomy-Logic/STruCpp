@@ -417,6 +417,34 @@ public:
         return *this;
     }
 
+    // Read-through proxies into the inner IECString.  Without these,
+    // user code in C/C++ POU bodies has to write `name.get().c_str()`
+    // / `name.get().length()` for every read — `IECStringVar` would
+    // otherwise expose nothing but `get()` / `set()` / `operator=` to
+    // its consumers.  Routed through the force-aware value (forced
+    // value when forcing is active, underlying value otherwise) so
+    // every read respects force semantics the same way `IECVar<T>`'s
+    // `operator T()` already does for numeric pins.  Returning the
+    // pointer to the persistent member (not to `get()`'s temporary)
+    // keeps `c_str()`'s buffer stable for the lifetime of `*this`.
+    //
+    // NOTE: only methods that didn't previously exist on
+    // `IECStringVar` are added here.  Comparison (`operator==` etc.)
+    // is intentionally NOT proxied — the free-function overloads at
+    // the bottom of this file (`operator==(IECStringVar, IECString)`
+    // and converse) already handle every cross-class compare path,
+    // and adding member operators would risk overload ambiguity at
+    // ST call sites that previously bound to the free functions.
+    constexpr size_t length() const noexcept {
+        return (forced_ ? forced_value_ : value_).length();
+    }
+    const char* c_str() const noexcept {
+        return (forced_ ? forced_value_ : value_).c_str();
+    }
+    char operator[](size_t index) const noexcept {
+        return (forced_ ? forced_value_ : value_)[index];
+    }
+
 private:
     value_type value_;
     bool forced_;
