@@ -27,6 +27,12 @@ describe("debug-table-gen helpers", () => {
     expect(sizeForTypeName("LINT")).toBe(8);
     expect(sizeForTypeName("REAL")).toBe(4);
     expect(sizeForTypeName("LREAL")).toBe(8);
+    // STRING / WSTRING use the fixed debug-protocol window width:
+    // 1 byte length prefix + 126 bytes of UTF-8 (STRING) or
+    // 126 * 2 bytes of UTF-16LE (WSTRING).  Mirrors `DEBUG_STRING_WIDTH` /
+    // `DEBUG_WSTRING_WIDTH` in `runtime/include/debug_dispatch.hpp`.
+    expect(sizeForTypeName("STRING")).toBe(127);
+    expect(sizeForTypeName("WSTRING")).toBe(253);
   });
 
   it("TAG values are sequential from 0", () => {
@@ -77,6 +83,41 @@ END_CONFIGURATION
     const blink = map.leaves.find((l) => l.path === "INSTANCE0.BLINK")!;
     expect(blink.type).toBe("BOOL");
     expect(blink.size).toBe(1);
+  });
+
+  it("emits Entry rows for STRING and WSTRING leaves with the wire-width sizes", () => {
+    const source = `
+PROGRAM main
+  VAR
+    label : STRING := 'hello';
+    note  : WSTRING := "hi";
+  END_VAR
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM instance0 WITH task0 : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    const map = result.debugMap!;
+    const labelLeaf = map.leaves.find((l) => l.path === "INSTANCE0.LABEL");
+    const noteLeaf = map.leaves.find((l) => l.path === "INSTANCE0.NOTE");
+    expect(labelLeaf, "STRING leaf must be emitted into the debug table").toBeDefined();
+    expect(noteLeaf, "WSTRING leaf must be emitted into the debug table").toBeDefined();
+    expect(labelLeaf!.type).toBe("STRING");
+    expect(labelLeaf!.size).toBe(127); // 1 + DEBUG_STRING_CAP
+    expect(noteLeaf!.type).toBe("WSTRING");
+    expect(noteLeaf!.size).toBe(253); // 1 + DEBUG_STRING_CAP * 2
+
+    const cpp = result.debugTableCpp!;
+    expect(cpp).toContain("TAG_STRING");
+    expect(cpp).toContain("TAG_WSTRING");
+    expect(cpp).toContain("&g_config.INSTANCE0.LABEL");
+    expect(cpp).toContain("&g_config.INSTANCE0.NOTE");
   });
 
   it("emits valid C++ source with the expected pointer expressions", () => {
