@@ -12,14 +12,30 @@
  *
  * This script actually executes the binary and FAILS (non-zero exit) if it
  * can't run:
- *   1. `--version` exits 0 and prints the package.json version
+ *   1. `--version` exits 0 and prints the expected version
  *      (proves the module-load path — the thing that crashes today — works).
  *   2. `--help` exits 0.
  *   3. A tiny ST program compiles to a non-empty .cpp.
  *
+ * Expected-version resolution (highest precedence first):
+ *
+ *   1. `STRUCPP_EXPECTED_VERSION` env var.  This is the source of truth
+ *      used by `release.yml` — every smoke step exports
+ *      `${{ needs.prepare.outputs.version }}`, the same value all build
+ *      jobs feed into `npm version` when bumping `package.json` for the
+ *      bundle/pkg pipeline.  Critically, this also lets the cross-runner
+ *      `smoke-windows` job assert correctly: it checks out fresh source
+ *      at the tag commit, where `package.json` may not have been bumped
+ *      by a `chore(release): vX.Y.Z` commit yet, so the version-from-disk
+ *      fallback would mismatch the binary built upstream with an
+ *      injected version.
+ *
+ *   2. `package.json` on disk.  Fallback for local invocations.
+ *
  * Usage:  node scripts/smoke-test.mjs <path-to-binary> [runner-prefix...]
  *   e.g.  node scripts/smoke-test.mjs dist/bin/strucpp
  *         node scripts/smoke-test.mjs dist/bin/strucpp arch -x86_64
+ *         STRUCPP_EXPECTED_VERSION=0.5.2 node scripts/smoke-test.mjs dist/bin/strucpp
  *
  * Any extra args after the binary path are a command prefix used to launch
  * it (for running a cross-arch binary under an emulator, e.g. `arch -x86_64`
@@ -38,8 +54,11 @@ if (!binArg) {
   process.exit(2);
 }
 
-const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url)));
-const expectedVersion = pkg.version;
+const expectedVersion =
+  process.env.STRUCPP_EXPECTED_VERSION ??
+  JSON.parse(readFileSync(new URL("../package.json", import.meta.url))).version;
+console.log(`  Expected version: ${expectedVersion}` +
+  (process.env.STRUCPP_EXPECTED_VERSION ? " (from STRUCPP_EXPECTED_VERSION)" : " (from package.json)"));
 
 /** Run the binary (optionally under a runner prefix) and return the result. */
 function run(args) {
