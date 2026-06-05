@@ -59,7 +59,7 @@ public:
      *  to functions expecting a wider IECVar type. Without this, C++ would need
      *  two user-defined conversions (IECVar<U>→U→T→IECVar<T>) which is disallowed. */
     template<typename U, std::enable_if_t<
-        std::is_convertible_v<U, T> && !std::is_same_v<U, T>, int> = 0>
+        std::is_convertible<U, T>::value && !std::is_same<U, T>::value, int> = 0>
     IECVar(const IECVar<U>& other) noexcept
         : value_{static_cast<T>(other.get())}, forced_{false}, forced_value_{} {}
 
@@ -197,7 +197,7 @@ public:
      *  by providing a direct match (template is preferred over two indirect paths
      *  that each require one user-defined conversion). */
     template<typename U, std::enable_if_t<
-        std::is_convertible_v<U, T> && !std::is_same_v<U, T>, int> = 0>
+        std::is_convertible<U, T>::value && !std::is_same<U, T>::value, int> = 0>
     IECVar& operator=(const IECVar<U>& other) noexcept {
         set(static_cast<T>(other.get()));
         return *this;
@@ -207,7 +207,7 @@ public:
      *  WARNING: On 64-bit platforms, assigning to types narrower than pointer width
      *  (e.g., DWORD) truncates the address. Use ULINT, LWORD, or PTR_INT_t for
      *  portable pointer-to-integer storage. */
-    template<typename U, typename V = T, std::enable_if_t<std::is_integral_v<V>, int> = 0>
+    template<typename U, typename V = T, std::enable_if_t<std::is_integral<V>::value, int> = 0>
     IECVar& operator=(const IEC_Ptr<U>& ptr) noexcept {
         set(static_cast<T>(ptr.to_addr()));
         return *this;
@@ -218,10 +218,10 @@ public:
     // =========================================================================
 
     /** Forward operator-> to underlying type (struct/FB member access) */
-    template<typename U = T, std::enable_if_t<std::is_class_v<U>, int> = 0>
+    template<typename U = T, std::enable_if_t<std::is_class<U>::value, int> = 0>
     T* operator->() noexcept { return &value_; }
 
-    template<typename U = T, std::enable_if_t<std::is_class_v<U>, int> = 0>
+    template<typename U = T, std::enable_if_t<std::is_class<U>::value, int> = 0>
     const T* operator->() const noexcept { return &value_; }
 
     /** Forward operator[] to underlying type (1D array access) */
@@ -350,7 +350,7 @@ inline IECVar<T> operator/(const IECVar<T>& a, const IECVar<T>& b) noexcept {
     return IECVar<T>(a.get() / b.get());
 }
 
-template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>>
+template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>>
 inline IECVar<T> operator%(const IECVar<T>& a, const IECVar<T>& b) noexcept {
     return IECVar<T>(a.get() % b.get());
 }
@@ -364,8 +364,8 @@ template<typename T> inline IECVar<T> operator*(const IECVar<T>& a, T b) noexcep
 template<typename T> inline IECVar<T> operator*(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a * b.get()); }
 template<typename T> inline IECVar<T> operator/(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() / b); }
 template<typename T> inline IECVar<T> operator/(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a / b.get()); }
-template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>> inline IECVar<T> operator%(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() % b); }
-template<typename T, typename = std::enable_if_t<std::is_integral_v<T>>> inline IECVar<T> operator%(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a % b.get()); }
+template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>> inline IECVar<T> operator%(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() % b); }
+template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>> inline IECVar<T> operator%(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a % b.get()); }
 
 // =============================================================================
 // Comparison Operators
