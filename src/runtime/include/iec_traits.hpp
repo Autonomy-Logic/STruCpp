@@ -30,8 +30,13 @@ template<typename T, typename Bounds1, typename Bounds2, typename Bounds3> class
 class IEC_STRUCT_Base;
 template<typename EnumType> class IEC_ENUM_Value;
 template<typename EnumType> class IEC_ENUM_Var;
-template<typename BaseType, auto Lower, auto Upper> class IEC_SUBRANGE_Value;
-template<typename BaseType, auto Lower, auto Upper> class IEC_SUBRANGE_Var;
+// Forward declarations.  `auto` template parameters are C++17; we declare
+// these subrange templates with `BaseType`-typed bounds so they remain
+// compilable under the platform's gnu++14 default (mbed Arduino cores).
+// Numeric bounds in IEC subrange types are always the same type as the
+// base, so requiring `Lower`/`Upper` to be `BaseType` is no semantic loss.
+template<typename BaseType, BaseType Lower, BaseType Upper> class IEC_SUBRANGE_Value;
+template<typename BaseType, BaseType Lower, BaseType Upper> class IEC_SUBRANGE_Var;
 template<typename T> class IEC_REF_TO;
 
 // =============================================================================
@@ -232,43 +237,43 @@ struct is_any_elementary<IECVar<T>> : is_any_elementary<T> {};
 // =============================================================================
 
 template<typename T>
-inline constexpr bool is_iec_type_v = is_iec_type<T>::value;
+constexpr bool is_iec_type_v = is_iec_type<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_bool_v = is_any_bool<T>::value;
+constexpr bool is_any_bool_v = is_any_bool<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_sint_v = is_any_sint<T>::value;
+constexpr bool is_any_sint_v = is_any_sint<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_uint_v = is_any_uint<T>::value;
+constexpr bool is_any_uint_v = is_any_uint<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_int_v = is_any_int<T>::value;
+constexpr bool is_any_int_v = is_any_int<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_real_v = is_any_real<T>::value;
+constexpr bool is_any_real_v = is_any_real<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_num_v = is_any_num<T>::value;
+constexpr bool is_any_num_v = is_any_num<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_bit_v = is_any_bit<T>::value;
+constexpr bool is_any_bit_v = is_any_bit<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_string_v = is_any_string<T>::value;
+constexpr bool is_any_string_v = is_any_string<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_date_v = is_any_date<T>::value;
+constexpr bool is_any_date_v = is_any_date<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_time_v = is_any_time<T>::value;
+constexpr bool is_any_time_v = is_any_time<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_magnitude_v = is_any_magnitude<T>::value;
+constexpr bool is_any_magnitude_v = is_any_magnitude<T>::value;
 
 template<typename T>
-inline constexpr bool is_any_elementary_v = is_any_elementary<T>::value;
+constexpr bool is_any_elementary_v = is_any_elementary<T>::value;
 
 // =============================================================================
 // Type Size Traits
@@ -297,7 +302,7 @@ template<typename T>
 struct iec_bit_size<IECVar<T>> : iec_bit_size<T> {};
 
 template<typename T>
-inline constexpr size_t iec_bit_size_v = iec_bit_size<T>::value;
+constexpr size_t iec_bit_size_v = iec_bit_size<T>::value;
 
 // =============================================================================
 // Underlying Type Traits
@@ -315,10 +320,10 @@ using iec_underlying_type_t = typename iec_underlying_type<T>::type;
 
 /** Extract the raw value from an IECVar or pass through a raw value unchanged */
 template<typename T>
-inline constexpr T iec_unwrap(T v) noexcept { return v; }
+constexpr T iec_unwrap(T v) noexcept { return v; }
 
 template<typename T>
-inline constexpr T iec_unwrap(const IECVar<T>& v) noexcept { return v.get(); }
+constexpr T iec_unwrap(const IECVar<T>& v) noexcept { return v.get(); }
 
 // =============================================================================
 // Type Limits
@@ -389,16 +394,16 @@ template<typename T, typename Bnd1, typename Bnd2, typename Bnd3>
 struct is_iec_array<IEC_ARRAY_3D<T, Bnd1, Bnd2, Bnd3>> : std::true_type {};
 
 template<typename T>
-inline constexpr bool is_iec_array_v = is_iec_array<T>::value;
+constexpr bool is_iec_array_v = is_iec_array<T>::value;
 
 /** Check if T is an IEC struct type */
 // Uses std::is_base_of to detect types derived from IEC_STRUCT_Base
 // Note: Generated structs inherit from IEC_STRUCT_Base
 template<typename T>
-struct is_iec_struct : std::bool_constant<std::is_base_of_v<IEC_STRUCT_Base, T>> {};
+struct is_iec_struct : std::integral_constant<bool,std::is_base_of<IEC_STRUCT_Base, T>::value> {};
 
 template<typename T>
-inline constexpr bool is_iec_struct_v = is_iec_struct<T>::value;
+constexpr bool is_iec_struct_v = is_iec_struct<T>::value;
 
 /** Check if T is an IEC enumeration type */
 template<typename T> struct is_iec_enum : std::false_type {};
@@ -410,19 +415,19 @@ template<typename E>
 struct is_iec_enum<IEC_ENUM_Var<E>> : std::true_type {};
 
 template<typename T>
-inline constexpr bool is_iec_enum_v = is_iec_enum<T>::value;
+constexpr bool is_iec_enum_v = is_iec_enum<T>::value;
 
 /** Check if T is an IEC subrange type */
 template<typename T> struct is_iec_subrange : std::false_type {};
 
-template<typename B, auto L, auto U>
+template<typename B, B L, B U>
 struct is_iec_subrange<IEC_SUBRANGE_Value<B, L, U>> : std::true_type {};
 
-template<typename B, auto L, auto U>
+template<typename B, B L, B U>
 struct is_iec_subrange<IEC_SUBRANGE_Var<B, L, U>> : std::true_type {};
 
 template<typename T>
-inline constexpr bool is_iec_subrange_v = is_iec_subrange<T>::value;
+constexpr bool is_iec_subrange_v = is_iec_subrange<T>::value;
 
 /** Check if T is an IEC pointer type (REF_TO) */
 template<typename T> struct is_iec_pointer : std::false_type {};
@@ -431,11 +436,11 @@ template<typename T>
 struct is_iec_pointer<IEC_REF_TO<T>> : std::true_type {};
 
 template<typename T>
-inline constexpr bool is_iec_pointer_v = is_iec_pointer<T>::value;
+constexpr bool is_iec_pointer_v = is_iec_pointer<T>::value;
 
 /** Check if T is ANY_DERIVED (composite types: arrays, structs, enums, subranges, pointers) */
 template<typename T>
-struct is_any_derived : std::bool_constant<
+struct is_any_derived : std::integral_constant<bool,
     is_iec_array<T>::value ||
     is_iec_struct<T>::value ||
     is_iec_enum<T>::value ||
@@ -444,7 +449,7 @@ struct is_any_derived : std::bool_constant<
 > {};
 
 template<typename T>
-inline constexpr bool is_any_derived_v = is_any_derived<T>::value;
+constexpr bool is_any_derived_v = is_any_derived<T>::value;
 
 // =============================================================================
 // C++17 SFINAE Helpers
