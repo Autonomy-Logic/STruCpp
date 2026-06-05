@@ -25,12 +25,12 @@ namespace strucpp {
  * @tparam Lower The minimum allowed value (inclusive)
  * @tparam Upper The maximum allowed value (inclusive)
  */
-template<typename BaseType, auto Lower, auto Upper>
+template<typename BaseType, BaseType Lower, BaseType Upper>
 class IEC_SUBRANGE_Value {
 public:
     using base_type = BaseType;
-    static constexpr auto lower_bound = Lower;
-    static constexpr auto upper_bound = Upper;
+    static constexpr BaseType lower_bound = Lower;
+    static constexpr BaseType upper_bound = Upper;
     
 private:
     BaseType value_;
@@ -208,13 +208,13 @@ public:
  * @tparam Lower The minimum allowed value
  * @tparam Upper The maximum allowed value
  */
-template<typename BaseType, auto Lower, auto Upper>
+template<typename BaseType, BaseType Lower, BaseType Upper>
 class IEC_SUBRANGE_Var {
 public:
     using value_type = IEC_SUBRANGE_Value<BaseType, Lower, Upper>;
     using base_type = BaseType;
-    static constexpr auto lower_bound = Lower;
-    static constexpr auto upper_bound = Upper;
+    static constexpr BaseType lower_bound = Lower;
+    static constexpr BaseType upper_bound = Upper;
     
 private:
     value_type value_;
@@ -323,7 +323,7 @@ public:
  * Convenience alias for subrange with forcing support.
  * Usage: IEC_SUBRANGE<int16_t, 0, 100> percentage;
  */
-template<typename BaseType, auto Lower, auto Upper>
+template<typename BaseType, BaseType Lower, BaseType Upper>
 using IEC_SUBRANGE = IEC_SUBRANGE_Var<BaseType, Lower, Upper>;
 
 /*

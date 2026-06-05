@@ -892,21 +892,33 @@ inline bool NE_STRING(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2
 // =============================================================================
 
 // Numeric → STRING (uses snprintf for real-time safety, no std::to_string)
+//
+// Split into two SFINAE'd overloads (signed vs unsigned) rather than a single
+// function with `if constexpr`, because user C/C++ POU code in
+// `c_blocks_code.cpp` compiles under whatever -std= the platform's Arduino
+// core picked (gnu++14 on mbed cores).  `if constexpr` is C++17-only and
+// would make this header unusable from those compilation units.  Tag
+// dispatch via `enable_if_t` works back to C++11.
 template<typename T,
-    std::enable_if_t<std::is_integral_v<decltype(iec_unwrap(std::declval<T>()))>, int> = 0>
+    std::enable_if_t<std::is_integral<decltype(iec_unwrap(std::declval<T>()))>::value
+                  && std::is_unsigned<decltype(iec_unwrap(std::declval<T>()))>::value, int> = 0>
 inline IECString<254> TO_STRING(T v) noexcept {
     char buf[32];
-    auto raw = iec_unwrap(v);
-    if constexpr (std::is_unsigned_v<decltype(raw)>) {
-        std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(raw));
-    } else {
-        std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(raw));
-    }
+    std::snprintf(buf, sizeof(buf), "%llu", static_cast<unsigned long long>(iec_unwrap(v)));
     return IECString<254>(buf);
 }
 
 template<typename T,
-    std::enable_if_t<std::is_floating_point_v<decltype(iec_unwrap(std::declval<T>()))>, int> = 0>
+    std::enable_if_t<std::is_integral<decltype(iec_unwrap(std::declval<T>()))>::value
+                  && !std::is_unsigned<decltype(iec_unwrap(std::declval<T>()))>::value, int> = 0>
+inline IECString<254> TO_STRING(T v) noexcept {
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(iec_unwrap(v)));
+    return IECString<254>(buf);
+}
+
+template<typename T,
+    std::enable_if_t<std::is_floating_point<decltype(iec_unwrap(std::declval<T>()))>::value, int> = 0>
 inline IECString<254> TO_STRING(T v) noexcept {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%g", static_cast<double>(iec_unwrap(v)));
