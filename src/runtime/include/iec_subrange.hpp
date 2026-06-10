@@ -2,6 +2,32 @@
 // Copyright (C) 2025 Autonomy / OpenPLC Project
 // This file is part of the STruC++ Runtime Library and is covered by the
 // STruC++ Runtime Library Exception. See COPYING.RUNTIME for details.
+//
+// ============================================================================
+// WARNING: KEEP THIS HEADER C++14-CLEAN (defensive).
+// ----------------------------------------------------------------------------
+// This header is NOT currently reachable from the C/C++ Function Block
+// translation unit (`c_blocks_code.cpp` includes iec_var.hpp + iec_string.hpp,
+// which pull in iec_traits.hpp + iec_types.hpp; iec_traits.hpp only
+// forward-declares the subrange specs rather than including this file). It was
+// nonetheless C++14-bridged in commit be85d8a and is adjacent to that chain —
+// a future change (e.g. a subrange-typed pin on a C/C++ POU, or iec_traits.hpp
+// switching from a forward declaration to a real `#include`) would pull it in.
+//
+// strucpp targets C++17, but the C/C++ FB TU is compiled under the Arduino
+// core's `-std` — gnu++14 on every mbed-based core (Nano RP2040 Connect, Nano
+// 33 BLE, Opta, GIGA, Portenta, Edge). To stay safe if/when this header enters
+// that chain, keep it C++14-clean. Do NOT use C++17/20 features unguarded:
+//   * `std::trait_v<T>`               -> `std::trait<T>::value`
+//   * `if constexpr`                  -> SFINAE / tag dispatch
+//   * inline variables / `inline constexpr`
+//   * `auto` non-type template params -> typed NTTPs
+//   * C++17/20 library headers -> include ONLY behind `#if __cplusplus >= ...`
+//     (see the guarded <concepts> block in iec_types.hpp for the pattern).
+//
+// If iec_subrange.hpp becomes part of the C/C++ FB include chain, promote this
+// to the same banner the reachable headers carry.
+// ============================================================================
 /**
  * STruC++ Runtime - IEC Subrange Types
  *
