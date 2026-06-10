@@ -316,4 +316,37 @@ describe('Phase 2.4 - References and Pointers', () => {
       expect(func?.returnType.name).toBe('INT');
     });
   });
+
+  describe('Semantic: REF= target validation', () => {
+    it('rejects REF= on a non-reference target', () => {
+      const source = `
+        PROGRAM Main
+          VAR
+            a : INT;
+            b : INT;
+          END_VAR
+          a REF= b;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(
+        result.errors.some((e) => /REF=.*reference|not a reference/i.test(e.message)),
+      ).toBe(true);
+    });
+
+    it('accepts REF= on a REFERENCE TO target', () => {
+      const source = `
+        PROGRAM Main
+          VAR
+            target : INT;
+            myref : REFERENCE_TO INT;
+          END_VAR
+          myref REF= target;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+    });
+  });
 });

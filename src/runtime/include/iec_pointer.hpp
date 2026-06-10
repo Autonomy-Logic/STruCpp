@@ -292,8 +292,10 @@ public:
  * REFERENCE_TO type with implicit dereferencing (CODESYS compatibility).
  * Unlike REF_TO, this type automatically dereferences on value access.
  *
- * Cannot be NULL - must always be bound to a valid variable.
- * Uses REF= operator (implemented as bind() method) for rebinding.
+ * Conceptually always bound; default-constructs unbound (nullptr) only so
+ * the variable can be declared before being bound. Must be bound (via the
+ * REF= operator / bind()) before any read or write — accessing it unbound
+ * is undefined behaviour, mirroring CODESYS.
  *
  * @tparam T The underlying value type (e.g., INT_t, REAL_t)
  */
@@ -308,12 +310,24 @@ private:
 
 public:
     /**
-     * Constructor - must be initialized with a valid reference
+     * Default constructor - unbound (ptr_ == nullptr).
+     *
+     * IEC 61131-3 REFERENCE TO is conceptually "always bound", but a
+     * variable of this type must still be *declarable* before it is bound
+     * (e.g. an uninitialized FB member or local that is bound later via the
+     * REF= operator inside the POU body). The generated code default-
+     * constructs such members, so a usable default ctor is required.
+     *
+     * As with CODESYS, reading or writing an unbound REFERENCE TO is
+     * undefined behaviour — generated code is expected to bind it (REF=)
+     * before first access. (Use REF_TO if you need explicit NULL checks.)
+     */
+    IEC_REFERENCE_TO() noexcept : ptr_(nullptr) {}
+
+    /**
+     * Constructor - initialize bound to a variable (REFERENCE TO X := target)
      */
     explicit IEC_REFERENCE_TO(IECVar<T>& var) noexcept : ptr_(&var) {}
-
-    // No default constructor - must be bound
-    IEC_REFERENCE_TO() = delete;
 
     // Copy/move - default is fine
     IEC_REFERENCE_TO(const IEC_REFERENCE_TO&) = default;

@@ -739,6 +739,71 @@ describeIfGpp('C++ Compilation Tests', () => {
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_comments');
     expect(cppResult.success).toBe(true);
   });
+
+  // ---------------------------------------------------------------------------
+  // References (REF_TO / REFERENCE TO)
+  // ---------------------------------------------------------------------------
+
+  it('compiles REF_TO: declare, := REF(), and ^ read/write', () => {
+    const source = `
+      PROGRAM Main
+        VAR
+          v1 : INT;
+          v2 : INT := 7;
+          rv : REF_TO INT;
+        END_VAR
+        rv := REF(v2);
+        rv^ := 12;
+        v1 := rv^;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('IEC_REF_TO<INT_t>');
+    expect(result.headerCode).toContain('#include "iec_pointer.hpp"');
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'ref_to_basic');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('compiles REFERENCE_TO: declare, REF= bind, implicit read/write', () => {
+    const source = `
+      PROGRAM Main
+        VAR
+          target : INT := 10;
+          other : INT := 99;
+          myref : REFERENCE_TO INT;
+          x : INT;
+        END_VAR
+        myref REF= target;
+        myref := 42;
+        x := myref;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('IEC_REFERENCE_TO<INT_t>');
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'reference_to_basic');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('compiles a FUNCTION_BLOCK with a REF_TO input rebound via REF= (link_reference)', () => {
+    // Regression: a REF_TO target lowers REF= to `= REF(src)` (IEC_REF_TO has
+    // no bind()), not `.bind()`. Previously emitted IEC_INT + .bind() -> error.
+    const source = `
+      FUNCTION_BLOCK link_reference
+        VAR_INPUT
+          ref_in : REF_TO INT;
+          var_in : INT;
+        END_VAR
+        ref_in REF= var_in;
+      END_FUNCTION_BLOCK
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('IEC_REF_TO<INT_t>');
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'fb_ref_to_input');
+    expect(cppResult.success).toBe(true);
+  });
 });
 
 /**
