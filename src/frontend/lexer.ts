@@ -336,9 +336,12 @@ export const NOT = createToken({ name: "NOT", pattern: /NOT/i });
 export const MOD = createToken({ name: "MOD", pattern: /MOD/i });
 
 // Reference types (IEC v3 and CODESYS compatibility)
+// IEC 61131-3 / CODESYS spell this as two words ("REFERENCE TO"); the
+// underscore form is also accepted for backward compatibility. The
+// whitespace between the words is consumed by this token, not skipped.
 export const REFERENCE_TO = createToken({
   name: "REFERENCE_TO",
-  pattern: /REFERENCE_TO/i,
+  pattern: /REFERENCE(?:_|\s+)TO/i,
 });
 export const REF_TO = createToken({ name: "REF_TO", pattern: /REF_TO/i });
 export const DREF = createToken({ name: "DREF", pattern: /DREF/i });
