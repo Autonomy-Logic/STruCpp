@@ -4175,6 +4175,16 @@ export class CodeGenerator {
       return `&(${args[0] ?? ""})`;
     }
 
+    // 0a. REF_LINK(x) → REF(x) — callable form of the REF() reference operator
+    // (REF is a reserved token and can't take the graphical EN/IN/ENO call
+    // form). Assigning the result to a REF_TO variable binds it.
+    if (nameUpper === "REF_LINK") {
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
+      return `REF(${args[0] ?? ""})`;
+    }
+
     // 0b. LOWER_BOUND/UPPER_BOUND(arr, dim) → arr.lower_bound() / arr.upper_bound()
     if (nameUpper === "LOWER_BOUND" || nameUpper === "UPPER_BOUND") {
       const method =
