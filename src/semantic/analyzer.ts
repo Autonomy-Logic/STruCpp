@@ -1592,12 +1592,13 @@ export class SemanticAnalyzer {
       }
     }
 
-    // Additional ADR constraint: argument must be an l-value
-    if (nameUpper === "ADR" && argCount > 0) {
+    // Additional ADR / REF_LINK constraint: argument must be an l-value
+    // (you can only take the address of / a reference to a variable).
+    if ((nameUpper === "ADR" || nameUpper === "REF_LINK") && argCount > 0) {
       const arg = userArgs[0]!.value;
       if (!this.isLValue(arg)) {
         this.addError(
-          "ADR() requires a variable reference, not an expression",
+          `${nameUpper}() requires a variable reference, not an expression`,
           expr.sourceSpan.startLine,
           expr.sourceSpan.startCol,
           expr.sourceSpan.file,

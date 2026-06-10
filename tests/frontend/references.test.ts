@@ -122,6 +122,25 @@ describe('Phase 2.4 - References and Pointers', () => {
       expect(decl?.type.referenceKind).toBe('reference_to');
       expect(decl?.type.name).toBe('MYSTRUCT');
     });
+
+    it('should parse the two-word "REFERENCE TO INT" spelling (IEC/CODESYS)', () => {
+      // IEC 61131-3 / CODESYS spell this as two words. This is the form
+      // OpenPLC Editor emits, so the lexer must accept the space variant
+      // in addition to the underscore form.
+      const source = `
+        PROGRAM Main
+          VAR
+            my_ref : REFERENCE TO INT;
+          END_VAR
+        END_PROGRAM
+      `;
+      const result = parse(source);
+      expect(result.errors).toHaveLength(0);
+      const decl = result.ast?.programs[0].varBlocks[0].declarations[0];
+      expect(decl?.type.isReference).toBe(true);
+      expect(decl?.type.referenceKind).toBe('reference_to');
+      expect(decl?.type.name).toBe('INT');
+    });
   });
 
   describe('Parser: Mixed REF_TO and non-reference variables', () => {
@@ -295,6 +314,39 @@ describe('Phase 2.4 - References and Pointers', () => {
       expect(func?.returnType.isReference).toBe(true);
       expect(func?.returnType.referenceKind).toBe('ref_to');
       expect(func?.returnType.name).toBe('INT');
+    });
+  });
+
+  describe('Semantic: REF= target validation', () => {
+    it('rejects REF= on a non-reference target', () => {
+      const source = `
+        PROGRAM Main
+          VAR
+            a : INT;
+            b : INT;
+          END_VAR
+          a REF= b;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(
+        result.errors.some((e) => /REF=.*reference|not a reference/i.test(e.message)),
+      ).toBe(true);
+    });
+
+    it('accepts REF= on a REFERENCE TO target', () => {
+      const source = `
+        PROGRAM Main
+          VAR
+            target : INT;
+            myref : REFERENCE_TO INT;
+          END_VAR
+          myref REF= target;
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
     });
   });
 });

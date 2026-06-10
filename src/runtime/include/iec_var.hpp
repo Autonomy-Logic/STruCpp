@@ -2,6 +2,33 @@
 // Copyright (C) 2025 Autonomy / OpenPLC Project
 // This file is part of the STruC++ Runtime Library and is covered by the
 // STruC++ Runtime Library Exception. See COPYING.RUNTIME for details.
+//
+// ============================================================================
+// WARNING: KEEP THIS HEADER C++14-CLEAN.
+// ----------------------------------------------------------------------------
+// strucpp targets C++17 and its EMITTED code is compiled as C++17 — but this
+// header is part of the C/C++ Function Block include chain, which is NOT.
+// OpenPLC Editor's Arduino flow emits `c_blocks_code.cpp`, including
+// `iec_var.hpp` + `iec_string.hpp` (which transitively pull in `iec_traits.hpp`
+// and `iec_types.hpp`). That translation unit is compiled under whatever
+// `-std=` the Arduino core picks, and every mbed-based core — Nano RP2040
+// Connect, Nano 33 BLE, Opta, GIGA, Portenta, Edge — hard-codes `-std=gnu++14`.
+// So any C++17/20 construct reachable from here breaks the user's C/C++ POU
+// build, even though the rest of strucpp is happily on C++17.
+//
+// In this header (and anything it includes) do NOT use C++17/20 features
+// unguarded. In particular:
+//   * `std::trait_v<T>`               -> `std::trait<T>::value`
+//   * `if constexpr`                  -> SFINAE / tag dispatch
+//   * inline variables / `inline constexpr`
+//   * `auto` non-type template params -> typed NTTPs
+//   * C++17/20 library headers (<optional>, <variant>, <string_view>,
+//     <concepts>, ...) -> include ONLY behind `#if __cplusplus >= ...`
+//     (see the guarded <concepts> block in iec_types.hpp for the pattern).
+//
+// Boundary introduced in commit be85d8a. If you change which headers
+// `c_blocks_code.cpp` pulls in, update this set of warnings accordingly.
+// ============================================================================
 /**
  * STruC++ Runtime - IEC Variable Wrapper
  *

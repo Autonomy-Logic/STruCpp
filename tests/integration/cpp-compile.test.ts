@@ -739,6 +739,97 @@ describeIfGpp('C++ Compilation Tests', () => {
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'external_comments');
     expect(cppResult.success).toBe(true);
   });
+
+  // ---------------------------------------------------------------------------
+  // References (REF_TO / REFERENCE TO)
+  // ---------------------------------------------------------------------------
+
+  it('compiles REF_TO: declare, := REF(), and ^ read/write', () => {
+    const source = `
+      PROGRAM Main
+        VAR
+          v1 : INT;
+          v2 : INT := 7;
+          rv : REF_TO INT;
+        END_VAR
+        rv := REF(v2);
+        rv^ := 12;
+        v1 := rv^;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('IEC_REF_TO<INT_t>');
+    expect(result.headerCode).toContain('#include "iec_pointer.hpp"');
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'ref_to_basic');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('compiles REFERENCE_TO: declare, REF= bind, implicit read/write', () => {
+    const source = `
+      PROGRAM Main
+        VAR
+          target : INT := 10;
+          other : INT := 99;
+          myref : REFERENCE_TO INT;
+          x : INT;
+        END_VAR
+        myref REF= target;
+        myref := 42;
+        x := myref;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('IEC_REFERENCE_TO<INT_t>');
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'reference_to_basic');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('compiles a FUNCTION_BLOCK with a REF_TO input rebound via REF= (link_reference)', () => {
+    // Regression: a REF_TO target lowers REF= to `= REF(src)` (IEC_REF_TO has
+    // no bind()), not `.bind()`. Previously emitted IEC_INT + .bind() -> error.
+    const source = `
+      FUNCTION_BLOCK link_reference
+        VAR_INPUT
+          ref_in : REF_TO INT;
+          var_in : INT;
+        END_VAR
+        ref_in REF= var_in;
+      END_FUNCTION_BLOCK
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('IEC_REF_TO<INT_t>');
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'fb_ref_to_input');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('compiles the REF_LINK block (assignment + graphical EN/IN/ENO call forms)', () => {
+    // REF_LINK is the callable form of the REF() operator (REF is a reserved
+    // token and cannot take the EN/IN/ENO block-call form). It lowers to
+    // REF(x); assigning to a REF_TO variable binds it.
+    const source = `
+      PROGRAM Main
+        VAR
+          another_var : INT := 43;
+          ref_a : REF_TO INT;
+          ref_b : REF_TO INT;
+          done_b : BOOL;
+          result : INT;
+        END_VAR
+        ref_a := REF_LINK(another_var);
+        ref_b := REF_LINK(EN := TRUE, IN := another_var, ENO => done_b);
+        ref_a^ := 100;
+        result := ref_b^;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain('REF(ANOTHER_VAR)');
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'ref_link_block');
+    expect(cppResult.success).toBe(true);
+  });
 });
 
 /**
