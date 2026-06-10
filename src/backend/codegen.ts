@@ -364,6 +364,11 @@ export class CodeGenerator {
   /** Map of variable name (upper case) → type name (original case) for current scope */
   protected currentScopeVarTypes: Map<string, string> = new Map();
 
+  /** Map of variable name (upper case) → referenceKind ("ref_to" | "reference_to"
+   *  | "pointer_to") for current scope. Only reference/pointer vars are present;
+   *  used e.g. to pick the correct lowering for a REF= rebind. */
+  protected currentScopeVarRefKinds: Map<string, string> = new Map();
+
   /** Parent class name of current FB (for SUPER resolution) */
   private currentFBExtends: string | undefined;
 
@@ -599,13 +604,17 @@ export class CodeGenerator {
       );
     }
 
-    if (typeRef.referenceKind === "pointer_to") {
-      // Use IEC_Ptr<T> for pointer types — handles cross-type assignment,
-      // pointer arithmetic, and pointer-to-integer conversion seamlessly.
-      // IEC_Ptr needs the raw element type (not IECVar-wrapped).
+    if (
+      typeRef.referenceKind === "pointer_to" ||
+      typeRef.referenceKind === "ref_to" ||
+      typeRef.referenceKind === "reference_to"
+    ) {
+      // Pointer (IEC_Ptr<T>) and reference (IEC_REF_TO<T> / IEC_REFERENCE_TO<T>)
+      // wrappers all take the raw element type (not IECVar-wrapped); they wrap
+      // an IECVar<T> internally.
       let elemType: string;
       if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-        // Array pointer: baseType is already raw (Array1D<...>)
+        // Array pointer/reference: baseType is already raw (Array1D<...>)
         elemType = baseType;
       } else if (this.isUserDefinedType(typeRef.name)) {
         // UDT: use raw struct/FB/program name
@@ -616,7 +625,19 @@ export class CodeGenerator {
         // Primitive type: use raw type mapping (BYTE_t, INT_t, etc.)
         elemType = this.typeCodeGen.mapTypeToCpp(typeRef.name);
       }
-      return `IEC_Ptr<${elemType}>`;
+      switch (typeRef.referenceKind) {
+        case "pointer_to":
+          // IEC_Ptr<T> — cross-type assignment, pointer arithmetic,
+          // pointer-to-integer conversion.
+          return `IEC_Ptr<${elemType}>`;
+        case "ref_to":
+          // REF_TO — explicit dereference (^), nullable, rebind via
+          // `:= REF(x)` / `:= ADR(x)`.
+          return `IEC_REF_TO<${elemType}>`;
+        case "reference_to":
+          // REFERENCE TO — implicit dereference, rebind via `REF=`.
+          return `IEC_REFERENCE_TO<${elemType}>`;
+      }
     }
     // For STRING(CONSTANT_NAME), emit template with the constant name
     if (typeof typeRef.maxLength === "string") {
@@ -1004,6 +1025,7 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_std_lib.hpp"');
     this.emitHeader('#include "iec_enum.hpp"');
     this.emitHeader('#include "iec_memory.hpp"');
+    this.emitHeader('#include "iec_pointer.hpp"');
     this.emitHeader('#include "iec_string.hpp"');
     this.emitHeader('#include "iec_wstring.hpp"');
     this.emitHeader("#include <array>");
@@ -2313,6 +2335,16 @@ export class CodeGenerator {
       // Initializer list
       const inits: string[] = [];
       for (const decl of prog.varDeclarations) {
+        // References (REF_TO / REFERENCE TO) wrap a pointer internally and
+        // must be default-constructed (unbound) — `name(0)` is ambiguous for
+        // IEC_REF_TO. They are bound later via REF= / := REF(). (An
+        // initialized `REFERENCE TO X := target` is a separate enhancement.)
+        if (
+          decl.referenceKind === "ref_to" ||
+          decl.referenceKind === "reference_to"
+        ) {
+          continue;
+        }
         const initVal = this.getDefaultValue(decl.typeName, decl.initialValue);
         // Skip user-defined types (empty initVal) - they use default constructors
         if (initVal) {
@@ -2336,6 +2368,16 @@ export class CodeGenerator {
       // Initializer list for local variables
       const inits: string[] = [];
       for (const decl of prog.varDeclarations) {
+        // References (REF_TO / REFERENCE TO) wrap a pointer internally and
+        // must be default-constructed (unbound) — `name(0)` is ambiguous for
+        // IEC_REF_TO. They are bound later via REF= / := REF(). (An
+        // initialized `REFERENCE TO X := target` is a separate enhancement.)
+        if (
+          decl.referenceKind === "ref_to" ||
+          decl.referenceKind === "reference_to"
+        ) {
+          continue;
+        }
         const initVal = this.getDefaultValue(decl.typeName, decl.initialValue);
         // Skip user-defined types (empty initVal) - they use default constructors
         if (initVal) {
@@ -2857,8 +2899,15 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate code for a REF= assignment (rebind REFERENCE_TO).
-   * ST: target REF= source;  →  C++: target.bind(source);
+   * Generate code for a REF= rebind. The lowering depends on the target's
+   * reference kind, because the two runtime wrappers expose different APIs:
+   *
+   *   REFERENCE TO (IEC_REFERENCE_TO)  →  target.bind(source);
+   *   REF_TO       (IEC_REF_TO)        →  target = REF(source);
+   *
+   * IEC_REF_TO has no bind() — it rebinds via assignment from REF()/ADR() —
+   * so emitting bind() unconditionally (the old behaviour) failed to compile
+   * for REF_TO targets.
    */
   private generateRefAssignStatement(
     stmt: RefAssignStatement,
@@ -2866,7 +2915,16 @@ export class CodeGenerator {
   ): void {
     const target = this.generateExpression(stmt.target);
     const source = this.generateExpression(stmt.source);
-    this.emit(`${indent}${target}.bind(${source});`);
+    const targetKind =
+      stmt.target.kind === "VariableExpression"
+        ? this.currentScopeVarRefKinds.get(stmt.target.name.toUpperCase())
+        : undefined;
+    if (targetKind === "ref_to") {
+      this.emit(`${indent}${target} = REF(${source});`);
+    } else {
+      // REFERENCE_TO (and the default) rebind via bind().
+      this.emit(`${indent}${target}.bind(${source});`);
+    }
   }
 
   /**
@@ -4117,6 +4175,16 @@ export class CodeGenerator {
       return `&(${args[0] ?? ""})`;
     }
 
+    // 0a. REF_LINK(x) → REF(x) — callable form of the REF() reference operator
+    // (REF is a reserved token and can't take the graphical EN/IN/ENO call
+    // form). Assigning the result to a REF_TO variable binds it.
+    if (nameUpper === "REF_LINK") {
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
+      return `REF(${args[0] ?? ""})`;
+    }
+
     // 0b. LOWER_BOUND/UPPER_BOUND(arr, dim) → arr.lower_bound() / arr.upper_bound()
     if (nameUpper === "LOWER_BOUND" || nameUpper === "UPPER_BOUND") {
       const method =
@@ -4608,6 +4676,7 @@ export class CodeGenerator {
     varBlocks: CompilationUnit["programs"][0]["varBlocks"],
   ): void {
     this.currentScopeVarTypes.clear();
+    this.currentScopeVarRefKinds.clear();
     this.memberMangledNames.clear();
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
@@ -4616,6 +4685,15 @@ export class CodeGenerator {
           : `IEC_${decl.type.name}`;
         for (const name of decl.names) {
           this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
+          if (
+            decl.type.referenceKind !== undefined &&
+            decl.type.referenceKind !== "none"
+          ) {
+            this.currentScopeVarRefKinds.set(
+              name.toUpperCase(),
+              decl.type.referenceKind,
+            );
+          }
           // Detect member name collisions with type name (GCC -Wchanges-meaning)
           if (
             this.isUserDefinedType(decl.type.name) &&

@@ -879,6 +879,24 @@ export class StdFunctionRegistry {
       category: "system",
     });
 
+    // REF_LINK(variable) -> reference to the variable (CODESYS REF() exposed
+    // as a callable block, since the bare REF() is a reserved operator token
+    // and cannot be invoked with the graphical EN/IN/ENO call form). Codegen
+    // lowers REF_LINK(x) to the runtime REF(x); wire its output to a REF_TO
+    // variable to bind it (myref := REF_LINK(target)). Replaces hand-written
+    // "link a reference" function blocks.
+    this.register({
+      name: "REF_LINK",
+      cppName: "REF",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "ANY",
+      params: [{ name: "IN", constraint: "ANY", isByRef: true }],
+      isVariadic: false,
+      isConversion: false,
+      category: "system",
+    });
+
     // SIZEOF(variable) -> UDINT (size in bytes)
     this.register({
       name: "SIZEOF",

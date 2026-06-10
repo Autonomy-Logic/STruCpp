@@ -768,6 +768,24 @@ export class TypeChecker {
       case "RefAssignStatement": {
         this.resolveExprType(stmt.target, scope);
         this.resolveExprType(stmt.source, scope);
+        // REF= rebinds a reference, so the target must be declared
+        // REF_TO / REFERENCE TO. Catch `plainVar REF= x` here with a clear
+        // message rather than letting it fall through to a confusing C++
+        // error (e.g. `IEC_INT` has no member `bind`).
+        if (stmt.target.kind === "VariableExpression") {
+          const sym = scope.lookup(stmt.target.name);
+          if (sym && sym.kind === "variable") {
+            const refKind = sym.declaration.type.referenceKind;
+            if (refKind !== "ref_to" && refKind !== "reference_to") {
+              this.addError(
+                `REF= requires a REF_TO or REFERENCE TO target; '${stmt.target.name}' is not a reference`,
+                stmt.target.sourceSpan.startLine,
+                stmt.target.sourceSpan.startCol,
+                stmt.target.sourceSpan.file,
+              );
+            }
+          }
+        }
         break;
       }
 
