@@ -200,6 +200,26 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
     }
   }
 
+  // Exported global variables (optional — archives compiled before globals
+  // were exported simply omit the field).
+  const globals: NonNullable<LibraryManifest["globals"]> = [];
+  if (Array.isArray(obj.globals)) {
+    for (let i = 0; i < obj.globals.length; i++) {
+      const g = obj.globals[i] as Record<string, unknown>;
+      if (typeof g.name !== "string" || g.name.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: globals[${i}].name must be a non-empty string`,
+        );
+      }
+      if (typeof g.type !== "string" || g.type.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: globals[${i}].type must be a non-empty string`,
+        );
+      }
+      globals.push(g as unknown as NonNullable<LibraryManifest["globals"]>[0]);
+    }
+  }
+
   const result: LibraryManifest = {
     name,
     version,
@@ -211,6 +231,9 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
     isBuiltin: Boolean(obj.isBuiltin),
   };
 
+  if (Array.isArray(obj.globals)) {
+    result.globals = globals;
+  }
   if (obj.description !== undefined) {
     result.description = String(obj.description);
   }
@@ -325,6 +348,45 @@ export function registerLibrarySymbols(
         outputs: fb.outputs.map((o) => makeVarSymbol(o, "output")),
         inouts: fb.inouts.map((io) => makeVarSymbol(io, "inout")),
         locals: [],
+      });
+    } catch (e) {
+      if (!(e instanceof DuplicateSymbolError)) throw e;
+    }
+  }
+
+  // Register exported global variables into the shared global scope. Because
+  // every imported library registers into the SAME globalScope (and duplicates
+  // are skipped, first-wins), a program importing several libraries can see all
+  // of their globals together at the same place — globals are additive.
+  for (const g of manifest.globals ?? []) {
+    const varType: ElementaryType = ELEMENTARY_TYPES[g.type.toUpperCase()] ?? {
+      typeKind: "elementary",
+      name: g.type,
+      sizeBits: 0,
+    };
+    try {
+      symbolTables.globalScope.define({
+        name: g.name,
+        kind: "variable",
+        type: varType,
+        declaration: {
+          kind: "VarDeclaration",
+          sourceSpan: createDefaultSourceSpan(),
+          names: [g.name],
+          type: {
+            kind: "TypeReference",
+            sourceSpan: createDefaultSourceSpan(),
+            name: g.type,
+            isReference: false,
+            referenceKind: "none",
+          },
+        },
+        isInput: false,
+        isOutput: false,
+        isInOut: false,
+        isExternal: false,
+        isGlobal: true,
+        isRetain: false,
       });
     } catch (e) {
       if (!(e instanceof DuplicateSymbolError)) throw e;

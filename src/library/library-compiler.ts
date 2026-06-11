@@ -333,6 +333,23 @@ export function compileLibrary(
           docByName,
         );
       }),
+      // Exported VAR_GLOBAL variables — their storage is emitted as inlineGlobal
+      // chunks; this list lets consumers' analyzers resolve the symbols. Every
+      // importing program merges all libraries' globals into one global scope.
+      globals: ast.globalVarBlocks.flatMap((block) =>
+        block.declarations.flatMap((decl) =>
+          decl.names.map((name) =>
+            tagCategory(
+              {
+                name,
+                type: decl.type.name,
+                ...(block.isConstant ? { constant: true } : {}),
+              },
+              catByName,
+            ),
+          ),
+        ),
+      ),
       headers: [headerFileName],
       isBuiltin: false,
       sourceFiles: sources.map((s) => s.fileName),
