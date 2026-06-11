@@ -206,6 +206,42 @@ export class TypeChecker {
   }
 
   /**
+   * Resolve a struct/FB/program field's declared type name, consulting the local
+   * compilation unit first and then the dependency libraries' symbol entries.
+   *
+   * The members of an FB whose type is defined in an imported `.stlib` (e.g.
+   * `rmp : _RMP_NEXT` where `_RMP_NEXT` lives in oscat-basic) are not in the local
+   * AST, so the AST-only `resolveFieldType` returns undefined for `rmp.DN`. That
+   * left the member access untyped, which only surfaced as a hard error when an
+   * overloaded bitwise std-function (e.g. `NOT`/`OR` from the IEC functions library)
+   * propagated the missing type as the generic `ANY_BIT` into a condition. Falling
+   * back to the FB symbol's registered inputs/outputs/inouts/locals fixes the root
+   * cause: `rmp.DN` now resolves to its real `BOOL` type.
+   */
+  private resolveFieldTypeAnywhere(
+    typeName: string,
+    fieldName: string,
+  ): string | undefined {
+    if (this.ast) {
+      const local = resolveFieldType(typeName, fieldName, this.ast);
+      if (local) return local;
+    }
+    const fb = this.symbolTables.lookupFunctionBlock(typeName);
+    if (fb) {
+      const fu = fieldName.toUpperCase();
+      for (const m of [
+        ...fb.inputs,
+        ...fb.outputs,
+        ...fb.inouts,
+        ...fb.locals,
+      ]) {
+        if (m.name.toUpperCase() === fu) return m.declaration?.type?.name;
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Infer the type of an expression.
    */
   inferType(expr: Expression, scope: Scope): IECType | undefined {
@@ -354,11 +390,10 @@ export class TypeChecker {
         if (!currentTypeName) break;
 
         if (step.kind === "field") {
-          // Resolve struct/FB field
-          const fieldType = resolveFieldType(
+          // Resolve struct/FB field (local AST + dependency-library FB members)
+          const fieldType = this.resolveFieldTypeAnywhere(
             currentTypeName,
             step.name,
-            this.ast,
           );
           if (fieldType) {
             currentTypeName = fieldType;
@@ -441,10 +476,9 @@ export class TypeChecker {
             currentType = ELEMENTARY_TYPES["BOOL"];
             currentTypeName = "BOOL";
           } else {
-            const fieldType = resolveFieldType(
+            const fieldType = this.resolveFieldTypeAnywhere(
               currentTypeName,
               field,
-              this.ast,
             );
             if (fieldType) {
               currentTypeName = fieldType;
