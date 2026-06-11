@@ -927,8 +927,15 @@ async function importLibMode(options: CLIOptions): Promise<void> {
   if (dependencies.length > 0) {
     stlibOpts.dependencies = dependencies;
   }
-  if (Object.keys(options.defines).length > 0) {
-    stlibOpts.globalConstants = options.defines;
+  // Forward the constants promoted from VAR_GLOBAL CONSTANT blocks (e.g. OSCAT's
+  // STRING_LENGTH) so the dropped GVL's values are still available as constexpr
+  // template parameters; explicit -D defines win over the imported values.
+  const mergedConstants = {
+    ...importResult.globalConstants,
+    ...options.defines,
+  };
+  if (Object.keys(mergedConstants).length > 0) {
+    stlibOpts.globalConstants = mergedConstants;
   }
   const result = compileStlib(importResult.sources, stlibOpts);
 

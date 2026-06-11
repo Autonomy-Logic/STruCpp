@@ -737,7 +737,7 @@ const INTEGER_ST_TYPES = new Set([
  * non-integer / non-numeric entries are present (the caller keeps the
  * GVL as a runtime variable in that case).
  */
-function extractConstantGlobals(
+export function extractConstantGlobals(
   declaration: string,
 ): Record<string, number> | null {
   const lines = declaration.split("\n");

@@ -335,6 +335,62 @@ describe("V2.3 integration: OSCAT Basic 335", () => {
 });
 
 // ============================================================
+// V2.3 length-prefixed extraction (regression: binary contamination)
+// ============================================================
+describe("V2.3 length-prefixed record extraction", () => {
+  /** True if the text contains NUL, a non-tab/CR/LF C0 control byte, or a run of 0xCD filler. */
+  const hasBinaryContamination = (text: string): boolean => {
+    let cdRun = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text.charCodeAt(i);
+      if (c === 0x00) return true;
+      if (c < 0x20 && c !== 0x09 && c !== 0x0a && c !== 0x0d) return true;
+      cdRun = c === 0xcd ? cdRun + 1 : 0;
+      if (cdRun >= 3) return true;
+    }
+    return false;
+  };
+
+  it("extracts every artefact without container framing (no NUL / 0xCD / control bytes)", async () => {
+    const result = await importCodesysLibrary(OSCAT_V23_PATH);
+    expect(result.success).toBe(true);
+    for (const src of result.sources) {
+      expect(
+        hasBinaryContamination(src.source),
+        `${src.fileName} contains binary container framing`,
+      ).toBe(false);
+    }
+  });
+
+  it("extracts each GVL as a clean, exactly-bounded record", () => {
+    const data = readFileSync(OSCAT_V23_PATH);
+    const { pous } = parseV23Library(data);
+    const gvls = pous.filter((p) => p.type === "GVL");
+    // The old regex-based extractor over-ran empty GVLs into padding and undercounted
+    // them; the length-prefixed reader bounds each record exactly.
+    expect(gvls.length).toBeGreaterThanOrEqual(4);
+    for (const gvl of gvls) {
+      expect(gvl.declaration.trimStart().startsWith("VAR_GLOBAL")).toBe(true);
+      expect(gvl.declaration.includes("END_VAR")).toBe(true);
+      expect(hasBinaryContamination(gvl.declaration)).toBe(false);
+    }
+  });
+
+  it("promotes VAR_GLOBAL CONSTANT integers to globalConstants and drops the GVL source", async () => {
+    const result = await importCodesysLibrary(OSCAT_V23_PATH);
+    // OSCAT's Constants block (STRING_LENGTH / LIST_LENGTH) becomes compile-time values…
+    expect(result.globalConstants.STRING_LENGTH).toBe(250);
+    expect(result.globalConstants.LIST_LENGTH).toBe(250);
+    // …and is not also emitted as a runtime GVL (which would double-define the symbols).
+    const constantGvl = result.sources.find(
+      (s) =>
+        s.source.includes("STRING_LENGTH") && s.fileName.endsWith(".gvl.st"),
+    );
+    expect(constantGvl).toBeUndefined();
+  });
+});
+
+// ============================================================
 // V3 Integration Tests (OSCAT binary fixtures in repo)
 // ============================================================
 describe("V3 integration: OSCAT Basic 335", () => {
