@@ -51,6 +51,41 @@ describe('STruC++ Compiler', () => {
       });
       expect(result).toBeDefined();
     });
+
+    it('should compile CODESYS-style chained assignment (a := b := expr)', () => {
+      // Used by OSCAT (e.g. BOILER: `flag_0 := boost_mode := FALSE;`). Desugars to a
+      // right-to-left cascade so every target receives the value: b := expr; a := b.
+      const result = compile(
+        'FUNCTION_BLOCK FB\n' +
+          'VAR a : BOOL; b : BOOL; c : INT; d : INT; END_VAR\n' +
+          'a := b := FALSE;\n' +
+          'c := d := 5;\n' +
+          'END_FUNCTION_BLOCK',
+      );
+      expect(result.errors).toHaveLength(0);
+      expect(result.success).toBe(true);
+      const body = result.cppCode.replace(/\s+/g, ' ');
+      // cascade: rightmost target gets the value first, then propagates left.
+      expect(body).toContain('B = false;');
+      expect(body).toContain('A = B;');
+      expect(body).toContain('D = 5;');
+      expect(body).toContain('C = D;');
+    });
+
+    it('should evaluate a chained-assignment RHS once into the rightmost target', () => {
+      // a := b := c := 7  →  c := 7; b := c; a := b  (three targets, one value)
+      const result = compile(
+        'FUNCTION_BLOCK FB\n' +
+          'VAR a : INT; b : INT; c : INT; END_VAR\n' +
+          'a := b := c := 7;\n' +
+          'END_FUNCTION_BLOCK',
+      );
+      expect(result.success).toBe(true);
+      const body = result.cppCode.replace(/\s+/g, ' ');
+      expect(body).toContain('C = 7;');
+      expect(body).toContain('B = C;');
+      expect(body).toContain('A = B;');
+    });
   });
 });
 
