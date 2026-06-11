@@ -130,4 +130,41 @@ describe("library global-variable export", () => {
     );
     expect(undeclared).toHaveLength(0);
   });
+
+  it("exports dependency struct fields so member access is typed", () => {
+    const oscat = loadStlibFromFile(resolve(LIBS_DIR, "oscat-basic.stlib"));
+    const cm = (oscat.manifest.types ?? []).find(
+      (t) => t.name === "CONSTANTS_MATH",
+    );
+    expect(cm?.fields?.find((f) => f.name === "PI")?.type).toBe("REAL");
+
+    // MATH.PI now resolves to REAL — using it where a REAL fits compiles, and
+    // using it as a boolean condition is correctly rejected (proving it's typed,
+    // not the old untyped/lenient fallback).
+    const ok = compileStlib(
+      [
+        {
+          fileName: "Ok.st",
+          source:
+            "FUNCTION_BLOCK Ok\nVAR x : REAL; END_VAR\nx := MATH.PI;\nEND_FUNCTION_BLOCK",
+        },
+      ],
+      { name: "ok", version: "1.0.0", namespace: "ok", dependencies: [oscat] },
+    );
+    expect(ok.errors).toHaveLength(0);
+
+    const bad = compileStlib(
+      [
+        {
+          fileName: "Bad.st",
+          source:
+            "FUNCTION_BLOCK Bad\nIF MATH.PI THEN ; END_IF;\nEND_FUNCTION_BLOCK",
+        },
+      ],
+      { name: "bad", version: "1.0.0", namespace: "bad", dependencies: [oscat] },
+    );
+    expect(
+      (bad.errors ?? []).some((e) => /got REAL/.test(e.message)),
+    ).toBe(true);
+  });
 });

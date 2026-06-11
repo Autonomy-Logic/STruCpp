@@ -16,6 +16,8 @@ import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
+  IECType,
+  StructType,
   TypeReference,
   VarDeclaration,
 } from "../frontend/ast.js";
@@ -196,6 +198,11 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: types[${i}].kind must be "struct", "enum", or "alias"`,
         );
       }
+      if (t.fields !== undefined && !Array.isArray(t.fields)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: types[${i}].fields must be an array`,
+        );
+      }
       types.push(t as unknown as LibraryManifest["types"][0]);
     }
   }
@@ -293,13 +300,32 @@ export function registerLibrarySymbols(
 
   // Register types
   for (const t of manifest.types) {
-    const resolvedType: ElementaryType = ELEMENTARY_TYPES[
-      t.name.toUpperCase()
-    ] ?? {
-      typeKind: "elementary",
-      name: t.name,
-      sizeBits: 0,
-    };
+    // For a struct with exported fields, register a real StructType carrying its
+    // member types, so member access on a dependency struct (e.g. `MATH.PI`)
+    // resolves to the field's type rather than staying untyped.
+    const resolvedType: IECType =
+      t.kind === "struct" && t.fields
+        ? ({
+            typeKind: "struct",
+            name: t.name,
+            fields: new Map<string, IECType>(
+              t.fields.map((f) => [
+                f.name,
+                ELEMENTARY_TYPES[f.type.toUpperCase()] ??
+                  ({
+                    typeKind: "elementary",
+                    name: f.type,
+                    sizeBits: 0,
+                  } as ElementaryType),
+              ]),
+            ),
+          } as StructType)
+        : (ELEMENTARY_TYPES[t.name.toUpperCase()] ??
+          ({
+            typeKind: "elementary",
+            name: t.name,
+            sizeBits: 0,
+          } as ElementaryType));
 
     try {
       symbolTables.globalScope.define({

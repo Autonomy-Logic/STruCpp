@@ -328,10 +328,19 @@ export function compileLibrary(
             : t.definition.kind === "EnumDefinition"
               ? "enum"
               : "alias";
-        return tagDocumentation(
-          tagCategory({ name: t.name, kind }, catByName),
-          docByName,
-        );
+        const entry: {
+          name: string;
+          kind: typeof kind;
+          fields?: Array<{ name: string; type: string }>;
+        } = { name: t.name, kind };
+        // Export struct member fields so consumers can type `x.field` access
+        // on a dependency struct.
+        if (t.definition.kind === "StructDefinition") {
+          entry.fields = t.definition.fields.flatMap((decl) =>
+            decl.names.map((name) => ({ name, type: decl.type.name })),
+          );
+        }
+        return tagDocumentation(tagCategory(entry, catByName), docByName);
       }),
       // Exported VAR_GLOBAL variables — their storage is emitted as inlineGlobal
       // chunks; this list lets consumers' analyzers resolve the symbols. Every

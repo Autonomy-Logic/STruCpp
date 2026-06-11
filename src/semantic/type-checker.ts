@@ -21,6 +21,7 @@ import type {
   IECType,
   ElementaryType,
   ReferenceType,
+  StructType,
   CompilationUnit,
   Statement,
   VarBlock,
@@ -238,7 +239,35 @@ export class TypeChecker {
         if (m.name.toUpperCase() === fu) return m.declaration?.type?.name;
       }
     }
+    // Dependency struct types: their member types are carried on the registered
+    // StructType (e.g. CONSTANTS_MATH.PI), so `MATH.PI` resolves to REAL.
+    const ty = this.symbolTables.lookupType(typeName);
+    if (ty?.resolvedType?.typeKind === "struct") {
+      const fu = fieldName.toUpperCase();
+      for (const [fname, ftype] of (ty.resolvedType as StructType).fields) {
+        if (fname.toUpperCase() === fu) {
+          return (ftype as { name?: string }).name;
+        }
+      }
+    }
     return undefined;
+  }
+
+  /**
+   * Resolve a type *name* to its IECType: an elementary type, else a registered
+   * type (struct/FB/enum from the local AST or a dependency library), else a
+   * minimal elementary placeholder. Using the registered type (rather than always
+   * wrapping the name in a placeholder elementary) keeps member/array-element
+   * access consistent with how a variable's declared type resolves — otherwise
+   * `event := prog[pos]` where both are a library struct would compare a real
+   * StructType against a placeholder elementary and be wrongly rejected.
+   */
+  private resolveNamedType(name: string): IECType {
+    return (
+      ELEMENTARY_TYPES[name.toUpperCase()] ??
+      this.symbolTables.lookupType(name)?.resolvedType ??
+      ({ typeKind: "elementary", name, sizeBits: 0 } as ElementaryType)
+    );
   }
 
   /**
@@ -397,13 +426,7 @@ export class TypeChecker {
           );
           if (fieldType) {
             currentTypeName = fieldType;
-            currentType =
-              ELEMENTARY_TYPES[fieldType.toUpperCase()] ??
-              ({
-                typeKind: "elementary",
-                name: fieldType,
-                sizeBits: 0,
-              } as ElementaryType);
+            currentType = this.resolveNamedType(fieldType);
           } else {
             // Check if it's a numeric bit access (e.g., var.0)
             if (/^\d+$/.test(step.name)) {
@@ -419,13 +442,7 @@ export class TypeChecker {
           const elemType = resolveArrayElementType(currentTypeName, this.ast);
           if (elemType) {
             currentTypeName = elemType;
-            currentType =
-              ELEMENTARY_TYPES[elemType.toUpperCase()] ??
-              ({
-                typeKind: "elementary",
-                name: elemType,
-                sizeBits: 0,
-              } as ElementaryType);
+            currentType = this.resolveNamedType(elemType);
           } else {
             currentType = undefined;
             currentTypeName = undefined;
@@ -456,13 +473,7 @@ export class TypeChecker {
         const elemType = resolveArrayElementType(currentTypeName, this.ast);
         if (elemType) {
           currentTypeName = elemType;
-          currentType =
-            ELEMENTARY_TYPES[elemType.toUpperCase()] ??
-            ({
-              typeKind: "elementary",
-              name: elemType,
-              sizeBits: 0,
-            } as ElementaryType);
+          currentType = this.resolveNamedType(elemType);
         }
       }
 
@@ -482,13 +493,7 @@ export class TypeChecker {
             );
             if (fieldType) {
               currentTypeName = fieldType;
-              currentType =
-                ELEMENTARY_TYPES[fieldType.toUpperCase()] ??
-                ({
-                  typeKind: "elementary",
-                  name: fieldType,
-                  sizeBits: 0,
-                } as ElementaryType);
+              currentType = this.resolveNamedType(fieldType);
             } else {
               currentType = undefined;
               currentTypeName = undefined;
