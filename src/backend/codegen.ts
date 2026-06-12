@@ -2363,8 +2363,16 @@ export class CodeGenerator {
         this.emitHeader("    }");
         this.emitHeader("    void sync_out() override {");
         for (const ext of prog.varExternal) {
+          // Dirty-diff over the whole object via its address + sizeof, NOT
+          // .raw_ptr(): raw_ptr() exists only on scalar IECVar<T>, so arrays
+          // (Array1D) and structs would fail to compile. Comparing
+          // &x..&x+sizeof(x) is correct for every VAR_EXTERNAL kind because
+          // x__prev is a full-value copy of x, so equal values compare byte-
+          // equal and any changed byte (the whole array/struct included) is
+          // detected. sizeof(*raw_ptr()) was also wrong for arrays (element
+          // size, not array size).
           this.emitHeader(
-            `        if (__builtin_memcmp(${ext.name}.raw_ptr(), ${ext.name}__prev.raw_ptr(), sizeof(*${ext.name}.raw_ptr())) != 0) *${ext.name}__canon = ${ext.name};`,
+            `        if (__builtin_memcmp(&${ext.name}, &${ext.name}__prev, sizeof(${ext.name})) != 0) *${ext.name}__canon = ${ext.name};`,
           );
         }
         this.emitHeader("    }");
