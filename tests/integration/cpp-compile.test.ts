@@ -830,6 +830,83 @@ describeIfGpp('C++ Compilation Tests', () => {
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'ref_link_block');
     expect(cppResult.success).toBe(true);
   });
+
+  // Regression: codegen/runtime gaps surfaced compiling the full OSCAT building
+  // library all the way to a binary.
+
+  it('compiles STRING_TO_TIME / TOD / DATE / DT (string-parse conversions)', () => {
+    // OSCAT's TIMER_EVENT_DECODE parses time/tod literals out of a string; the
+    // runtime previously only had numeric TO_TIME (static_cast<long long>(string)
+    // failed to compile).
+    const source = `
+      FUNCTION_BLOCK ParseFB
+        VAR
+          dur : STRING;
+          t : TIME; tod : TOD; d : DATE; dt : DT;
+        END_VAR
+        t := STRING_TO_TIME(dur);
+        tod := STRING_TO_TOD(dur);
+        d := STRING_TO_DATE(dur);
+        dt := STRING_TO_DT(dur);
+      END_FUNCTION_BLOCK
+    `;
+    const result = compile(source);
+    expect(result.errors).toHaveLength(0);
+    const cpp = compileWithGpp(result.headerCode, result.cppCode, 'string_to_time');
+    expect(cpp.success, cpp.error).toBe(true);
+  });
+
+  it('compiles a 2D array with an aggregate initializer', () => {
+    // OSCAT's WATER_CP/WATER_ENTHALPY use `ARRAY[1..3,0..1] OF REAL := [..]`;
+    // IEC_ARRAY_2D needed a flat (row-major) initializer-list constructor.
+    const source = `
+      FUNCTION Lookup : REAL
+        VAR
+          DATA : ARRAY[1..3,0..1] OF REAL := [0.0, 4.2, 10.0, 4.19, 20.0, 4.18];
+        END_VAR
+        Lookup := DATA[2,1];
+      END_FUNCTION
+    `;
+    const result = compile(source);
+    expect(result.errors).toHaveLength(0);
+    const cpp = compileWithGpp(result.headerCode, result.cppCode, 'array2d_init');
+    expect(cpp.success, cpp.error).toBe(true);
+  });
+
+  it('compiles an FB member whose type is shadowed by a sibling member', () => {
+    // OSCAT's F_LAMP has both `ONTIME : UDINT` and `RUNTIME : ONTIME` (an FB);
+    // the data member ONTIME hides the type, so the declaration needs an
+    // elaborated `class` specifier.
+    const source = `
+      FUNCTION_BLOCK ONTIME
+        VAR_OUTPUT done : BOOL; END_VAR
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK Uses
+        VAR
+          ONTIME : UDINT;
+          RUNTIME : ONTIME;
+        END_VAR
+      END_FUNCTION_BLOCK
+    `;
+    const result = compile(source);
+    expect(result.errors).toHaveLength(0);
+    const cpp = compileWithGpp(result.headerCode, result.cppCode, 'member_shadows_type');
+    expect(cpp.success, cpp.error).toBe(true);
+  });
+
+  it('compiles an ST identifier that collides with a C stdlib macro', () => {
+    // OSCAT's T_AVG24 declares `TMP_MAX`, which <cstdio> #defines.
+    const source = `
+      FUNCTION_BLOCK MacroName
+        VAR TMP_MAX : INT; END_VAR
+        TMP_MAX := 5;
+      END_FUNCTION_BLOCK
+    `;
+    const result = compile(source);
+    expect(result.errors).toHaveLength(0);
+    const cpp = compileWithGpp(result.headerCode, result.cppCode, 'macro_collision');
+    expect(cpp.success, cpp.error).toBe(true);
+  });
 });
 
 /**

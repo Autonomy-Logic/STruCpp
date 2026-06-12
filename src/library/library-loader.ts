@@ -16,6 +16,8 @@ import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
+  IECType,
+  StructType,
   TypeReference,
   VarDeclaration,
 } from "../frontend/ast.js";
@@ -196,7 +198,32 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: types[${i}].kind must be "struct", "enum", or "alias"`,
         );
       }
+      if (t.fields !== undefined && !Array.isArray(t.fields)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: types[${i}].fields must be an array`,
+        );
+      }
       types.push(t as unknown as LibraryManifest["types"][0]);
+    }
+  }
+
+  // Exported global variables (optional — archives compiled before globals
+  // were exported simply omit the field).
+  const globals: NonNullable<LibraryManifest["globals"]> = [];
+  if (Array.isArray(obj.globals)) {
+    for (let i = 0; i < obj.globals.length; i++) {
+      const g = obj.globals[i] as Record<string, unknown>;
+      if (typeof g.name !== "string" || g.name.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: globals[${i}].name must be a non-empty string`,
+        );
+      }
+      if (typeof g.type !== "string" || g.type.length === 0) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: globals[${i}].type must be a non-empty string`,
+        );
+      }
+      globals.push(g as unknown as NonNullable<LibraryManifest["globals"]>[0]);
     }
   }
 
@@ -211,6 +238,9 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
     isBuiltin: Boolean(obj.isBuiltin),
   };
 
+  if (Array.isArray(obj.globals)) {
+    result.globals = globals;
+  }
   if (obj.description !== undefined) {
     result.description = String(obj.description);
   }
@@ -270,13 +300,32 @@ export function registerLibrarySymbols(
 
   // Register types
   for (const t of manifest.types) {
-    const resolvedType: ElementaryType = ELEMENTARY_TYPES[
-      t.name.toUpperCase()
-    ] ?? {
-      typeKind: "elementary",
-      name: t.name,
-      sizeBits: 0,
-    };
+    // For a struct with exported fields, register a real StructType carrying its
+    // member types, so member access on a dependency struct (e.g. `MATH.PI`)
+    // resolves to the field's type rather than staying untyped.
+    const resolvedType: IECType =
+      t.kind === "struct" && t.fields
+        ? ({
+            typeKind: "struct",
+            name: t.name,
+            fields: new Map<string, IECType>(
+              t.fields.map((f) => [
+                f.name,
+                ELEMENTARY_TYPES[f.type.toUpperCase()] ??
+                  ({
+                    typeKind: "elementary",
+                    name: f.type,
+                    sizeBits: 0,
+                  } as ElementaryType),
+              ]),
+            ),
+          } as StructType)
+        : (ELEMENTARY_TYPES[t.name.toUpperCase()] ??
+          ({
+            typeKind: "elementary",
+            name: t.name,
+            sizeBits: 0,
+          } as ElementaryType));
 
     try {
       symbolTables.globalScope.define({
@@ -325,6 +374,45 @@ export function registerLibrarySymbols(
         outputs: fb.outputs.map((o) => makeVarSymbol(o, "output")),
         inouts: fb.inouts.map((io) => makeVarSymbol(io, "inout")),
         locals: [],
+      });
+    } catch (e) {
+      if (!(e instanceof DuplicateSymbolError)) throw e;
+    }
+  }
+
+  // Register exported global variables into the shared global scope. Because
+  // every imported library registers into the SAME globalScope (and duplicates
+  // are skipped, first-wins), a program importing several libraries can see all
+  // of their globals together at the same place — globals are additive.
+  for (const g of manifest.globals ?? []) {
+    const varType: ElementaryType = ELEMENTARY_TYPES[g.type.toUpperCase()] ?? {
+      typeKind: "elementary",
+      name: g.type,
+      sizeBits: 0,
+    };
+    try {
+      symbolTables.globalScope.define({
+        name: g.name,
+        kind: "variable",
+        type: varType,
+        declaration: {
+          kind: "VarDeclaration",
+          sourceSpan: createDefaultSourceSpan(),
+          names: [g.name],
+          type: {
+            kind: "TypeReference",
+            sourceSpan: createDefaultSourceSpan(),
+            name: g.type,
+            isReference: false,
+            referenceKind: "none",
+          },
+        },
+        isInput: false,
+        isOutput: false,
+        isInOut: false,
+        isExternal: false,
+        isGlobal: true,
+        isRetain: false,
       });
     } catch (e) {
       if (!(e instanceof DuplicateSymbolError)) throw e;

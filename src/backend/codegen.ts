@@ -1032,6 +1032,29 @@ export class CodeGenerator {
     this.emitHeader("#include <cstddef>");
     this.emitHeader("#include <string>");
 
+    // Undefine C standard-library macros that collide with legal ST identifiers
+    // (e.g. OSCAT's T_AVG24 has a local `TMP_MAX`, which <cstdio> #defines).
+    // Done after the runtime includes so the runtime still sees the real macros;
+    // user code below only ever uses these names as ordinary identifiers.
+    this.emitHeader("");
+    this.emitHeader(
+      "// Avoid clashes between ST identifiers and C stdlib macros",
+    );
+    for (const m of [
+      "TMP_MAX",
+      "EOF",
+      "BUFSIZ",
+      "FOPEN_MAX",
+      "FILENAME_MAX",
+      "RAND_MAX",
+      "EXIT_SUCCESS",
+      "EXIT_FAILURE",
+    ]) {
+      this.emitHeader(`#ifdef ${m}`);
+      this.emitHeader(`#undef ${m}`);
+      this.emitHeader(`#endif`);
+    }
+
     // Include library headers
     if (this.options.libraryHeaders.length > 0) {
       this.emitHeader("");
@@ -1384,6 +1407,18 @@ export class CodeGenerator {
     this.emitHeader("public:");
     this.recordHeaderLineMapping(fb.sourceSpan.startLine, classLine);
 
+    // Member names in this FB — used to detect a member that shadows the type
+    // of a sibling member (e.g. F_LAMP has both `ONTIME : UDINT` and
+    // `RUNTIME : ONTIME`, where the FB type ONTIME also exists). C++ member
+    // lookup would resolve the bare type name to the data member, so such a
+    // member declaration needs an elaborated `class`/`struct` specifier.
+    const fbMemberNames = new Set<string>();
+    for (const block of fb.varBlocks) {
+      for (const decl of block.declarations) {
+        for (const n of decl.names) fbMemberNames.add(n.toUpperCase());
+      }
+    }
+
     // Generate member variables
     for (const block of fb.varBlocks) {
       const comment =
@@ -1398,6 +1433,7 @@ export class CodeGenerator {
       this.emitHeader(`    ${comment}`);
       for (const decl of block.declarations) {
         const cppType = this.mapTypeRefToCpp(decl.type);
+        const tag = this.elaboratedTagIfShadowed(decl.type.name, fbMemberNames);
         for (const name of decl.names) {
           const memberName = this.mangleMemberIfNeeded(
             name,
@@ -1406,7 +1442,7 @@ export class CodeGenerator {
           );
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
-          this.emitHeader(`    ${cppType} ${memberName};`);
+          this.emitHeader(`    ${tag}${cppType} ${memberName};`);
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
       }
@@ -4502,6 +4538,23 @@ export class CodeGenerator {
    */
   private isFBType(typeName: string): boolean {
     return this.knownFBTypes.has(typeName.toUpperCase());
+  }
+
+  /**
+   * When `typeName` (a member's declared type) is also the name of a sibling
+   * member in the same scope, return the C++ elaborated-type-specifier keyword
+   * (`class `/`struct `) needed so the bare type name isn't resolved to the data
+   * member. Returns "" when there's no shadowing or the type isn't a composite.
+   */
+  private elaboratedTagIfShadowed(
+    typeName: string,
+    memberNames: Set<string>,
+  ): string {
+    const u = typeName.toUpperCase();
+    if (!memberNames.has(u)) return "";
+    if (this.knownFBTypes.has(u)) return "class ";
+    if (this.knownStructTypes.has(u)) return "struct ";
+    return "";
   }
 
   /**

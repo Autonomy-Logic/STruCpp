@@ -244,6 +244,34 @@ describe('STLexer', () => {
       }
     });
 
+    it('should tokenize date literals with zero-padded and single-digit fields', () => {
+      // IEC 61131-3 / CODESYS allow 1- or 2-digit month/day (OSCAT uses D#1970-9-1).
+      for (const lit of ['D#2024-01-15', 'D#1970-9-1', 'D#2011-02-3', 'DATE#2000-12-9']) {
+        const result = tokenize(lit);
+        expect(result.errors, lit).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('DateLiteral');
+      }
+    });
+
+    it('should tokenize date-and-time literals with single-digit fields', () => {
+      for (const lit of ['DT#2024-01-15-12:30:00', 'DT#1970-1-1-00:00:00', 'DT#1970-1-1-0:0']) {
+        const result = tokenize(lit);
+        expect(result.errors, lit).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('DateTimeLiteral');
+      }
+    });
+
+    it('should tokenize time-of-day literals with single-digit fields', () => {
+      for (const lit of ['TOD#12:30:00', 'TOD#1:2:3', 'TIME_OF_DAY#9:5']) {
+        const result = tokenize(lit);
+        expect(result.errors, lit).toHaveLength(0);
+        expect(result.tokens).toHaveLength(1);
+        expect(result.tokens[0]?.tokenType.name).toBe('TimeOfDayLiteral');
+      }
+    });
+
     it('should tokenize compound time literals', () => {
       const result = tokenize('T#1h2m3s');
       expect(result.errors).toHaveLength(0);
