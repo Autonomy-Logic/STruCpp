@@ -440,7 +440,7 @@ export class ASTBuilder {
       const stmtListChildren = stmtListNode.children as CstChildren;
       for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
         const stmt = this.buildStatement(stmtNode);
-        if (stmt) body.push(stmt);
+        if (stmt) body.push(...(Array.isArray(stmt) ? stmt : [stmt]));
       }
     }
 
@@ -495,7 +495,7 @@ export class ASTBuilder {
       const stmtListChildren = stmtListNode.children as CstChildren;
       for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
         const stmt = this.buildStatement(stmtNode);
-        if (stmt) body.push(stmt);
+        if (stmt) body.push(...(Array.isArray(stmt) ? stmt : [stmt]));
       }
     }
 
@@ -571,7 +571,7 @@ export class ASTBuilder {
       const stmtListChildren = stmtListNode.children as CstChildren;
       for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
         const stmt = this.buildStatement(stmtNode);
-        if (stmt) body.push(stmt);
+        if (stmt) body.push(...(Array.isArray(stmt) ? stmt : [stmt]));
       }
     }
 
@@ -696,7 +696,7 @@ export class ASTBuilder {
       const stmtListChildren = stmtListNode.children as CstChildren;
       for (const stmtNode of getAllNodes(stmtListChildren.statement)) {
         const stmt = this.buildStatement(stmtNode);
-        if (stmt) body.push(stmt);
+        if (stmt) body.push(...(Array.isArray(stmt) ? stmt : [stmt]));
       }
     }
 
@@ -1511,7 +1511,7 @@ export class ASTBuilder {
   /**
    * Build a Statement from a CST node.
    */
-  buildStatement(node: CstNode): Statement | undefined {
+  buildStatement(node: CstNode): Statement | Statement[] | undefined {
     const children = node.children as CstChildren;
 
     // Check for different statement types
@@ -1521,9 +1521,12 @@ export class ASTBuilder {
       );
     }
     if (children.assignmentStatement) {
-      return this.buildAssignmentStatement(
+      // A chained assignment desugars into multiple statements; a plain one
+      // returns a single node so existing single-statement callers still work.
+      const stmts = this.buildAssignmentStatement(
         getFirstNode(children.assignmentStatement)!,
       );
+      return stmts.length === 1 ? stmts[0] : stmts;
     }
     if (children.ifStatement) {
       return this.buildIfStatement(getFirstNode(children.ifStatement)!);
@@ -1604,23 +1607,53 @@ export class ASTBuilder {
   /**
    * Build an AssignmentStatement from a CST node.
    */
-  buildAssignmentStatement(node: CstNode): AssignmentStatement {
+  buildAssignmentStatement(node: CstNode): AssignmentStatement[] {
     const children = node.children as CstChildren;
-    const variableNode = getFirstNode(children.variable);
     const exprNode = getFirstNode(children.expression);
+    const value =
+      (exprNode ? this.buildExpression(exprNode) : undefined) ??
+      this.createDummyLiteral(node);
 
-    const target = variableNode
-      ? this.buildVariableExpression(variableNode)
-      : this.createDummyVariable(node);
-    const valueExpr = exprNode ? this.buildExpression(exprNode) : undefined;
-    const value = valueExpr ?? this.createDummyLiteral(node);
+    // Targets in source order: the leading `variable`, then each chained
+    // `assignTargetTail`'s `variable` (CODESYS `a := b := expr;`).
+    const firstVar = getFirstNode(children.variable);
+    const targetNodes: (CstNode | undefined)[] = [firstVar];
+    for (const tail of getAllNodes(children.assignTargetTail)) {
+      targetNodes.push(getFirstNode((tail.children as CstChildren).variable));
+    }
+    const buildTarget = (n: CstNode | undefined): Expression =>
+      (n ? this.buildVariableExpression(n) : undefined) ??
+      this.createDummyVariable(node);
 
-    return {
-      kind: "AssignmentStatement",
-      sourceSpan: nodeToSourceSpan(node),
-      target,
-      value,
-    };
+    // Single (non-chained) assignment — the common case.
+    if (targetNodes.length === 1) {
+      return [
+        {
+          kind: "AssignmentStatement",
+          sourceSpan: nodeToSourceSpan(node),
+          target: buildTarget(targetNodes[0]),
+          value,
+        },
+      ];
+    }
+
+    // Desugar `t0 := t1 := … := tn := expr;` into sequential assignments,
+    // evaluated right-to-left so every target ends up holding `expr`'s value:
+    //   tn := expr;  t(n-1) := tn;  …  t0 := t1;
+    // (each later target is read fresh as the RHS of the next-left assignment).
+    const out: AssignmentStatement[] = [];
+    for (let i = targetNodes.length - 1; i >= 0; i--) {
+      out.push({
+        kind: "AssignmentStatement",
+        sourceSpan: nodeToSourceSpan(node),
+        target: buildTarget(targetNodes[i]),
+        value:
+          i === targetNodes.length - 1
+            ? value
+            : buildTarget(targetNodes[i + 1]),
+      });
+    }
+    return out;
   }
 
   /**
@@ -3338,7 +3371,7 @@ export class ASTBuilder {
       const listChildren = listNode.children as CstChildren;
       for (const stmtNode of getAllNodes(listChildren.statement)) {
         const stmt = this.buildStatement(stmtNode);
-        if (stmt) stmts.push(stmt);
+        if (stmt) stmts.push(...(Array.isArray(stmt) ? stmt : [stmt]));
       }
     }
     return stmts;
@@ -3461,7 +3494,9 @@ export class ASTBuilder {
     const stmtNode = getFirstNode(children.statement);
     if (stmtNode) {
       const stmt = this.buildStatement(stmtNode);
-      if (stmt) return stmt;
+      // A test statement is a single assertion/action — if a chained assignment
+      // ever desugars to several, the effective (last) one is what it asserts.
+      if (stmt) return Array.isArray(stmt) ? stmt[stmt.length - 1]! : stmt;
     }
     throw new Error("Empty test statement");
   }

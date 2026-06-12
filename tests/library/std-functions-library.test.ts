@@ -12,6 +12,7 @@
 
 import { describe, it, expect } from "vitest";
 import { resolve } from "path";
+import { compileStlib } from "../../src/index.js";
 import { loadStlibFromFile } from "../../src/node/library-loader.js";
 import { StdFunctionRegistry } from "../../src/semantic/std-function-registry.js";
 
@@ -142,5 +143,52 @@ describe("iec-std-functions.stlib synthesis", () => {
     const names = fns.map((f) => f.name);
     const sorted = [...names].sort((a, b) => a.localeCompare(b));
     expect(names).toEqual(sorted);
+  });
+});
+
+describe("std-functions + cross-library FB member type resolution", () => {
+  // Regression: an FB whose type is defined in a *dependency* library has its
+  // members resolved from the symbol table, not the local AST. Previously a
+  // member access like `gen.q1` resolved to `undefined`; that was harmless until
+  // the overloaded bitwise std-functions (AND/OR/NOT, declared returning the
+  // generic ANY_BIT) propagated the missing type as ANY_BIT into a condition,
+  // failing with "Condition must be ... got ANY_BIT". This reproduced OSCAT
+  // building's BLIND_CONTROL_S (`IF NOT (rmp.DN OR rmp.UP)` where rmp:_RMP_NEXT).
+  it("resolves a dependency FB's BOOL outputs in NOT/OR conditions", () => {
+    // A tiny library providing an FB with BOOL outputs.
+    const genLib = compileStlib(
+      [
+        {
+          fileName: "GEN.st",
+          source:
+            "FUNCTION_BLOCK GEN\nVAR_OUTPUT q1 : BOOL; q2 : BOOL; END_VAR\nEND_FUNCTION_BLOCK",
+        },
+      ],
+      { name: "gen-lib", version: "1.0.0", namespace: "gen" },
+    );
+    expect(genLib.success).toBe(true);
+
+    // The IEC std-functions library is what makes NOT/OR overloaded ANY_BIT
+    // functions — both dependencies must be present to trigger the original bug.
+    const consumer = compileStlib(
+      [
+        {
+          fileName: "USER.st",
+          source:
+            "FUNCTION_BLOCK USER\nVAR g : GEN; END_VAR\ng();\nIF NOT (g.q1 OR g.q2) THEN ; END_IF;\nEND_FUNCTION_BLOCK",
+        },
+      ],
+      {
+        name: "user",
+        version: "1.0.0",
+        namespace: "user",
+        dependencies: [archive, genLib.archive!],
+      },
+    );
+    const anyBit = (consumer.errors ?? []).filter((e) =>
+      /ANY_BIT/.test(e.message),
+    );
+    expect(anyBit).toHaveLength(0);
+    expect(consumer.success).toBe(true);
   });
 });

@@ -20,7 +20,7 @@ import type {
   ExtractedPOU,
 } from "./types.js";
 import { pouToSources } from "./pou-formatter.js";
-import { parseV3Library } from "./v3-parser.js";
+import { extractConstantGlobals, parseV3Library } from "./v3-parser.js";
 
 /** ZIP local file header magic (PK\x03\x04). */
 const ZIP_MAGIC = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
@@ -100,14 +100,31 @@ function importV23(data: Uint8Array): CodesysImportResult {
     };
   }
 
-  const sources = pouToSources(pous);
-  const counts = countByType(pous);
+  // Promote VAR_GLOBAL CONSTANT integer blocks to compile-time constants and drop the
+  // GVL from the runtime sources — mirroring the V3 path. OSCAT's STRING_LENGTH /
+  // LIST_LENGTH need to be constexpr (they parameterise IECStringVar<…>), and emitting
+  // them as a runtime GVL as well collides with the compiler's global scope.
+  const globalConstants: Record<string, number> = {};
+  const kept: typeof pous = [];
+  for (const pou of pous) {
+    if (pou.type === "GVL") {
+      const constants = extractConstantGlobals(pou.declaration);
+      if (constants) {
+        Object.assign(globalConstants, constants);
+        continue;
+      }
+    }
+    kept.push(pou);
+  }
+
+  const sources = pouToSources(kept);
+  const counts = countByType(kept);
 
   return {
     success: true,
     sources,
-    globalConstants: {},
-    metadata: { format: "v23", pouCount: pous.length, counts },
+    globalConstants,
+    metadata: { format: "v23", pouCount: kept.length, counts },
     warnings,
     errors: [],
   };

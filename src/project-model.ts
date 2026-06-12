@@ -255,7 +255,7 @@ export interface ProjectModelResult {
  */
 export function parseDateLiteralToDays(literal: string): bigint {
   const stripped = literal.replace(/^(D|DATE)#/i, "");
-  const m = stripped.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const m = stripped.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (!m) return 0n;
   const MS_PER_DAY = 86_400_000n;
   const ms = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
@@ -298,7 +298,7 @@ export function parseTodLiteralToNs(literal: string): bigint {
 export function parseDtLiteralToNs(literal: string): bigint {
   const stripped = literal.replace(/^(DT|DATE_AND_TIME)#/i, "");
   const m = stripped.match(
-    /^(\d{4})-(\d{2})-(\d{2})-(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?$/,
+    /^(\d{4})-(\d{1,2})-(\d{1,2})-(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?$/,
   );
   if (!m) return 0n;
   const y = m[1] ?? "0";

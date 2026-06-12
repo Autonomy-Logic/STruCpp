@@ -102,11 +102,36 @@ export interface LibraryTypeEntry {
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
   baseType?: string;
+  /** Struct member fields (name + declared type), so a consuming compilation
+   *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
+   *  for `kind: "struct"`; optional for backward compatibility. */
+  fields?: Array<{ name: string; type: string }>;
   /** Type-level help text — same lifecycle as `LibraryFBEntry.documentation`,
    *  populated automatically from the structured doc-block slot in CODESYS
    *  imports (typically the type's revision-history comment for OSCAT) and
    *  overridable via `library.json`. */
   documentation?: string;
+  /** Folder path within the library — see `LibraryFunctionEntry.category`. */
+  category?: string;
+}
+
+/**
+ * Library global-variable entry in a manifest.
+ *
+ * One per name declared in a library's `VAR_GLOBAL` blocks (e.g. OSCAT's
+ * `MATH : CONSTANTS_MATH`). The variable's storage is emitted by the library
+ * as an `inlineGlobal` chunk; this entry is what lets a *consuming* compilation
+ * see the symbol so `MATH.PI` resolves. Globals from every imported library are
+ * registered into the same shared global scope, so a program importing two
+ * libraries sees both libraries' globals together (additively).
+ */
+export interface LibraryGlobalEntry {
+  /** Global variable name (as declared). */
+  name: string;
+  /** Declared type name (elementary or a library type, e.g. CONSTANTS_MATH). */
+  type: string;
+  /** True for `VAR_GLOBAL CONSTANT` entries. */
+  constant?: boolean;
   /** Folder path within the library — see `LibraryFunctionEntry.category`. */
   category?: string;
 }
@@ -135,6 +160,10 @@ export interface LibraryManifest {
   functionBlocks: LibraryFBEntry[];
   /** Exported types */
   types: LibraryTypeEntry[];
+  /** Exported global variables (from the library's VAR_GLOBAL blocks).
+   *  Optional for backward compatibility with archives compiled before
+   *  globals were exported — consumers treat a missing field as empty. */
+  globals?: LibraryGlobalEntry[];
   /** C++ headers to include */
   headers: string[];
   /** Whether this is a built-in C++ runtime library */

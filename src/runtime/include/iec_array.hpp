@@ -144,7 +144,20 @@ private:
     
 public:
     IEC_ARRAY_2D() noexcept : data_{} {}
-    
+
+    // Flat (row-major) initializer-list constructor — mirrors IEC_ARRAY_1D.
+    // ST aggregate inits for a 2D array (e.g. `ARRAY[1..20,0..1] OF REAL := [..]`)
+    // codegen to a flat brace list; fill row-major, ignoring any overflow.
+    template<typename U>
+    IEC_ARRAY_2D(std::initializer_list<U> init) noexcept : data_{} {
+        size_t i = 0;
+        for (const auto& val : init) {
+            if (i >= total_size) break;
+            data_[i] = val;
+            ++i;
+        }
+    }
+
     // Element access (1-based IEC indexing) - no bounds checking.
     // constexpr so &arr(i, j) is a constant expression — see the
     // matching note on IEC_ARRAY_1D::operator[] above.

@@ -1118,13 +1118,27 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Assignment statement
+   * Assignment statement, including CODESYS-style chained assignment
+   * `a := b := expr;` (every target on the chain receives the value).
+   * Each extra `target :=` is a gated `assignTargetTail`; the BACKTRACK
+   * gate distinguishes a chained target from the final RHS expression
+   * (both can start with an identifier).
    */
   public assignmentStatement = this.RULE("assignmentStatement", () => {
     this.SUBRULE(this.variable);
     this.CONSUME(tokens.Assign);
+    this.MANY({
+      GATE: this.BACKTRACK(this.assignTargetTail),
+      DEF: () => this.SUBRULE(this.assignTargetTail),
+    });
     this.SUBRULE(this.expression);
     this.CONSUME(tokens.Semicolon);
+  });
+
+  /** One extra `target :=` link in a chained assignment (`… := target := …`). */
+  public assignTargetTail = this.RULE("assignTargetTail", () => {
+    this.SUBRULE(this.variable);
+    this.CONSUME(tokens.Assign);
   });
 
   /**

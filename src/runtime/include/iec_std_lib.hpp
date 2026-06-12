@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
 #include <type_traits>
 
@@ -98,6 +99,33 @@ struct ProgramBase {
      * @return Count of retain variables
      */
     virtual size_t getRetainCount() const { return 0; }
+
+    // -------------------------------------------------------------------------
+    // Threaded-runtime hooks (appended at the end of the vtable so run() stays
+    // at slot 1 -- a runtime that predates these still works, it just never
+    // calls them). No-ops by default; generated code overrides them ONLY when
+    // compiled with STRUCPP_THREADED. The OpenPLC threaded runtime calls
+    // sync_in() before run() and sync_out() after, around a per-task private
+    // working copy of this program's VAR_EXTERNAL globals (so task bodies run
+    // without holding a global lock). located_range() reports this program's
+    // contiguous slice of the global locatedVars[] table so the runtime can
+    // copy its located I/O in/out scoped to the owning task.
+    // -------------------------------------------------------------------------
+
+    /** Copy this program's VAR_EXTERNAL globals from canonical storage into
+     *  its private working copies. Called by the runtime before run(). */
+    virtual void sync_in() {}
+
+    /** Commit this program's changed VAR_EXTERNAL globals from its working
+     *  copies back to canonical storage. Called by the runtime after run(). */
+    virtual void sync_out() {}
+
+    /** Report this program's slice [offset, offset+count) of the project-wide
+     *  locatedVars[] table. count == 0 means the program has no located I/O. */
+    virtual void located_range(uint32_t* offset, uint32_t* count) const {
+        *offset = 0;
+        *count = 0;
+    }
 };
 
 /**
@@ -772,6 +800,120 @@ template<typename T> inline IEC_DT TO_DT(T v) noexcept {
 template<typename T> inline IEC_TOD TO_TOD(T v) noexcept {
     return IEC_TOD(static_cast<TOD_t>(iec_unwrap(v)));
 }
+
+// ---------------------------------------------------------------------------
+// STRING -> TIME / TOD / DATE / DT parsing
+//
+// The frontend lowers STRING_TO_TIME / STRING_TO_TOD / STRING_TO_DATE /
+// STRING_TO_DT to TO_TIME / TO_TOD / TO_DATE / TO_DT. The numeric overloads
+// above treat their argument as a raw count; the string overloads below PARSE
+// the textual IEC literal (used by e.g. OSCAT's TIMER_EVENT_DECODE). Formats,
+// each with an optional `PREFIX#`:
+//   TIME : [T#]  (<num>(d|h|m|s|ms|us|ns))+        -> nanoseconds
+//   TOD  : [TOD#] HH:MM[:SS[.fff]]                 -> ns since midnight
+//   DATE : [D#] YYYY-MM-DD                         -> days since 1970-01-01
+//   DT   : [DT#] YYYY-MM-DD-HH:MM[:SS[.fff]]       -> ns since the Unix epoch
+// Lenient and exception-free (AVR-safe); unparseable input yields 0.
+namespace iec_strparse {
+
+// Skip a leading `IDENT#` literal prefix (e.g. "T#", "TOD#") if present.
+inline const char* skip_literal_prefix(const char* s) noexcept {
+    for (const char* p = s; *p; ++p) {
+        if (*p == '#') return p + 1;
+        const char c = *p;
+        const bool idish = c == '_' || (c >= '0' && c <= '9') ||
+                           (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+        if (!idish) break;
+    }
+    return s;
+}
+
+inline int64_t parse_time_ns(const char* s) noexcept {
+    s = skip_literal_prefix(s);
+    int64_t total = 0;
+    while (*s) {
+        char* end = nullptr;
+        const double val = std::strtod(s, &end);
+        if (end == s) { ++s; continue; }
+        s = end;
+        const char u0 = (*s >= 'A' && *s <= 'Z') ? static_cast<char>(*s + 32) : *s;
+        const char u1 =
+            (s[0] && s[1] >= 'A' && s[1] <= 'Z') ? static_cast<char>(s[1] + 32) : s[1];
+        int64_t mult = 1000000LL; // default unit: milliseconds
+        if (u0 == 'm' && u1 == 's') { mult = 1000000LL; s += 2; }
+        else if (u0 == 'u' && u1 == 's') { mult = 1000LL; s += 2; }
+        else if (u0 == 'n' && u1 == 's') { mult = 1LL; s += 2; }
+        else if (u0 == 'd') { mult = 86400000000000LL; s += 1; }
+        else if (u0 == 'h') { mult = 3600000000000LL; s += 1; }
+        else if (u0 == 'm') { mult = 60000000000LL; s += 1; }
+        else if (u0 == 's') { mult = 1000000000LL; s += 1; }
+        total += static_cast<int64_t>(val * static_cast<double>(mult));
+    }
+    return total;
+}
+
+inline void read_int(const char*& s, long long& out) noexcept {
+    char* end = nullptr;
+    out = std::strtoll(s, &end, 10);
+    if (end != s) s = end;
+}
+
+inline int64_t parse_tod_ns(const char* s) noexcept {
+    s = skip_literal_prefix(s);
+    long long hh = 0, mm = 0, ss = 0;
+    double frac = 0;
+    read_int(s, hh);
+    if (*s == ':') { ++s; read_int(s, mm); }
+    if (*s == ':') { ++s; read_int(s, ss); }
+    if (*s == '.') { char* e = nullptr; frac = std::strtod(s, &e); if (e != s) s = e; }
+    return hh * 3600000000000LL + mm * 60000000000LL + ss * 1000000000LL +
+           static_cast<int64_t>(frac * 1e9);
+}
+
+// Days from 1970-01-01 for a proleptic-Gregorian date (Hinnant's algorithm).
+inline int64_t days_from_civil(long long y, long long m, long long d) noexcept {
+    y -= (m <= 2);
+    const long long era = (y >= 0 ? y : y - 399) / 400;
+    const long long yoe = y - era * 400;
+    const long long doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;
+    const long long doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    return era * 146097 + doe - 719468;
+}
+
+inline int64_t parse_date_days(const char* s) noexcept {
+    s = skip_literal_prefix(s);
+    long long y = 0, mo = 0, d = 0;
+    read_int(s, y);
+    if (*s == '-') { ++s; read_int(s, mo); }
+    if (*s == '-') { ++s; read_int(s, d); }
+    return days_from_civil(y, mo ? mo : 1, d ? d : 1);
+}
+
+inline int64_t parse_dt_ns(const char* s) noexcept {
+    s = skip_literal_prefix(s);
+    long long y = 0, mo = 0, d = 0, hh = 0, mm = 0, ss = 0;
+    read_int(s, y);
+    if (*s == '-') { ++s; read_int(s, mo); }
+    if (*s == '-') { ++s; read_int(s, d); }
+    if (*s == '-') { ++s; read_int(s, hh); }
+    if (*s == ':') { ++s; read_int(s, mm); }
+    if (*s == ':') { ++s; read_int(s, ss); }
+    return days_from_civil(y, mo ? mo : 1, d ? d : 1) * 86400000000000LL +
+           hh * 3600000000000LL + mm * 60000000000LL + ss * 1000000000LL;
+}
+
+} // namespace iec_strparse
+
+// String overloads (more specialized than the numeric TO_* templates, so they
+// win overload resolution for STRING arguments).
+template<size_t N> inline IEC_TIME TO_TIME(const IECString<N>& s) noexcept { return IEC_TIME(iec_strparse::parse_time_ns(s.c_str())); }
+template<size_t N> inline IEC_TIME TO_TIME(const IECStringVar<N>& s) noexcept { return IEC_TIME(iec_strparse::parse_time_ns(s.get().c_str())); }
+template<size_t N> inline IEC_TOD TO_TOD(const IECString<N>& s) noexcept { return IEC_TOD(iec_strparse::parse_tod_ns(s.c_str())); }
+template<size_t N> inline IEC_TOD TO_TOD(const IECStringVar<N>& s) noexcept { return IEC_TOD(iec_strparse::parse_tod_ns(s.get().c_str())); }
+template<size_t N> inline IEC_DATE TO_DATE(const IECString<N>& s) noexcept { return IEC_DATE(iec_strparse::parse_date_days(s.c_str())); }
+template<size_t N> inline IEC_DATE TO_DATE(const IECStringVar<N>& s) noexcept { return IEC_DATE(iec_strparse::parse_date_days(s.get().c_str())); }
+template<size_t N> inline IEC_DT TO_DT(const IECString<N>& s) noexcept { return IEC_DT(iec_strparse::parse_dt_ns(s.c_str())); }
+template<size_t N> inline IEC_DT TO_DT(const IECStringVar<N>& s) noexcept { return IEC_DT(iec_strparse::parse_dt_ns(s.get().c_str())); }
 
 // =============================================================================
 // String / Wide String Conversion
