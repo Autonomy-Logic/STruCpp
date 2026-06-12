@@ -2279,21 +2279,45 @@ export class CodeGenerator {
       }
     }
 
-    // Generate external variable references
+    // Generate external variable members.
+    //
+    // Default build (single-threaded / baremetal / pre-threaded runtime):
+    // plain references to the shared Configuration globals -- the program
+    // reads/writes the canonical storage directly (the runtime serializes
+    // task bodies, so this is safe).
+    //
+    // STRUCPP_THREADED build (OpenPLC threaded runtime): the program holds a
+    // private working COPY of each global, a pointer to the canonical global,
+    // and a snapshot taken at sync_in. The runtime calls sync_in() before
+    // run() and sync_out() after, so task bodies operate only on private
+    // storage and never hold a global lock across the body. sync_out commits
+    // only globals this program actually changed (memcmp vs the snapshot), so
+    // a program that merely reads a shared global never clobbers a concurrent
+    // writer. The member keeps the same name in both builds, so the generated
+    // body code is identical.
     if (prog.varExternal.length > 0) {
-      this.emitHeader("    // External variables (references to globals)");
-      for (const ext of prog.varExternal) {
-        // VAR_EXTERNAL records have separate `name` (variable) and
-        // `typeName` (type). projectVarToTypeRef rewires them; then
-        // mapTypeRefToCpp+toParamTypeRef preserves array/pointer
-        // metadata while stripping STRING/WSTRING maxLength so any
-        // string size binds to the &-reference (matches previous
-        // behavior of the mapVarTypeToCpp(ext.typeName) call).
-        const cppType = this.mapTypeRefToCpp(
+      // VAR_EXTERNAL records carry separate `name`/`typeName`;
+      // projectVarToTypeRef + toParamTypeRef + mapTypeRefToCpp resolve the
+      // C++ type the same way the constructor params do (must agree).
+      const extTypes = prog.varExternal.map((ext) =>
+        this.mapTypeRefToCpp(
           this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-        );
-        this.emitHeader(`    ${cppType}& ${ext.name};`);
+        ),
+      );
+      this.emitHeader("    // External variables (globals)");
+      this.emitHeader("#ifdef STRUCPP_THREADED");
+      for (let i = 0; i < prog.varExternal.length; i++) {
+        const ext = prog.varExternal[i]!;
+        const ty = extTypes[i]!;
+        this.emitHeader(`    ${ty} ${ext.name};`);
+        this.emitHeader(`    ${ty}* ${ext.name}__canon = nullptr;`);
+        this.emitHeader(`    ${ty} ${ext.name}__prev;`);
       }
+      this.emitHeader("#else");
+      for (let i = 0; i < prog.varExternal.length; i++) {
+        this.emitHeader(`    ${extTypes[i]!}& ${prog.varExternal[i]!.name};`);
+      }
+      this.emitHeader("#endif");
     }
 
     this.emitHeader("");
@@ -2321,6 +2345,45 @@ export class CodeGenerator {
     this.emitHeader("");
     this.emitHeader("    // Run program");
     this.emitHeader("    void run() override;");
+
+    // Threaded-runtime overrides (STRUCPP_THREADED only): global sync hooks
+    // and this program's slice of the located-vars table. Absent otherwise,
+    // so the default build's ProgramBase no-ops are used.
+    const threadedRange = this.locatedRangeForProgram(prog.name);
+    if (prog.varExternal.length > 0 || threadedRange.count > 0) {
+      this.emitHeader("");
+      this.emitHeader("#ifdef STRUCPP_THREADED");
+      if (prog.varExternal.length > 0) {
+        this.emitHeader("    void sync_in() override {");
+        for (const ext of prog.varExternal) {
+          this.emitHeader(
+            `        ${ext.name} = *${ext.name}__canon; ${ext.name}__prev = ${ext.name};`,
+          );
+        }
+        this.emitHeader("    }");
+        this.emitHeader("    void sync_out() override {");
+        for (const ext of prog.varExternal) {
+          // Dirty-diff over the whole object via its address + sizeof, NOT
+          // .raw_ptr(): raw_ptr() exists only on scalar IECVar<T>, so arrays
+          // (Array1D) and structs would fail to compile. Comparing
+          // &x..&x+sizeof(x) is correct for every VAR_EXTERNAL kind because
+          // x__prev is a full-value copy of x, so equal values compare byte-
+          // equal and any changed byte (the whole array/struct included) is
+          // detected. sizeof(*raw_ptr()) was also wrong for arrays (element
+          // size, not array size).
+          this.emitHeader(
+            `        if (__builtin_memcmp(&${ext.name}, &${ext.name}__prev, sizeof(${ext.name})) != 0) *${ext.name}__canon = ${ext.name};`,
+          );
+        }
+        this.emitHeader("    }");
+      }
+      if (threadedRange.count > 0) {
+        this.emitHeader(
+          `    void located_range(uint32_t* __off, uint32_t* __cnt) const override { *__off = ${threadedRange.offset}; *__cnt = ${threadedRange.count}; }`,
+        );
+      }
+      this.emitHeader("#endif");
+    }
 
     // Generate retain variable support if there are retain variables
     if (retainVars.length > 0) {
@@ -2387,13 +2450,33 @@ export class CodeGenerator {
           inits.push(`${decl.name}(${initVal})`);
         }
       }
-      for (const ext of prog.varExternal) {
-        inits.push(`${ext.name}(${ext.name}_ref)`);
-      }
+      // External globals: default build binds reference members in the init
+      // list; STRUCPP_THREADED build binds the canonical pointer in the body
+      // (the working copy is a value member synced by the runtime). The body
+      // code is identical in both builds.
+      const extRefInits = prog.varExternal.map(
+        (ext) => `${ext.name}(${ext.name}_ref)`,
+      );
+      this.emit("#ifdef STRUCPP_THREADED");
       if (inits.length > 0) {
         this.emit(`    : ${inits.join(", ")}`);
       }
+      this.emit("#else");
+      {
+        const combined = [...inits, ...extRefInits];
+        if (combined.length > 0) {
+          this.emit(`    : ${combined.join(", ")}`);
+        }
+      }
+      this.emit("#endif");
       this.emit("{");
+      if (prog.varExternal.length > 0) {
+        this.emit("#ifdef STRUCPP_THREADED");
+        for (const ext of prog.varExternal) {
+          this.emit(`    ${ext.name}__canon = &${ext.name}_ref;`);
+        }
+        this.emit("#endif");
+      }
 
       // Initialize located variable pointers
       this.generateLocatedVarPointerInit(prog.name);
@@ -5460,6 +5543,28 @@ export class CodeGenerator {
 
     this.emit("};");
     this.emit("");
+  }
+
+  /**
+   * This program's contiguous slice [offset, offset+count) of the project-wide
+   * locatedVars[] table. The table is built in program-iteration order, so a
+   * single program's located vars are contiguous. Used by the STRUCPP_THREADED
+   * located_range() override so the runtime can scope located I/O copy-in/out
+   * to the owning task.
+   */
+  private locatedRangeForProgram(programName: string): {
+    offset: number;
+    count: number;
+  } {
+    let offset = -1;
+    let count = 0;
+    for (let i = 0; i < this.locatedVars.length; i++) {
+      if (this.locatedVars[i]!.programName === programName) {
+        if (offset < 0) offset = i;
+        count++;
+      }
+    }
+    return { offset: offset < 0 ? 0 : offset, count };
   }
 
   /**
