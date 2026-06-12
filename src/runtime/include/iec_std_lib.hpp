@@ -99,6 +99,33 @@ struct ProgramBase {
      * @return Count of retain variables
      */
     virtual size_t getRetainCount() const { return 0; }
+
+    // -------------------------------------------------------------------------
+    // Threaded-runtime hooks (appended at the end of the vtable so run() stays
+    // at slot 1 -- a runtime that predates these still works, it just never
+    // calls them). No-ops by default; generated code overrides them ONLY when
+    // compiled with STRUCPP_THREADED. The OpenPLC threaded runtime calls
+    // sync_in() before run() and sync_out() after, around a per-task private
+    // working copy of this program's VAR_EXTERNAL globals (so task bodies run
+    // without holding a global lock). located_range() reports this program's
+    // contiguous slice of the global locatedVars[] table so the runtime can
+    // copy its located I/O in/out scoped to the owning task.
+    // -------------------------------------------------------------------------
+
+    /** Copy this program's VAR_EXTERNAL globals from canonical storage into
+     *  its private working copies. Called by the runtime before run(). */
+    virtual void sync_in() {}
+
+    /** Commit this program's changed VAR_EXTERNAL globals from its working
+     *  copies back to canonical storage. Called by the runtime after run(). */
+    virtual void sync_out() {}
+
+    /** Report this program's slice [offset, offset+count) of the project-wide
+     *  locatedVars[] table. count == 0 means the program has no located I/O. */
+    virtual void located_range(uint32_t* offset, uint32_t* count) const {
+        *offset = 0;
+        *count = 0;
+    }
 };
 
 /**
