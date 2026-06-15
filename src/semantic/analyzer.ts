@@ -1590,6 +1590,34 @@ export class SemanticAnalyzer {
           expr.sourceSpan.file,
         );
       }
+    } else {
+      // Library function (not a built-in registry function).  A library
+      // function is emitted as a free C++ function with no default arguments
+      // AND no call-site default filling — so a call missing a required input
+      // (e.g. a graphical BIT_COUNT block left unconnected, generating
+      // `BIT_COUNT(EN := TRUE, ENO => tmp)`) would otherwise slip through to
+      // the C++ compiler and fail with an opaque "too few arguments" error.
+      // Flag it here with a clear message instead.
+      //
+      // Only library functions are checked: they carry resolved `parameters`.
+      // User-defined functions have empty `parameters` here and are left to
+      // codegen, which intentionally zero-fills their unfilled inputs (named/
+      // positional argument reordering).  Function-block invocations resolve
+      // to a variable, not a function, so their optional inputs never reach
+      // this path.
+      const sym = this.symbolTables.globalScope.lookup(nameUpper);
+      if (sym?.kind === "function") {
+        const requiredInputs = sym.parameters.filter((p) => p.isInput).length;
+        const providedInputs = userArgs.filter((a) => !a.isOutput).length;
+        if (providedInputs < requiredInputs) {
+          this.addError(
+            `'${nameUpper}' requires ${requiredInputs} argument(s), got ${providedInputs}`,
+            expr.sourceSpan.startLine,
+            expr.sourceSpan.startCol,
+            expr.sourceSpan.file,
+          );
+        }
+      }
     }
 
     // Additional ADR / REF_LINK constraint: argument must be an l-value

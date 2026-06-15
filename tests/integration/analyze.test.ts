@@ -88,6 +88,96 @@ describe("analyze() API", () => {
     expect(result.ast).toBeDefined();
   });
 
+  it("does not flag a user-defined function called with missing args (codegen zero-fills)", () => {
+    // User-defined functions intentionally zero-fill unfilled inputs at the
+    // call site (named/positional reordering), so a missing argument is not an
+    // error for them — only library functions, which have no default filling,
+    // are checked. This guards against re-introducing a false positive here.
+    const result = analyze(`
+      FUNCTION DOUBLE_IT : INT
+        VAR_INPUT IN : INT; END_VAR
+        DOUBLE_IT := IN * 2;
+      END_FUNCTION
+
+      PROGRAM Main
+        VAR y : INT; END_VAR
+        y := DOUBLE_IT();
+      END_PROGRAM
+    `);
+
+    expect(result.errors.some((e) => /requires \d+ argument/i.test(e.message))).toBe(false);
+  });
+
+  it("does not require arguments for a function-block invocation (inputs are optional)", () => {
+    const result = analyze(
+      `
+      PROGRAM Main
+        VAR fb : MyFB; END_VAR
+        fb();
+      END_PROGRAM
+    `,
+      {
+        additionalSources: [
+          {
+            fileName: "myfb.st",
+            source: `
+            FUNCTION_BLOCK MyFB
+              VAR_INPUT trigger : BOOL; END_VAR
+              VAR_OUTPUT done : BOOL; END_VAR
+              done := trigger;
+            END_FUNCTION_BLOCK
+          `,
+          },
+        ],
+      },
+    );
+
+    // fb() omits the optional input `trigger` — that is valid for an FB.
+    expect(result.errors.some((e) => /requires \d+ argument/i.test(e.message))).toBe(false);
+  });
+
+  it("errors when a LIBRARY function call omits its required input (the BIT_COUNT case)", () => {
+    // The graphical editor emits e.g. `BIT_COUNT(EN := TRUE, ENO => tmp)` when
+    // its data input is left unconnected.  With the library signature loaded,
+    // the analyzer must flag the missing argument instead of letting it reach
+    // the C++ compiler.
+    const bitCountLib = {
+      formatVersion: 1 as const,
+      manifest: {
+        name: "oscat-basic",
+        version: "1.0.0",
+        namespace: "oscat",
+        functions: [
+          {
+            name: "BIT_COUNT",
+            returnType: "INT",
+            parameters: [{ name: "IN", type: "DWORD", direction: "input" as const }],
+          },
+        ],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      },
+      chunks: [],
+      dependencies: [],
+    };
+
+    const result = analyze(
+      `
+      PROGRAM Main
+        VAR n : INT; END_VAR
+        n := BIT_COUNT(EN := TRUE);
+      END_PROGRAM
+    `,
+      { libraries: [bitCountLib] },
+    );
+
+    expect(
+      result.errors.some((e) => /BIT_COUNT.*requires 1 argument.*got 0/i.test(e.message)),
+    ).toBe(true);
+  });
+
   it("returns a defined result for empty/whitespace input", () => {
     const result = analyze("");
     expect(result).toBeDefined();
