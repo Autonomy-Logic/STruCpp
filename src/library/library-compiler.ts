@@ -15,7 +15,48 @@ import type {
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
 import type { LibraryVarType } from "./library-manifest.js";
-import type { TypeReference } from "../frontend/ast.js";
+import type { Expression, TypeReference } from "../frontend/ast.js";
+
+/**
+ * Serialize a VAR_INPUT initial-value expression back into an ST string for the
+ * manifest (e.g. `255`, `-1`, `10.0`, `T#100ms`, `TRUE`, `MY_CONST`). Parameter
+ * defaults are almost always literals or simple expressions; the cases below
+ * cover them. Returns undefined for anything it can't faithfully render, so the
+ * caller omits the field rather than emit a wrong default.
+ */
+function serializeInitialValue(expr: Expression): string | undefined {
+  switch (expr.kind) {
+    case "LiteralExpression":
+      return expr.rawValue;
+    case "VariableExpression":
+      // A bare named constant/enum used as a default (no subscripts/fields).
+      return expr.subscripts.length === 0 &&
+        expr.fieldAccess.length === 0 &&
+        !expr.isDereference
+        ? expr.name
+        : undefined;
+    case "UnaryExpression": {
+      const operand = serializeInitialValue(expr.operand);
+      if (operand === undefined) return undefined;
+      return expr.operator === "NOT"
+        ? `NOT ${operand}`
+        : `${expr.operator}${operand}`;
+    }
+    case "ParenthesizedExpression": {
+      const inner = serializeInitialValue(expr.expression);
+      return inner === undefined ? undefined : `(${inner})`;
+    }
+    case "BinaryExpression": {
+      const left = serializeInitialValue(expr.left);
+      const right = serializeInitialValue(expr.right);
+      return left === undefined || right === undefined
+        ? undefined
+        : `${left} ${expr.operator} ${right}`;
+    }
+    default:
+      return undefined;
+  }
+}
 
 /**
  * Serialize a variable's type reference into the manifest format,
@@ -270,8 +311,12 @@ export function compileLibrary(
               name: fn.name,
               returnType: fn.returnType.name,
               parameters: fn.varBlocks.flatMap((block) =>
-                block.declarations.flatMap((decl) =>
-                  decl.names.map((name) => ({
+                block.declarations.flatMap((decl) => {
+                  const initialValue =
+                    decl.initialValue !== undefined
+                      ? serializeInitialValue(decl.initialValue)
+                      : undefined;
+                  return decl.names.map((name) => ({
                     name,
                     type: decl.type.name,
                     direction:
@@ -280,8 +325,11 @@ export function compileLibrary(
                         : block.blockType === "VAR_IN_OUT"
                           ? "inout"
                           : "input",
-                  })),
-                ),
+                    // Present ⇒ optional input (default supplied); absent ⇒
+                    // mandatory. Preserved from user ST and CODESYS-imported ST.
+                    ...(initialValue !== undefined ? { initialValue } : {}),
+                  }));
+                }),
               ),
             },
             catByName,

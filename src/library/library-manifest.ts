@@ -30,6 +30,15 @@ export interface LibraryFunctionEntry {
     name: string;
     type: string;
     direction: "input" | "output" | "inout";
+    /** Initial (default) value of the parameter, as an ST expression string
+     *  (e.g. "255", "10.0", "T#100ms"). Present only for inputs declared with
+     *  an initial value. Semantics: an input WITH an `initialValue` is
+     *  OPTIONAL at the call site (the compiler supplies the default when the
+     *  argument is omitted); an input WITHOUT one is MANDATORY (omitting it is
+     *  a compile error). Captured by the library compiler from VAR_INPUT
+     *  initial values in the source ST — including ST produced by the CODESYS
+     *  v2/v3 importers, which preserve declarations verbatim. */
+    initialValue?: string;
   }>;
   /** Variadic call shape. When set, `parameters` describes the leading
    *  required parameters and the function accepts any number of

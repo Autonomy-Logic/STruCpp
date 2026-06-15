@@ -21,6 +21,8 @@ import type {
   CodesysImportResult,
   ExtractedPOU,
 } from "../../src/library/codesys-import/index.js";
+import { compileStlib } from "../../src/library/library-compiler.js";
+import type { LibraryManifest } from "../../src/library/library-manifest.js";
 
 // Tests previously called `await importCodesysLibrary(path)`; the public
 // API is now bytes-first so the file read sits in the test harness.
@@ -732,5 +734,49 @@ describe("CLI --import-lib", () => {
       expect(combined).toContain("Format: CODESYS V2.3");
       expect(combined).toContain("Extracted 555 items");
     }
+  });
+});
+
+describe("CODESYS import → manifest: VAR_INPUT initial values", () => {
+  // OSCAT's AIN function declares optional inputs with defaults
+  // (e.g. `sign : BYTE := 255; high : REAL := 10.0;`). Those defaults must
+  // survive the full import → compileStlib pipeline into the manifest, for
+  // both the v2.3 (.lib) and v3 (.library) importers.
+  // Compile just AIN (self-contained) from the imported sources — the full
+  // OSCAT set needs its dependency libraries to compile, which is out of scope
+  // here; AIN alone exercises importer → ST → compileStlib → manifest.
+  async function importAndCompileAin(path: string) {
+    const imported = await importCodesysLibrary(path);
+    expect(imported.success).toBe(true);
+    const ainSrc = imported.sources.find((s) => s.fileName === "AIN.st");
+    expect(ainSrc).toBeDefined();
+    const lib = compileStlib([ainSrc!], {
+      name: "oscat-ain",
+      version: "335.0.0",
+      namespace: "oscat",
+    });
+    expect(lib.success).toBe(true);
+    return lib.archive!.manifest.functions;
+  }
+
+  function assertAinDefaults(functions: LibraryManifest["functions"]) {
+    const ain = functions.find((f) => f.name === "AIN");
+    expect(ain).toBeDefined();
+    const byName = Object.fromEntries(
+      ain!.parameters.map((p) => [p.name.toUpperCase(), p]),
+    );
+    // mandatory input keeps no default
+    expect("initialValue" in byName.IN!).toBe(false);
+    // optional inputs carry their ST defaults
+    expect(byName.SIGN!.initialValue).toBe("255");
+    expect(byName.HIGH!.initialValue).toBe("10.0");
+  }
+
+  it("v2.3 (.lib) importer preserves function input defaults into the manifest", async () => {
+    assertAinDefaults(await importAndCompileAin(OSCAT_V23_PATH));
+  });
+
+  it("v3 (.library) importer preserves function input defaults into the manifest", async () => {
+    assertAinDefaults(await importAndCompileAin(OSCAT_V3_PATH));
   });
 });
