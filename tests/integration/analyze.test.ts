@@ -88,11 +88,13 @@ describe("analyze() API", () => {
     expect(result.ast).toBeDefined();
   });
 
-  it("does not flag a user-defined function called with missing args (codegen zero-fills)", () => {
-    // User-defined functions intentionally zero-fill unfilled inputs at the
-    // call site (named/positional reordering), so a missing argument is not an
-    // error for them — only library functions, which have no default filling,
-    // are checked. This guards against re-introducing a false positive here.
+  // --- Option A: required vs. optional function inputs --------------------
+  // An input WITHOUT an initial value is mandatory; one WITH a default is
+  // optional. Enforced uniformly for user-defined and library functions.
+
+  const MISSING = /is missing required input/i;
+
+  it("errors when a user-defined function omits a required (no-default) input", () => {
     const result = analyze(`
       FUNCTION DOUBLE_IT : INT
         VAR_INPUT IN : INT; END_VAR
@@ -105,7 +107,26 @@ describe("analyze() API", () => {
       END_PROGRAM
     `);
 
-    expect(result.errors.some((e) => /requires \d+ argument/i.test(e.message))).toBe(false);
+    expect(
+      result.errors.some((e) => /DOUBLE_IT.*missing required input.*IN/i.test(e.message)),
+    ).toBe(true);
+  });
+
+  it("does not flag a user-defined function input that declares an initial value", () => {
+    const result = analyze(`
+      FUNCTION SCALE_IT : INT
+        VAR_INPUT IN : INT; FACTOR : INT := 2; END_VAR
+        SCALE_IT := IN * FACTOR;
+      END_FUNCTION
+
+      PROGRAM Main
+        VAR y : INT; END_VAR
+        y := SCALE_IT(IN := 21);
+      END_PROGRAM
+    `);
+
+    // FACTOR has a default, so omitting it is fine; IN is provided.
+    expect(result.errors.some((e) => MISSING.test(e.message))).toBe(false);
   });
 
   it("does not require arguments for a function-block invocation (inputs are optional)", () => {
@@ -133,7 +154,7 @@ describe("analyze() API", () => {
     );
 
     // fb() omits the optional input `trigger` — that is valid for an FB.
-    expect(result.errors.some((e) => /requires \d+ argument/i.test(e.message))).toBe(false);
+    expect(result.errors.some((e) => MISSING.test(e.message))).toBe(false);
   });
 
   it("errors when a LIBRARY function call omits its required input (the BIT_COUNT case)", () => {
@@ -174,8 +195,55 @@ describe("analyze() API", () => {
     );
 
     expect(
-      result.errors.some((e) => /BIT_COUNT.*requires 1 argument.*got 0/i.test(e.message)),
+      result.errors.some((e) => /BIT_COUNT.*missing required input.*IN/i.test(e.message)),
     ).toBe(true);
+  });
+
+  it("does not flag a LIBRARY function input that carries an initialValue", () => {
+    // A library function with an optional input (default in the manifest) may
+    // be called without it.
+    const scaleLib = {
+      formatVersion: 1 as const,
+      manifest: {
+        name: "demo",
+        version: "1.0.0",
+        namespace: "demo",
+        functions: [
+          {
+            name: "SCALE1",
+            returnType: "REAL",
+            parameters: [
+              { name: "IN", type: "REAL", direction: "input" as const },
+              {
+                name: "MAXV",
+                type: "REAL",
+                direction: "input" as const,
+                initialValue: "1000.0",
+              },
+            ],
+          },
+        ],
+        functionBlocks: [],
+        types: [],
+        headers: [],
+        isBuiltin: false,
+      },
+      chunks: [],
+      dependencies: [],
+    };
+
+    const result = analyze(
+      `
+      PROGRAM Main
+        VAR r : REAL; END_VAR
+        r := SCALE1(IN := 2.0);
+      END_PROGRAM
+    `,
+      { libraries: [scaleLib] },
+    );
+
+    // MAXV has a manifest default → optional; IN is provided.
+    expect(result.errors.some((e) => /missing required input/i.test(e.message))).toBe(false);
   });
 
   it("returns a defined result for empty/whitespace input", () => {

@@ -288,9 +288,16 @@ export function registerLibrarySymbols(
           body: [],
         },
         returnType,
-        parameters: fn.parameters.map((p) =>
-          makeVarSymbol({ name: p.name, type: p.type }, p.direction),
-        ),
+        parameters: fn.parameters.map((p) => {
+          const sym = makeVarSymbol(
+            { name: p.name, type: p.type },
+            p.direction,
+          );
+          // Carry the optional-input marker: a parameter with an initial value
+          // is optional at the call site (see Option A in the analyzer).
+          if (p.initialValue !== undefined) sym.initialValue = p.initialValue;
+          return sym;
+        }),
       });
     } catch (e) {
       // Skip duplicate symbol errors (first definition wins), re-throw others

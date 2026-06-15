@@ -8,6 +8,7 @@
  */
 
 import type {
+  Argument,
   AssertCall,
   CompilationUnit,
   ElementaryType,
@@ -30,6 +31,7 @@ import type {
 import type { CompileError, SourceSpan } from "../types.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
+import type { FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 import {
   getBitAccessWidth,
@@ -1591,32 +1593,18 @@ export class SemanticAnalyzer {
         );
       }
     } else {
-      // Library function (not a built-in registry function).  A library
-      // function is emitted as a free C++ function with no default arguments
-      // AND no call-site default filling — so a call missing a required input
-      // (e.g. a graphical BIT_COUNT block left unconnected, generating
-      // `BIT_COUNT(EN := TRUE, ENO => tmp)`) would otherwise slip through to
-      // the C++ compiler and fail with an opaque "too few arguments" error.
-      // Flag it here with a clear message instead.
-      //
-      // Only library functions are checked: they carry resolved `parameters`.
-      // User-defined functions have empty `parameters` here and are left to
-      // codegen, which intentionally zero-fills their unfilled inputs (named/
-      // positional argument reordering).  Function-block invocations resolve
-      // to a variable, not a function, so their optional inputs never reach
-      // this path.
+      // Library or user-defined function (not a built-in registry function).
+      // Every input WITHOUT an initial value is mandatory; inputs WITH one are
+      // optional (the compiler supplies the default). A call that leaves a
+      // mandatory input unsupplied — e.g. a graphical block with an
+      // unconnected required pin, or hand-written ST missing an argument — is
+      // a compile error here, instead of a confusing failure further down
+      // (the C++ compiler for library functions, or silent zero-fill for
+      // user functions). Function-block invocations resolve to a variable,
+      // not a function, so their optional inputs never reach this path.
       const sym = this.symbolTables.globalScope.lookup(nameUpper);
       if (sym?.kind === "function") {
-        const requiredInputs = sym.parameters.filter((p) => p.isInput).length;
-        const providedInputs = userArgs.filter((a) => !a.isOutput).length;
-        if (providedInputs < requiredInputs) {
-          this.addError(
-            `'${nameUpper}' requires ${requiredInputs} argument(s), got ${providedInputs}`,
-            expr.sourceSpan.startLine,
-            expr.sourceSpan.startCol,
-            expr.sourceSpan.file,
-          );
-        }
+        this.checkRequiredFunctionInputs(expr, sym, userArgs);
       }
     }
 
@@ -1663,6 +1651,83 @@ export class SemanticAnalyzer {
           );
         }
       }
+    }
+  }
+
+  /**
+   * Ordered input parameters of a function, each flagged optional when it
+   * declares an initial value. Handles both symbol shapes:
+   *   - Library functions carry resolved `parameters` (a VariableSymbol per
+   *     param; its `initialValue` string marks an optional input).
+   *   - User-defined functions carry their VAR_INPUT declarations on
+   *     `declaration.varBlocks` (an AST `initialValue` marks an optional one).
+   */
+  private functionInputParams(
+    sym: FunctionSymbol,
+  ): Array<{ name: string; optional: boolean }> {
+    if (sym.parameters.length > 0) {
+      return sym.parameters
+        .filter((p) => p.isInput)
+        .map((p) => ({
+          name: p.name.toUpperCase(),
+          optional: p.initialValue !== undefined,
+        }));
+    }
+    const params: Array<{ name: string; optional: boolean }> = [];
+    for (const block of sym.declaration.varBlocks) {
+      if (block.blockType !== "VAR_INPUT") continue;
+      for (const decl of block.declarations) {
+        const optional = decl.initialValue !== undefined;
+        for (const n of decl.names)
+          params.push({ name: n.toUpperCase(), optional });
+      }
+    }
+    return params;
+  }
+
+  /**
+   * Option A: every input without an initial value is mandatory. Resolve the
+   * call's named/positional arguments to parameter slots (mirroring the
+   * codegen's argument reordering) and error if any mandatory input is left
+   * unsupplied.
+   */
+  private checkRequiredFunctionInputs(
+    expr: FunctionCallExpression,
+    sym: FunctionSymbol,
+    userArgs: Argument[],
+  ): void {
+    const inputParams = this.functionInputParams(sym);
+    const required = inputParams.filter((p) => !p.optional);
+    if (required.length === 0) return;
+
+    // Slots claimed by name; remaining positional args fill the rest in order.
+    const satisfied = new Set<string>();
+    const positional: Argument[] = [];
+    for (const arg of userArgs) {
+      if (arg.isOutput) continue; // `=> var` outputs don't fill inputs
+      if (arg.name !== undefined) satisfied.add(arg.name.toUpperCase());
+      else positional.push(arg);
+    }
+    let pi = 0;
+    for (const p of inputParams) {
+      if (pi >= positional.length) break;
+      if (satisfied.has(p.name)) continue;
+      satisfied.add(p.name);
+      pi++;
+    }
+
+    const missing = required
+      .filter((p) => !satisfied.has(p.name))
+      .map((p) => p.name);
+    if (missing.length > 0) {
+      this.addError(
+        `'${expr.functionName.toUpperCase()}' is missing required input${
+          missing.length > 1 ? "s" : ""
+        }: ${missing.join(", ")}`,
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
     }
   }
 

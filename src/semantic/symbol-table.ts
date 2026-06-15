@@ -60,6 +60,11 @@ export interface VariableSymbol extends BaseSymbol {
   isGlobal: boolean;
   isRetain: boolean;
   address?: string | undefined;
+  /** Default value as an ST expression string, for library function/FB
+   *  parameters reconstructed from a manifest (whose `declaration` carries no
+   *  AST initial value). Presence marks the input as OPTIONAL. User-defined
+   *  POUs instead carry their default on `declaration.initialValue`. */
+  initialValue?: string | undefined;
 }
 
 /**
