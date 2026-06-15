@@ -46,7 +46,8 @@
 #pragma once
 
 #include <cstddef>
-#ifndef __AVR__
+#include "iec_fault.hpp"
+#if STRUCPP_HAS_EXCEPTIONS
 #include <stdexcept>
 #include <string>
 #endif
@@ -58,7 +59,7 @@ namespace strucpp {
 // Null Reference Exception
 // =============================================================================
 
-#ifndef __AVR__
+#if STRUCPP_HAS_EXCEPTIONS
 /**
  * Exception thrown when dereferencing a NULL reference.
  * The runtime catches this and stops execution of the affected POU.
@@ -151,10 +152,10 @@ public:
      */
     IECVar<T>& deref() {
         if (ptr_ == nullptr) {
-#ifdef __AVR__
-            for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
+#else
+            iec_runtime_fault(IecFault::NullReference);
 #endif
         }
         return *ptr_;
@@ -162,10 +163,10 @@ public:
 
     const IECVar<T>& deref() const {
         if (ptr_ == nullptr) {
-#ifdef __AVR__
-            for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
+#else
+            iec_runtime_fault(IecFault::NullReference);
 #endif
         }
         return *ptr_;
@@ -176,10 +177,10 @@ public:
      */
     IECVar<T>& deref(const char* context) {
         if (ptr_ == nullptr) {
-#ifdef __AVR__
-            for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException(context);
+#else
+            iec_runtime_fault(IecFault::NullReference, context);
 #endif
         }
         return *ptr_;
@@ -187,10 +188,10 @@ public:
 
     const IECVar<T>& deref(const char* context) const {
         if (ptr_ == nullptr) {
-#ifdef __AVR__
-            for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException(context);
+#else
+            iec_runtime_fault(IecFault::NullReference, context);
 #endif
         }
         return *ptr_;
@@ -233,10 +234,10 @@ public:
      */
     pointer_type operator->() {
         if (ptr_ == nullptr) {
-#ifdef __AVR__
-            for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
+#else
+            iec_runtime_fault(IecFault::NullReference);
 #endif
         }
         return ptr_;
@@ -244,10 +245,10 @@ public:
 
     const pointer_type operator->() const {
         if (ptr_ == nullptr) {
-#ifdef __AVR__
-            for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
+#else
+            iec_runtime_fault(IecFault::NullReference);
 #endif
         }
         return ptr_;
