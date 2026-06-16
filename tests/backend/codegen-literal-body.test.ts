@@ -67,7 +67,7 @@ describe("issue #133: statement-body literal lowering", () => {
     );
     expect(body).toContain("U > 0x10");
     expect(body).toContain("U + 0x01");
-    expect(body).toContain("ARR[0b11] = 0xAA;");
+    expect(body).toContain("ARR.at(0b11) = 0xAA;");
   });
 
   it("emits valid reals (decimal point or exponent)", () => {
