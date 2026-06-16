@@ -3663,14 +3663,17 @@ export class CodeGenerator {
     }
 
     // Legacy path: flat subscripts/fieldAccess/dereference (no interleaving)
-    // Subscripts (array access)
-    // 2D+ arrays use operator() syntax: arr(i, j) — 1D uses operator[]: arr[i]
+    // Subscripts (array access). Use the bounds-checked .at() accessor (1D and
+    // 2D+) so an out-of-range index raises a clean fault — throw on exception
+    // targets (caught by the runtime, stops the faulting task), or
+    // iec_runtime_fault(ArrayBounds) on -fno-exceptions MCU targets — instead of
+    // the unchecked operator[]/operator() that silently corrupts memory.
     if (expr.subscripts.length > 1) {
       const args = expr.subscripts.map((sub) => this.generateExpression(sub));
-      result += `(${args.join(", ")})`;
+      result += `.at(${args.join(", ")})`;
     } else {
       for (const sub of expr.subscripts) {
-        result += `[${this.generateExpression(sub)}]`;
+        result += `.at(${this.generateExpression(sub)})`;
       }
     }
 
@@ -3769,13 +3772,19 @@ export class CodeGenerator {
           break;
         }
         case "subscript": {
+          // Bounds-checked .at() (not operator[]/operator()): an out-of-range
+          // IEC array index raises a clean fault — `throw` on exception targets
+          // (the runtime v4 dispatcher catches it and stops just the faulting
+          // task) and iec_runtime_fault(IecFault::ArrayBounds) on -fno-exceptions
+          // MCU targets. operator[] stays unchecked+constexpr for the debug-table
+          // generator's &arr[i] address-of expressions; POU bodies use .at().
           if (step.indices.length > 1) {
             const args = step.indices.map((idx) =>
               this.generateExpression(idx),
             );
-            result += `(${args.join(", ")})`;
+            result += `.at(${args.join(", ")})`;
           } else if (step.indices.length === 1) {
-            result += `[${this.generateExpression(step.indices[0]!)}]`;
+            result += `.at(${this.generateExpression(step.indices[0]!)})`;
           }
           break;
         }
