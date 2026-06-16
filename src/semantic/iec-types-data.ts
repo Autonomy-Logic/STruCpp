@@ -161,6 +161,22 @@ export const IEC_BASE_TYPES: readonly IECTypeMetadata[] = [
     wireFormat: "uint64",
     xml: { elementName: "LWORD", plcopenStandard: true },
   },
+  {
+    // CODESYS __XWORD: an unsigned integer whose width equals the target
+    // pointer width (resolved in C++ via `#if __SIZEOF_POINTER__`). Used as
+    // a generic address/pointer-sized value (ADR/REF_LINK return it; users
+    // may declare it for generic pointer functions/blocks). The byteSize/bits
+    // here are NOMINAL (max width); the type-checker exempts __XWORD from
+    // width-narrowing checks since its real width is target-dependent.
+    name: "__XWORD",
+    aliases: [],
+    byteSize: 8,
+    bits: 64,
+    signed: false,
+    cppType: "XWORD_t",
+    wireFormat: "uint64",
+    xml: { elementName: "__XWORD", plcopenStandard: false },
+  },
 
   // ── Signed integers ──────────────────────────────────────────────
   {

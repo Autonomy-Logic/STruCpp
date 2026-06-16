@@ -53,7 +53,7 @@ import {
   parseTodLiteralToNs,
 } from "../project-model.js";
 import { TypeRegistry } from "../semantic/type-registry.js";
-import { TypeCodeGenerator } from "./type-codegen.js";
+import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
 import {
   getTypeBits,
@@ -492,7 +492,10 @@ export class CodeGenerator {
       }
       return typeName;
     }
-    return `IEC_${typeName}`;
+    // Elementary types: use the canonical IECVar alias map so names whose
+    // wrapper isn't simply `IEC_<NAME>` (e.g. __XWORD → IEC_XWORD) resolve
+    // correctly; all standard types map to `IEC_<NAME>` as before.
+    return IEC_TO_CPP_VAR_TYPE[typeName.toUpperCase()] ?? `IEC_${typeName}`;
   }
 
   /**
@@ -2434,13 +2437,17 @@ export class CodeGenerator {
       // Initializer list
       const inits: string[] = [];
       for (const decl of prog.varDeclarations) {
-        // References (REF_TO / REFERENCE TO) wrap a pointer internally and
-        // must be default-constructed (unbound) — `name(0)` is ambiguous for
-        // IEC_REF_TO. They are bound later via REF= / := REF(). (An
-        // initialized `REFERENCE TO X := target` is a separate enhancement.)
+        // References (REF_TO / REFERENCE TO) and pointers (POINTER TO) wrap a
+        // pointer internally and must be default-constructed (unbound/null) —
+        // `name(0)` is ambiguous for IEC_REF_TO, and now also for IEC_Ptr,
+        // which gained an integer-address ctor (the `0` literal matches both
+        // the nullptr_t and the uintptr_t overload). The default ctor sets the
+        // pointer to nullptr, which is exactly the IEC default. References are
+        // bound later via REF= / := REF(); pointers via := ADR()/&.
         if (
           decl.referenceKind === "ref_to" ||
-          decl.referenceKind === "reference_to"
+          decl.referenceKind === "reference_to" ||
+          decl.referenceKind === "pointer_to"
         ) {
           continue;
         }
@@ -2487,13 +2494,17 @@ export class CodeGenerator {
       // Initializer list for local variables
       const inits: string[] = [];
       for (const decl of prog.varDeclarations) {
-        // References (REF_TO / REFERENCE TO) wrap a pointer internally and
-        // must be default-constructed (unbound) — `name(0)` is ambiguous for
-        // IEC_REF_TO. They are bound later via REF= / := REF(). (An
-        // initialized `REFERENCE TO X := target` is a separate enhancement.)
+        // References (REF_TO / REFERENCE TO) and pointers (POINTER TO) wrap a
+        // pointer internally and must be default-constructed (unbound/null) —
+        // `name(0)` is ambiguous for IEC_REF_TO, and now also for IEC_Ptr,
+        // which gained an integer-address ctor (the `0` literal matches both
+        // the nullptr_t and the uintptr_t overload). The default ctor sets the
+        // pointer to nullptr, which is exactly the IEC default. References are
+        // bound later via REF= / := REF(); pointers via := ADR()/&.
         if (
           decl.referenceKind === "ref_to" ||
-          decl.referenceKind === "reference_to"
+          decl.referenceKind === "reference_to" ||
+          decl.referenceKind === "pointer_to"
         ) {
           continue;
         }

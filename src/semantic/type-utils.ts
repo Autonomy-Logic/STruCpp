@@ -99,6 +99,7 @@ export const TYPE_CATEGORIES: Record<string, TypeCategory[]> = {
   WORD: ["ANY", "ANY_ELEMENTARY", "ANY_BIT"],
   DWORD: ["ANY", "ANY_ELEMENTARY", "ANY_BIT"],
   LWORD: ["ANY", "ANY_ELEMENTARY", "ANY_BIT"],
+  __XWORD: ["ANY", "ANY_ELEMENTARY", "ANY_BIT"],
   SINT: ["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE", "ANY_NUM", "ANY_INT"],
   INT: ["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE", "ANY_NUM", "ANY_INT"],
   DINT: ["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE", "ANY_NUM", "ANY_INT"],
@@ -127,6 +128,11 @@ const WIDENING_CATEGORY: Record<string, string> = {
   WORD: "BIT",
   DWORD: "BIT",
   LWORD: "BIT",
+  // __XWORD is a platform-width address type. We model it as a 64-bit
+  // bit-string for category purposes (its sizeBits is 64); the explicit
+  // free-conversion rule in isImplicitlyConvertible keeps address round-trips
+  // (ADR()/REF_LINK() into integers/pointers) warning-free.
+  __XWORD: "BIT",
   SINT: "SINT",
   INT: "SINT",
   DINT: "SINT",
@@ -319,6 +325,18 @@ export function isImplicitlyConvertible(
   const s = source.toUpperCase();
   const t = target.toUpperCase();
   if (s === t) return true;
+
+  // __XWORD is a platform-width address type (CODESYS __XWORD semantics).
+  // It is freely convertible — in either direction, without a narrowing
+  // warning — with any bit-string or integer type, since ADR()/REF_LINK()
+  // produce __XWORD and that address is routinely stored into BYTE/DWORD/...
+  // and back. POINTER/REF assignments are handled separately by the caller.
+  if (s === "__XWORD" || t === "__XWORD") {
+    const other = s === "__XWORD" ? t : s;
+    const otherCat = WIDENING_CATEGORY[other];
+    if (otherCat === "BIT" || otherCat === "SINT" || otherCat === "UINT")
+      return true;
+  }
 
   const sBits = ELEMENTARY_TYPES[s]?.sizeBits;
   const tBits = ELEMENTARY_TYPES[t]?.sizeBits;
