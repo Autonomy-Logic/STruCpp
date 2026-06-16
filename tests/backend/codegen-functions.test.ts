@@ -337,7 +337,7 @@ describe("Codegen - Function Calls", () => {
     it("should warn when => is used on a VAR_INPUT parameter", () => {
       const result = compile(`
         FUNCTION Divide : INT
-          VAR_INPUT dividend : INT; divisor : INT; END_VAR
+          VAR_INPUT dividend : INT := 0; divisor : INT; END_VAR
           VAR_OUTPUT remainder : INT; END_VAR
           remainder := dividend MOD divisor;
           Divide := dividend / divisor;
@@ -506,7 +506,7 @@ describe("Codegen - Function Calls", () => {
     it("should fill unfilled parameters with zero default", () => {
       const result = compileAndCheck(`
         FUNCTION Calc : INT
-          VAR_INPUT a : INT; b : INT; c : INT; END_VAR
+          VAR_INPUT a : INT; b : INT := 0; c : INT := 0; END_VAR
           Calc := a + b + c;
         END_FUNCTION
 
@@ -540,7 +540,7 @@ describe("Codegen - Function Calls", () => {
     it("should warn about named args referencing non-existent parameters", () => {
       const result = compile(`
         FUNCTION Calc : INT
-          VAR_INPUT x : INT; y : INT; END_VAR
+          VAR_INPUT x : INT := 0; y : INT := 0; END_VAR
           Calc := x + y;
         END_FUNCTION
 
@@ -563,7 +563,7 @@ describe("Codegen - Function Calls", () => {
     it("should fill all slots with defaults when named args have typos", () => {
       const result = compile(`
         FUNCTION Calc : INT
-          VAR_INPUT x : INT; y : INT; END_VAR
+          VAR_INPUT x : INT := 0; y : INT := 0; END_VAR
           Calc := x + y;
         END_FUNCTION
 
@@ -581,7 +581,7 @@ describe("Codegen - Function Calls", () => {
     it("should handle mix of positional before named correctly", () => {
       const result = compileAndCheck(`
         FUNCTION Calc : INT
-          VAR_INPUT a : INT; b : INT; c : INT; END_VAR
+          VAR_INPUT a : INT; b : INT := 0; c : INT; END_VAR
           Calc := a + b + c;
         END_FUNCTION
 
@@ -598,7 +598,7 @@ describe("Codegen - Function Calls", () => {
     it("should handle REAL parameter defaults correctly", () => {
       const result = compileAndCheck(`
         FUNCTION Scale : REAL
-          VAR_INPUT value : REAL; factor : REAL; END_VAR
+          VAR_INPUT value : REAL; factor : REAL := 0.0; END_VAR
           Scale := value * factor;
         END_FUNCTION
 

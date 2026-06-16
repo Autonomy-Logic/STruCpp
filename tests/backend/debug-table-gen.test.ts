@@ -17,6 +17,9 @@ describe("debug-table-gen helpers", () => {
     expect(tagNameForTypeName("LREAL")).toBe("LREAL");
     expect(tagNameForTypeName("TIME_OF_DAY")).toBe("TOD");
     expect(tagNameForTypeName("DATE_AND_TIME")).toBe("DT");
+    // __XWORD (platform-width address type) reads as an LWORD on the debug
+    // surface, which targets the native 64-bit host.
+    expect(tagNameForTypeName("__XWORD")).toBe("LWORD");
     expect(tagNameForTypeName("NOT_A_TYPE")).toBeUndefined();
   });
 
@@ -33,6 +36,7 @@ describe("debug-table-gen helpers", () => {
     // `DEBUG_WSTRING_WIDTH` in `runtime/include/debug_dispatch.hpp`.
     expect(sizeForTypeName("STRING")).toBe(127);
     expect(sizeForTypeName("WSTRING")).toBe(253);
+    expect(sizeForTypeName("__XWORD")).toBe(8);
   });
 
   it("TAG values are sequential from 0", () => {
@@ -83,6 +87,36 @@ END_CONFIGURATION
     const blink = map.leaves.find((l) => l.path === "INSTANCE0.BLINK")!;
     expect(blink.type).toBe("BOOL");
     expect(blink.size).toBe(1);
+  });
+
+  it("emits a debug leaf for a __XWORD variable (does not crash visitTypeRef)", () => {
+    // Regression: __XWORD is a builtin elementary type with no type-symbol
+    // declaration, so the debug walker must treat it as a leaf via the
+    // IEC_NAME_TO_TAG fast path rather than recursing through lookupType().
+    const source = `
+PROGRAM main
+  VAR
+    addr : __XWORD;
+  END_VAR
+  addr := addr;
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM instance0 WITH task0 : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.debugMap).toBeDefined();
+    const addr = result.debugMap!.leaves.find(
+      (l) => l.path === "INSTANCE0.ADDR",
+    )!;
+    expect(addr).toBeDefined();
+    expect(addr.type).toBe("LWORD");
+    expect(addr.size).toBe(8);
   });
 
   it("emits Entry rows for STRING and WSTRING leaves with the wire-width sizes", () => {

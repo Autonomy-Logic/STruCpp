@@ -63,6 +63,21 @@ using DWORD_t = uint32_t;
 /** IEC LWORD - 64-bit bit string (IEC v3) */
 using LWORD_t = uint64_t;
 
+/**
+ * CODESYS __XWORD - unsigned integer sized to the target pointer width.
+ * Used for ADR()/REF() results and generic pointer-sized values, so an
+ * address round-trips without truncation and without wasting space on
+ * narrow targets (2 bytes on AVR, 8 on 64-bit hosts). `__SIZEOF_POINTER__`
+ * is provided by GCC/Clang/avr-gcc.
+ */
+#if __SIZEOF_POINTER__ <= 2
+using XWORD_t = uint16_t;
+#elif __SIZEOF_POINTER__ <= 4
+using XWORD_t = uint32_t;
+#else
+using XWORD_t = uint64_t;
+#endif
+
 // =============================================================================
 // Elementary Types - Signed Integers
 // =============================================================================

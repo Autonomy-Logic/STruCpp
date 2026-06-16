@@ -48,6 +48,12 @@ public:
     template<typename U>
     IEC_Ptr(IEC_Ptr<U> other) noexcept : ptr_(other.get_void()) {}
 
+    // Construct from an integer address (e.g. __XWORD/ULINT from ADR()).
+    // `IEC_XWORD` implicitly converts to its underlying integer, which
+    // converts to uintptr_t here — the typed pointer round-trips the address.
+    explicit IEC_Ptr(std::uintptr_t addr) noexcept
+        : ptr_(reinterpret_cast<void*>(addr)) {}
+
     // Assignment from any raw pointer
     template<typename U>
     IEC_Ptr& operator=(U* p) noexcept {
@@ -64,6 +70,14 @@ public:
 
     IEC_Ptr& operator=(std::nullptr_t) noexcept {
         ptr_ = nullptr;
+        return *this;
+    }
+
+    // Assignment from an integer address (e.g. `ptr := _TMP` where the temp is
+    // __XWORD/ULINT from ADR()). The address is reinterpreted to the typed
+    // pointer; the source integer carries a pointer-width value.
+    IEC_Ptr& operator=(std::uintptr_t addr) noexcept {
+        ptr_ = reinterpret_cast<void*>(addr);
         return *this;
     }
 

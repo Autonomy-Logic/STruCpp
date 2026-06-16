@@ -72,6 +72,7 @@ const IEC_TO_CPP_TYPE: Record<string, string> = {
   UINT: "UINT_t",
   UDINT: "UDINT_t",
   ULINT: "ULINT_t",
+  __XWORD: "XWORD_t",
   REAL: "REAL_t",
   LREAL: "LREAL_t",
   TIME: "TIME_t",
@@ -94,7 +95,7 @@ const IEC_TO_CPP_TYPE: Record<string, string> = {
  * Map IEC elementary type names to their IECVar-wrapped C++ type names.
  * Used for struct fields and array elements that need per-element forcing.
  */
-const IEC_TO_CPP_VAR_TYPE: Record<string, string> = {
+export const IEC_TO_CPP_VAR_TYPE: Record<string, string> = {
   BOOL: "IEC_BOOL",
   BYTE: "IEC_BYTE",
   WORD: "IEC_WORD",
@@ -108,6 +109,7 @@ const IEC_TO_CPP_VAR_TYPE: Record<string, string> = {
   UINT: "IEC_UINT",
   UDINT: "IEC_UDINT",
   ULINT: "IEC_ULINT",
+  __XWORD: "IEC_XWORD",
   REAL: "IEC_REAL",
   LREAL: "IEC_LREAL",
   TIME: "IEC_TIME",

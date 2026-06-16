@@ -50,7 +50,9 @@ describe("IEC base-type registry", () => {
     it.each(IEC_BASE_TYPES.map((t) => [t.name, t]))(
       "%s has all required fields populated",
       (_name, t: IECTypeMetadata) => {
-        expect(t.name).toMatch(/^[A-Z][A-Z0-9_]*$/);
+        // Leading underscores are allowed for platform/vendor types such as
+        // __XWORD (CODESYS naming convention for the pointer-width address type).
+        expect(t.name).toMatch(/^_*[A-Z][A-Z0-9_]*$/);
         expect(t.aliases).toBeInstanceOf(Array);
         expect(typeof t.byteSize).toBe("number");
         expect(t.byteSize).toBeGreaterThanOrEqual(0);
