@@ -15,8 +15,10 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#ifndef __AVR__
+#include "iec_fault.hpp"
+#if STRUCPP_HAS_EXCEPTIONS
 #include <stdexcept>
 #endif
 
@@ -141,10 +143,10 @@ inline LocatedArea parse_area(char c) {
         case 'I': case 'i': return LocatedArea::Input;
         case 'Q': case 'q': return LocatedArea::Output;
         case 'M': case 'm': return LocatedArea::Memory;
-#ifdef __AVR__
-        default: for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
         default: throw std::invalid_argument("Invalid area character");
+#else
+        default: iec_runtime_fault(IecFault::BadLocation, "Invalid area character");
 #endif
     }
 }
@@ -162,10 +164,10 @@ inline LocatedSize parse_size(char c) {
         case 'W': case 'w': return LocatedSize::Word;
         case 'D': case 'd': return LocatedSize::DWord;
         case 'L': case 'l': return LocatedSize::LWord;
-#ifdef __AVR__
-        default: for(;;);
-#else
+#if STRUCPP_HAS_EXCEPTIONS
         default: throw std::invalid_argument("Invalid size character");
+#else
+        default: iec_runtime_fault(IecFault::BadLocation, "Invalid size character");
 #endif
     }
 }
