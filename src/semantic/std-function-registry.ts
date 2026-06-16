@@ -866,13 +866,15 @@ export class StdFunctionRegistry {
   // ---------------------------------------------------------------------------
 
   private registerSystemFunctions(): void {
-    // ADR(variable) -> ULINT (address of variable)
+    // ADR(variable) -> __XWORD (pointer-width address of variable). Returning
+    // the pointer-width type lets a `_TMP : __XWORD := ADR(x)` temp round-trip
+    // the address on every target and assign to a typed POINTER TO X.
     this.register({
       name: "ADR",
       cppName: "ADR",
       returnConstraint: "specific",
       returnMatchesFirstParam: false,
-      specificReturnType: "ULINT",
+      specificReturnType: "__XWORD",
       params: [{ name: "IN", constraint: "ANY", isByRef: true }],
       isVariadic: false,
       isConversion: false,
@@ -890,7 +892,7 @@ export class StdFunctionRegistry {
       cppName: "REF",
       returnConstraint: "specific",
       returnMatchesFirstParam: false,
-      specificReturnType: "ANY",
+      specificReturnType: "__XWORD",
       params: [{ name: "IN", constraint: "ANY", isByRef: true }],
       isVariadic: false,
       isConversion: false,

@@ -124,6 +124,14 @@ public:
      */
     IEC_REF_TO(std::nullptr_t) noexcept : ptr_(nullptr) {}
 
+    /**
+     * Constructor from an integer address (e.g. a __XWORD temp produced by
+     * REF_LINK()). The address is reinterpreted as the wrapped IECVar<T>*;
+     * it must originate from REF_LINK()/ADR() of a matching variable.
+     */
+    explicit IEC_REF_TO(std::uintptr_t addr) noexcept
+        : ptr_(reinterpret_cast<pointer_type>(addr)) {}
+
     // Copy and move constructors/assignment - default is fine
     IEC_REF_TO(const IEC_REF_TO&) = default;
     IEC_REF_TO(IEC_REF_TO&&) = default;
@@ -213,6 +221,16 @@ public:
      */
     IEC_REF_TO& operator=(std::nullptr_t) noexcept {
         set(nullptr);
+        return *this;
+    }
+
+    /**
+     * Assignment from an integer address (e.g. `ref := _TMP` where the temp is
+     * a __XWORD produced by REF_LINK()). The address is reinterpreted as the
+     * wrapped IECVar<T>*.
+     */
+    IEC_REF_TO& operator=(std::uintptr_t addr) noexcept {
+        set(reinterpret_cast<pointer_type>(addr));
         return *this;
     }
 

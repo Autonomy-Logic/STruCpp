@@ -240,6 +240,16 @@ public:
         return *this;
     }
 
+    /** Assignment from a raw pointer — stores the address as an integer.
+     *  Used by the ADR(x) lowering `_TMP : __XWORD := &(x)`. Integral targets
+     *  only; routed through uintptr_t so it is pointer-width-correct per
+     *  target (no truncation when T is __XWORD/XWORD_t). */
+    template<typename U, typename V = T, std::enable_if_t<std::is_integral<V>::value, int> = 0>
+    IECVar& operator=(U* p) noexcept {
+        set(static_cast<T>(reinterpret_cast<std::uintptr_t>(p)));
+        return *this;
+    }
+
     // =========================================================================
     // Container Access Forwarding (for array/struct types)
     // =========================================================================
@@ -486,6 +496,8 @@ using IEC_BYTE = IECVar<BYTE_t>;
 using IEC_WORD = IECVar<WORD_t>;
 using IEC_DWORD = IECVar<DWORD_t>;
 using IEC_LWORD = IECVar<LWORD_t>;
+// CODESYS __XWORD — pointer-width unsigned (see XWORD_t in iec_types.hpp).
+using IEC_XWORD = IECVar<XWORD_t>;
 
 // Signed integers
 using IEC_SINT = IECVar<SINT_t>;
