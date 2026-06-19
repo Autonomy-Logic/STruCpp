@@ -1369,7 +1369,20 @@ inline T MOVE(T value) noexcept {
  * All calls to TIME() within the same cycle return the same value,
  * matching CODESYS behavior.
  */
+#ifdef STRUCPP_THREADED
+// Threaded runtime (OpenPLC v4): each IEC task runs on its own thread and must
+// observe an IEC TIME() value that is STABLE for the duration of its scan and
+// equal to the time at which the dispatcher released it. thread_local gives
+// every worker its own TIME() base; the runtime stamps it via
+// strucpp_set_current_time() at each dispatch, so a slow/overrunning task keeps
+// reading its own snapshot while the dispatcher's master clock advances freely
+// for the other tasks. Gated on STRUCPP_THREADED because single-threaded
+// targets (Arduino/bare-metal) may have no TLS runtime — there it stays a plain
+// global, which is correct for a one-thread scan loop.
+inline thread_local int64_t __CURRENT_TIME_NS = 0;
+#else
 inline int64_t __CURRENT_TIME_NS = 0;
+#endif
 
 /**
  * Returns the current scan-cycle time.

@@ -43,7 +43,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("ARR[1] = 100;");
+    expect(result.cppCode).toContain("ARR.at(1) = 100;");
   });
 
   it("should generate 1D array element read", () => {
@@ -60,7 +60,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("X = ARR[5];");
+    expect(result.cppCode).toContain("X = ARR.at(5);");
   });
 
   it("should generate array access with variable index", () => {
@@ -77,7 +77,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("ARR[I] = ARR[I] + 1;");
+    expect(result.cppCode).toContain("ARR.at(I) = ARR.at(I) + 1;");
   });
 
   it("should generate array access with expression index", () => {
@@ -94,7 +94,7 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("ARR[I + 1] = ARR[I - 1] + ARR[I];");
+    expect(result.cppCode).toContain("ARR.at(I + 1) = ARR.at(I - 1) + ARR.at(I);");
   });
 
   it("should generate 2D array access with multiple subscripts", () => {
@@ -113,8 +113,8 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("MATRIX(0, 0) = 1.0;");
-    expect(result.cppCode).toContain("MATRIX(I, J) = 0.0;");
+    expect(result.cppCode).toContain("MATRIX.at(0, 0) = 1.0;");
+    expect(result.cppCode).toContain("MATRIX.at(I, J) = 0.0;");
   });
 
   it("should generate array access in FOR loop", () => {
@@ -137,8 +137,8 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("ARR[I] = I * 10;");
-    expect(result.cppCode).toContain("SUM = SUM + ARR[I];");
+    expect(result.cppCode).toContain("ARR.at(I) = I * 10;");
+    expect(result.cppCode).toContain("SUM = SUM + ARR.at(I);");
   });
 });
 
@@ -248,8 +248,8 @@ describe("Phase 3.3: Combined Array/Struct Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("POINTS[1].X = 100;");
-    expect(result.cppCode).toContain("POINTS[I].Y = 200;");
+    expect(result.cppCode).toContain("POINTS.at(1).X = 100;");
+    expect(result.cppCode).toContain("POINTS.at(I).Y = 200;");
   });
 
   it("should generate array of struct access in loop", () => {
@@ -273,8 +273,8 @@ describe("Phase 3.3: Combined Array/Struct Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("POINTS[I].X = I;");
-    expect(result.cppCode).toContain("POINTS[I].Y = I * 2;");
+    expect(result.cppCode).toContain("POINTS.at(I).X = I;");
+    expect(result.cppCode).toContain("POINTS.at(I).Y = I * 2;");
   });
 });
 

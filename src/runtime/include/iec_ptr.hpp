@@ -25,6 +25,11 @@
 #include <cstddef>
 #include <type_traits>
 
+#include "iec_fault.hpp"   // STRUCPP_HAS_EXCEPTIONS, IecFault, iec_runtime_fault
+#if STRUCPP_HAS_EXCEPTIONS
+#include <stdexcept>
+#endif
+
 namespace strucpp {
 
 // Forward declare IECVar for arithmetic overloads
@@ -81,12 +86,30 @@ public:
         return *this;
     }
 
-    // Dereference
-    T& operator*() const noexcept { return *static_cast<T*>(ptr_); }
-    T* operator->() const noexcept { return static_cast<T*>(ptr_); }
+    // Null-fault helper: a dereference of an unassigned (NULL) POINTER TO
+    // raises a clean fault instead of an undefined access — throw on exception
+    // targets (the runtime catches it and stops just the faulting task), or
+    // iec_runtime_fault(IecFault::NullReference) on -fno-exceptions MCU targets
+    // (where there is no MMU to trap a null deref, so the unchecked access would
+    // silently read/write address 0). Mirrors REF_TO's NullReferenceException.
+    void __fault_if_null() const {
+        if (!ptr_) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::runtime_error("Null pointer dereference");
+#else
+            iec_runtime_fault(IecFault::NullReference);
+#endif
+        }
+    }
 
-    // Subscript (pointer[n])
-    T& operator[](std::ptrdiff_t n) const noexcept {
+    // Dereference (null-checked)
+    T& operator*() const { __fault_if_null(); return *static_cast<T*>(ptr_); }
+    T* operator->() const { __fault_if_null(); return static_cast<T*>(ptr_); }
+
+    // Subscript (pointer[n]) — null-checked base (the offset itself is
+    // unbounded raw pointer arithmetic, as in C).
+    T& operator[](std::ptrdiff_t n) const {
+        __fault_if_null();
         return *(static_cast<T*>(ptr_) + n);
     }
 
