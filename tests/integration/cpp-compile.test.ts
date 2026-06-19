@@ -298,9 +298,9 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // Verify 2D access uses operator() syntax, not chained brackets
-    expect(result.cppCode).toContain('M(0, 0)');
-    expect(result.cppCode).toContain('M(1, 2)');
-    expect(result.cppCode).toContain('M(I, J)');
+    expect(result.cppCode).toContain('M.at(0, 0)');
+    expect(result.cppCode).toContain('M.at(1, 2)');
+    expect(result.cppCode).toContain('M.at(I, J)');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'array_2d_access');
     expect(cppResult.success).toBe(true);
@@ -333,9 +333,9 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     // 1D uses brackets, 2D uses parenthesized call syntax
-    expect(result.cppCode).toContain('ROW[1]');
-    expect(result.cppCode).toContain('GRID(1, 1)');
-    expect(result.cppCode).toContain('GRID(I, I)');
+    expect(result.cppCode).toContain('ROW.at(1)');
+    expect(result.cppCode).toContain('GRID.at(1, 1)');
+    expect(result.cppCode).toContain('GRID.at(I, I)');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'mixed_1d_2d_access');
     expect(cppResult.success).toBe(true);

@@ -2359,8 +2359,18 @@ export class CodeGenerator {
       if (prog.varExternal.length > 0) {
         this.emitHeader("    void sync_in() override {");
         for (const ext of prog.varExternal) {
+          // Snapshot the private working copy with a raw byte copy (memcpy),
+          // NOT `__prev = x`. IECVar::operator= routes through set() and copies
+          // ONLY value_ (it deliberately preserves forced_/forced_value_), so
+          // `__prev = x` leaves __prev's padding and forced_* bytes diverging
+          // from x's. The sync_out memcmp below then sees those stale bytes as a
+          // spurious "change" — making a program that merely READS a shared
+          // global write its stale snapshot back to canonical and clobber a
+          // concurrent writer (per-variable, so it can revert g_a but not g_b
+          // and tear a cross-global invariant). memcpy makes __prev byte-equal
+          // to x at sync_in, so the memcmp is a true value diff.
           this.emitHeader(
-            `        ${ext.name} = *${ext.name}__canon; ${ext.name}__prev = ${ext.name};`,
+            `        ${ext.name} = *${ext.name}__canon; __builtin_memcpy(&${ext.name}__prev, &${ext.name}, sizeof(${ext.name}));`,
           );
         }
         this.emitHeader("    }");
@@ -2368,12 +2378,12 @@ export class CodeGenerator {
         for (const ext of prog.varExternal) {
           // Dirty-diff over the whole object via its address + sizeof, NOT
           // .raw_ptr(): raw_ptr() exists only on scalar IECVar<T>, so arrays
-          // (Array1D) and structs would fail to compile. Comparing
-          // &x..&x+sizeof(x) is correct for every VAR_EXTERNAL kind because
-          // x__prev is a full-value copy of x, so equal values compare byte-
-          // equal and any changed byte (the whole array/struct included) is
-          // detected. sizeof(*raw_ptr()) was also wrong for arrays (element
-          // size, not array size).
+          // (Array1D) and structs would fail to compile. This is correct for
+          // every VAR_EXTERNAL kind ONLY because sync_in snapshots __prev with
+          // memcpy (a byte-exact copy): the body changes value_ via set(), and
+          // nothing else writes the object, so any byte difference here is a
+          // real value change. A pure reader leaves x byte-identical to __prev
+          // and commits nothing.
           this.emitHeader(
             `        if (__builtin_memcmp(&${ext.name}, &${ext.name}__prev, sizeof(${ext.name})) != 0) *${ext.name}__canon = ${ext.name};`,
           );
@@ -3663,14 +3673,17 @@ export class CodeGenerator {
     }
 
     // Legacy path: flat subscripts/fieldAccess/dereference (no interleaving)
-    // Subscripts (array access)
-    // 2D+ arrays use operator() syntax: arr(i, j) — 1D uses operator[]: arr[i]
+    // Subscripts (array access). Use the bounds-checked .at() accessor (1D and
+    // 2D+) so an out-of-range index raises a clean fault — throw on exception
+    // targets (caught by the runtime, stops the faulting task), or
+    // iec_runtime_fault(ArrayBounds) on -fno-exceptions MCU targets — instead of
+    // the unchecked operator[]/operator() that silently corrupts memory.
     if (expr.subscripts.length > 1) {
       const args = expr.subscripts.map((sub) => this.generateExpression(sub));
-      result += `(${args.join(", ")})`;
+      result += `.at(${args.join(", ")})`;
     } else {
       for (const sub of expr.subscripts) {
-        result += `[${this.generateExpression(sub)}]`;
+        result += `.at(${this.generateExpression(sub)})`;
       }
     }
 
@@ -3769,13 +3782,19 @@ export class CodeGenerator {
           break;
         }
         case "subscript": {
+          // Bounds-checked .at() (not operator[]/operator()): an out-of-range
+          // IEC array index raises a clean fault — `throw` on exception targets
+          // (the runtime v4 dispatcher catches it and stops just the faulting
+          // task) and iec_runtime_fault(IecFault::ArrayBounds) on -fno-exceptions
+          // MCU targets. operator[] stays unchecked+constexpr for the debug-table
+          // generator's &arr[i] address-of expressions; POU bodies use .at().
           if (step.indices.length > 1) {
             const args = step.indices.map((idx) =>
               this.generateExpression(idx),
             );
-            result += `(${args.join(", ")})`;
+            result += `.at(${args.join(", ")})`;
           } else if (step.indices.length === 1) {
-            result += `[${this.generateExpression(step.indices[0]!)}]`;
+            result += `.at(${this.generateExpression(step.indices[0]!)})`;
           }
           break;
         }
