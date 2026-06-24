@@ -4665,6 +4665,10 @@ export class CodeGenerator {
   ): string {
     const u = typeName.toUpperCase();
     if (!memberNames.has(u)) return "";
+    // Enums are emitted as `using IEC_X = IEC_ENUM<X>` aliases, which cannot be
+    // named with an elaborated `struct`/`class` specifier. They also never need
+    // disambiguation here because the member is already mangled (name_).
+    if (this.enumTypeMembers.has(u)) return "";
     if (this.knownFBTypes.has(u)) return "class ";
     if (this.knownStructTypes.has(u)) return "struct ";
     return "";

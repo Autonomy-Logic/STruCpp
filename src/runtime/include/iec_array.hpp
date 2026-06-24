@@ -296,6 +296,30 @@ public:
         return data_[index - lower_];
     }
 
+    // Bounds-checked access — the codegen emits .at() for all subscripts so an
+    // out-of-range index raises a clean fault instead of corrupting memory.
+    T& at(int64_t index) {
+        if (index < lower_ || index > upper_) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::out_of_range("Array index out of bounds");
+#else
+            iec_runtime_fault(IecFault::ArrayBounds);
+#endif
+        }
+        return data_[index - lower_];
+    }
+
+    const T& at(int64_t index) const {
+        if (index < lower_ || index > upper_) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::out_of_range("Array index out of bounds");
+#else
+            iec_runtime_fault(IecFault::ArrayBounds);
+#endif
+        }
+        return data_[index - lower_];
+    }
+
     int64_t lower_bound(int = 1) const noexcept { return lower_; }
     int64_t upper_bound(int = 1) const noexcept { return upper_; }
     int64_t length() const noexcept { return upper_ - lower_ + 1; }
@@ -322,6 +346,29 @@ public:
     }
 
     const T& operator()(int64_t i, int64_t j) const noexcept {
+        return data_[(i - lower1_) * dim2_ + (j - lower2_)];
+    }
+
+    // Bounds-checked access — codegen emits .at(i, j) for 2D subscripts.
+    T& at(int64_t i, int64_t j) {
+        if (i < lower1_ || i > upper1_ || j < lower2_ || j > upper2_) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::out_of_range("Array index out of bounds");
+#else
+            iec_runtime_fault(IecFault::ArrayBounds);
+#endif
+        }
+        return data_[(i - lower1_) * dim2_ + (j - lower2_)];
+    }
+
+    const T& at(int64_t i, int64_t j) const {
+        if (i < lower1_ || i > upper1_ || j < lower2_ || j > upper2_) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::out_of_range("Array index out of bounds");
+#else
+            iec_runtime_fault(IecFault::ArrayBounds);
+#endif
+        }
         return data_[(i - lower1_) * dim2_ + (j - lower2_)];
     }
 

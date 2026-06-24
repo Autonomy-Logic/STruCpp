@@ -113,6 +113,14 @@ public:
         return *(static_cast<T*>(ptr_) + n);
     }
 
+    // Bounds-checked accessor used by codegen's subscript path. A POINTER TO has
+    // no bounds metadata, so this matches operator[]: null-checked base with
+    // unbounded raw pointer arithmetic (as in C).
+    T& at(std::ptrdiff_t n) const {
+        __fault_if_null();
+        return *(static_cast<T*>(ptr_) + n);
+    }
+
     // Raw access
     T* get() const noexcept { return static_cast<T*>(ptr_); }
     void* get_void() const noexcept { return ptr_; }
