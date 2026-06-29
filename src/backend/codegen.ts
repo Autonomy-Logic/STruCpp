@@ -385,6 +385,9 @@ export class CodeGenerator {
   /** Map of UPPER(typeName).UPPER(propName) → declared property name for property access codegen */
   protected propertyNameMap: Map<string, string> = new Map();
 
+  /** Map of UPPER(FB name) → UPPER(parent FB name) for walking the EXTENDS chain during property resolution */
+  protected fbExtendsMap: Map<string, string> = new Map();
+
   /** Current FB name (set during generateFBImplementation for property resolution) */
   private currentFBName: string | undefined;
 
@@ -941,6 +944,9 @@ export class CodeGenerator {
 
     // Build method name map, property name map, and interface method names for FBs
     for (const fb of ast.functionBlocks) {
+      if (fb.extends) {
+        this.fbExtendsMap.set(fb.name.toUpperCase(), fb.extends.toUpperCase());
+      }
       for (const method of fb.methods) {
         this.methodNameMap.set(
           `${fb.name.toUpperCase()}.${method.name.toUpperCase()}`,
@@ -4707,14 +4713,28 @@ export class CodeGenerator {
   /**
    * Resolve a property name from the property name map.
    * Returns the declared property name if the field is a property, undefined otherwise.
+   *
+   * Walks the EXTENDS chain: a PROPERTY declared on a base FB is inherited and
+   * thus accessible through a derived FB instance, so each ancestor is consulted
+   * in turn. The visited set guards against malformed cyclic inheritance.
    */
   private resolvePropertyName(
     typeName: string | undefined,
     fieldName: string,
   ): string | undefined {
     if (!typeName) return undefined;
-    const key = `${typeName.toUpperCase()}.${fieldName.toUpperCase()}`;
-    return this.propertyNameMap.get(key);
+    const fieldUpper = fieldName.toUpperCase();
+    let currentType: string | undefined = typeName.toUpperCase();
+    const visited = new Set<string>();
+    while (currentType && !visited.has(currentType)) {
+      visited.add(currentType);
+      const declaredName = this.propertyNameMap.get(
+        `${currentType}.${fieldUpper}`,
+      );
+      if (declaredName) return declaredName;
+      currentType = this.fbExtendsMap.get(currentType);
+    }
+    return undefined;
   }
 
   /**
