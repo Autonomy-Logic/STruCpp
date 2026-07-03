@@ -326,14 +326,16 @@ END_CONFIGURATION
       expect(paths).toContain("P.LOCAL");
     });
 
-    it("uses g_config.<name> as the C++ pointer expression for globals", () => {
+    it("uses g_config.<name>.value as the C++ pointer expression for globals", () => {
       // The AST builder canonicalises identifier case (IEC 61131-3 is
       // case-insensitive), so even `gxRun` ends up as `GXRUN` in the
       // generated header — the debug-table C++ has to address that field.
+      // Each global is a `GlobalVar<V>` wrapper (value + per-global mutex), so
+      // the debugger must reach the underlying storage through `.value`.
       const result = compile(globalsSource);
       const cpp = result.debugTableCpp!;
-      expect(cpp).toContain("&g_config.GXRUN");
-      expect(cpp).toContain("&g_config.GICOUNT");
+      expect(cpp).toContain("&g_config.GXRUN.value");
+      expect(cpp).toContain("&g_config.GICOUNT.value");
     });
 
     it("places globals before instance vars (own bucket at array 0)", () => {
