@@ -430,6 +430,94 @@ describe('Error Handling Tests', () => {
     });
   });
 
+  // Shared globals use a per-global-mutex model: each CONFIGURATION VAR_GLOBAL
+  // is a GlobalVar<V> (value + mutex) and each VAR_EXTERNAL is a pointer to it.
+  // Scalars get full read()/write() codegen; composite globals (struct / array
+  // / function-block) can be declared + debugged but their in-body access is
+  // gated (fail-loud) until locked field/element/call codegen lands.
+  describe('Shared globals (mutex model)', () => {
+    it('compiles a scalar located shared global end-to-end', () => {
+      const source = `
+        PROGRAM Main
+          VAR_EXTERNAL run AT %QX0.0 : BOOL; END_VAR
+          VAR seed : BOOL := TRUE; END_VAR
+          run := seed;
+        END_PROGRAM
+
+        CONFIGURATION Config0
+          VAR_GLOBAL run AT %QX0.0 : BOOL; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      // Scalar external access is rewritten through the GlobalVar pointer.
+      expect(result.cppCode).toContain('RUN->write(');
+      // The config global is a GlobalVar<V> member and the located image binds
+      // through its `.value`.
+      expect(result.headerCode).toContain('GlobalVar<IEC_BOOL> RUN;');
+      expect(result.cppCode).toContain('RUN.value.raw_ptr()');
+    });
+
+    it('allows declaring a composite (struct) shared global', () => {
+      const source = `
+        TYPE Point : STRUCT x : INT; y : INT; END_STRUCT END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL pt : Point; END_VAR
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL pt : Point; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+    });
+
+    it('fails loudly when a composite shared global is read in a body', () => {
+      const source = `
+        TYPE Point : STRUCT x : INT; y : INT; END_STRUCT END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL pt : Point; END_VAR
+          VAR v : INT; END_VAR
+          v := pt.x;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL pt : Point; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      expect(() => compile(source)).toThrow(/composite type|not yet supported/i);
+    });
+
+    it('fails loudly when a composite shared global is written in a body', () => {
+      const source = `
+        TYPE Point : STRUCT x : INT; y : INT; END_STRUCT END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL pt : Point; END_VAR
+          pt.x := 3;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL pt : Point; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      expect(() => compile(source)).toThrow(/composite type|not yet supported/i);
+    });
+  });
+
   describe('Task Validation', () => {
     it('should report error for undefined task reference', () => {
       const source = `

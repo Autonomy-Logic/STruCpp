@@ -52,7 +52,7 @@ import {
   parseTimeLiteral,
   parseTodLiteralToNs,
 } from "../project-model.js";
-import { TypeRegistry } from "../semantic/type-registry.js";
+import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
 import {
@@ -290,6 +290,18 @@ export class CodeGenerator {
 
   /** Track located variables for descriptor array generation */
   private locatedVars: LocatedVarDescriptor[] = [];
+
+  /** UPPER(names) of the current PROGRAM's VAR_EXTERNAL globals. Non-empty only
+   *  while emitting a program body; access to these is rewritten to go through
+   *  the GlobalVar pointer (g->read() / g->write() / g->with_lock()). */
+  private programExternals: Set<string> = new Set();
+
+  /** UPPER(names) of the current PROGRAM's VAR_EXTERNAL globals whose type is
+   *  NOT elementary (struct / array / function-block). Subset of
+   *  programExternals. Scalar externals get full read()/write() codegen;
+   *  composite externals can be declared + debugged but their in-body access is
+   *  gated here (fail-loud) until locked field/element/call codegen lands. */
+  private compositeExternals: Set<string> = new Set();
 
   /** Track retain variables per program for table generation */
   private programRetainVars: Map<
@@ -1023,6 +1035,7 @@ export class CodeGenerator {
     this.emitHeader("");
     this.emitHeader('#include "iec_types.hpp"');
     this.emitHeader('#include "iec_var.hpp"');
+    this.emitHeader('#include "iec_global.hpp"');
     this.emitHeader('#include "iec_array.hpp"');
     this.emitHeader('#include "iec_located.hpp"');
     this.emitHeader('#include "iec_std_lib.hpp"');
@@ -2284,20 +2297,11 @@ export class CodeGenerator {
 
     // Generate external variable members.
     //
-    // Default build (single-threaded / baremetal / pre-threaded runtime):
-    // plain references to the shared Configuration globals -- the program
-    // reads/writes the canonical storage directly (the runtime serializes
-    // task bodies, so this is safe).
-    //
-    // STRUCPP_THREADED build (OpenPLC threaded runtime): the program holds a
-    // private working COPY of each global, a pointer to the canonical global,
-    // and a snapshot taken at sync_in. The runtime calls sync_in() before
-    // run() and sync_out() after, so task bodies operate only on private
-    // storage and never hold a global lock across the body. sync_out commits
-    // only globals this program actually changed (memcmp vs the snapshot), so
-    // a program that merely reads a shared global never clobbers a concurrent
-    // writer. The member keeps the same name in both builds, so the generated
-    // body code is identical.
+    // A VAR_EXTERNAL reference to a CONFIGURATION VAR_GLOBAL is a pointer to the
+    // single canonical GlobalVar<V> (which bundles the value + that global's own
+    // mutex). Access goes through the pointer: `g->read()` / `g->write(v)` /
+    // `g->with_lock(f)`. The lock is a no-op in the non-threaded build. Same
+    // member shape and body code in both builds.
     if (prog.varExternal.length > 0) {
       // VAR_EXTERNAL records carry separate `name`/`typeName`;
       // projectVarToTypeRef + toParamTypeRef + mapTypeRefToCpp resolve the
@@ -2307,20 +2311,19 @@ export class CodeGenerator {
           this.toParamTypeRef(this.projectVarToTypeRef(ext)),
         ),
       );
-      this.emitHeader("    // External variables (globals)");
-      this.emitHeader("#ifdef STRUCPP_THREADED");
+      this.emitHeader("    // External variables (pointers to shared globals)");
       for (let i = 0; i < prog.varExternal.length; i++) {
         const ext = prog.varExternal[i]!;
-        const ty = extTypes[i]!;
-        this.emitHeader(`    ${ty} ${ext.name};`);
-        this.emitHeader(`    ${ty}* ${ext.name}__canon = nullptr;`);
-        this.emitHeader(`    ${ty} ${ext.name}__prev;`);
+        // Every external — scalar or composite — is a pointer to its canonical
+        // GlobalVar<V>. Composite globals (struct / array / function-block) can
+        // be declared and debugged (the located image + debug table reach them
+        // through `.value`); only their in-body ACCESS is currently gated, at
+        // the access sites (see compositeExternals), because correct locked
+        // field / element / call codegen is a follow-up phase.
+        this.emitHeader(
+          `    GlobalVar<${extTypes[i]!}>* ${ext.name} = nullptr;`,
+        );
       }
-      this.emitHeader("#else");
-      for (let i = 0; i < prog.varExternal.length; i++) {
-        this.emitHeader(`    ${extTypes[i]!}& ${prog.varExternal[i]!.name};`);
-      }
-      this.emitHeader("#endif");
     }
 
     this.emitHeader("");
@@ -2331,14 +2334,14 @@ export class CodeGenerator {
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     if (prog.varExternal.length > 0) {
-      // Constructor with external variable references — same metadata-aware
-      // type resolution as the field declarations above.
+      // Constructor takes a pointer to each canonical GlobalVar<V> (the
+      // configuration owns the storage + mutex; the program just points at it).
       const params = prog.varExternal
         .map((ext) => {
           const cppType = this.mapTypeRefToCpp(
             this.toParamTypeRef(this.projectVarToTypeRef(ext)),
           );
-          return `${cppType}& ${ext.name}_ref`;
+          return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
       this.emitHeader(`    explicit ${className}(${params});`);
@@ -2349,52 +2352,21 @@ export class CodeGenerator {
     this.emitHeader("    // Run program");
     this.emitHeader("    void run() override;");
 
-    // Threaded-runtime overrides (STRUCPP_THREADED only): global sync hooks
-    // and this program's slice of the located-vars table. Absent otherwise,
-    // so the default build's ProgramBase no-ops are used.
+    // Threaded-runtime override (STRUCPP_THREADED only): this program's slice
+    // of the located-vars table, for PROGRAM-LOCAL `VAR AT` only. Shared globals
+    // no longer use sync_in/sync_out — VAR_EXTERNAL access goes through the
+    // GlobalVar pointer (per-global-mutex locked). `sync_in`/`sync_out` remain
+    // reserved no-op vtable slots in ProgramBase for ABI stability; we simply
+    // don't override them. Config-scope located globals are copied at the
+    // barrier (owned by the configuration), so this range covers only this
+    // program's own `VAR AT` declarations.
     const threadedRange = this.locatedRangeForProgram(prog.name);
-    if (prog.varExternal.length > 0 || threadedRange.count > 0) {
+    if (threadedRange.count > 0) {
       this.emitHeader("");
       this.emitHeader("#ifdef STRUCPP_THREADED");
-      if (prog.varExternal.length > 0) {
-        this.emitHeader("    void sync_in() override {");
-        for (const ext of prog.varExternal) {
-          // Snapshot the private working copy with a raw byte copy (memcpy),
-          // NOT `__prev = x`. IECVar::operator= routes through set() and copies
-          // ONLY value_ (it deliberately preserves forced_/forced_value_), so
-          // `__prev = x` leaves __prev's padding and forced_* bytes diverging
-          // from x's. The sync_out memcmp below then sees those stale bytes as a
-          // spurious "change" — making a program that merely READS a shared
-          // global write its stale snapshot back to canonical and clobber a
-          // concurrent writer (per-variable, so it can revert g_a but not g_b
-          // and tear a cross-global invariant). memcpy makes __prev byte-equal
-          // to x at sync_in, so the memcmp is a true value diff.
-          this.emitHeader(
-            `        ${ext.name} = *${ext.name}__canon; __builtin_memcpy(&${ext.name}__prev, &${ext.name}, sizeof(${ext.name}));`,
-          );
-        }
-        this.emitHeader("    }");
-        this.emitHeader("    void sync_out() override {");
-        for (const ext of prog.varExternal) {
-          // Dirty-diff over the whole object via its address + sizeof, NOT
-          // .raw_ptr(): raw_ptr() exists only on scalar IECVar<T>, so arrays
-          // (Array1D) and structs would fail to compile. This is correct for
-          // every VAR_EXTERNAL kind ONLY because sync_in snapshots __prev with
-          // memcpy (a byte-exact copy): the body changes value_ via set(), and
-          // nothing else writes the object, so any byte difference here is a
-          // real value change. A pure reader leaves x byte-identical to __prev
-          // and commits nothing.
-          this.emitHeader(
-            `        if (__builtin_memcmp(&${ext.name}, &${ext.name}__prev, sizeof(${ext.name})) != 0) *${ext.name}__canon = ${ext.name};`,
-          );
-        }
-        this.emitHeader("    }");
-      }
-      if (threadedRange.count > 0) {
-        this.emitHeader(
-          `    void located_range(uint32_t* __off, uint32_t* __cnt) const override { *__off = ${threadedRange.offset}; *__cnt = ${threadedRange.count}; }`,
-        );
-      }
+      this.emitHeader(
+        `    void located_range(uint32_t* __off, uint32_t* __cnt) const override { *__off = ${threadedRange.offset}; *__cnt = ${threadedRange.count}; }`,
+      );
       this.emitHeader("#endif");
     }
 
@@ -2439,7 +2411,7 @@ export class CodeGenerator {
           const cppType = this.mapTypeRefToCpp(
             this.toParamTypeRef(this.projectVarToTypeRef(ext)),
           );
-          return `${cppType}& ${ext.name}_ref`;
+          return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
       this.emit(`Program_${prog.name}::Program_${prog.name}(${params})`);
@@ -2467,33 +2439,16 @@ export class CodeGenerator {
           inits.push(`${decl.name}(${initVal})`);
         }
       }
-      // External globals: default build binds reference members in the init
-      // list; STRUCPP_THREADED build binds the canonical pointer in the body
-      // (the working copy is a value member synced by the runtime). The body
-      // code is identical in both builds.
-      const extRefInits = prog.varExternal.map(
+      // External globals: bind the pointer member to the canonical GlobalVar<V>
+      // passed by the configuration. Identical in both builds.
+      const extInits = prog.varExternal.map(
         (ext) => `${ext.name}(${ext.name}_ref)`,
       );
-      this.emit("#ifdef STRUCPP_THREADED");
-      if (inits.length > 0) {
-        this.emit(`    : ${inits.join(", ")}`);
+      const combined = [...inits, ...extInits];
+      if (combined.length > 0) {
+        this.emit(`    : ${combined.join(", ")}`);
       }
-      this.emit("#else");
-      {
-        const combined = [...inits, ...extRefInits];
-        if (combined.length > 0) {
-          this.emit(`    : ${combined.join(", ")}`);
-        }
-      }
-      this.emit("#endif");
       this.emit("{");
-      if (prog.varExternal.length > 0) {
-        this.emit("#ifdef STRUCPP_THREADED");
-        for (const ext of prog.varExternal) {
-          this.emit(`    ${ext.name}__canon = &${ext.name}_ref;`);
-        }
-        this.emit("#endif");
-      }
 
       // Initialize located variable pointers
       this.generateLocatedVarPointerInit(prog.name);
@@ -2539,6 +2494,16 @@ export class CodeGenerator {
 
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
+    // VAR_EXTERNAL names for this program: body access to these is rewritten to
+    // go through the GlobalVar pointer (g->read()/write()/with_lock).
+    this.programExternals = new Set(
+      prog.varExternal.map((ext) => ext.name.toUpperCase()),
+    );
+    this.compositeExternals = new Set(
+      prog.varExternal
+        .filter((ext) => !isElementaryType(ext.typeName))
+        .map((ext) => ext.name.toUpperCase()),
+    );
     if (astProg) {
       this.enterScope(astProg.varBlocks);
     }
@@ -2552,6 +2517,8 @@ export class CodeGenerator {
       this.exitScope();
       this.emitLineDirective(astProg.sourceSpan.endLine);
     }
+    this.programExternals = new Set();
+    this.compositeExternals = new Set();
     const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
@@ -2615,7 +2582,21 @@ export class CodeGenerator {
             ? { referenceKind: gvar.referenceKind }
             : {}),
         });
-        this.emitHeader(`    ${constQualifier}${cppType} ${gvar.name};`);
+        // Wrap the canonical global in GlobalVar<V> (value + per-global mutex).
+        // Programs reach it through a GlobalVar<V>* VAR_EXTERNAL and lock it on
+        // every access. `const` cannot apply (the wrapper is mutated under lock).
+        void constQualifier;
+        this.emitHeader(`    GlobalVar<${cppType}> ${gvar.name};`);
+        // #172: a located VAR_GLOBAL (`AT %IX/%QX/%MW ...`) must enter the
+        // located-vars descriptor so the runtime binds it to the I/O image.
+        // Owner "@config" (not a real program) keeps it out of every program's
+        // located_range; its pointer is wired in the configuration ctor.
+        if (gvar.address) {
+          this.collectLocatedVarFromModel(
+            { name: gvar.name, typeName: gvar.typeName, address: gvar.address },
+            "@config",
+          );
+        }
       }
       this.emitHeader("");
     }
@@ -2694,8 +2675,8 @@ export class CodeGenerator {
         inst.programType.toUpperCase(),
       );
       if (prog && prog.varExternal.length > 0) {
-        // Pass references to global variables
-        const args = prog.varExternal.map((ext) => ext.name).join(", ");
+        // Pass a pointer to each canonical GlobalVar<V> member.
+        const args = prog.varExternal.map((ext) => `&${ext.name}`).join(", ");
         inits.push(`${inst.instanceName}(${args})`);
       } else {
         inits.push(`${inst.instanceName}()`);
@@ -2747,6 +2728,12 @@ export class CodeGenerator {
       );
       resourceIndex++;
     }
+
+    // #172: bind located VAR_GLOBAL descriptor pointers to the canonical
+    // storage (through the GlobalVar<V> wrapper's `.value`). The runtime copies
+    // the I/O image to/from these pointers (locking each global's mutex on the
+    // threaded path).
+    this.generateLocatedVarPointerInit("@config", "    ", ".value");
 
     this.emit("}");
     this.emit("");
@@ -2957,6 +2944,23 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
+    // Composite shared global (struct / array / FB) as the assignment target:
+    // not yet supported (see generateVariableExpression for the rationale). This
+    // catches whole-object writes (`g := x`); field / element writes
+    // (`g.x := v`) are caught when the target expression is generated below.
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      this.compositeExternals.has(stmt.target.name.toUpperCase())
+    ) {
+      throw new Error(
+        `Shared global '${stmt.target.name}' is a composite type (struct / ` +
+          `array / function-block) and is written in a program body. Composite ` +
+          `shared globals can be declared and debugged, but writing them from a ` +
+          `threaded/shared context is not yet supported in the mutex-based ` +
+          `shared-global model — scalar globals only for now.`,
+      );
+    }
+
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
     if (propWrite) {
@@ -3019,6 +3023,20 @@ export class CodeGenerator {
       this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
         this.emit(`${bi}${target} = ${callExpr};`);
       });
+      return;
+    }
+
+    // VAR_EXTERNAL scalar write → lock the shared global and set its value via
+    // the pointer. (Struct/array/FB-instance external writes go through
+    // with_lock at their emission sites.)
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      stmt.target.fieldAccess.length === 0 &&
+      !stmt.target.isDereference &&
+      this.programExternals.has(stmt.target.name.toUpperCase())
+    ) {
+      const value = this.generateExpression(stmt.value);
+      this.emit(`${indent}${stmt.target.name}->write(${value});`);
       return;
     }
 
@@ -3543,6 +3561,33 @@ export class CodeGenerator {
    */
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
+
+    // Composite shared global (struct / array / function-block) accessed in a
+    // body: not yet supported. Locked field / element / call codegen
+    // (g->with_lock(...), respecting the never-nested-lock contract) is a
+    // follow-up phase. Fail loudly rather than emit mis-locked / non-compiling
+    // code. Declaration + debug-table + located-image binding all work.
+    if (this.compositeExternals.has(nameUpper)) {
+      throw new Error(
+        `Shared global '${expr.name}' is a composite type (struct / array / ` +
+          `function-block) and is accessed in a program body. Composite shared ` +
+          `globals can be declared and debugged, but reading or writing them ` +
+          `from a threaded/shared context is not yet supported in the ` +
+          `mutex-based shared-global model — scalar globals only for now.`,
+      );
+    }
+
+    // VAR_EXTERNAL scalar read → lock the shared global and return its value.
+    // read() yields the real IEC type, so it stays deduction-friendly in
+    // std-lib templates (NOT/ADD/...). Struct/array/FB externals (fieldAccess or
+    // call sites) are handled at their emission sites via with_lock().
+    if (
+      this.programExternals.has(nameUpper) &&
+      expr.fieldAccess.length === 0 &&
+      !expr.isDereference
+    ) {
+      return `${expr.name}->read()`;
+    }
 
     // Handle THIS reference
     if (nameUpper === "THIS") {
@@ -5075,6 +5120,21 @@ export class CodeGenerator {
     indent: string,
   ): void {
     const rawName = this.resolveVariableBaseName(call.functionName);
+
+    // Calling a function-block instance that is a shared global: not yet
+    // supported (see generateVariableExpression for the rationale). An FB call
+    // mutates instance state and reads its outputs across several emitted
+    // lines; doing that safely needs a single with_lock() spanning the whole
+    // call, which is a follow-up phase. Fail loudly.
+    if (this.compositeExternals.has(call.functionName.toUpperCase())) {
+      throw new Error(
+        `Shared global '${call.functionName}' is a function-block instance and ` +
+          `is invoked in a program body. Calling a shared function-block global ` +
+          `is not yet supported in the mutex-based shared-global model — scalar ` +
+          `globals only for now.`,
+      );
+    }
+
     const instanceName =
       this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName;
 
@@ -5520,8 +5580,12 @@ export class CodeGenerator {
 
     // Forward declarations for program instances
     for (const locVar of this.locatedVars) {
+      const scope =
+        locVar.programName === "@config"
+          ? "configuration"
+          : `Program_${locVar.programName}`;
       this.emitHeader(
-        `// Forward: ${locVar.varName} AT ${locVar.address} in Program_${locVar.programName}`,
+        `// Forward: ${locVar.varName} AT ${locVar.address} in ${scope}`,
       );
     }
     if (isEmpty) {
@@ -5608,6 +5672,10 @@ export class CodeGenerator {
   private generateLocatedVarPointerInit(
     programName: string,
     indent: string = "    ",
+    // Member accessor between the variable name and `.raw_ptr()`. Empty for
+    // program-local `VAR AT` (the member is the IEC value directly); ".value"
+    // for configuration VAR_GLOBAL (the member is a GlobalVar<V> wrapper).
+    memberAccess: string = "",
   ): void {
     const progVars = this.locatedVars.filter(
       (v) => v.programName === programName,
@@ -5623,7 +5691,7 @@ export class CodeGenerator {
       );
       if (index >= 0) {
         this.emit(
-          `${indent}locatedVars[${index}].pointer = ${locVar.varName}.raw_ptr();`,
+          `${indent}locatedVars[${index}].pointer = ${locVar.varName}${memberAccess}.raw_ptr();`,
         );
       }
     }
