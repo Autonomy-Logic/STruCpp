@@ -4885,7 +4885,9 @@ export class CodeGenerator {
 
   /**
    * Enter a new scope for code generation. Populates currentScopeVarTypes
-   * from the variable blocks of a program or function block.
+   * from the variable blocks of a program or function block, then adds
+   * VAR_GLOBAL declarations. When names collide, local declarations shadow
+   * global declarations.
    */
   private enterScope(
     varBlocks: CompilationUnit["programs"][0]["varBlocks"],
@@ -4893,6 +4895,25 @@ export class CodeGenerator {
     this.currentScopeVarTypes.clear();
     this.currentScopeVarRefKinds.clear();
     this.memberMangledNames.clear();
+
+    // Initialize with global declarations to allow local declarations to shadow them
+    for (const block of this.ast?.globalVarBlocks ?? []) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
+          if (
+            decl.type.referenceKind !== undefined &&
+            decl.type.referenceKind !== "none"
+          ) {
+            this.currentScopeVarRefKinds.set(
+              name.toUpperCase(),
+              decl.type.referenceKind,
+            );
+          }
+        }
+      }
+    }
+
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
         const cppType = this.isUserDefinedType(decl.type.name)
