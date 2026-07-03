@@ -2567,6 +2567,16 @@ export class CodeGenerator {
         // every access. `const` cannot apply (the wrapper is mutated under lock).
         void constQualifier;
         this.emitHeader(`    GlobalVar<${cppType}> ${gvar.name};`);
+        // #172: a located VAR_GLOBAL (`AT %IX/%QX/%MW ...`) must enter the
+        // located-vars descriptor so the runtime binds it to the I/O image.
+        // Owner "@config" (not a real program) keeps it out of every program's
+        // located_range; its pointer is wired in the configuration ctor.
+        if (gvar.address) {
+          this.collectLocatedVarFromModel(
+            { name: gvar.name, typeName: gvar.typeName, address: gvar.address },
+            "@config",
+          );
+        }
       }
       this.emitHeader("");
     }
@@ -2698,6 +2708,12 @@ export class CodeGenerator {
       );
       resourceIndex++;
     }
+
+    // #172: bind located VAR_GLOBAL descriptor pointers to the canonical
+    // storage (through the GlobalVar<V> wrapper's `.value`). The runtime copies
+    // the I/O image to/from these pointers (locking each global's mutex on the
+    // threaded path).
+    this.generateLocatedVarPointerInit("@config", "    ", ".value");
 
     this.emit("}");
     this.emit("");
@@ -5497,8 +5513,12 @@ export class CodeGenerator {
 
     // Forward declarations for program instances
     for (const locVar of this.locatedVars) {
+      const scope =
+        locVar.programName === "@config"
+          ? "configuration"
+          : `Program_${locVar.programName}`;
       this.emitHeader(
-        `// Forward: ${locVar.varName} AT ${locVar.address} in Program_${locVar.programName}`,
+        `// Forward: ${locVar.varName} AT ${locVar.address} in ${scope}`,
       );
     }
     if (isEmpty) {
@@ -5585,6 +5605,10 @@ export class CodeGenerator {
   private generateLocatedVarPointerInit(
     programName: string,
     indent: string = "    ",
+    // Member accessor between the variable name and `.raw_ptr()`. Empty for
+    // program-local `VAR AT` (the member is the IEC value directly); ".value"
+    // for configuration VAR_GLOBAL (the member is a GlobalVar<V> wrapper).
+    memberAccess: string = "",
   ): void {
     const progVars = this.locatedVars.filter(
       (v) => v.programName === programName,
@@ -5600,7 +5624,7 @@ export class CodeGenerator {
       );
       if (index >= 0) {
         this.emit(
-          `${indent}locatedVars[${index}].pointer = ${locVar.varName}.raw_ptr();`,
+          `${indent}locatedVars[${index}].pointer = ${locVar.varName}${memberAccess}.raw_ptr();`,
         );
       }
     }
