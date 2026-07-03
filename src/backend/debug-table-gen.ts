@@ -478,9 +478,10 @@ export function generateDebugTable(
   // Path convention is bare uppercase name (no instance prefix): the
   // editor's `buildGlobalDebugPath()` returns `name.toUpperCase()` and
   // OPC-UA `GVL:foo` references resolve against the same key.
-  // C++ expression is `${configGlobal}.${name}` because globals are
-  // emitted as members of the Configuration class (see codegen.ts
-  // `generateConfigurationFromAST`).
+  // C++ expression is `${configGlobal}.${name}.value` because each global is
+  // emitted as a `GlobalVar<V>` member of the Configuration class (value +
+  // per-global mutex); `.value` reaches the underlying IEC storage the
+  // debugger reads/writes (see codegen.ts, iec_global.hpp).
   for (const config of ast.configurations) {
     for (const block of config.varBlocks) {
       if (block.blockType !== "VAR_GLOBAL") continue;
@@ -488,7 +489,7 @@ export function generateDebugTable(
         for (const varName of decl.names) {
           visitTypeRef(
             varName.toUpperCase(),
-            `${configGlobal}.${varName}`,
+            `${configGlobal}.${varName}.value`,
             decl.type,
           );
         }

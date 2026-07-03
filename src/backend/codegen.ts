@@ -52,7 +52,7 @@ import {
   parseTimeLiteral,
   parseTodLiteralToNs,
 } from "../project-model.js";
-import { TypeRegistry } from "../semantic/type-registry.js";
+import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
 import {
@@ -295,6 +295,13 @@ export class CodeGenerator {
    *  while emitting a program body; access to these is rewritten to go through
    *  the GlobalVar pointer (g->read() / g->write() / g->with_lock()). */
   private programExternals: Set<string> = new Set();
+
+  /** UPPER(names) of the current PROGRAM's VAR_EXTERNAL globals whose type is
+   *  NOT elementary (struct / array / function-block). Subset of
+   *  programExternals. Scalar externals get full read()/write() codegen;
+   *  composite externals can be declared + debugged but their in-body access is
+   *  gated here (fail-loud) until locked field/element/call codegen lands. */
+  private compositeExternals: Set<string> = new Set();
 
   /** Track retain variables per program for table generation */
   private programRetainVars: Map<
@@ -2306,8 +2313,15 @@ export class CodeGenerator {
       );
       this.emitHeader("    // External variables (pointers to shared globals)");
       for (let i = 0; i < prog.varExternal.length; i++) {
+        const ext = prog.varExternal[i]!;
+        // Every external — scalar or composite — is a pointer to its canonical
+        // GlobalVar<V>. Composite globals (struct / array / function-block) can
+        // be declared and debugged (the located image + debug table reach them
+        // through `.value`); only their in-body ACCESS is currently gated, at
+        // the access sites (see compositeExternals), because correct locked
+        // field / element / call codegen is a follow-up phase.
         this.emitHeader(
-          `    GlobalVar<${extTypes[i]!}>* ${prog.varExternal[i]!.name} = nullptr;`,
+          `    GlobalVar<${extTypes[i]!}>* ${ext.name} = nullptr;`,
         );
       }
     }
@@ -2485,6 +2499,11 @@ export class CodeGenerator {
     this.programExternals = new Set(
       prog.varExternal.map((ext) => ext.name.toUpperCase()),
     );
+    this.compositeExternals = new Set(
+      prog.varExternal
+        .filter((ext) => !isElementaryType(ext.typeName))
+        .map((ext) => ext.name.toUpperCase()),
+    );
     if (astProg) {
       this.enterScope(astProg.varBlocks);
     }
@@ -2499,6 +2518,7 @@ export class CodeGenerator {
       this.emitLineDirective(astProg.sourceSpan.endLine);
     }
     this.programExternals = new Set();
+    this.compositeExternals = new Set();
     const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
@@ -2924,6 +2944,23 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
+    // Composite shared global (struct / array / FB) as the assignment target:
+    // not yet supported (see generateVariableExpression for the rationale). This
+    // catches whole-object writes (`g := x`); field / element writes
+    // (`g.x := v`) are caught when the target expression is generated below.
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      this.compositeExternals.has(stmt.target.name.toUpperCase())
+    ) {
+      throw new Error(
+        `Shared global '${stmt.target.name}' is a composite type (struct / ` +
+          `array / function-block) and is written in a program body. Composite ` +
+          `shared globals can be declared and debugged, but writing them from a ` +
+          `threaded/shared context is not yet supported in the mutex-based ` +
+          `shared-global model — scalar globals only for now.`,
+      );
+    }
+
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
     if (propWrite) {
@@ -3524,6 +3561,21 @@ export class CodeGenerator {
    */
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
+
+    // Composite shared global (struct / array / function-block) accessed in a
+    // body: not yet supported. Locked field / element / call codegen
+    // (g->with_lock(...), respecting the never-nested-lock contract) is a
+    // follow-up phase. Fail loudly rather than emit mis-locked / non-compiling
+    // code. Declaration + debug-table + located-image binding all work.
+    if (this.compositeExternals.has(nameUpper)) {
+      throw new Error(
+        `Shared global '${expr.name}' is a composite type (struct / array / ` +
+          `function-block) and is accessed in a program body. Composite shared ` +
+          `globals can be declared and debugged, but reading or writing them ` +
+          `from a threaded/shared context is not yet supported in the ` +
+          `mutex-based shared-global model — scalar globals only for now.`,
+      );
+    }
 
     // VAR_EXTERNAL scalar read → lock the shared global and return its value.
     // read() yields the real IEC type, so it stays deduction-friendly in
@@ -5068,6 +5120,21 @@ export class CodeGenerator {
     indent: string,
   ): void {
     const rawName = this.resolveVariableBaseName(call.functionName);
+
+    // Calling a function-block instance that is a shared global: not yet
+    // supported (see generateVariableExpression for the rationale). An FB call
+    // mutates instance state and reads its outputs across several emitted
+    // lines; doing that safely needs a single with_lock() spanning the whole
+    // call, which is a follow-up phase. Fail loudly.
+    if (this.compositeExternals.has(call.functionName.toUpperCase())) {
+      throw new Error(
+        `Shared global '${call.functionName}' is a function-block instance and ` +
+          `is invoked in a program body. Calling a shared function-block global ` +
+          `is not yet supported in the mutex-based shared-global model — scalar ` +
+          `globals only for now.`,
+      );
+    }
+
     const instanceName =
       this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName;
 
