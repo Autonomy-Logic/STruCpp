@@ -1135,30 +1135,6 @@ export class CodeGenerator {
       }
     }
 
-    // Generate top-level global variables (GVL files)
-    if (ast.globalVarBlocks.length > 0) {
-      this.emitHeader("// Global variables");
-      for (const block of ast.globalVarBlocks) {
-        const constQualifier = block.isConstant ? "const " : "";
-        for (const decl of block.declarations) {
-          const cppType = this.mapTypeRefToCpp(decl.type);
-          for (const name of decl.names) {
-            this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
-            if (decl.initialValue) {
-              const initExpr = this.generateExpression(decl.initialValue);
-              this.emitHeader(
-                `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
-              );
-            } else {
-              this.emitHeader(`inline ${cppType} ${name}{};`);
-            }
-            this.emitHeaderChunkMarker("end", "inlineGlobal", name);
-          }
-        }
-      }
-      this.emitHeader("");
-    }
-
     // Inject reachable library chunks (header side).
     //
     // Per archive: emit `// Library: <name>` header, then `class X;`
@@ -1229,6 +1205,30 @@ export class CodeGenerator {
       this.emitHeaderChunkMarker("begin", "functionBlock", fb.name);
       this.generateFBHeaderDeclaration(fb);
       this.emitHeaderChunkMarker("end", "functionBlock", fb.name);
+    }
+
+    // Generate top-level global variables (GVL files)
+    if (ast.globalVarBlocks.length > 0) {
+      this.emitHeader("// Global variables");
+      for (const block of ast.globalVarBlocks) {
+        const constQualifier = block.isConstant ? "const " : "";
+        for (const decl of block.declarations) {
+          const cppType = this.mapTypeRefToCpp(decl.type);
+          for (const name of decl.names) {
+            this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
+            if (decl.initialValue) {
+              const initExpr = this.generateExpression(decl.initialValue);
+              this.emitHeader(
+                `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
+              );
+            } else {
+              this.emitHeader(`inline ${cppType} ${name}{};`);
+            }
+            this.emitHeaderChunkMarker("end", "inlineGlobal", name);
+          }
+        }
+      }
+      this.emitHeader("");
     }
 
     // Generate program class declarations
