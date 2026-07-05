@@ -1,0 +1,58 @@
+{
+  "name": "plcopen-softmotion",
+  "displayName": "PLCopen SoftMotion (Light)",
+  "version": "0.1.0",
+  "namespace": "strucpp",
+  "description": "PLCopen Motion Control (Part 1) blocks for CiA 402 servo drives. MC_* wrappers over the OpenSML light SoftMotion library (GPL-3.0, https://github.com/feecat/OpenSML). Position/velocity in raw drive units.",
+  "isBuiltin": true,
+  "blocks": {
+    "MC_POWER": {
+      "documentation": "Enables/disables the power stage of a CiA 402 axis and runs the drive enable sequence. Status is TRUE once operation is enabled."
+    },
+    "MC_HOME": {
+      "documentation": "Commands the drive's homing procedure (CiA 402 mode 6). Requires homing method/speeds configured on the drive (0x6098/0x6099/0x609A)."
+    },
+    "MC_MOVEABSOLUTE": {
+      "documentation": "Moves to an absolute target position using the drive's Profile Position mode (CiA 402 mode 1). Position/Velocity are in raw drive increments."
+    },
+    "MC_MOVERELATIVE": {
+      "documentation": "Moves a relative distance using the drive's Profile Position mode (CiA 402 mode 1). Distance/Velocity are in raw drive increments."
+    },
+    "MC_MOVEVELOCITY": {
+      "documentation": "Commands a continuous velocity using the drive's Profile Velocity mode (CiA 402 mode 3). Velocity is signed, in raw drive increments/s."
+    },
+    "MC_STOP": {
+      "documentation": "Requests a controlled stop (halt) and holds the axis at standstill."
+    },
+    "MC_HALT": {
+      "documentation": "Requests a controlled halt; the axis can resume with a new motion command."
+    },
+    "MC_RESET": {
+      "documentation": "Acknowledges/clears a drive fault (CiA 402 fault reset, ControlWord bit 7)."
+    },
+    "MC_READACTUALPOSITION": {
+      "documentation": "Reads the axis actual position (0x6064) in raw drive increments."
+    },
+    "MC_READACTUALVELOCITY": {
+      "documentation": "Reads the axis actual velocity (0x606C) in raw drive increments/s."
+    },
+    "MC_READSTATUS": {
+      "documentation": "Reads the CiA 402 axis state (fault / operation-enabled / standstill) from the StatusWord."
+    },
+    "OPENSML_POWER": {
+      "documentation": "OpenSML CiA 402 power/enable sequence state machine (backs MC_Power)."
+    },
+    "OPENSML_HOME": {
+      "documentation": "OpenSML homing state machine, CiA 402 mode 6 (backs MC_Home)."
+    },
+    "OPENSML_PROFILEPOSITION": {
+      "documentation": "OpenSML Profile Position state machine, CiA 402 mode 1 (backs MC_MoveAbsolute/MC_MoveRelative)."
+    },
+    "OPENSML_PROFILEVELOCITY": {
+      "documentation": "OpenSML Profile Velocity state machine, CiA 402 mode 3 (backs MC_MoveVelocity)."
+    },
+    "OPENSML_STOP": {
+      "documentation": "OpenSML software stop; sets the halt bit (ControlWord bit 8)."
+    }
+  }
+}

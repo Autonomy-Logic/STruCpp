@@ -456,6 +456,7 @@ export async function setup() {
   const iecPath = resolve(libsDir, "iec-standard-fb.stlib");
   const additionalFbPath = resolve(libsDir, "additional-function-blocks.stlib");
   const oscatPath = resolve(libsDir, "oscat-basic.stlib");
+  const softmotionPath = resolve(libsDir, "plcopen-softmotion.stlib");
   const stdFnPath = resolve(libsDir, "iec-std-functions.stlib");
 
   await refreshAndLoadCompiler();
@@ -506,6 +507,28 @@ export async function setup() {
     });
   }
 
+  // 3b. PLCopen SoftMotion (Light) — disk-backed. MC_* wrappers over the
+  //     vendored OpenSML CiA 402 blocks. Depends on iec-standard-fb (TON).
+  //     Axis type must precede the FBs that reference it.
+  if (existsSync(resolve(sourcesRoot, "plcopen-softmotion"))) {
+    console.log("[rebuild-libs] Rebuilding plcopen-softmotion.stlib...");
+    const iecArchive = loadStlibFromFile(iecPath);
+    rebuildLibraryFromDisk({
+      libDirName: "plcopen-softmotion",
+      stlibPath: softmotionPath,
+      orderedSources: [
+        "opensml_axis.st",
+        "opensml_power.st",
+        "opensml_home.st",
+        "opensml_profile_position.st",
+        "opensml_profile_velocity.st",
+        "opensml_stop.st",
+        "mc_wrappers.st",
+      ],
+      dependencies: [iecArchive],
+    });
+  }
+
   // 4. IEC std functions — synthesized from StdFunctionRegistry. Pure
   //    metadata: no .st sources, no codegen output. Editor tooling
   //    consumes the manifest to render ADD/SUB/MUX/SHL/CONCAT/... in
@@ -541,6 +564,12 @@ export async function setup() {
     }
     if (existsSync(oscatPath)) {
       copyFileSync(oscatPath, resolve(vscodeLibsDir, "oscat-basic.stlib"));
+    }
+    if (existsSync(softmotionPath)) {
+      copyFileSync(
+        softmotionPath,
+        resolve(vscodeLibsDir, "plcopen-softmotion.stlib"),
+      );
     }
     if (existsSync(stdFnPath)) {
       copyFileSync(stdFnPath, resolve(vscodeLibsDir, "iec-std-functions.stlib"));
