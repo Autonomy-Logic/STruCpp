@@ -14,6 +14,7 @@ import { describe, it, expect } from "vitest";
 import { resolve } from "path";
 import { discoverStlibs, loadStlibFromFile } from "../../src/node/library-loader.js";
 import { compile } from "../../src/index.js";
+import { hasGpp, runE2ETestPipeline } from "../integration/test-helpers.js";
 
 const LIBS_DIR = resolve(__dirname, "../../libs");
 const STLIB_PATH = resolve(LIBS_DIR, "plcopen-softmotion.stlib");
@@ -61,6 +62,33 @@ describe("PLCopen SoftMotion Library", () => {
         "OPENSML_STOP",
       ]) {
         expect(names, `${b} present`).toContain(b);
+      }
+    });
+
+    it("exposes the controller-side (CSP) blocks and the S7RTT OTG engine", () => {
+      const names = archive.manifest.functionBlocks.map((fb) => fb.name);
+      for (const b of [
+        "OPENSML_SYNCPOSITION",
+        "OPENSML_SYNCVELOCITY",
+        "OPENSML_AXISCONTROLLER",
+        "FB_S7RTT_OTG",
+        "FB_S7RTT_PLAN",
+      ]) {
+        expect(names, `${b} present`).toContain(b);
+      }
+      // S7RTT trajectory helper functions
+      const fns = (archive.manifest.functions ?? []).map((f) => f.name);
+      for (const f of [
+        "FC_S7RTT_ATTIME",
+        "FC_S7RTT_BUILDPROFILE",
+        "FC_S7RTT_CALCTRAJDIST",
+      ]) {
+        expect(fns, `${f} present`).toContain(f);
+      }
+      // supporting types
+      const types = (archive.manifest.types ?? []).map((t) => t.name);
+      for (const t of ["ST_MOTIONSTATE", "ST_MOTIONLIMITS", "OPENSML_CONTROL"]) {
+        expect(types, `${t} present`).toContain(t);
       }
     });
 
@@ -156,6 +184,64 @@ describe("PLCopen SoftMotion Library", () => {
       const result = compile(source);
       expect(result.success).toBe(false);
       expect(result.errors.length).toBeGreaterThan(0);
+    });
+
+    it("compiles the controller-side CSP path (SyncPosition + S7RTT OTG)", () => {
+      const source = `
+        PROGRAM Main
+          VAR
+            Axis1 : OpenSML_Axis;
+            syncP : OpenSML_SyncPosition;
+            enable, sim : BOOL;
+          END_VAR
+          syncP(Axis := Axis1, xEnable := enable, xSimulation := sim,
+                TargetPosition := 12345.0, MaxVelocity := 2000.0,
+                MaxAcceleration := 20000.0, MaxJerk := 200000.0, CycleTime := 0.001);
+        END_PROGRAM
+      `;
+      const result = compile(source, { libraries: discoverStlibs(LIBS_DIR) });
+      expect(result.errors).toHaveLength(0);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // Numeric validation that the S-curve OTG math survived the PLCopen-XML -> ST
+  // conversion: a point-to-point move must converge to target while respecting
+  // the velocity limit. Requires g++ (auto-skipped otherwise).
+  describe.skipIf(!hasGpp)("runtime: S7RTT OTG trajectory", () => {
+    it("converges to target within the velocity limit and without error", () => {
+      const testST = `
+        TEST 'OTG point-to-point converges under vmax'
+          VAR
+            otg : FB_S7RTT_OTG;
+            i : INT;
+            np : LREAL;
+            peakVel : LREAL;
+          END_VAR
+          FOR i := 1 TO 3000 DO
+            otg(ControlInterface := FALSE, TargetPosition := 100000.0,
+                TargetVelocity := 0.0, CycleTime := 0.001,
+                MaxVelocity := 50000.0, MaxAcceleration := 500000.0,
+                MaxJerk := 5000000.0, CurrentPosition := 0.0);
+            IF ABS(otg.NewVelocity) > peakVel THEN
+              peakVel := ABS(otg.NewVelocity);
+            END_IF
+          END_FOR
+          np := otg.NewPosition;
+          ASSERT_NEAR(np, 100000.0, 5.0);
+          ASSERT_TRUE(peakVel <= 50001.0);
+          ASSERT_FALSE(otg.xError);
+        END_TEST
+      `;
+      const { stdout, exitCode } = runE2ETestPipeline({
+        sourceST: `PROGRAM Main VAR dummy : BOOL; END_VAR dummy := FALSE; END_PROGRAM`,
+        testST,
+        isTestBuild: true,
+        tempDirPrefix: "strucpp-softmotion-",
+        compileOptions: { libraries: discoverStlibs(LIBS_DIR) },
+      });
+      expect(stdout).toMatch(/PASS|passed/i);
+      expect(exitCode).toBe(0);
     });
   });
 });

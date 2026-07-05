@@ -517,12 +517,24 @@ export async function setup() {
       libDirName: "plcopen-softmotion",
       stlibPath: softmotionPath,
       orderedSources: [
+        // Types first
         "opensml_axis.st",
+        "opensml_control.st",
+        "s7rtt_types.st",
+        // S7RTT online trajectory generator (Apache-2.0)
+        "s7rtt_functions.st",
+        "s7rtt_blocks.st",
+        // OpenSML drive-side blocks
         "opensml_power.st",
         "opensml_home.st",
         "opensml_profile_position.st",
         "opensml_profile_velocity.st",
         "opensml_stop.st",
+        // OpenSML controller-side (CSP) blocks — depend on FB_S7RTT_OTG
+        "opensml_sync_position.st",
+        "opensml_sync_velocity.st",
+        "opensml_axis_controller.st",
+        // PLCopen MC_* wrappers
         "mc_wrappers.st",
       ],
       dependencies: [iecArchive],
