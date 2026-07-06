@@ -437,6 +437,12 @@ export class CodeGenerator {
    *  Used to resolve positional arguments in FB invocations. */
   private fbInputParams: Map<string, string[]> = new Map();
 
+  /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
+   *  FB inout params are stored as by-value members with copy-in at the call
+   *  site; this set drives the matching copy-back after the call so a callee's
+   *  mutations propagate to the caller's variable (true inout semantics). */
+  private fbInoutParams: Map<string, Set<string>> = new Map();
+
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
 
   constructor(
@@ -682,6 +688,7 @@ export class CodeGenerator {
     fbs: Array<{
       name: string;
       inputNames: string[];
+      inoutNames: string[];
       fields: Array<{
         name: string;
         type: string;
@@ -698,6 +705,12 @@ export class CodeGenerator {
         this.fbInputParams.set(
           fbUpper,
           fb.inputNames.map((n) => n.toUpperCase()),
+        );
+      }
+      if (fb.inoutNames.length > 0) {
+        this.fbInoutParams.set(
+          fbUpper,
+          new Set(fb.inoutNames.map((n) => n.toUpperCase())),
         );
       }
       for (const f of fb.fields) {
@@ -777,6 +790,7 @@ export class CodeGenerator {
           return {
             name: fb.name,
             inputNames: fb.inputs.map((i) => i.name),
+            inoutNames: fb.inouts.map((i) => i.name),
             fields: [
               ...fb.inputs.map(mapVar),
               ...fb.outputs.map(mapVar),
@@ -920,6 +934,7 @@ export class CodeGenerator {
       this.knownFBTypes.add(fb.name.toUpperCase());
       // Build ordered input parameter names for positional argument resolution
       const inputNames: string[] = [];
+      const inoutNames: string[] = [];
       for (const block of fb.varBlocks) {
         if (block.blockType === "VAR_INPUT") {
           for (const decl of block.declarations) {
@@ -927,10 +942,19 @@ export class CodeGenerator {
               inputNames.push(name.toUpperCase());
             }
           }
+        } else if (block.blockType === "VAR_IN_OUT") {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              inoutNames.push(name.toUpperCase());
+            }
+          }
         }
       }
       if (inputNames.length > 0) {
         this.fbInputParams.set(fb.name.toUpperCase(), inputNames);
+      }
+      if (inoutNames.length > 0) {
+        this.fbInoutParams.set(fb.name.toUpperCase(), new Set(inoutNames));
       }
     }
 
@@ -5185,6 +5209,26 @@ export class CodeGenerator {
       },
       `${instanceName}.ENO`,
     );
+
+    // Copy VAR_IN_OUT parameters back to the caller's variables. FB inout params
+    // are stored as by-value members and copied IN before the call; without this
+    // copy-OUT the callee's mutations would be discarded (true inout semantics
+    // require both directions). Mirrors the graphical-language convention of
+    // tying an inout pin on both sides. A follow-up strucpp branch replaces this
+    // copy-in/copy-out with by-reference (pointer) inout members.
+    const inoutParams = fbTypeName
+      ? this.fbInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+    if (inoutParams && inoutParams.size > 0) {
+      for (const arg of filteredArgs) {
+        if (arg.isOutput) continue;
+        if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
+          this.emit(
+            `${indent}${this.generateExpression(arg.value)} = ${instanceName}.${arg.name};`,
+          );
+        }
+      }
+    }
 
     // Capture output arguments (=> syntax), excluding ENO (already handled)
     for (const arg of filteredArgs) {

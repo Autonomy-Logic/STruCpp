@@ -3,11 +3,17 @@
   "displayName": "PLCopen SoftMotion (Light)",
   "version": "0.1.0",
   "namespace": "strucpp",
-  "description": "PLCopen Motion Control (Part 1) blocks for CiA 402 servo drives. MC_* wrappers over the OpenSML light SoftMotion library (GPL-3.0, https://github.com/feecat/OpenSML). Position/velocity in raw drive units.",
+  "description": "CODESYS SoftMotion (SM3) compatible PLCopen Motion Control for CiA 402 servo drives. AXIS_REF_SM3 + MC_* blocks in LREAL technical units, over the OpenSML light SoftMotion engine (GPL-3.0, https://github.com/feecat/OpenSML) and S7RTT OTG (Apache-2.0, https://github.com/feecat/S7RTT).",
   "isBuiltin": true,
   "blocks": {
+    "SM_DRIVE_GENERICDS402": {
+      "documentation": "Generic CiA 402 (DS402) drive bridge — the OpenPLC analogue of CODESYS SM_Drive_ETC_GenericDSP402. One per axis, called each scan; bridges the CiA 402 PDO image to AXIS_REF_SM3, converting increments <-> technical units and deriving the PLCopen axis state."
+    },
     "MC_POWER": {
       "documentation": "Enables/disables the power stage of a CiA 402 axis and runs the drive enable sequence. Status is TRUE once operation is enabled."
+    },
+    "MC_READAXISERROR": {
+      "documentation": "Reads the axis error state and error identifier (AxisError / AxisErrorID) from the CiA 402 drive."
     },
     "MC_HOME": {
       "documentation": "Commands the drive's homing procedure (CiA 402 mode 6). Requires homing method/speeds configured on the drive (0x6098/0x6099/0x609A)."
