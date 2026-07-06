@@ -2968,10 +2968,6 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
-    // Composite shared global (struct / array / FB) as the assignment target is
-    // handled by generateVariableExpression, which routes it to `g->value`
-    // (whole-object or field/bit writes) — see the rationale there.
-
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
     if (propWrite) {
@@ -2979,6 +2975,20 @@ export class CodeGenerator {
       this.emit(
         `${indent}${propWrite.objectCode}set_${propWrite.propertyName}(${value});`,
       );
+      return;
+    }
+
+    // Composite / array shared-global WRITE (VAR_EXTERNAL to a composite
+    // VAR_GLOBAL): take the global's own mutex and write the canonical directly
+    // through with_lock. The RHS is computed into a temp first, so any
+    // composite-global reads in it take + release their locks before we take the
+    // target's lock — at most one global lock is ever held at a time.
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      !stmt.target.isDereference &&
+      this.compositeExternals.has(stmt.target.name.toUpperCase())
+    ) {
+      this.emitCompositeGlobalWrite(stmt.target, stmt.value, indent);
       return;
     }
 
@@ -3065,6 +3075,55 @@ export class CodeGenerator {
     }
 
     this.emit(`${indent}${target} = ${value};`);
+  }
+
+  /**
+   * Emit a write to a composite / array shared global (VAR_EXTERNAL to a
+   * composite VAR_GLOBAL) under the global's own mutex via with_lock. The RHS is
+   * hoisted to a temp BEFORE the lock is taken so its own composite-global reads
+   * (each a self-contained with_lock) release before this write's lock is
+   * acquired — guaranteeing at most one global lock held at a time. Handles
+   * whole-object, field/element, and bit writes (the bit read-modify-write runs
+   * inside the single lock, so it is atomic). The lock compiles out on
+   * non-STRUCPP_THREADED builds (the guard lives inside GlobalVar::with_lock).
+   */
+  private emitCompositeGlobalWrite(
+    target: VariableExpression,
+    valueExpr: Expression,
+    indent: string,
+  ): void {
+    const nameUpper = target.name.toUpperCase();
+    const ptr = this.resolveVariableBaseName(target.name);
+    const tmp = `__gwv_${this.tempVarCounter++}`;
+    const value = this.generateExpression(valueExpr);
+    this.emit(`${indent}auto ${tmp} = ${value};`);
+
+    const lastField = target.fieldAccess[target.fieldAccess.length - 1];
+    const isBitWrite =
+      target.fieldAccess.length > 0 && /^\d+$/.test(lastField ?? "");
+
+    if (isBitWrite) {
+      // Base without the trailing bit index, rendered on the lock lambda param.
+      const baseVar: VariableExpression = {
+        ...target,
+        fieldAccess: target.fieldAccess.slice(0, -1),
+      };
+      if (target.accessChain) {
+        const trimmed = this.trimLastFieldFromAccessChain(target.accessChain);
+        if (trimmed) baseVar.accessChain = trimmed;
+        else delete baseVar.accessChain;
+      }
+      const lv = this.renderAccessTail("(*__glk)", baseVar, nameUpper);
+      this.emit(
+        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = (${lv} & ~(1ULL << ${lastField})) | ((${tmp} ? 1ULL : 0ULL) << ${lastField}); });`,
+      );
+      return;
+    }
+
+    const lv = this.renderAccessTail("(*__glk)", target, nameUpper);
+    this.emit(
+      `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${tmp}; });`,
+    );
   }
 
   /**
@@ -3596,6 +3655,19 @@ export class CodeGenerator {
       return `${expr.name}->read()`;
     }
 
+    // Composite / array shared-global READ (VAR_EXTERNAL to a composite
+    // VAR_GLOBAL). Take the global's own mutex and read the canonical value
+    // directly through with_lock — a field/element read copies only that
+    // sub-value, never the whole struct. The lock lives inside
+    // GlobalVar::with_lock (compiled out when not STRUCPP_THREADED), and each
+    // with_lock is self-contained (acquire → return → release), so several
+    // composite-global reads in one expression are sequential, never nested.
+    if (this.compositeExternals.has(nameUpper) && !expr.isDereference) {
+      const ptr = this.resolveVariableBaseName(expr.name);
+      const inner = this.renderAccessTail("(*__glk)", expr, nameUpper);
+      return `${ptr}->with_lock([&](auto* __glk){ return ${inner}; })`;
+    }
+
     // Handle THIS reference
     if (nameUpper === "THIS") {
       // THIS^ (dereference) with no field access → (*this)
@@ -3671,11 +3743,7 @@ export class CodeGenerator {
 
     // In function/method bodies, references to the function/method name redirect to the result variable
     let result: string;
-    if (this.compositeExternals.has(nameUpper) && !expr.isDereference) {
-      // Composite shared global: base is the canonical value behind the
-      // GlobalVar pointer. Field/subscript/bit access below builds on it.
-      result = `${this.resolveVariableBaseName(expr.name)}->value`;
-    } else if (
+    if (
       this.currentFunctionName &&
       nameUpper === this.currentFunctionName.toUpperCase()
     ) {
@@ -3722,6 +3790,23 @@ export class CodeGenerator {
         return `${expr.name}::${expr.fieldAccess[0]}`;
       }
     }
+
+    return this.renderAccessTail(result, expr, nameUpper);
+  }
+
+  /**
+   * Render an expression's access chain (subscripts / field access / bit access /
+   * dereference) onto a given base string. Factored out of
+   * generateVariableExpression so the same access logic can be rendered onto a
+   * different base — e.g. `(*p)` inside a composite shared-global `with_lock`
+   * lambda.
+   */
+  private renderAccessTail(
+    base: string,
+    expr: VariableExpression,
+    nameUpper: string,
+  ): string {
+    let result = base;
 
     // Use ordered access chain when available (preserves interleaving)
     if (expr.accessChain && expr.accessChain.length > 0) {
@@ -5210,8 +5295,10 @@ export class CodeGenerator {
       for (const arg of filteredArgs) {
         if (arg.isOutput) continue;
         if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
-          this.emit(
-            `${indent}${this.generateExpression(arg.value)} = ${instanceName}.${arg.name};`,
+          this.emitCaptureToLvalue(
+            arg.value,
+            `${instanceName}.${arg.name}`,
+            indent,
           );
         }
       }
@@ -5220,11 +5307,44 @@ export class CodeGenerator {
     // Capture output arguments (=> syntax), excluding ENO (already handled)
     for (const arg of filteredArgs) {
       if (arg.name && arg.isOutput) {
-        this.emit(
-          `${indent}${this.generateExpression(arg.value)} = ${instanceName}.${arg.name};`,
+        this.emitCaptureToLvalue(
+          arg.value,
+          `${instanceName}.${arg.name}`,
+          indent,
         );
       }
     }
+  }
+
+  /**
+   * Emit `<target> = <source>` where `source` is an already-rendered C++
+   * expression. If `target` is a composite / array shared global (VAR_EXTERNAL
+   * to a composite VAR_GLOBAL), the write goes through the global's mutex via
+   * with_lock (a with_lock read result is an rvalue and can't be assigned to).
+   * Used for FB VAR_IN_OUT copy-back and `=>` output capture.
+   */
+  private emitCaptureToLvalue(
+    target: Expression,
+    source: string,
+    indent: string,
+  ): void {
+    if (
+      target.kind === "VariableExpression" &&
+      !target.isDereference &&
+      this.compositeExternals.has(target.name.toUpperCase())
+    ) {
+      const ptr = this.resolveVariableBaseName(target.name);
+      const lv = this.renderAccessTail(
+        "(*__glk)",
+        target,
+        target.name.toUpperCase(),
+      );
+      this.emit(
+        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${source}; });`,
+      );
+      return;
+    }
+    this.emit(`${indent}${this.generateExpression(target)} = ${source};`);
   }
 
   /**

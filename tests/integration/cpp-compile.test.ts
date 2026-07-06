@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execSync } from 'child_process';
 import { compile } from '../../src/index.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -89,6 +90,67 @@ describeIfGpp('C++ Compilation Tests', () => {
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'global_external');
     expect(cppResult.success).toBe(true);
+  });
+
+  it('compiles composite/array shared-global access (with_lock) — threaded and non-threaded', () => {
+    // A struct + array-of-struct global exercised via field/bit/element/FB-inout
+    // access, all routed through GlobalVar::with_lock. Must compile both with the
+    // per-global mutex active (-DSTRUCPP_THREADED) and with it compiled out.
+    const source = `
+      TYPE Item : STRUCT v : INT; END_STRUCT END_TYPE
+      TYPE Cplx : STRUCT
+        x : INT;
+        cw : UINT;
+        nums : ARRAY[1..4] OF INT;
+        items : ARRAY[1..3] OF Item;
+      END_STRUCT END_TYPE
+      FUNCTION_BLOCK Touch VAR_IN_OUT a : Cplx; END_VAR a.x := a.x + 1; END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR_EXTERNAL g : Cplx; END_VAR
+        VAR i : INT; v : INT; b : BOOL; t : Touch; END_VAR
+        v := g.x;
+        g.x := v + 1;
+        g.cw.3 := b;
+        b := g.cw.5;
+        g.nums[i] := v;
+        v := g.items[i].v;
+        t(a := g);
+      END_PROGRAM
+      CONFIGURATION Config0
+        VAR_GLOBAL g : Cplx; END_VAR
+        RESOURCE Res0 ON PLC
+          TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+          TASK task1(INTERVAL := T#10ms, PRIORITY := 2);
+          PROGRAM inst0 WITH task0 : Main;
+          PROGRAM inst1 WITH task1 : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain('->with_lock(');
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    const hpp = path.join(tempDir, 'generated.hpp');
+    const cpp = path.join(tempDir, 'composite_global.cpp');
+    fs.writeFileSync(hpp, result.headerCode);
+    fs.writeFileSync(cpp, `${result.cppCode}\n\nint main(){ return 0; }\n`);
+
+    for (const threaded of [false, true]) {
+      const flag = threaded ? '-DSTRUCPP_THREADED' : '';
+      const out = path.join(tempDir, `composite_global_${threaded}.out`);
+      let ok = true;
+      let diag = '';
+      try {
+        execSync(`g++ -std=c++17 ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, {
+          stdio: 'pipe',
+        });
+      } catch (e) {
+        ok = false;
+        diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+      }
+      expect(ok, `g++ ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
+    }
   });
 
   // "multiple programs" test removed — covered by st-validation/programs/multi_program.

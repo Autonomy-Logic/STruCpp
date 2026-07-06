@@ -480,9 +480,9 @@ describe('Error Handling Tests', () => {
       expect(result.success).toBe(true);
     });
 
-    it('reads a composite shared global field via the canonical value pointer', () => {
-      // Composite shared globals are accessed directly through the GlobalVar
-      // pointer's `->value` (single-task access; used by SoftMotion axes).
+    it('reads a composite shared global field under the global mutex (with_lock)', () => {
+      // Composite shared globals are accessed under their own per-global mutex
+      // via GlobalVar::with_lock (a no-op lock on non-threaded builds).
       const source = `
         TYPE Point : STRUCT x : INT; y : INT; END_STRUCT END_TYPE
         PROGRAM Main
@@ -500,7 +500,7 @@ describe('Error Handling Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('PT->value.X');
+      expect(result.cppCode).toContain('PT->with_lock(');
     });
 
     it('writes a composite shared global field via the canonical value pointer', () => {
@@ -520,7 +520,106 @@ describe('Error Handling Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('PT->value.X = ');
+      expect(result.cppCode).toContain('PT->with_lock(');
+    });
+
+    it('locks bit read + bit write on a composite shared global field', () => {
+      const source = `
+        TYPE Ctrl : STRUCT cw : UINT; END_STRUCT END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL c : Ctrl; END_VAR
+          VAR b : BOOL; END_VAR
+          c.cw.3 := b;
+          b := c.cw.5;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL c : Ctrl; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      // Bit write: read-modify-write happens inside one lock (atomic).
+      expect(result.cppCode).toMatch(/C->with_lock\(\[&\]\(auto\* __glk\)\{ \(\*__glk\)\.CW = \(\(\*__glk\)\.CW & ~\(1ULL << 3\)\)/);
+      // Bit read: extracted inside the lock.
+      expect(result.cppCode).toMatch(/C->with_lock\(\[&\]\(auto\* __glk\)\{ return \(\(static_cast<uint64_t>\(\(\*__glk\)\.CW\) >> 5\) & 1\)/);
+    });
+
+    it('locks element access on an array-of-scalar and array-of-struct global', () => {
+      const source = `
+        TYPE Item : STRUCT v : INT; END_STRUCT END_TYPE
+        TYPE Bag : STRUCT nums : ARRAY[1..4] OF INT; items : ARRAY[1..3] OF Item; END_STRUCT END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL bag : Bag; END_VAR
+          VAR i : INT; v : INT; END_VAR
+          bag.nums[i] := v;
+          v := bag.items[i].v;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL bag : Bag; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('BAG->with_lock([&](auto* __glk){ (*__glk).NUMS.at(I) = ');
+      expect(result.cppCode).toContain('BAG->with_lock([&](auto* __glk){ return (*__glk).ITEMS.at(I).V; })');
+    });
+
+    it('passes a composite shared global to an FB VAR_IN_OUT under the lock (in + out)', () => {
+      const source = `
+        TYPE Axis : STRUCT pos : INT; END_STRUCT END_TYPE
+        FUNCTION_BLOCK Mover VAR_IN_OUT a : Axis; END_VAR a.pos := a.pos + 1; END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR_EXTERNAL ax : Axis; END_VAR
+          VAR mv : Mover; END_VAR
+          mv(a := ax);
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL ax : Axis; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      // copy-in: locked read of the whole global into the FB's by-value inout member
+      expect(result.cppCode).toContain('MV.A = AX->with_lock([&](auto* __glk){ return (*__glk); });');
+      // copy-out: locked write back
+      expect(result.cppCode).toContain('AX->with_lock([&](auto* __glk){ (*__glk) = MV.A; });');
+    });
+
+    it('never nests two global locks in one statement (reads hoisted before write-lock)', () => {
+      const source = `
+        TYPE P : STRUCT a : INT; b : INT; END_STRUCT END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL g1 : P; g2 : P; END_VAR
+          g1.a := g2.b;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL g1 : P; g2 : P; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      // g2 read is hoisted to a temp BEFORE g1's write-lock — the g1 write-lock
+      // body must contain only the temp, never a nested g2->with_lock.
+      expect(result.cppCode).toMatch(/auto __gwv_\d+ = G2->with_lock\(\[&\]\(auto\* __glk\)\{ return \(\*__glk\)\.B; \}\);/);
+      expect(result.cppCode).toMatch(/G1->with_lock\(\[&\]\(auto\* __glk\)\{ \(\*__glk\)\.A = __gwv_\d+; \}\);/);
+      // No g2 lock inside a g1 lock lambda.
+      expect(result.cppCode).not.toMatch(/G1->with_lock\([^;]*G2->with_lock/);
     });
   });
 
