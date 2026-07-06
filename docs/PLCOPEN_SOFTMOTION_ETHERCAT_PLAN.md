@@ -1,188 +1,188 @@
-# PLCopen SoftMotion — EtherCAT Auto-Mapping Design Plan
+# PLCopen SoftMotion — CODESYS Compatibility & EtherCAT Auto-Mapping Plan
 
-Status: **design** (Stage 3). Stages 1–2 (the `plcopen-softmotion` `.stlib`
-itself) are implemented on branch `feat/plcopen-softmotion`.
+Status: **design**. The motion *engine* (Stages 1–2) is implemented on branch
+`feat/plcopen-softmotion` (PR #194). This document plans the **CODESYS
+SoftMotion compatibility layer** on top of it, plus the openplc-editor tooling
+that makes an EtherCAT drive usable as an axis.
 
 ## Goal
 
-Give OpenPLC users the CODESYS SoftMotion experience: **add a CiA 402 servo
-drive from its ESI XML, get a ready-to-use axis, and pass it straight to the
-`MC_*` blocks — without ever manually mapping `%I`/`%Q` addresses.** The motion
-library already exists and is validated; this document plans the tooling that
-binds a physical EtherCAT drive to an `OpenSML_Axis` automatically.
+**Let engineers port CODESYS SoftMotion projects to OpenPLC with minimal (ideally
+zero) source changes.** In CODESYS a user adds an EtherCAT servo named `X_Axis`,
+declares `fbPower : MC_Power;`, and calls `fbPower(Axis := X_Axis, …)` — the
+device `X_Axis` *is* an `AXIS_REF_SM3` instance and type-checks directly into the
+`Axis` input. We want the same in OpenPLC: the EtherCAT device name is the axis
+name, and the `MC_*` blocks + axis type match CODESYS signatures so ported code
+compiles unchanged.
 
-## What already exists (do not rebuild)
+## Key finding: we already have the motion engine
 
-- **The motion library** (`libs/sources/plcopen-softmotion/`): `OpenSML_Axis`
-  (a CiA 402 struct of ControlWord/StatusWord/positions/velocities), the
-  OpenSML drive-side + controller-side blocks, the S7RTT OTG engine, and the
-  canonical PLCopen `MC_*` wrappers. Users call `MC_Power(Axis := Axis1, …)`.
-- **OpenPLC EtherCAT transport** (`openplc-runtime`,
-  `core/src/drivers/plugins/native/ethercat/`): a **SOEM**-based master on a
-  dedicated bus thread that maps **PDO entries → plain IEC located variables**,
-  generically, with **zero motion semantics**. A servo's ControlWord (0x6040),
-  StatusWord (0x6041), Target Position (0x607A), Position Actual (0x6064), etc.
-  can each already be bound to a `%QW`/`%IW`/`%QD`/`%ID` address via
-  `ethercat.json` (`iec_location ↔ pdo_entry`).
-- **The editor's ESI pipeline** (`openplc-editor`,
-  `src/backend/shared/ethercat/`): `esi-parser.ts` parses vendor ESI XML,
-  `pdoToChannels()` flattens PDOs, `generateIecLocation()` assigns
-  `%IX/%QW/%ID/…`, and a `channel-mapping-table` UI lets a user bind each PDO
-  entry to an address. `generate-ethercat-config.ts` emits the runtime JSON.
+Examination of a CODESYS 3.5.22.10 install (SoftMotion 4.20.2.0) and the
+`SML_CompatibilityCheck_DS402` example shows:
 
-So the servo's objects **already become located variables today** — the only
-missing layer is the CiA 402 axis abstraction on top of them.
+- **CODESYS SoftMotion Light (SML)** — `MC_*_SML` over `AXIS_REF_SML` /
+  `Axis_REF_ETC_DSP402_SML` — is single-axis CiA 402 where **the drive computes
+  the profile** (Profile Position/Velocity/Homing modes). This is **exactly
+  OpenSML's architecture** (`OpenSML` = open SoftMotion Light). Our drive-side
+  blocks already behave equivalently.
+- **Full SoftMotion (SM3)** — `MC_*` over `AXIS_REF_SM3` — computes the profile
+  **in the PLC** and streams cyclic-synchronous-position (csp). Our OpenSML Sync
+  blocks + the **S7RTT** jerk-limited OTG already provide this.
 
-## The core constraint
+So the hard part (the trajectory math) is done. The remaining work is a
+**compatibility/adaptation layer**: CODESYS-shaped types, signatures, units,
+enums, and a per-axis drive bridge — not new motion algorithms.
 
-strucpp cannot, today, bind a **STRUCT** to the process image. From the
-`journaled-globals` work: only **scalar** located globals/externals compile and
-bind (`VAR_GLOBAL ctrlword AT %QW10 : UINT;`). A located `VAR_GLOBAL` of a
-struct type is declaration-only and **fails loud on access**; there is no
-per-field `AT`, no `%Q*` auto-addressing, and no editor-consumable address
-manifest. Therefore `OpenSML_Axis` itself cannot be the located object — yet.
+## Decisions (agreed)
 
-Two routes follow. **Path A** delivers the full user-facing experience on
-today's compiler via generated glue. **Path B** removes the glue later with
-targeted compiler work. They are not mutually exclusive: ship A, evolve to B.
+1. **Tier order: SML first, then SM3.** Build `AXIS_REF_SML` + `MC_*_SML` over
+   the OpenSML core first (near-direct; matches the on-disk DS402 example),
+   validate the full port pipeline, then add `AXIS_REF_SM3` + `MC_*` using S7RTT
+   for csp.
+2. **Full LREAL engineering units + scaling** from the start (true CODESYS
+   parity), via `iRatioTechUnitsNum`/`dwRatioTechUnitsDenom`/`fScalefactor`.
+3. **Device name = axis name.** An EtherCAT CiA 402 device named `X_Axis`
+   becomes a global axis instance `X_Axis`, injected so `MC_*(Axis := X_Axis)`
+   type-checks.
 
----
+## Architecture
 
-## Path A — glue-based auto-mapping (recommended, near-term)
-
-The user experience is identical to CODESYS. The editor does all the wiring; the
-generated glue is hidden.
-
-### Data flow
+Three layers, bottom-up. The bottom exists; the middle and top are the new work.
 
 ```
-Servo ESI XML  ──add drive, mark "SoftMotion axis"──►  openplc-editor
-      │
-      │ 1. recognize CiA 402 objects among the drive's PDO entries
-      │    (0x6040/6041/6060/6061/607A/6064/60FF/606C/6071/6077/60F4)
-      │ 2. auto-assign %Q/%I addresses to each (existing generateIecLocation)
-      ▼
-Generated artifacts (all machine-owned, hidden from the user):
-  a) ethercat.json channels   — PDO entry ↔ %Q/%I  (existing format)
-  b) scalar located globals   — VAR_GLOBAL axis1_ctrlword AT %QW10 : UINT; …
-  c) an OpenSML_Axis instance — VAR_GLOBAL Axis1 : OpenSML_Axis;
-  d) a per-axis "link" POU     — copies located scalars <-> Axis1 fields each scan
-      ▼
-User program:  MC_Power(Axis := Axis1, Enable := run);   ◄── no addresses, ever
-      ▼
-Runtime (unchanged): SOEM bus thread copies %Q→drive, drive→%I each cycle
+┌─ User application (ported CODESYS code, unchanged) ────────────────────────┐
+│   fbPower : MC_Power_SML;   fbMove : MC_MoveAbsolute_SML;                   │
+│   fbPower(Axis := X_Axis, Enable := TRUE, …);                              │
+│   fbMove(Axis := X_Axis, Execute := go, Position := 250.0 (* mm *), …);    │
+└───────────────────────────────────────────────────────────────────────────┘
+        │  Axis : AXIS_REF_SML   (LREAL units, PLCopen state, scaling)
+        ▼
+┌─ COMPATIBILITY LAYER (new) ───────────────────────────────────────────────┐
+│  • AXIS_REF_SML / AXIS_REF_SM3 type (CODESYS field names + scaling)         │
+│  • MC_*_SML / MC_* blocks (CODESYS-exact signatures, LREAL units)          │
+│  • Enums: MC_DIRECTION, MC_BUFFER_MODE, SMC_AXIS_STATE, SMC_ERROR(subset)  │
+│  • Per-axis DRIVE BRIDGE FB (models CODESYS SM_Drive_ETC_GenericDSP402):    │
+│      each scan: CiA402 PDOs → fActPosition (÷scale);                        │
+│                 run CiA402 state machine (CW/SW) + mode select;             │
+│                 commanded units × scale → increments → Target PDO          │
+│  • PLCopen axis state machine (nAxisState) over the CiA402 drive state      │
+└───────────────────────────────────────────────────────────────────────────┘
+        │  uses (internal)
+        ▼
+┌─ ENGINE (built — Stages 1–2) ─────────────────────────────────────────────┐
+│  OpenSML CiA402 blocks (drive-side)  +  S7RTT OTG (controller-side csp)     │
+│  OpenSML_Axis (raw CiA402 PDO words)                                        │
+└───────────────────────────────────────────────────────────────────────────┘
+        │  located variables (%Q/%I)  ← generic PDO↔located binding (exists)
+        ▼
+   openplc-runtime SOEM EtherCAT master  ⇄  physical CiA 402 servo
 ```
 
-The "link" POU is exactly OpenSML's own `OpenSML_TC3Link` pattern: a body that
-does `Axis1.ControlWord := axis1_ctrlword;` (outputs) and
-`axis1_statusword := Axis1.StatusWord;` (inputs) — one cheap copy per field per
-scan. The editor calls it once per axis at the top of the scan, before the user
-POUs run.
+### The compatibility layer — what to build
 
-### CiA 402 axis profile (the recognition table)
+- **Axis type** (`AXIS_REF_SML`, later `AXIS_REF_SM3`): a struct carrying the
+  CODESYS field names ported code reads/writes — `fSetPosition`, `fActPosition`,
+  `fActVelocity`, `fSetVelocity`, `nAxisState` (`SMC_AXIS_STATE`), the scaling
+  fields (`iRatioTechUnitsNum` DINT, `dwRatioTechUnitsDenom` DWORD,
+  `fScalefactor` LREAL), error (`bError`, `dwErrorID`), plus an embedded/linked
+  `OpenSML_Axis` for the raw CiA 402 PDO words. (CODESYS's `AXIS_REF_SM3` is a
+  FUNCTION_BLOCK; a struct suffices for application-code portability since ported
+  code references fields, not axis methods — revisit if a project calls axis
+  methods.)
+- **MC_ blocks** with CODESYS-exact signatures. SML tier (`_SML` suffix):
+  `MC_Power_SML`, `MC_MoveAbsolute_SML`, `MC_MoveRelative_SML`,
+  `MC_MoveVelocity_SML`, `MC_Home_SML`, `MC_Stop_SML`, `MC_Reset_SML`,
+  `MC_ReadStatus_SML`, `MC_ReadActualPosition_SML`,
+  `MC_ReadActualVelocity_SML`. SM3 tier: the same names without the suffix, plus
+  `MC_Halt`, `MC_MoveAdditive`, and the profile/superimposed blocks as needed.
+  Inputs `Position/Distance/Velocity/Acceleration/Deceleration/Jerk : LREAL`,
+  `Direction : MC_DIRECTION`, `BufferMode : MC_BUFFER_MODE`; outputs
+  `Done/Busy/Active/CommandAborted/Error : BOOL`, `ErrorID : SMC_ERROR`.
+  Internally each maps to the existing OpenSML/S7RTT logic + unit scaling.
+- **Enums**: `MC_DIRECTION`, `MC_BUFFER_MODE`, `SMC_AXIS_STATE` (8 PLCopen
+  states), `SMC_HOMING_MODE`, and an `SMC_ERROR` subset (the 0–~500 band:
+  drive-interface/limits/controller-mode/FB-input; skip the 1000+ CNC/kinematics
+  ranges).
+- **Drive bridge FB** (the crux): one per axis, called each scan, mirroring
+  CODESYS's `SM_Drive_ETC_GenericDSP402`. Reads CiA 402 TxPDOs (0x6041/0x6061/
+  0x6064/0x606C) → axis actual fields (÷ scale); runs the CiA 402 state machine
+  (Controlword 0x6040 sequence Shutdown→SwitchOn→EnableOperation, Fault Reset)
+  to honor `MC_Power`; selects mode (0x6060); converts commanded units → 0x607A/
+  0x60FF increments; maintains `nAxisState`. This *is* the OpenSML logic
+  re-dressed with scaling and the CODESYS state model.
+- **PLCopen axis state machine**: derive `nAxisState`/`MC_ReadStatus` booleans
+  (Disabled/Errorstop/Stopping/StandStill/DiscreteMotion/ContinuousMotion/
+  Homing) from the CiA 402 Statusword + active motion.
 
-The editor needs a small built-in map from CiA 402 object index → axis field +
-direction + IEC width. Minimum viable set:
+## openplc-editor integration (the user-facing part)
 
-| Object | Field (OpenSML_Axis)          | Dir | IEC   |
-|--------|-------------------------------|-----|-------|
-| 0x6040 | ControlWord                   | %Q  | UINT  |
-| 0x6041 | StatusWord                    | %I  | UINT  |
-| 0x6060 | Modes_of_operation            | %Q  | SINT  |
-| 0x6061 | Modes_of_operation_display    | %I  | SINT  |
-| 0x607A | Target_Position               | %Q  | DINT  |
-| 0x6081 | Profile_Velocity              | %Q  | UDINT |
-| 0x60FF | Target_Velocity               | %Q  | DINT  |
-| 0x6071 | Target_torque                 | %Q  | INT   |
-| 0x6064 | Position_Actual_Value         | %I  | DINT  |
-| 0x606C | Velocity_Actual_Value         | %I  | DINT  |
-| 0x6077 | Torque_Actual_Value           | %I  | INT   |
-| 0x60F4 | Following_Error_Actual_Value  | %I  | DINT  |
+The simplified, device-centric model (the device *is* the axis):
 
-Recognition = "for this drive's assigned PDOs, if an entry's index matches the
-table, wire it to the corresponding axis field." Missing optional objects
-(torque, following error) are simply left at default.
+1. **CiA 402 recognition**: when an ESI device is added on EtherCAT and its PDOs
+   match CiA 402 (0x6040/0x6041/0x607A/0x6064 mandatory), the editor tags it a
+   SoftMotion drive.
+2. **Distinct project-tree icon** marking it a soft-motion axis (vs a plain
+   EtherCAT slave).
+3. **CODESYS-style device config screen**: drive/scaling parameters (units ratio,
+   velocity/accel limits, homing) + **real-time feedback** (actual position/
+   velocity/state) — modeled on the CODESYS CiA 402 axis editor.
+4. **Device name = axis name**: the device's name is the axis identifier used in
+   `MC_*(Axis := <name>)`.
+5. **Compile-time generation**: the editor emits (a) the scalar located globals
+   bound to the drive's CiA 402 PDO `%I`/`%Q` addresses, (b) the `<name> :
+   AXIS_REF_SML` (or `_SM3`) global instance, and (c) the per-axis drive-bridge
+   call in the scan, wiring located scalars ⇄ axis. The user never maps an
+   address; `MC_*(Axis := <name>)` type-checks because `<name>` is declared as
+   the axis type.
 
-### Editor changes (openplc-editor)
+This supersedes the earlier "Path A glue POU" framing: the drive-bridge FB *is*
+the glue, and it now carries scaling + the CODESYS state model, not just a copy.
+The **located-struct compiler work** (formerly "Path B" — per-field `AT`,
+`%Q*` auto-addressing, address manifest, lifting the composite-access gate)
+remains a *later optimization* that would let the axis bind to PDOs directly and
+shrink the generated bridge; it is not required for the plan above.
 
-1. **CiA 402 profile module** — the table above + a `matchCia402(channel)` helper
-   in `src/backend/shared/ethercat/`.
-2. **"Add as SoftMotion axis" action** in the EtherCAT device UI: when a scanned
-   drive exposes the mandatory objects (0x6040/0x6041/0x607A/0x6064), offer to
-   create an axis; name it (`Axis1`).
-3. **Axis-artifact generator**: emit (b) scalar located globals, (c) the
-   `OpenSML_Axis` global instance, and (d) the link POU into the project's
-   generated sources; register the link-POU call in the scan order.
-4. **Axis manager UI**: list configured axes, their drive, and status; this is
-   the SoftMotion "device tree" equivalent.
+## CODESYS project import (separate, later workstream)
 
-### Runtime changes (openplc-runtime)
+Running ported *source* is the library's job (above). Importing a `.project`
+*file* is separate tooling. The CODESYS `.project` is a zip of GUID-keyed
+**binary** `.object`/`.meta` blobs plus a shared string table — POU source is
+only partially recoverable as raw strings; robust extraction needs either
+reverse-engineering the serialization or driving CODESYS's own export/scripting.
+`~/Documents/Code/autonomy-edge` (the NestJS/React cloud platform + web editor +
+project storage) is where this import/round-trip tooling would live. Scope this
+after the runtime library compatibility lands.
 
-**None.** The generic PDO↔located binding already carries everything; the axis
-lives entirely in generated ST + the existing located-variable image.
+## Effort read
 
-### Pros / cons
+- **Tier 1 (SML):** engine behavior exists; work = axis type + LREAL/scaling +
+  exact `_SML` signatures + enums + PLCopen state + drive-bridge FB. **Moderate.**
+- **Tier 2 (SM3):** + wire S7RTT OTG → csp path, a few more blocks, broader
+  `SMC_ERROR`. **Larger, but the OTG is done.**
+- **Editor:** CiA 402 recognition + icon + config screen + compile-time
+  generation. **Moderate**, mostly UI + codegen over the existing ESI pipeline.
 
-- ➕ Ships on the current compiler; no strucpp core changes.
-- ➕ Identical user UX to CODESYS (import XML → axis → `MC_*`).
-- ➖ Generated glue POU + one struct-copy per axis per scan (negligible cost,
-  but visible in generated sources).
-- ➖ Located binding lives in generated globals, not in the axis type itself.
+## Sequencing
 
----
-
-## Path B — compiler struct-binding (future, removes the glue)
-
-Make `OpenSML_Axis` bind to the process image directly, so the editor generates
-only a located axis declaration and no link POU. This is the
-`journaled-globals` follow-up flagged in commit `f42784f`. Phased:
-
-1. **Per-field `AT` grammar** — allow `AT %…` on struct/FB member declarations,
-   or a whole-struct base-address form (`Axis1 AT %Q… : OpenSML_Axis`) that lays
-   fields out by offset.
-2. **Struct located descriptors** — emit `locatedVars[]` entries per field
-   (offset-based `void*` binding into the struct instance), and give generated
-   structs a `raw_ptr()`-equivalent so pointers resolve.
-3. **Lift the composite-access gate** — allow read/write/FB-call on a located
-   composite external (currently fail-loud in `codegen.ts`), including bit
-   access on located struct fields (`Axis.ControlWord.3`).
-4. **`%Q*` auto-addressing** — accept CODESYS-style auto-assigned addresses so
-   the editor need not compute every byte offset.
-5. **Address manifest** — emit an editor-consumable JSON of
-   `{address, direction, size, symbol}` for located vars (today this lives only
-   as comments in generated C++), so the editor can round-trip bindings.
-
-With B, the editor's axis artifact collapses to a single located
-`OpenSML_Axis` global and the link POU disappears.
-
----
-
-## Cross-cutting concerns
-
-- **Units / scaling.** The library currently uses raw drive units (increments).
-  CODESYS parity wants engineering units (mm, deg) via a per-axis scale. Add a
-  `Scale` to the axis (OpenSML_Control already carries one) and LREAL `MC_*`
-  overloads. Independent of A/B; can land with either.
-- **DC sync timing.** The runtime bus thread is OS-clock timed, not
-  DC-phase-locked. Drive-side Profile modes (the OpenSML core blocks) tolerate
-  this. Controller-side CSP (the Sync blocks + OTG) wants tight cyclic
-  determinism — for high-dynamic CSP, add DC-synced output timing to the SOEM
-  bus thread. Track as a separate runtime task.
-
-## Recommended sequencing
-
-1. **Path A** in openplc-editor (CiA 402 profile + axis generator + link POU +
-   axis UI). Runtime untouched. Delivers the full UX.
-2. **Units/scaling** (LREAL `MC_*` + per-axis scale) — usability.
-3. **Path B** compiler phases 1–5, then simplify the editor generator to drop
-   the link POU.
-4. **DC-sync** runtime work if/when high-dynamic CSP is required.
+1. Compatibility layer, **Tier 1 (SML)**: enums → `AXIS_REF_SML` + drive-bridge
+   FB (units/scaling + CiA 402 state) → `MC_*_SML` blocks → tests (compile +
+   numeric, incl. a scaled move). Validate against the DS402 example's API.
+2. **Editor** CiA 402 device → axis generation (recognition, icon, config
+   screen, compile-time globals + bridge). End-to-end: add drive → write
+   `MC_*_SML(Axis := <name>)` → run on hardware.
+3. Compatibility layer, **Tier 2 (SM3)**: `AXIS_REF_SM3` + `MC_*` + csp via
+   S7RTT + remaining blocks/errors.
+4. **CODESYS `.project` import** tooling (autonomy-edge).
+5. Optional: located-struct compiler support to remove the generated bridge glue.
 
 ## Open questions
 
-- Multi-axis groups / interpolated (CNC) motion — out of scope for OpenSML
-  (Light); would need the fuller lusipad/RTmotion C++ kernel path.
-- Where should axis config persist in the OpenPLC project format, alongside the
-  existing `ethercat.json`?
-- Homing/SDO startup parameters (0x6098/0x6099/0x609A, 0x6083/0x6084): surface
-  in the axis UI or leave to the existing SDO-parameters table?
+- **AXIS_REF as struct vs FB**: struct covers field-access portability; confirm
+  whether real target projects call axis *methods* (would need an FB + methods).
+- **Scaling source**: read the drive's units-per-rev / gear from ESI/CoE
+  defaults, or require the user to enter them in the config screen?
+- **Timing for SM3/csp**: the runtime bus thread is OS-clock timed, not
+  DC-phase-locked — fine for SML (drive-side profiles), but high-dynamic csp may
+  need DC-synced output timing added to the SOEM bus thread.
+- **`_SML` vs unsuffixed names**: ship both families, or alias so a project
+  written for either compiles?
