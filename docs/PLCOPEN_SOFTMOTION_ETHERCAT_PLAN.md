@@ -35,13 +35,25 @@ enums, and a per-axis drive bridge — not new motion algorithms.
 
 ## Decisions (agreed)
 
-1. **Tier order: SML first, then SM3.** Build `AXIS_REF_SML` + `MC_*_SML` over
-   the OpenSML core first (near-direct; matches the on-disk DS402 example),
-   validate the full port pipeline, then add `AXIS_REF_SM3` + `MC_*` using S7RTT
-   for csp.
-2. **Full LREAL engineering units + scaling** from the start (true CODESYS
+1. **CODESYS mainstream names, unsuffixed.** Use `AXIS_REF_SM3` + `MC_Power` /
+   `MC_MoveAbsolute` / … (NOT the `_SML` suffix) — these cover the majority of
+   CODESYS SoftMotion projects and give the lowest porting friction. The
+   *implementation* underneath evolves (drive-side profile first, S7RTT csp
+   later) but the user-facing name + signature stays constant.
+2. **Axis type = STRUCT** (`AXIS_REF_SM3` as a struct of fields), passed by
+   reference into `MC_*` via `VAR_IN_OUT`. Research verdict: real application
+   code never calls axis methods/properties — it only passes the axis to `MC_*`
+   and reads/writes fields; every `AXIS_REF_SM3` method/property in CODESYS is
+   driver-internal. (Edge case: some projects store `POINTER TO AXIS_REF_SM3`
+   in structures — needs strucpp POINTER support, Phase 6; not required for the
+   direct `MC_*(Axis := X_Axis)` pattern.)
+3. **Implementation tier order: drive-side first, then csp.** Back the SM3
+   blocks with the OpenSML drive-side engine first (near-direct; matches the
+   on-disk DS402 example's behavior), then upgrade `MC_MoveAbsolute` et al. to
+   controller-side csp via S7RTT where PLC-side accel/jerk fidelity is needed.
+4. **Full LREAL engineering units + scaling** from the start (true CODESYS
    parity), via `iRatioTechUnitsNum`/`dwRatioTechUnitsDenom`/`fScalefactor`.
-3. **Device name = axis name.** An EtherCAT CiA 402 device named `X_Axis`
+5. **Device name = axis name.** An EtherCAT CiA 402 device named `X_Axis`
    becomes a global axis instance `X_Axis`, injected so `MC_*(Axis := X_Axis)`
    type-checks.
 
@@ -89,16 +101,26 @@ Three layers, bottom-up. The bottom exists; the middle and top are the new work.
   FUNCTION_BLOCK; a struct suffices for application-code portability since ported
   code references fields, not axis methods — revisit if a project calls axis
   methods.)
-- **MC_ blocks** with CODESYS-exact signatures. SML tier (`_SML` suffix):
-  `MC_Power_SML`, `MC_MoveAbsolute_SML`, `MC_MoveRelative_SML`,
-  `MC_MoveVelocity_SML`, `MC_Home_SML`, `MC_Stop_SML`, `MC_Reset_SML`,
-  `MC_ReadStatus_SML`, `MC_ReadActualPosition_SML`,
-  `MC_ReadActualVelocity_SML`. SM3 tier: the same names without the suffix, plus
-  `MC_Halt`, `MC_MoveAdditive`, and the profile/superimposed blocks as needed.
+- **MC_ blocks** with CODESYS-exact **unsuffixed** signatures, ranked by real
+  usage (from research):
+  - *Core (nearly every project):* `MC_Power`, `MC_MoveAbsolute`, `MC_Reset`,
+    `MC_Halt`, `MC_Stop`.
+  - *Common:* `MC_MoveVelocity`, `MC_MoveRelative`, `MC_Home`, `MC_ReadStatus`,
+    `MC_ReadAxisError`, `MC_ReadActualPosition`, `MC_Jog`.
+  - *Situational (later):* `MC_ReadActualVelocity`, `MC_SetPosition`,
+    `MC_MoveAdditive`, and `SMC3_PersistPosition` (persist absolute-encoder
+    position across restarts — replaces homing on many machines; worth early
+    support).
   Inputs `Position/Distance/Velocity/Acceleration/Deceleration/Jerk : LREAL`,
   `Direction : MC_DIRECTION`, `BufferMode : MC_BUFFER_MODE`; outputs
   `Done/Busy/Active/CommandAborted/Error : BOOL`, `ErrorID : SMC_ERROR`.
   Internally each maps to the existing OpenSML/S7RTT logic + unit scaling.
+- **Most-accessed axis fields** to expose (the practical subset of ~100):
+  read — `fActPosition`, `fActVelocity`, `nAxisState`, `bRegulatorRealState`,
+  `bDriveStartRealState`, `bError`, `dwErrorID`, `bCommunication`,
+  `wCommunicationState`; command — `fSetPosition`, `fSetVelocity`,
+  `bRegulatorOn`, `byControllerMode`; config (set once) — the scaling +
+  software-limit fields.
 - **Enums**: `MC_DIRECTION`, `MC_BUFFER_MODE`, `SMC_AXIS_STATE` (8 PLCopen
   states), `SMC_HOMING_MODE`, and an `SMC_ERROR` subset (the 0–~500 band:
   drive-interface/limits/controller-mode/FB-input; skip the 1000+ CNC/kinematics
@@ -113,6 +135,28 @@ Three layers, bottom-up. The bottom exists; the middle and top are the new work.
 - **PLCopen axis state machine**: derive `nAxisState`/`MC_ReadStatus` booleans
   (Disabled/Errorstop/Stopping/StandStill/DiscreteMotion/ContinuousMotion/
   Homing) from the CiA 402 Statusword + active motion.
+
+### Behavioral fidelity the bridge/blocks must honor (porting gotchas)
+
+These CODESYS-specific behaviors are load-bearing for unmodified ports:
+
+- **Call active FBs every cycle** until `Done`/`Error`/`CommandAborted`; a block
+  that stops being called mid-motion is an error in CODESYS
+  (`SMC_FB_WASNT_CALLED_DURING_MOTION`).
+- **`Execute := FALSE` does not stop motion** — it only re-arms the block for the
+  next rising edge. Stopping requires `MC_Halt`/`MC_Stop`.
+- **`BufferMode` defaults to Aborting** (a new move immediately interrupts the
+  running one); one active + one buffered move per axis; a third is rejected.
+  POU **FB call order is semantically load-bearing** for buffered/blended moves.
+- **Command vs RealState**: `bRegulatorOn`/`bDriveStart` are commands;
+  `bRegulatorRealState`/`bDriveStartRealState` are drive feedback — correct code
+  waits on RealState.
+- **`MC_Power` drives the PLCopen state machine**; `nAxisState` transitions are
+  its side effect, and moves are rejected if the axis isn't in a compatible
+  state (`SMC_AXIS_NOT_READY_FOR_MOTION`).
+- **Unit scaling** applies to all `MC_*` values (technical units), converted to
+  increments via the ratio + `fScalefactor`.
+- **Modulo/rotary axes** (`fPositionPeriod`) wrap internally — later concern.
 
 ## openplc-editor integration (the user-facing part)
 
@@ -175,14 +219,20 @@ after the runtime library compatibility lands.
 4. **CODESYS `.project` import** tooling (autonomy-edge).
 5. Optional: located-struct compiler support to remove the generated bridge glue.
 
+## Resolved
+
+- **Axis type = STRUCT**, unsuffixed CODESYS names (`AXIS_REF_SM3`, `MC_Power`,
+  …). App code uses field-access + `MC_*` only; axis methods are driver-internal.
+
 ## Open questions
 
-- **AXIS_REF as struct vs FB**: struct covers field-access portability; confirm
-  whether real target projects call axis *methods* (would need an FB + methods).
 - **Scaling source**: read the drive's units-per-rev / gear from ESI/CoE
   defaults, or require the user to enter them in the config screen?
-- **Timing for SM3/csp**: the runtime bus thread is OS-clock timed, not
-  DC-phase-locked — fine for SML (drive-side profiles), but high-dynamic csp may
-  need DC-synced output timing added to the SOEM bus thread.
-- **`_SML` vs unsuffixed names**: ship both families, or alias so a project
-  written for either compiles?
+- **Timing for csp**: the runtime bus thread is OS-clock timed, not
+  DC-phase-locked — fine for drive-side profiles, but high-dynamic csp may need
+  DC-synced output timing added to the SOEM bus thread.
+- **`POINTER TO AXIS_REF_SM3`**: some projects store the axis by pointer in
+  structures; supporting that needs strucpp POINTER (Phase 6). Defer unless a
+  target project needs it.
+- **`SMC3_PersistPosition`** semantics on OpenPLC (persistent storage for
+  absolute-encoder position) — where does persisted position live?
