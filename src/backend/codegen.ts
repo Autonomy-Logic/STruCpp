@@ -2968,22 +2968,9 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
-    // Composite shared global (struct / array / FB) as the assignment target:
-    // not yet supported (see generateVariableExpression for the rationale). This
-    // catches whole-object writes (`g := x`); field / element writes
-    // (`g.x := v`) are caught when the target expression is generated below.
-    if (
-      stmt.target.kind === "VariableExpression" &&
-      this.compositeExternals.has(stmt.target.name.toUpperCase())
-    ) {
-      throw new Error(
-        `Shared global '${stmt.target.name}' is a composite type (struct / ` +
-          `array / function-block) and is written in a program body. Composite ` +
-          `shared globals can be declared and debugged, but writing them from a ` +
-          `threaded/shared context is not yet supported in the mutex-based ` +
-          `shared-global model — scalar globals only for now.`,
-      );
-    }
+    // Composite shared global (struct / array / FB) as the assignment target is
+    // handled by generateVariableExpression, which routes it to `g->value`
+    // (whole-object or field/bit writes) — see the rationale there.
 
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
@@ -3587,26 +3574,22 @@ export class CodeGenerator {
     const nameUpper = expr.name.toUpperCase();
 
     // Composite shared global (struct / array / function-block) accessed in a
-    // body: not yet supported. Locked field / element / call codegen
-    // (g->with_lock(...), respecting the never-nested-lock contract) is a
-    // follow-up phase. Fail loudly rather than emit mis-locked / non-compiling
-    // code. Declaration + debug-table + located-image binding all work.
-    if (this.compositeExternals.has(nameUpper)) {
-      throw new Error(
-        `Shared global '${expr.name}' is a composite type (struct / array / ` +
-          `function-block) and is accessed in a program body. Composite shared ` +
-          `globals can be declared and debugged, but reading or writing them ` +
-          `from a threaded/shared context is not yet supported in the ` +
-          `mutex-based shared-global model — scalar globals only for now.`,
-      );
-    }
+    // body: reach its canonical value directly through the GlobalVar pointer
+    // (`g->value` / `g->value.field` / `g->value.field.N`). The per-global mutex
+    // is intentionally bypassed for composites — they are shared within a single
+    // (bus-cycle) task, e.g. a SoftMotion AXIS_REF_SM3 driven by its bridge and
+    // the MC_* blocks in the same scan. Cross-task composite sharing (needing a
+    // lock spanning a whole field/call access) remains a follow-up. The base is
+    // set to `g->value` below (see the `result` assignment); field/subscript/bit
+    // access then builds on it.
 
     // VAR_EXTERNAL scalar read → lock the shared global and return its value.
     // read() yields the real IEC type, so it stays deduction-friendly in
-    // std-lib templates (NOT/ADD/...). Struct/array/FB externals (fieldAccess or
-    // call sites) are handled at their emission sites via with_lock().
+    // std-lib templates (NOT/ADD/...). Composite externals use `->value`
+    // directly (handled at the base below), not read().
     if (
       this.programExternals.has(nameUpper) &&
+      !this.compositeExternals.has(nameUpper) &&
       expr.fieldAccess.length === 0 &&
       !expr.isDereference
     ) {
@@ -3688,7 +3671,11 @@ export class CodeGenerator {
 
     // In function/method bodies, references to the function/method name redirect to the result variable
     let result: string;
-    if (
+    if (this.compositeExternals.has(nameUpper) && !expr.isDereference) {
+      // Composite shared global: base is the canonical value behind the
+      // GlobalVar pointer. Field/subscript/bit access below builds on it.
+      result = `${this.resolveVariableBaseName(expr.name)}->value`;
+    } else if (
       this.currentFunctionName &&
       nameUpper === this.currentFunctionName.toUpperCase()
     ) {

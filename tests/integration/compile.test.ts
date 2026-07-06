@@ -480,7 +480,9 @@ describe('Error Handling Tests', () => {
       expect(result.success).toBe(true);
     });
 
-    it('fails loudly when a composite shared global is read in a body', () => {
+    it('reads a composite shared global field via the canonical value pointer', () => {
+      // Composite shared globals are accessed directly through the GlobalVar
+      // pointer's `->value` (single-task access; used by SoftMotion axes).
       const source = `
         TYPE Point : STRUCT x : INT; y : INT; END_STRUCT END_TYPE
         PROGRAM Main
@@ -496,10 +498,12 @@ describe('Error Handling Tests', () => {
           END_RESOURCE
         END_CONFIGURATION
       `;
-      expect(() => compile(source)).toThrow(/composite type|not yet supported/i);
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('PT->value.X');
     });
 
-    it('fails loudly when a composite shared global is written in a body', () => {
+    it('writes a composite shared global field via the canonical value pointer', () => {
       const source = `
         TYPE Point : STRUCT x : INT; y : INT; END_STRUCT END_TYPE
         PROGRAM Main
@@ -514,7 +518,9 @@ describe('Error Handling Tests', () => {
           END_RESOURCE
         END_CONFIGURATION
       `;
-      expect(() => compile(source)).toThrow(/composite type|not yet supported/i);
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.cppCode).toContain('PT->value.X = ');
     });
   });
 
