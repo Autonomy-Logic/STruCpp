@@ -34,7 +34,7 @@
 import { execSync } from "child_process";
 import { readFileSync, readdirSync, writeFileSync, existsSync, copyFileSync, statSync } from "fs";
 import { resolve, dirname, relative, sep, posix } from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 import { buildIecTypesJson } from "./build-iec-types-json.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -103,22 +103,22 @@ async function refreshAndLoadCompiler() {
   }
 
   const compiler = await import(
-    resolve(projectRoot, "dist/library/library-compiler.js")
+    pathToFileURL(resolve(projectRoot, "dist/library/library-compiler.js")).href
   );
   const nodeLoader = await import(
-    resolve(projectRoot, "dist/node/library-loader.js")
+    pathToFileURL(resolve(projectRoot, "dist/node/library-loader.js")).href
   );
   const nodeConfig = await import(
-    resolve(projectRoot, "dist/node/library-config.js")
+    pathToFileURL(resolve(projectRoot, "dist/node/library-config.js")).href
   );
   const pureConfig = await import(
-    resolve(projectRoot, "dist/library/library-config.js")
+    pathToFileURL(resolve(projectRoot, "dist/library/library-config.js")).href
   );
   const codesysImport = await import(
-    resolve(projectRoot, "dist/library/codesys-import/index.js")
+    pathToFileURL(resolve(projectRoot, "dist/library/codesys-import/index.js")).href
   );
   const stdFnRegistry = await import(
-    resolve(projectRoot, "dist/semantic/std-function-registry.js")
+    pathToFileURL(resolve(projectRoot, "dist/semantic/std-function-registry.js")).href
   );
   compileStlib = compiler.compileStlib;
   loadStlibFromFile = nodeLoader.loadStlibFromFile;
