@@ -5344,6 +5344,19 @@ export class CodeGenerator {
       );
       return;
     }
+    // Scalar VAR_EXTERNAL capture → the shared global is a pointer, so its value
+    // is read via `->read()` (an rvalue) and written via `->write()`. Assigning
+    // to `->read()` fails to compile, so route the write through the pointer,
+    // mirroring the scalar-external branch of generateAssignmentStatement.
+    if (
+      target.kind === "VariableExpression" &&
+      target.fieldAccess.length === 0 &&
+      !target.isDereference &&
+      this.programExternals.has(target.name.toUpperCase())
+    ) {
+      this.emit(`${indent}${target.name}->write(${source});`);
+      return;
+    }
     this.emit(`${indent}${this.generateExpression(target)} = ${source};`);
   }
 

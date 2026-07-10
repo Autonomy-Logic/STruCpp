@@ -153,6 +153,42 @@ describeIfGpp('C++ Compilation Tests', () => {
     }
   });
 
+  it('compiles `=>` FB-output capture into a scalar shared global (SoftMotion bridge pattern)', () => {
+    // Regression: capturing an FB output via `=>` into a VAR_EXTERNAL scalar used
+    // to emit `g->read() = value;` — `read()` returns by value (an rvalue), so
+    // g++ failed with "lvalue required as left operand of assignment". The write
+    // must go through the global pointer's `write()`. This mirrors the generated
+    // SoftMotion drive bridge, where the drive FB's command outputs are captured
+    // into located scalar globals bound to the CiA 402 PDO addresses.
+    const source = `
+      FUNCTION_BLOCK Drive
+        VAR_OUTPUT cmd : DINT; END_VAR
+        cmd := cmd + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Bridge
+        VAR_EXTERNAL targetVel : DINT; END_VAR
+        VAR d : Drive; END_VAR
+        d(cmd => targetVel);
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL targetVel : DINT; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Bridge;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    // The capture must route through the pointer's write(), never `->read() =`.
+    // (Codegen upper-cases IEC identifiers.)
+    expect(result.cppCode).toContain('TARGETVEL->write(');
+    expect(result.cppCode).not.toMatch(/TARGETVEL->read\(\)\s*=/);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'output_capture_scalar_external');
+    expect(cppResult.success).toBe(true);
+  });
+
   // "multiple programs" test removed — covered by st-validation/programs/multi_program.
 
   it('should compile a program with time literal intervals', () => {
