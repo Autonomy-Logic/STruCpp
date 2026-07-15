@@ -153,6 +153,64 @@ describeIfGpp('C++ Compilation Tests', () => {
     }
   });
 
+  it('a function block VAR_EXTERNAL touches the SHARED global, not a local copy (threaded + non-threaded)', () => {
+    // Regression: an FB's VAR_EXTERNAL used to compile to a plain member (a
+    // private copy the FB mutated in isolation). It must instead be a
+    // GlobalVar<V>* bound to the file-scope canonical, so the FB and everyone
+    // else see the one shared global. Verified at runtime: two FB calls must
+    // leave the shared COUNTER at 2.
+    const source = `
+      FUNCTION_BLOCK Bumper
+        VAR_EXTERNAL counter : INT; END_VAR
+        counter := counter + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR b : Bumper; END_VAR
+        b();
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL counter : INT := 0; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    // File-scope canonical + FB pointer member bound to it + pointer access.
+    expect(result.headerCode).toContain('inline GlobalVar<IEC_INT> COUNTER');
+    expect(result.headerCode).toContain('GlobalVar<IEC_INT>* COUNTER');
+    expect(result.cppCode).toContain('COUNTER(&');
+    expect(result.cppCode).toContain('COUNTER->write(');
+    // The old bug: a plain value member on the FB. Must NOT appear.
+    expect(result.headerCode).not.toContain('    IEC_INT COUNTER;');
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    const hpp = path.join(tempDir, 'generated.hpp');
+    const cpp = path.join(tempDir, 'fb_external.cpp');
+    fs.writeFileSync(hpp, result.headerCode);
+    fs.writeFileSync(
+      cpp,
+      `${result.cppCode}\n\nint main(){ strucpp::BUMPER b; b(); b(); return strucpp::COUNTER.read() == 2 ? 0 : 1; }\n`,
+    );
+
+    for (const threaded of [false, true]) {
+      const flag = threaded ? '-DSTRUCPP_THREADED' : '';
+      const out = path.join(tempDir, `fb_external_${threaded}.out`);
+      let ok = true;
+      let diag = '';
+      try {
+        execSync(`g++ -std=c++17 ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, { stdio: 'pipe' });
+        execSync(`"${out}"`, { stdio: 'pipe' }); // exit 0 ⇒ shared COUNTER == 2
+      } catch (e) {
+        ok = false;
+        diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+      }
+      expect(ok, `g++/run ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
+    }
+  });
+
   it('compiles `=>` FB-output capture into a scalar shared global (SoftMotion bridge pattern)', () => {
     // Regression: capturing an FB output via `=>` into a VAR_EXTERNAL scalar used
     // to emit `g->read() = value;` — `read()` returns by value (an rvalue), so

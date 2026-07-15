@@ -1248,6 +1248,11 @@ export class CodeGenerator {
       this.emitHeaderChunkMarker("end", "type", iface.name);
     }
 
+    // Configuration VAR_GLOBALs as file-scope singletons — emitted before the
+    // FB/program classes so their bodies (and FB constructors that bind a
+    // VAR_EXTERNAL pointer to a global) can name them.
+    this.emitFileScopeGlobals();
+
     // Generate function block class declarations (topologically sorted by dependency)
     for (const fb of this.sortedFBs) {
       this.emitHeaderChunkMarker("begin", "functionBlock", fb.name);
@@ -1420,6 +1425,27 @@ export class CodeGenerator {
   }
 
   /**
+   * Collect a function block's VAR_EXTERNAL references (name + resolved C++
+   * type). IEC 61131-3 lets an FB access configuration globals this way; each
+   * becomes a `GlobalVar<V>*` bound to the file-scope canonical.
+   */
+  private collectFBExternals(
+    fb: CompilationUnit["functionBlocks"][0],
+  ): Array<{ name: string; cppType: string }> {
+    const externals: Array<{ name: string; cppType: string }> = [];
+    for (const block of fb.varBlocks) {
+      if (block.blockType !== "VAR_EXTERNAL") continue;
+      for (const decl of block.declarations) {
+        const cppType = this.mapTypeRefToCpp(decl.type);
+        for (const name of decl.names) {
+          externals.push({ name, cppType });
+        }
+      }
+    }
+    return externals;
+  }
+
+  /**
    * Generate header declaration for a function block.
    */
   private generateFBHeaderDeclaration(
@@ -1461,6 +1487,12 @@ export class CodeGenerator {
 
     // Generate member variables
     for (const block of fb.varBlocks) {
+      // VAR_EXTERNAL is a reference to a configuration global, not a member of
+      // the FB — emitted below as a GlobalVar<V>* pointing at the file-scope
+      // canonical (mirrors the PROGRAM path). Handling it here as a plain member
+      // would give the FB a private copy that never touches the shared global.
+      if (block.blockType === "VAR_EXTERNAL") continue;
+
       const comment =
         block.blockType === "VAR_INPUT"
           ? "// Inputs"
@@ -1485,6 +1517,18 @@ export class CodeGenerator {
           this.emitHeader(`    ${tag}${cppType} ${memberName};`);
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
+      }
+    }
+
+    // VAR_EXTERNAL members: a pointer to the file-scope canonical GlobalVar<V>
+    // (same shape a PROGRAM uses). Bound in the constructor to &<ns>::<name>.
+    const fbExternals = this.collectFBExternals(fb);
+    if (fbExternals.length > 0) {
+      this.emitHeader("    // External variables (pointers to shared globals)");
+      for (const ext of fbExternals) {
+        this.emitHeader(
+          `    GlobalVar<${ext.cppType}>* ${ext.name} = nullptr;`,
+        );
       }
     }
 
@@ -2051,9 +2095,41 @@ export class CodeGenerator {
     this.currentFBVarBlocks = fb.varBlocks;
     this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
 
+    // VAR_EXTERNAL: body access (operator(), methods, properties) is rewritten
+    // to go through the GlobalVar pointer (g->read()/write()/with_lock), exactly
+    // like a PROGRAM. Set for the whole implementation, cleared at the end.
+    const externalDecls = fb.varBlocks
+      .filter((b) => b.blockType === "VAR_EXTERNAL")
+      .flatMap((b) =>
+        b.declarations.flatMap((d) =>
+          d.names.map((n) => ({ name: n, typeName: d.type.name })),
+        ),
+      );
+    this.programExternals = new Set(
+      externalDecls.map((e) => e.name.toUpperCase()),
+    );
+    this.compositeExternals = new Set(
+      externalDecls
+        .filter((e) => !isElementaryType(e.typeName))
+        .map((e) => e.name.toUpperCase()),
+    );
+
     // Constructor with initializer list for variables with defaults
     const fbInits: string[] = [];
+    // Bind each VAR_EXTERNAL pointer to the file-scope canonical global. The
+    // namespace qualifier disambiguates the global from the same-named pointer
+    // member being initialized. File-scope visibility means this works no
+    // matter how deeply the FB is instantiated — no pointer threading.
+    if (externalDecls.length > 0) {
+      const ns = this.projectModel
+        ? getProjectNamespace(this.projectModel)
+        : "strucpp";
+      for (const e of externalDecls) {
+        fbInits.push(`${e.name}(&${ns}::${e.name})`);
+      }
+    }
     for (const block of fb.varBlocks) {
+      if (block.blockType === "VAR_EXTERNAL") continue;
       for (const decl of block.declarations) {
         if (decl.initialValue) {
           const initExpr = this.generateExpression(decl.initialValue);
@@ -2117,6 +2193,8 @@ export class CodeGenerator {
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
     this.currentFBInterfaceMethods = new Set();
+    this.programExternals = new Set();
+    this.compositeExternals = new Set();
   }
 
   /**
@@ -2573,24 +2651,30 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate header declaration for a configuration from the project model.
+   * Emit configuration VAR_GLOBALs as file-scope `inline GlobalVar<V>`
+   * singletons — one per unique name — instead of configuration-class members.
+   *
+   * File scope makes the single canonical storage (value + its own mutex)
+   * reachable from every POU regardless of nesting: a program keeps receiving a
+   * `GlobalVar<V>*` via the configuration constructor (which now hands over the
+   * file-scope address), and a function block binds its VAR_EXTERNAL pointer
+   * straight to `&<ns>::<name>` in its own constructor — no pointer threading
+   * through containers. Must run before the FB/program/config classes so their
+   * bodies can name the globals. Also registers located VAR_GLOBALs so the
+   * runtime binds them to the I/O image.
    */
-  private generateConfigurationHeaderFromModel(
-    config: ConfigurationDecl,
-  ): void {
-    this.emitHeader(
-      `class Configuration_${config.name} : public ConfigurationInstance {`,
-    );
-    this.emitHeader("public:");
-
-    // Generate VAR_GLOBAL members
-    if (config.globalVars.length > 0) {
-      this.emitHeader("    // VAR_GLOBAL variables");
+  private emitFileScopeGlobals(): void {
+    if (!this.projectModel) return;
+    const seen = new Set<string>();
+    let emittedAny = false;
+    for (const config of this.projectModel.configurations) {
       for (const gvar of config.globalVars) {
-        const constQualifier = gvar.isConstant ? "const " : "";
-        // Same metadata-aware lookup as program locals (see comment in
-        // generateProgramHeaderFromModel) — globals can also be inline
-        // ARRAY types and need Array1D<...> expansion.
+        const key = gvar.name.toUpperCase();
+        // Same name across configurations = one canonical global (strucpp
+        // already treats them as such); emit its storage once.
+        if (seen.has(key)) continue;
+        seen.add(key);
+
         const cppType = this.mapTypeRefToCpp({
           name: gvar.typeName,
           ...(gvar.maxLength !== undefined
@@ -2606,15 +2690,23 @@ export class CodeGenerator {
             ? { referenceKind: gvar.referenceKind }
             : {}),
         });
-        // Wrap the canonical global in GlobalVar<V> (value + per-global mutex).
-        // Programs reach it through a GlobalVar<V>* VAR_EXTERNAL and lock it on
-        // every access. `const` cannot apply (the wrapper is mutated under lock).
-        void constQualifier;
-        this.emitHeader(`    GlobalVar<${cppType}> ${gvar.name};`);
-        // #172: a located VAR_GLOBAL (`AT %IX/%QX/%MW ...`) must enter the
-        // located-vars descriptor so the runtime binds it to the I/O image.
-        // Owner "@config" (not a real program) keeps it out of every program's
-        // located_range; its pointer is wired in the configuration ctor.
+        const initVal = this.getDefaultValue(gvar.typeName, gvar.initialValue);
+
+        if (!emittedAny) {
+          this.emitHeader(
+            "// Configuration VAR_GLOBAL storage — file-scope so every POU " +
+              "(program or nested function block) reaches the one canonical " +
+              "GlobalVar<V> (value + mutex).",
+          );
+          emittedAny = true;
+        }
+        this.emitHeader(
+          `inline GlobalVar<${cppType}> ${gvar.name}{${initVal}};`,
+        );
+
+        // A located VAR_GLOBAL (`AT %IX/%QX/%MW ...`) enters the located-vars
+        // descriptor so the runtime binds it to the I/O image. Owner "@config"
+        // (not a real program) keeps it out of every program's located_range.
         if (gvar.address) {
           this.collectLocatedVarFromModel(
             { name: gvar.name, typeName: gvar.typeName, address: gvar.address },
@@ -2622,8 +2714,24 @@ export class CodeGenerator {
           );
         }
       }
-      this.emitHeader("");
     }
+    if (emittedAny) this.emitHeader("");
+  }
+
+  /**
+   * Generate header declaration for a configuration from the project model.
+   */
+  private generateConfigurationHeaderFromModel(
+    config: ConfigurationDecl,
+  ): void {
+    this.emitHeader(
+      `class Configuration_${config.name} : public ConfigurationInstance {`,
+    );
+    this.emitHeader("public:");
+
+    // VAR_GLOBALs are emitted as file-scope singletons (see
+    // emitFileScopeGlobals), not configuration-class members, so every POU can
+    // reach them. Nothing to declare inside the class here.
 
     // Generate program instance members
     const allInstances = this.collectProgramInstances(config);
@@ -2684,16 +2792,12 @@ export class CodeGenerator {
     // Initializer list
     const inits: string[] = [];
 
-    // Initialize global variables
-    for (const gvar of config.globalVars) {
-      const initVal = this.getDefaultValue(gvar.typeName, gvar.initialValue);
-      // Skip user-defined types (empty initVal) - they use default constructors
-      if (initVal) {
-        inits.push(`${gvar.name}(${initVal})`);
-      }
-    }
+    // VAR_GLOBALs self-initialize at file scope (see emitFileScopeGlobals), so
+    // there's nothing to init here.
 
-    // Initialize program instances (with external variable references)
+    // Initialize program instances (with external variable references).
+    // `&${ext.name}` now resolves to the file-scope global (the class no longer
+    // shadows it with a member), so programs receive the same canonical pointer.
     for (const inst of allInstances) {
       const prog = this.projectModel?.programs.get(
         inst.programType.toUpperCase(),

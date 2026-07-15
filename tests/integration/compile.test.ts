@@ -407,6 +407,38 @@ describe('Error Handling Tests', () => {
       expect(result.errors.some(e => e.message.includes('NONEXISTENTVAR'))).toBe(true);
     });
 
+    it('reports a located error for a FUNCTION_BLOCK VAR_EXTERNAL without a matching VAR_GLOBAL', () => {
+      // IEC 61131-3 lets an FB access globals via VAR_EXTERNAL, so a missing
+      // global must be flagged — and anchored at the declaration so the editor
+      // can surface it (previously FBs were skipped and the error was file-less).
+      const source = `
+        CONFIGURATION MyConfig
+          VAR_GLOBAL realGlobal : INT; END_VAR
+          RESOURCE MyResource ON PLC
+            TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+            PROGRAM MainInstance WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+
+        FUNCTION_BLOCK Worker
+          VAR_EXTERNAL bogusGlobal : INT; END_VAR
+          bogusGlobal := 1;
+        END_FUNCTION_BLOCK
+
+        PROGRAM Main VAR w : Worker; END_VAR w(); END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      const err = result.errors.find(
+        (e) => e.message.includes('BOGUSGLOBAL') && e.message.includes('no matching'),
+      );
+      expect(err).toBeDefined();
+      expect(err!.message).toContain("function block 'WORKER'");
+      // Located (not the old file-less 0,0): points at the declaration line.
+      expect(err!.line).toBeGreaterThan(0);
+      expect(err!.file).toBeTruthy();
+    });
+
     it('should report error for VAR_EXTERNAL with type mismatch', () => {
       const source = `
         CONFIGURATION MyConfig
@@ -456,9 +488,9 @@ describe('Error Handling Tests', () => {
       expect(result.success).toBe(true);
       // Scalar external access is rewritten through the GlobalVar pointer.
       expect(result.cppCode).toContain('RUN->write(');
-      // The config global is a GlobalVar<V> member and the located image binds
-      // through its `.value`.
-      expect(result.headerCode).toContain('GlobalVar<IEC_BOOL> RUN;');
+      // The config global is a file-scope GlobalVar<V> singleton (reachable from
+      // every POU) and the located image binds through its `.value`.
+      expect(result.headerCode).toContain('inline GlobalVar<IEC_BOOL> RUN');
       expect(result.cppCode).toContain('RUN.value.raw_ptr()');
     });
 
