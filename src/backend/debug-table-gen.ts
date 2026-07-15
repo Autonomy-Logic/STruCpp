@@ -478,20 +478,23 @@ export function generateDebugTable(
   // Path convention is bare uppercase name (no instance prefix): the
   // editor's `buildGlobalDebugPath()` returns `name.toUpperCase()` and
   // OPC-UA `GVL:foo` references resolve against the same key.
-  // C++ expression is `${configGlobal}.${name}.value` because each global is
-  // emitted as a `GlobalVar<V>` member of the Configuration class (value +
-  // per-global mutex); `.value` reaches the underlying IEC storage the
-  // debugger reads/writes (see codegen.ts, iec_global.hpp).
+  // C++ expression is `${name}.value`: each global is emitted as a file-scope
+  // `inline GlobalVar<V>` singleton (value + per-global mutex), so `.value`
+  // reaches the underlying IEC storage the debugger reads/writes directly —
+  // no configuration-instance prefix (see codegen.ts emitFileScopeGlobals,
+  // iec_global.hpp).
+  const seenGlobals = new Set<string>();
   for (const config of ast.configurations) {
     for (const block of config.varBlocks) {
       if (block.blockType !== "VAR_GLOBAL") continue;
       for (const decl of block.declarations) {
         for (const varName of decl.names) {
-          visitTypeRef(
-            varName.toUpperCase(),
-            `${configGlobal}.${varName}.value`,
-            decl.type,
-          );
+          // File-scope singletons are deduped by name; mirror that here so the
+          // debug table doesn't emit duplicate entries for a shared global.
+          const key = varName.toUpperCase();
+          if (seenGlobals.has(key)) continue;
+          seenGlobals.add(key);
+          visitTypeRef(key, `${varName}.value`, decl.type);
         }
       }
     }
