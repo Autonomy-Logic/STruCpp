@@ -25,6 +25,11 @@ libs/iec-types.json
 vscode-extension/bundled-libs/*.stlib
 vscode-extension/bundled-libs/iec-types.json
 
+# npm pack output — the release pipeline builds and publishes this; it must
+# never be committed (a stray committed tarball leaks into release assets via
+# the `strucpp-*.tgz` upload glob).
+*.tgz
+
 # IDE and editors
 .vscode/
 .idea/
