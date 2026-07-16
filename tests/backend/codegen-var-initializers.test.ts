@@ -134,7 +134,7 @@ describe("issue #133: VAR initializer literal lowering", () => {
   });
 
   it("lowers based literals in VAR_GLOBAL initializers too", () => {
-    const { cppCode, success } = compileST(`
+    const { headerCode, success } = compileST(`
       CONFIGURATION Cfg
         VAR_GLOBAL
           g : UDINT := 16#CAFE;
@@ -142,7 +142,9 @@ describe("issue #133: VAR initializer literal lowering", () => {
       END_CONFIGURATION
     `);
     expect(success).toBe(true);
-    expect(cppCode).toContain("0xCAFE");
-    expect(cppCode).not.toContain("16#");
+    // Config globals are file-scope `inline GlobalVar<V>` singletons, so the
+    // (lowered) initializer lands in the header, not the configuration ctor.
+    expect(headerCode).toContain("0xCAFE");
+    expect(headerCode).not.toContain("16#");
   });
 });

@@ -21,7 +21,7 @@ import type {
   VarDeclaration,
   Expression,
 } from "./frontend/ast.js";
-import type { CompileError } from "./types.js";
+import type { CompileError, SourceSpan } from "./types.js";
 
 // =============================================================================
 // Project Model Interfaces
@@ -99,6 +99,9 @@ export interface VarExternalDeclaration {
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
   referenceKind?: string;
+  /** Location of the declaration, so a "no matching VAR_GLOBAL" diagnostic can
+   *  point at the offending line instead of being emitted file-less. */
+  sourceSpan?: SourceSpan;
 }
 
 /**
@@ -166,6 +169,9 @@ export interface FunctionBlockDecl {
   outputs: ProjectVarDeclaration[];
   inouts: ProjectVarDeclaration[];
   locals: ProjectVarDeclaration[];
+  /** VAR_EXTERNAL references to configuration globals. IEC 61131-3 permits a
+   *  function block (unlike a function) to access globals via VAR_EXTERNAL. */
+  varExternal: VarExternalDeclaration[];
 }
 
 /**
@@ -436,23 +442,7 @@ export class ProjectModelBuilder {
             // Carry type-shape metadata through so codegen can rebuild
             // Array1D<...> / IEC_Ptr<...> instead of falling through to
             // mapVarTypeToCpp's IEC_${name} default.
-            varExternal.push({
-              name: varName,
-              typeName: decl.type.name,
-              ...(decl.type.maxLength !== undefined
-                ? { maxLength: decl.type.maxLength }
-                : {}),
-              ...(decl.type.arrayDimensions !== undefined
-                ? { arrayDimensions: decl.type.arrayDimensions }
-                : {}),
-              ...(decl.type.elementTypeName !== undefined
-                ? { elementTypeName: decl.type.elementTypeName }
-                : {}),
-              ...(decl.type.referenceKind !== undefined &&
-              decl.type.referenceKind !== "none"
-                ? { referenceKind: decl.type.referenceKind }
-                : {}),
-            });
+            varExternal.push(this.convertVarExternal(varName, decl));
           }
         }
       } else {
@@ -527,8 +517,21 @@ export class ProjectModelBuilder {
     const outputs: ProjectVarDeclaration[] = [];
     const inouts: ProjectVarDeclaration[] = [];
     const locals: ProjectVarDeclaration[] = [];
+    const varExternal: VarExternalDeclaration[] = [];
 
     for (const block of fb.varBlocks) {
+      // VAR_EXTERNAL references a configuration global — captured separately so
+      // it's validated (and code-generated) as a global reference, not lumped
+      // in with the FB's own locals.
+      if (block.blockType === "VAR_EXTERNAL") {
+        for (const decl of block.declarations) {
+          for (const varName of decl.names) {
+            varExternal.push(this.convertVarExternal(varName, decl));
+          }
+        }
+        continue;
+      }
+
       const target =
         block.blockType === "VAR_INPUT"
           ? inputs
@@ -551,6 +554,7 @@ export class ProjectModelBuilder {
       outputs,
       inouts,
       locals,
+      varExternal,
     });
   }
 
@@ -725,29 +729,86 @@ export class ProjectModelBuilder {
       }
     }
 
-    // Check each program's VAR_EXTERNAL references
+    // Check every POU that may declare VAR_EXTERNAL. IEC 61131-3 allows both
+    // PROGRAMs and FUNCTION_BLOCKs to access globals this way (functions may
+    // not, so they're intentionally not checked here).
     for (const prog of this.programs.values()) {
-      for (const ext of prog.varExternal) {
-        const key = ext.name.toUpperCase();
-        const globalVar = globalVarMap.get(key);
+      this.checkVarExternalReferences(
+        prog.varExternal,
+        `program '${prog.name}'`,
+        globalVarMap,
+      );
+    }
+    for (const fb of this.functionBlocks.values()) {
+      this.checkVarExternalReferences(
+        fb.varExternal,
+        `function block '${fb.name}'`,
+        globalVarMap,
+      );
+    }
+  }
 
-        if (!globalVar) {
-          this.addError(
-            `VAR_EXTERNAL '${ext.name}' in program '${prog.name}' has no matching VAR_GLOBAL declaration`,
-            0,
-            0,
-          );
-        } else if (
-          globalVar.typeName.toUpperCase() !== ext.typeName.toUpperCase()
-        ) {
-          this.addError(
-            `Type mismatch for VAR_EXTERNAL '${ext.name}' in program '${prog.name}': expected '${globalVar.typeName}' but found '${ext.typeName}'`,
-            0,
-            0,
-          );
-        }
+  /**
+   * Validate a POU's VAR_EXTERNAL references against the project's globals,
+   * emitting a diagnostic anchored at each declaration (so the editor can flag
+   * the offending line) when a global is missing or its type disagrees.
+   */
+  private checkVarExternalReferences(
+    externals: VarExternalDeclaration[],
+    ownerLabel: string,
+    globalVarMap: Map<string, { typeName: string; configName: string }>,
+  ): void {
+    for (const ext of externals) {
+      const globalVar = globalVarMap.get(ext.name.toUpperCase());
+      const span = ext.sourceSpan;
+
+      if (!globalVar) {
+        this.addError(
+          `VAR_EXTERNAL '${ext.name}' in ${ownerLabel} has no matching VAR_GLOBAL declaration`,
+          span?.startLine ?? 0,
+          span?.startCol ?? 0,
+          span?.file,
+        );
+      } else if (
+        globalVar.typeName.toUpperCase() !== ext.typeName.toUpperCase()
+      ) {
+        this.addError(
+          `Type mismatch for VAR_EXTERNAL '${ext.name}' in ${ownerLabel}: expected '${globalVar.typeName}' but found '${ext.typeName}'`,
+          span?.startLine ?? 0,
+          span?.startCol ?? 0,
+          span?.file,
+        );
       }
     }
+  }
+
+  /**
+   * Build a VarExternalDeclaration from a VAR_EXTERNAL entry, carrying the
+   * type-shape metadata codegen needs plus the source location so a
+   * "no matching VAR_GLOBAL" diagnostic can point at the declaration.
+   */
+  private convertVarExternal(
+    name: string,
+    decl: VarDeclaration,
+  ): VarExternalDeclaration {
+    return {
+      name,
+      typeName: decl.type.name,
+      sourceSpan: decl.sourceSpan,
+      ...(decl.type.maxLength !== undefined
+        ? { maxLength: decl.type.maxLength }
+        : {}),
+      ...(decl.type.arrayDimensions !== undefined
+        ? { arrayDimensions: decl.type.arrayDimensions }
+        : {}),
+      ...(decl.type.elementTypeName !== undefined
+        ? { elementTypeName: decl.type.elementTypeName }
+        : {}),
+      ...(decl.type.referenceKind !== undefined &&
+      decl.type.referenceKind !== "none"
+        ? { referenceKind: decl.type.referenceKind }
+        : {}),
+    };
   }
 
   /**
@@ -853,12 +914,18 @@ export class ProjectModelBuilder {
   /**
    * Add an error message.
    */
-  private addError(message: string, line: number, column: number): void {
+  private addError(
+    message: string,
+    line: number,
+    column: number,
+    file?: string,
+  ): void {
     this.errors.push({
       message,
       line,
       column,
       severity: "error",
+      ...(file !== undefined ? { file } : {}),
     });
   }
 
