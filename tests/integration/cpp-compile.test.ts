@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { execSync } from 'child_process';
 import { compile } from '../../src/index.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -88,6 +89,161 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.success).toBe(true);
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'global_external');
+    expect(cppResult.success).toBe(true);
+  });
+
+  it('compiles composite/array shared-global access (with_lock) — threaded and non-threaded', () => {
+    // A struct + array-of-struct global exercised via field/bit/element/FB-inout
+    // access, all routed through GlobalVar::with_lock. Must compile both with the
+    // per-global mutex active (-DSTRUCPP_THREADED) and with it compiled out.
+    const source = `
+      TYPE Item : STRUCT v : INT; END_STRUCT END_TYPE
+      TYPE Cplx : STRUCT
+        x : INT;
+        cw : UINT;
+        nums : ARRAY[1..4] OF INT;
+        items : ARRAY[1..3] OF Item;
+      END_STRUCT END_TYPE
+      FUNCTION_BLOCK Touch VAR_IN_OUT a : Cplx; END_VAR a.x := a.x + 1; END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR_EXTERNAL g : Cplx; END_VAR
+        VAR i : INT; v : INT; b : BOOL; t : Touch; END_VAR
+        v := g.x;
+        g.x := v + 1;
+        g.cw.3 := b;
+        b := g.cw.5;
+        g.nums[i] := v;
+        v := g.items[i].v;
+        t(a := g);
+      END_PROGRAM
+      CONFIGURATION Config0
+        VAR_GLOBAL g : Cplx; END_VAR
+        RESOURCE Res0 ON PLC
+          TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+          TASK task1(INTERVAL := T#10ms, PRIORITY := 2);
+          PROGRAM inst0 WITH task0 : Main;
+          PROGRAM inst1 WITH task1 : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.cppCode).toContain('->with_lock(');
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    const hpp = path.join(tempDir, 'generated.hpp');
+    const cpp = path.join(tempDir, 'composite_global.cpp');
+    fs.writeFileSync(hpp, result.headerCode);
+    fs.writeFileSync(cpp, `${result.cppCode}\n\nint main(){ return 0; }\n`);
+
+    for (const threaded of [false, true]) {
+      const flag = threaded ? '-DSTRUCPP_THREADED' : '';
+      const out = path.join(tempDir, `composite_global_${threaded}.out`);
+      let ok = true;
+      let diag = '';
+      try {
+        execSync(`g++ -std=c++17 ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, {
+          stdio: 'pipe',
+        });
+      } catch (e) {
+        ok = false;
+        diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+      }
+      expect(ok, `g++ ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
+    }
+  });
+
+  it('a function block VAR_EXTERNAL touches the SHARED global, not a local copy (threaded + non-threaded)', () => {
+    // Regression: an FB's VAR_EXTERNAL used to compile to a plain member (a
+    // private copy the FB mutated in isolation). It must instead be a
+    // GlobalVar<V>* bound to the file-scope canonical, so the FB and everyone
+    // else see the one shared global. Verified at runtime: two FB calls must
+    // leave the shared COUNTER at 2.
+    const source = `
+      FUNCTION_BLOCK Bumper
+        VAR_EXTERNAL counter : INT; END_VAR
+        counter := counter + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR b : Bumper; END_VAR
+        b();
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL counter : INT := 0; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    // File-scope canonical + FB pointer member bound to it + pointer access.
+    expect(result.headerCode).toContain('inline GlobalVar<IEC_INT> COUNTER');
+    expect(result.headerCode).toContain('GlobalVar<IEC_INT>* COUNTER');
+    expect(result.cppCode).toContain('COUNTER(&');
+    expect(result.cppCode).toContain('COUNTER->write(');
+    // The old bug: a plain value member on the FB. Must NOT appear.
+    expect(result.headerCode).not.toContain('    IEC_INT COUNTER;');
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    const hpp = path.join(tempDir, 'generated.hpp');
+    const cpp = path.join(tempDir, 'fb_external.cpp');
+    fs.writeFileSync(hpp, result.headerCode);
+    fs.writeFileSync(
+      cpp,
+      `${result.cppCode}\n\nint main(){ strucpp::BUMPER b; b(); b(); return strucpp::COUNTER.read() == 2 ? 0 : 1; }\n`,
+    );
+
+    for (const threaded of [false, true]) {
+      const flag = threaded ? '-DSTRUCPP_THREADED' : '';
+      const out = path.join(tempDir, `fb_external_${threaded}.out`);
+      let ok = true;
+      let diag = '';
+      try {
+        execSync(`g++ -std=c++17 ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, { stdio: 'pipe' });
+        execSync(`"${out}"`, { stdio: 'pipe' }); // exit 0 ⇒ shared COUNTER == 2
+      } catch (e) {
+        ok = false;
+        diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+      }
+      expect(ok, `g++/run ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
+    }
+  });
+
+  it('compiles `=>` FB-output capture into a scalar shared global (SoftMotion bridge pattern)', () => {
+    // Regression: capturing an FB output via `=>` into a VAR_EXTERNAL scalar used
+    // to emit `g->read() = value;` — `read()` returns by value (an rvalue), so
+    // g++ failed with "lvalue required as left operand of assignment". The write
+    // must go through the global pointer's `write()`. This mirrors the generated
+    // SoftMotion drive bridge, where the drive FB's command outputs are captured
+    // into located scalar globals bound to the CiA 402 PDO addresses.
+    const source = `
+      FUNCTION_BLOCK Drive
+        VAR_OUTPUT cmd : DINT; END_VAR
+        cmd := cmd + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Bridge
+        VAR_EXTERNAL targetVel : DINT; END_VAR
+        VAR d : Drive; END_VAR
+        d(cmd => targetVel);
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL targetVel : DINT; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Bridge;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    // The capture must route through the pointer's write(), never `->read() =`.
+    // (Codegen upper-cases IEC identifiers.)
+    expect(result.cppCode).toContain('TARGETVEL->write(');
+    expect(result.cppCode).not.toMatch(/TARGETVEL->read\(\)\s*=/);
+
+    const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'output_capture_scalar_external');
     expect(cppResult.success).toBe(true);
   });
 

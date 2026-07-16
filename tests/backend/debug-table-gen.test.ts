@@ -326,16 +326,19 @@ END_CONFIGURATION
       expect(paths).toContain("P.LOCAL");
     });
 
-    it("uses g_config.<name>.value as the C++ pointer expression for globals", () => {
+    it("uses <name>.value as the C++ pointer expression for file-scope globals", () => {
       // The AST builder canonicalises identifier case (IEC 61131-3 is
       // case-insensitive), so even `gxRun` ends up as `GXRUN` in the
-      // generated header — the debug-table C++ has to address that field.
-      // Each global is a `GlobalVar<V>` wrapper (value + per-global mutex), so
-      // the debugger must reach the underlying storage through `.value`.
+      // generated header — the debug-table C++ has to address that global.
+      // Each global is a file-scope `GlobalVar<V>` singleton (value + per-global
+      // mutex), reached directly (no configuration-instance prefix) through
+      // `.value`.
       const result = compile(globalsSource);
       const cpp = result.debugTableCpp!;
-      expect(cpp).toContain("&g_config.GXRUN.value");
-      expect(cpp).toContain("&g_config.GICOUNT.value");
+      expect(cpp).toContain("&GXRUN.value");
+      expect(cpp).toContain("&GICOUNT.value");
+      // Must NOT reach through the configuration instance any more.
+      expect(cpp).not.toContain("&g_config.GXRUN.value");
     });
 
     it("places globals before instance vars (own bucket at array 0)", () => {

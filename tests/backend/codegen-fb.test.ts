@@ -336,4 +336,62 @@ describe("Codegen - Function Blocks", () => {
       expect(result.cppCode).toContain("FB();");
     });
   });
+
+  describe("VAR_IN_OUT copy-back", () => {
+    // FB inout params are by-value members with copy-in at the call site; the
+    // codegen must also emit a copy-OUT after the call so the callee's mutations
+    // reach the caller's variable (true inout semantics).
+    it("copies a scalar inout back to the caller after the call", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Bumper
+          VAR_IN_OUT v : INT; END_VAR
+          v := v + 1;
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR fb : Bumper; x : INT; END_VAR
+          fb(v := x);
+        END_PROGRAM
+      `);
+      // copy-in, call, copy-out
+      expect(result.cppCode).toContain("FB.V = X;");
+      expect(result.cppCode).toContain("X = FB.V;");
+    });
+
+    it("copies a struct inout back to the caller", () => {
+      const result = compileAndCheck(`
+        TYPE PointT : STRUCT a : INT; END_STRUCT END_TYPE
+        FUNCTION_BLOCK Setter
+          VAR_IN_OUT p : PointT; END_VAR
+          p.a := 7;
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR fb : Setter; mypt : PointT; END_VAR
+          fb(p := mypt);
+        END_PROGRAM
+      `);
+      expect(result.cppCode).toContain("FB.P = MYPT;");
+      expect(result.cppCode).toContain("MYPT = FB.P;");
+    });
+
+    it("copies a nested struct-field inout back through both FB levels", () => {
+      const result = compileAndCheck(`
+        TYPE Inner : STRUCT w : INT; END_STRUCT END_TYPE
+        TYPE Outer : STRUCT inr : Inner; END_STRUCT END_TYPE
+        FUNCTION_BLOCK Writer VAR_IN_OUT a : Inner; END_VAR a.w := 42; END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Mid
+          VAR_IN_OUT o : Outer; END_VAR
+          VAR w : Writer; END_VAR
+          w(a := o.inr);
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR m : Mid; top : Outer; END_VAR
+          m(o := top);
+        END_PROGRAM
+      `);
+      // inner FB writes back to the struct field...
+      expect(result.cppCode).toContain("O.INR = W.A;");
+      // ...and the outer FB writes back to the program variable
+      expect(result.cppCode).toContain("TOP = M.O;");
+    });
+  });
 });

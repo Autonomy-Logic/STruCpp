@@ -437,6 +437,12 @@ export class CodeGenerator {
    *  Used to resolve positional arguments in FB invocations. */
   private fbInputParams: Map<string, string[]> = new Map();
 
+  /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
+   *  FB inout params are stored as by-value members with copy-in at the call
+   *  site; this set drives the matching copy-back after the call so a callee's
+   *  mutations propagate to the caller's variable (true inout semantics). */
+  private fbInoutParams: Map<string, Set<string>> = new Map();
+
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
 
   constructor(
@@ -682,6 +688,7 @@ export class CodeGenerator {
     fbs: Array<{
       name: string;
       inputNames: string[];
+      inoutNames: string[];
       fields: Array<{
         name: string;
         type: string;
@@ -698,6 +705,12 @@ export class CodeGenerator {
         this.fbInputParams.set(
           fbUpper,
           fb.inputNames.map((n) => n.toUpperCase()),
+        );
+      }
+      if (fb.inoutNames.length > 0) {
+        this.fbInoutParams.set(
+          fbUpper,
+          new Set(fb.inoutNames.map((n) => n.toUpperCase())),
         );
       }
       for (const f of fb.fields) {
@@ -777,6 +790,7 @@ export class CodeGenerator {
           return {
             name: fb.name,
             inputNames: fb.inputs.map((i) => i.name),
+            inoutNames: fb.inouts.map((i) => i.name),
             fields: [
               ...fb.inputs.map(mapVar),
               ...fb.outputs.map(mapVar),
@@ -920,6 +934,7 @@ export class CodeGenerator {
       this.knownFBTypes.add(fb.name.toUpperCase());
       // Build ordered input parameter names for positional argument resolution
       const inputNames: string[] = [];
+      const inoutNames: string[] = [];
       for (const block of fb.varBlocks) {
         if (block.blockType === "VAR_INPUT") {
           for (const decl of block.declarations) {
@@ -927,10 +942,19 @@ export class CodeGenerator {
               inputNames.push(name.toUpperCase());
             }
           }
+        } else if (block.blockType === "VAR_IN_OUT") {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              inoutNames.push(name.toUpperCase());
+            }
+          }
         }
       }
       if (inputNames.length > 0) {
         this.fbInputParams.set(fb.name.toUpperCase(), inputNames);
+      }
+      if (inoutNames.length > 0) {
+        this.fbInoutParams.set(fb.name.toUpperCase(), new Set(inoutNames));
       }
     }
 
@@ -1224,6 +1248,11 @@ export class CodeGenerator {
       this.emitHeaderChunkMarker("end", "type", iface.name);
     }
 
+    // Configuration VAR_GLOBALs as file-scope singletons — emitted before the
+    // FB/program classes so their bodies (and FB constructors that bind a
+    // VAR_EXTERNAL pointer to a global) can name them.
+    this.emitFileScopeGlobals();
+
     // Generate function block class declarations (topologically sorted by dependency)
     for (const fb of this.sortedFBs) {
       this.emitHeaderChunkMarker("begin", "functionBlock", fb.name);
@@ -1396,6 +1425,27 @@ export class CodeGenerator {
   }
 
   /**
+   * Collect a function block's VAR_EXTERNAL references (name + resolved C++
+   * type). IEC 61131-3 lets an FB access configuration globals this way; each
+   * becomes a `GlobalVar<V>*` bound to the file-scope canonical.
+   */
+  private collectFBExternals(
+    fb: CompilationUnit["functionBlocks"][0],
+  ): Array<{ name: string; cppType: string }> {
+    const externals: Array<{ name: string; cppType: string }> = [];
+    for (const block of fb.varBlocks) {
+      if (block.blockType !== "VAR_EXTERNAL") continue;
+      for (const decl of block.declarations) {
+        const cppType = this.mapTypeRefToCpp(decl.type);
+        for (const name of decl.names) {
+          externals.push({ name, cppType });
+        }
+      }
+    }
+    return externals;
+  }
+
+  /**
    * Generate header declaration for a function block.
    */
   private generateFBHeaderDeclaration(
@@ -1437,6 +1487,12 @@ export class CodeGenerator {
 
     // Generate member variables
     for (const block of fb.varBlocks) {
+      // VAR_EXTERNAL is a reference to a configuration global, not a member of
+      // the FB — emitted below as a GlobalVar<V>* pointing at the file-scope
+      // canonical (mirrors the PROGRAM path). Handling it here as a plain member
+      // would give the FB a private copy that never touches the shared global.
+      if (block.blockType === "VAR_EXTERNAL") continue;
+
       const comment =
         block.blockType === "VAR_INPUT"
           ? "// Inputs"
@@ -1461,6 +1517,18 @@ export class CodeGenerator {
           this.emitHeader(`    ${tag}${cppType} ${memberName};`);
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
+      }
+    }
+
+    // VAR_EXTERNAL members: a pointer to the file-scope canonical GlobalVar<V>
+    // (same shape a PROGRAM uses). Bound in the constructor to &<ns>::<name>.
+    const fbExternals = this.collectFBExternals(fb);
+    if (fbExternals.length > 0) {
+      this.emitHeader("    // External variables (pointers to shared globals)");
+      for (const ext of fbExternals) {
+        this.emitHeader(
+          `    GlobalVar<${ext.cppType}>* ${ext.name} = nullptr;`,
+        );
       }
     }
 
@@ -2027,9 +2095,41 @@ export class CodeGenerator {
     this.currentFBVarBlocks = fb.varBlocks;
     this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
 
+    // VAR_EXTERNAL: body access (operator(), methods, properties) is rewritten
+    // to go through the GlobalVar pointer (g->read()/write()/with_lock), exactly
+    // like a PROGRAM. Set for the whole implementation, cleared at the end.
+    const externalDecls = fb.varBlocks
+      .filter((b) => b.blockType === "VAR_EXTERNAL")
+      .flatMap((b) =>
+        b.declarations.flatMap((d) =>
+          d.names.map((n) => ({ name: n, typeName: d.type.name })),
+        ),
+      );
+    this.programExternals = new Set(
+      externalDecls.map((e) => e.name.toUpperCase()),
+    );
+    this.compositeExternals = new Set(
+      externalDecls
+        .filter((e) => !isElementaryType(e.typeName))
+        .map((e) => e.name.toUpperCase()),
+    );
+
     // Constructor with initializer list for variables with defaults
     const fbInits: string[] = [];
+    // Bind each VAR_EXTERNAL pointer to the file-scope canonical global. The
+    // namespace qualifier disambiguates the global from the same-named pointer
+    // member being initialized. File-scope visibility means this works no
+    // matter how deeply the FB is instantiated — no pointer threading.
+    if (externalDecls.length > 0) {
+      const ns = this.projectModel
+        ? getProjectNamespace(this.projectModel)
+        : "strucpp";
+      for (const e of externalDecls) {
+        fbInits.push(`${e.name}(&${ns}::${e.name})`);
+      }
+    }
     for (const block of fb.varBlocks) {
+      if (block.blockType === "VAR_EXTERNAL") continue;
       for (const decl of block.declarations) {
         if (decl.initialValue) {
           const initExpr = this.generateExpression(decl.initialValue);
@@ -2093,6 +2193,8 @@ export class CodeGenerator {
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
     this.currentFBInterfaceMethods = new Set();
+    this.programExternals = new Set();
+    this.compositeExternals = new Set();
   }
 
   /**
@@ -2549,24 +2651,30 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate header declaration for a configuration from the project model.
+   * Emit configuration VAR_GLOBALs as file-scope `inline GlobalVar<V>`
+   * singletons — one per unique name — instead of configuration-class members.
+   *
+   * File scope makes the single canonical storage (value + its own mutex)
+   * reachable from every POU regardless of nesting: a program keeps receiving a
+   * `GlobalVar<V>*` via the configuration constructor (which now hands over the
+   * file-scope address), and a function block binds its VAR_EXTERNAL pointer
+   * straight to `&<ns>::<name>` in its own constructor — no pointer threading
+   * through containers. Must run before the FB/program/config classes so their
+   * bodies can name the globals. Also registers located VAR_GLOBALs so the
+   * runtime binds them to the I/O image.
    */
-  private generateConfigurationHeaderFromModel(
-    config: ConfigurationDecl,
-  ): void {
-    this.emitHeader(
-      `class Configuration_${config.name} : public ConfigurationInstance {`,
-    );
-    this.emitHeader("public:");
-
-    // Generate VAR_GLOBAL members
-    if (config.globalVars.length > 0) {
-      this.emitHeader("    // VAR_GLOBAL variables");
+  private emitFileScopeGlobals(): void {
+    if (!this.projectModel) return;
+    const seen = new Set<string>();
+    let emittedAny = false;
+    for (const config of this.projectModel.configurations) {
       for (const gvar of config.globalVars) {
-        const constQualifier = gvar.isConstant ? "const " : "";
-        // Same metadata-aware lookup as program locals (see comment in
-        // generateProgramHeaderFromModel) — globals can also be inline
-        // ARRAY types and need Array1D<...> expansion.
+        const key = gvar.name.toUpperCase();
+        // Same name across configurations = one canonical global (strucpp
+        // already treats them as such); emit its storage once.
+        if (seen.has(key)) continue;
+        seen.add(key);
+
         const cppType = this.mapTypeRefToCpp({
           name: gvar.typeName,
           ...(gvar.maxLength !== undefined
@@ -2582,15 +2690,23 @@ export class CodeGenerator {
             ? { referenceKind: gvar.referenceKind }
             : {}),
         });
-        // Wrap the canonical global in GlobalVar<V> (value + per-global mutex).
-        // Programs reach it through a GlobalVar<V>* VAR_EXTERNAL and lock it on
-        // every access. `const` cannot apply (the wrapper is mutated under lock).
-        void constQualifier;
-        this.emitHeader(`    GlobalVar<${cppType}> ${gvar.name};`);
-        // #172: a located VAR_GLOBAL (`AT %IX/%QX/%MW ...`) must enter the
-        // located-vars descriptor so the runtime binds it to the I/O image.
-        // Owner "@config" (not a real program) keeps it out of every program's
-        // located_range; its pointer is wired in the configuration ctor.
+        const initVal = this.getDefaultValue(gvar.typeName, gvar.initialValue);
+
+        if (!emittedAny) {
+          this.emitHeader(
+            "// Configuration VAR_GLOBAL storage — file-scope so every POU " +
+              "(program or nested function block) reaches the one canonical " +
+              "GlobalVar<V> (value + mutex).",
+          );
+          emittedAny = true;
+        }
+        this.emitHeader(
+          `inline GlobalVar<${cppType}> ${gvar.name}{${initVal}};`,
+        );
+
+        // A located VAR_GLOBAL (`AT %IX/%QX/%MW ...`) enters the located-vars
+        // descriptor so the runtime binds it to the I/O image. Owner "@config"
+        // (not a real program) keeps it out of every program's located_range.
         if (gvar.address) {
           this.collectLocatedVarFromModel(
             { name: gvar.name, typeName: gvar.typeName, address: gvar.address },
@@ -2598,8 +2714,24 @@ export class CodeGenerator {
           );
         }
       }
-      this.emitHeader("");
     }
+    if (emittedAny) this.emitHeader("");
+  }
+
+  /**
+   * Generate header declaration for a configuration from the project model.
+   */
+  private generateConfigurationHeaderFromModel(
+    config: ConfigurationDecl,
+  ): void {
+    this.emitHeader(
+      `class Configuration_${config.name} : public ConfigurationInstance {`,
+    );
+    this.emitHeader("public:");
+
+    // VAR_GLOBALs are emitted as file-scope singletons (see
+    // emitFileScopeGlobals), not configuration-class members, so every POU can
+    // reach them. Nothing to declare inside the class here.
 
     // Generate program instance members
     const allInstances = this.collectProgramInstances(config);
@@ -2660,16 +2792,12 @@ export class CodeGenerator {
     // Initializer list
     const inits: string[] = [];
 
-    // Initialize global variables
-    for (const gvar of config.globalVars) {
-      const initVal = this.getDefaultValue(gvar.typeName, gvar.initialValue);
-      // Skip user-defined types (empty initVal) - they use default constructors
-      if (initVal) {
-        inits.push(`${gvar.name}(${initVal})`);
-      }
-    }
+    // VAR_GLOBALs self-initialize at file scope (see emitFileScopeGlobals), so
+    // there's nothing to init here.
 
-    // Initialize program instances (with external variable references)
+    // Initialize program instances (with external variable references).
+    // `&${ext.name}` now resolves to the file-scope global (the class no longer
+    // shadows it with a member), so programs receive the same canonical pointer.
     for (const inst of allInstances) {
       const prog = this.projectModel?.programs.get(
         inst.programType.toUpperCase(),
@@ -2944,23 +3072,6 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
-    // Composite shared global (struct / array / FB) as the assignment target:
-    // not yet supported (see generateVariableExpression for the rationale). This
-    // catches whole-object writes (`g := x`); field / element writes
-    // (`g.x := v`) are caught when the target expression is generated below.
-    if (
-      stmt.target.kind === "VariableExpression" &&
-      this.compositeExternals.has(stmt.target.name.toUpperCase())
-    ) {
-      throw new Error(
-        `Shared global '${stmt.target.name}' is a composite type (struct / ` +
-          `array / function-block) and is written in a program body. Composite ` +
-          `shared globals can be declared and debugged, but writing them from a ` +
-          `threaded/shared context is not yet supported in the mutex-based ` +
-          `shared-global model — scalar globals only for now.`,
-      );
-    }
-
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
     if (propWrite) {
@@ -2968,6 +3079,20 @@ export class CodeGenerator {
       this.emit(
         `${indent}${propWrite.objectCode}set_${propWrite.propertyName}(${value});`,
       );
+      return;
+    }
+
+    // Composite / array shared-global WRITE (VAR_EXTERNAL to a composite
+    // VAR_GLOBAL): take the global's own mutex and write the canonical directly
+    // through with_lock. The RHS is computed into a temp first, so any
+    // composite-global reads in it take + release their locks before we take the
+    // target's lock — at most one global lock is ever held at a time.
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      !stmt.target.isDereference &&
+      this.compositeExternals.has(stmt.target.name.toUpperCase())
+    ) {
+      this.emitCompositeGlobalWrite(stmt.target, stmt.value, indent);
       return;
     }
 
@@ -3054,6 +3179,55 @@ export class CodeGenerator {
     }
 
     this.emit(`${indent}${target} = ${value};`);
+  }
+
+  /**
+   * Emit a write to a composite / array shared global (VAR_EXTERNAL to a
+   * composite VAR_GLOBAL) under the global's own mutex via with_lock. The RHS is
+   * hoisted to a temp BEFORE the lock is taken so its own composite-global reads
+   * (each a self-contained with_lock) release before this write's lock is
+   * acquired — guaranteeing at most one global lock held at a time. Handles
+   * whole-object, field/element, and bit writes (the bit read-modify-write runs
+   * inside the single lock, so it is atomic). The lock compiles out on
+   * non-STRUCPP_THREADED builds (the guard lives inside GlobalVar::with_lock).
+   */
+  private emitCompositeGlobalWrite(
+    target: VariableExpression,
+    valueExpr: Expression,
+    indent: string,
+  ): void {
+    const nameUpper = target.name.toUpperCase();
+    const ptr = this.resolveVariableBaseName(target.name);
+    const tmp = `__gwv_${this.tempVarCounter++}`;
+    const value = this.generateExpression(valueExpr);
+    this.emit(`${indent}auto ${tmp} = ${value};`);
+
+    const lastField = target.fieldAccess[target.fieldAccess.length - 1];
+    const isBitWrite =
+      target.fieldAccess.length > 0 && /^\d+$/.test(lastField ?? "");
+
+    if (isBitWrite) {
+      // Base without the trailing bit index, rendered on the lock lambda param.
+      const baseVar: VariableExpression = {
+        ...target,
+        fieldAccess: target.fieldAccess.slice(0, -1),
+      };
+      if (target.accessChain) {
+        const trimmed = this.trimLastFieldFromAccessChain(target.accessChain);
+        if (trimmed) baseVar.accessChain = trimmed;
+        else delete baseVar.accessChain;
+      }
+      const lv = this.renderAccessTail("(*__glk)", baseVar, nameUpper);
+      this.emit(
+        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = (${lv} & ~(1ULL << ${lastField})) | ((${tmp} ? 1ULL : 0ULL) << ${lastField}); });`,
+      );
+      return;
+    }
+
+    const lv = this.renderAccessTail("(*__glk)", target, nameUpper);
+    this.emit(
+      `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${tmp}; });`,
+    );
   }
 
   /**
@@ -3563,30 +3737,39 @@ export class CodeGenerator {
     const nameUpper = expr.name.toUpperCase();
 
     // Composite shared global (struct / array / function-block) accessed in a
-    // body: not yet supported. Locked field / element / call codegen
-    // (g->with_lock(...), respecting the never-nested-lock contract) is a
-    // follow-up phase. Fail loudly rather than emit mis-locked / non-compiling
-    // code. Declaration + debug-table + located-image binding all work.
-    if (this.compositeExternals.has(nameUpper)) {
-      throw new Error(
-        `Shared global '${expr.name}' is a composite type (struct / array / ` +
-          `function-block) and is accessed in a program body. Composite shared ` +
-          `globals can be declared and debugged, but reading or writing them ` +
-          `from a threaded/shared context is not yet supported in the ` +
-          `mutex-based shared-global model — scalar globals only for now.`,
-      );
-    }
+    // body: reach its canonical value directly through the GlobalVar pointer
+    // (`g->value` / `g->value.field` / `g->value.field.N`). The per-global mutex
+    // is intentionally bypassed for composites — they are shared within a single
+    // (bus-cycle) task, e.g. a SoftMotion AXIS_REF_SM3 driven by its bridge and
+    // the MC_* blocks in the same scan. Cross-task composite sharing (needing a
+    // lock spanning a whole field/call access) remains a follow-up. The base is
+    // set to `g->value` below (see the `result` assignment); field/subscript/bit
+    // access then builds on it.
 
     // VAR_EXTERNAL scalar read → lock the shared global and return its value.
     // read() yields the real IEC type, so it stays deduction-friendly in
-    // std-lib templates (NOT/ADD/...). Struct/array/FB externals (fieldAccess or
-    // call sites) are handled at their emission sites via with_lock().
+    // std-lib templates (NOT/ADD/...). Composite externals use `->value`
+    // directly (handled at the base below), not read().
     if (
       this.programExternals.has(nameUpper) &&
+      !this.compositeExternals.has(nameUpper) &&
       expr.fieldAccess.length === 0 &&
       !expr.isDereference
     ) {
       return `${expr.name}->read()`;
+    }
+
+    // Composite / array shared-global READ (VAR_EXTERNAL to a composite
+    // VAR_GLOBAL). Take the global's own mutex and read the canonical value
+    // directly through with_lock — a field/element read copies only that
+    // sub-value, never the whole struct. The lock lives inside
+    // GlobalVar::with_lock (compiled out when not STRUCPP_THREADED), and each
+    // with_lock is self-contained (acquire → return → release), so several
+    // composite-global reads in one expression are sequential, never nested.
+    if (this.compositeExternals.has(nameUpper) && !expr.isDereference) {
+      const ptr = this.resolveVariableBaseName(expr.name);
+      const inner = this.renderAccessTail("(*__glk)", expr, nameUpper);
+      return `${ptr}->with_lock([&](auto* __glk){ return ${inner}; })`;
     }
 
     // Handle THIS reference
@@ -3711,6 +3894,23 @@ export class CodeGenerator {
         return `${expr.name}::${expr.fieldAccess[0]}`;
       }
     }
+
+    return this.renderAccessTail(result, expr, nameUpper);
+  }
+
+  /**
+   * Render an expression's access chain (subscripts / field access / bit access /
+   * dereference) onto a given base string. Factored out of
+   * generateVariableExpression so the same access logic can be rendered onto a
+   * different base — e.g. `(*p)` inside a composite shared-global `with_lock`
+   * lambda.
+   */
+  private renderAccessTail(
+    base: string,
+    expr: VariableExpression,
+    nameUpper: string,
+  ): string {
+    let result = base;
 
     // Use ordered access chain when available (preserves interleaving)
     if (expr.accessChain && expr.accessChain.length > 0) {
@@ -5186,14 +5386,82 @@ export class CodeGenerator {
       `${instanceName}.ENO`,
     );
 
+    // Copy VAR_IN_OUT parameters back to the caller's variables. FB inout params
+    // are stored as by-value members and copied IN before the call; without this
+    // copy-OUT the callee's mutations would be discarded (true inout semantics
+    // require both directions). Mirrors the graphical-language convention of
+    // tying an inout pin on both sides. A follow-up strucpp branch replaces this
+    // copy-in/copy-out with by-reference (pointer) inout members.
+    const inoutParams = fbTypeName
+      ? this.fbInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+    if (inoutParams && inoutParams.size > 0) {
+      for (const arg of filteredArgs) {
+        if (arg.isOutput) continue;
+        if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
+          this.emitCaptureToLvalue(
+            arg.value,
+            `${instanceName}.${arg.name}`,
+            indent,
+          );
+        }
+      }
+    }
+
     // Capture output arguments (=> syntax), excluding ENO (already handled)
     for (const arg of filteredArgs) {
       if (arg.name && arg.isOutput) {
-        this.emit(
-          `${indent}${this.generateExpression(arg.value)} = ${instanceName}.${arg.name};`,
+        this.emitCaptureToLvalue(
+          arg.value,
+          `${instanceName}.${arg.name}`,
+          indent,
         );
       }
     }
+  }
+
+  /**
+   * Emit `<target> = <source>` where `source` is an already-rendered C++
+   * expression. If `target` is a composite / array shared global (VAR_EXTERNAL
+   * to a composite VAR_GLOBAL), the write goes through the global's mutex via
+   * with_lock (a with_lock read result is an rvalue and can't be assigned to).
+   * Used for FB VAR_IN_OUT copy-back and `=>` output capture.
+   */
+  private emitCaptureToLvalue(
+    target: Expression,
+    source: string,
+    indent: string,
+  ): void {
+    if (
+      target.kind === "VariableExpression" &&
+      !target.isDereference &&
+      this.compositeExternals.has(target.name.toUpperCase())
+    ) {
+      const ptr = this.resolveVariableBaseName(target.name);
+      const lv = this.renderAccessTail(
+        "(*__glk)",
+        target,
+        target.name.toUpperCase(),
+      );
+      this.emit(
+        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${source}; });`,
+      );
+      return;
+    }
+    // Scalar VAR_EXTERNAL capture → the shared global is a pointer, so its value
+    // is read via `->read()` (an rvalue) and written via `->write()`. Assigning
+    // to `->read()` fails to compile, so route the write through the pointer,
+    // mirroring the scalar-external branch of generateAssignmentStatement.
+    if (
+      target.kind === "VariableExpression" &&
+      target.fieldAccess.length === 0 &&
+      !target.isDereference &&
+      this.programExternals.has(target.name.toUpperCase())
+    ) {
+      this.emit(`${indent}${target.name}->write(${source});`);
+      return;
+    }
+    this.emit(`${indent}${this.generateExpression(target)} = ${source};`);
   }
 
   /**
