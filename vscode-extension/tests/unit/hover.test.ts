@@ -210,3 +210,24 @@ describe("getHover — built-in IEC data type docs (#55)", () => {
     }
   });
 });
+
+describe("hover on array variables", () => {
+  const ARRAY_SOURCE = `PROGRAM Main
+  VAR
+    someArray : ARRAY [0..10] OF BOOL;
+  END_VAR
+  someArray[0] := FALSE;
+END_PROGRAM
+`;
+
+  it("shows the declared ARRAY type, not the internal synthetic name", () => {
+    const analysis = analyze(ARRAY_SOURCE, { fileName: "arrays.st" });
+    // 1-indexed position on `someArray` in the declaration.
+    const hover = getHover(analysis, "arrays.st", 3, 6, undefined, ARRAY_SOURCE);
+    const text = typeof hover?.contents === "object" && "value" in hover.contents
+      ? hover.contents.value
+      : String(hover?.contents ?? "");
+    expect(text).toContain("ARRAY [0..10] OF BOOL");
+    expect(text).not.toContain("__INLINE_ARRAY");
+  });
+});

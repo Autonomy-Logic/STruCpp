@@ -26,7 +26,7 @@ import { ELEMENTARY_TYPES, typeName } from "strucpp";
 import { getCursorContext } from "./cursor-context.js";
 import { getScopeForContext } from "./resolve-symbol.js";
 import { isTestFile, extractTestVarDeclarations } from "../../shared/test-utils.js";
-import { stripCommentsAndStrings } from "./lsp-utils.js";
+import { inlineArrayInfo, renderVariableType, stripCommentsAndStrings } from "./lsp-utils.js";
 
 /**
  * Get completion items for the given position.
@@ -402,15 +402,15 @@ function getMembersForType(
     // Collect from inputs/outputs arrays
     const added = new Set<string>();
     for (const v of fbSym.inputs) {
-      items.push(makeVariableCompletion(v, "2"));
+      items.push(...makeVariableCompletion(v, "2"));
       added.add(v.name.toUpperCase());
     }
     for (const v of fbSym.outputs) {
-      items.push(makeVariableCompletion(v, "2"));
+      items.push(...makeVariableCompletion(v, "2"));
       added.add(v.name.toUpperCase());
     }
     for (const v of fbSym.inouts) {
-      items.push(makeVariableCompletion(v, "2"));
+      items.push(...makeVariableCompletion(v, "2"));
       added.add(v.name.toUpperCase());
     }
 
@@ -421,7 +421,7 @@ function getMembersForType(
         if (sym.kind === "variable" && !added.has(sym.name.toUpperCase())) {
           const varSym = sym as VariableSymbol;
           if (varSym.isInput || varSym.isOutput || varSym.isInOut) {
-            items.push(makeVariableCompletion(varSym, "2"));
+            items.push(...makeVariableCompletion(varSym, "2"));
             added.add(sym.name.toUpperCase());
           }
         }
@@ -522,7 +522,7 @@ function getBodyCompletions(
 
       if (sym.kind === "variable") {
         const varSym = sym as VariableSymbol;
-        items.push(makeVariableCompletion(varSym, sortPriority));
+        items.push(...makeVariableCompletion(varSym, sortPriority));
       } else if (sym.kind === "constant") {
         items.push({
           label: sym.name,
@@ -818,17 +818,77 @@ function getTestBodyCompletions(): CompletionItem[] {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Maximum number of indexed elements surfaced for a single array variable.
+ * Past this the array is offered as a bare name only — a 10 000-element array
+ * must not drown every other symbol in the completion list.
+ */
+const MAX_ARRAY_ELEMENT_COMPLETIONS = 100;
+
+/** Every index tuple of an array, in row-major order — `[[0],[1],…]` for 1-D,
+ *  `[[0,0],[0,1],…]` for multi-dimensional. Empty past the element cap. */
+function arrayIndexTuples(
+  dimensions: ReadonlyArray<{ start: number; end: number }>,
+): number[][] {
+  let total = 1;
+  for (const d of dimensions) {
+    const size = d.end - d.start + 1;
+    if (size <= 0) return [];
+    total *= size;
+    if (total > MAX_ARRAY_ELEMENT_COMPLETIONS) return [];
+  }
+
+  let tuples: number[][] = [[]];
+  for (const d of dimensions) {
+    const next: number[][] = [];
+    for (const prefix of tuples) {
+      for (let i = d.start; i <= d.end; i++) next.push([...prefix, i]);
+    }
+    tuples = next;
+  }
+  return tuples;
+}
+
+/**
+ * Completion items for a variable: the variable itself, plus one item per
+ * element when it's a fixed-bound inline array.
+ *
+ * Arrays are the one shape where the bare symbol is not directly usable —
+ * `someArray` alone is not assignable to a BOOL, only `someArray[3]` is. A
+ * client filtering candidates by an expected type (the graphical LD/FBD
+ * variable boxes do exactly this) would otherwise be left with nothing to
+ * offer. Emitting the elements keeps the language server the single authority
+ * on what a symbol can be used as, instead of every client re-deriving array
+ * bounds from its own model.
+ */
 function makeVariableCompletion(
   sym: VariableSymbol,
   sortText: string,
-): CompletionItem {
-  const typeStr = sym.declaration?.type?.name ?? (sym.type ? typeName(sym.type) : undefined);
-  return {
-    label: sym.name,
-    kind: CompletionItemKind.Variable,
-    detail: typeStr,
-    sortText,
-  };
+): CompletionItem[] {
+  const items: CompletionItem[] = [
+    {
+      label: sym.name,
+      kind: CompletionItemKind.Variable,
+      detail: renderVariableType(sym),
+      sortText,
+    },
+  ];
+
+  const array = inlineArrayInfo(sym);
+  if (!array) return items;
+
+  for (const indices of arrayIndexTuples(array.dimensions)) {
+    items.push({
+      label: `${sym.name}[${indices.join(",")}]`,
+      kind: CompletionItemKind.Variable,
+      detail: array.elementType,
+      // Sort elements immediately after their parent, ahead of nothing else:
+      // the suffix keeps them grouped without displacing other symbols at the
+      // same scope priority.
+      sortText: `${sortText}~${indices.map((i) => String(i).padStart(6, "0")).join(",")}`,
+    });
+  }
+  return items;
 }
 
 function formatFunctionSignature(sym: FunctionSymbol): string {
@@ -898,6 +958,14 @@ function restoreOriginalCasing(
     const restored = caseMap.get(item.label.toUpperCase());
     if (restored) {
       item.label = restored;
+    } else {
+      // Indexed array elements (`someArray[0]`) are synthesized by the server,
+      // so the whole label never occurs verbatim in the source and the direct
+      // lookup above always misses. Restore the identifier half and keep the
+      // subscript, or the editor inserts a shouting `SOMEARRAY[0]`.
+      const indexed = /^([A-Za-z_]\w*)(\[[^\]]*\])$/.exec(item.label);
+      const base = indexed ? caseMap.get(indexed[1].toUpperCase()) : undefined;
+      if (indexed && base) item.label = base + indexed[2];
     }
 
     // Also restore type names in detail strings (e.g., "REAL" → "Real")

@@ -311,3 +311,100 @@ END_PROGRAM
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// Array variables
+//
+// The AST names inline arrays with an internal synthetic identifier
+// (`__INLINE_ARRAY_BOOL`) and keeps the element type and bounds beside it on
+// the same TypeReference. Publishing the raw name leaked a compiler internal
+// and left clients unable to tell what the symbol could be used as: an editor
+// filtering candidates by an expected type found nothing to offer for an
+// array, and rejected `someArray[0]` as an unknown expression.
+// ---------------------------------------------------------------------------
+
+describe("array completions", () => {
+  const ARRAY_SOURCE = `PROGRAM Main
+  VAR
+    someArray : ARRAY [0..10] OF BOOL;
+    matrix : ARRAY [0..2, 0..2] OF INT;
+    negative : ARRAY [-2..0] OF SINT;
+    huge : ARRAY [1..500] OF INT;
+    plain : BOOL;
+  END_VAR
+  plain := FALSE;
+END_PROGRAM
+`;
+
+  function arrayCompletions() {
+    const analysis = analyze(ARRAY_SOURCE, { fileName: "arrays.st" });
+    // Body position, on the assignment line.
+    return getCompletions(analysis, "arrays.st", 9, 3, ARRAY_SOURCE);
+  }
+
+  function labelled(items: { label: string }[], prefix: string): string[] {
+    return items.map((i) => i.label).filter((l) => l.toUpperCase().startsWith(prefix.toUpperCase()));
+  }
+
+  function detailOf(items: { label: string; detail?: string }[], label: string): string | undefined {
+    return items.find((i) => i.label.toUpperCase() === label.toUpperCase())?.detail;
+  }
+
+  it("renders the declared ARRAY type instead of the internal synthetic name", () => {
+    const items = arrayCompletions();
+    expect(detailOf(items, "someArray")).toBe("ARRAY [0..10] OF BOOL");
+    expect(detailOf(items, "matrix")).toBe("ARRAY [0..2, 0..2] OF INT");
+    expect(detailOf(items, "negative")).toBe("ARRAY [-2..0] OF SINT");
+  });
+
+  it("never leaks an internal array type name through a variable's detail", () => {
+    const items = arrayCompletions();
+    const leaked = items.filter(
+      (i) => i.detail?.includes("__INLINE_ARRAY") || i.detail?.includes("__VLA_"),
+    );
+    expect(leaked).toEqual([]);
+  });
+
+  it("offers every element of a 1-D array, typed as the element type", () => {
+    const items = arrayCompletions();
+    const elements = labelled(items, "someArray[");
+    expect(elements).toHaveLength(11);
+    expect(elements[0]).toBe("someArray[0]");
+    expect(elements[10]).toBe("someArray[10]");
+    expect(detailOf(items, "someArray[3]")).toBe("BOOL");
+  });
+
+  it("offers multi-dimensional elements in row-major order with comma indices", () => {
+    const items = arrayCompletions();
+    const elements = labelled(items, "matrix[");
+    expect(elements).toHaveLength(9);
+    expect(elements.slice(0, 4)).toEqual(["matrix[0,0]", "matrix[0,1]", "matrix[0,2]", "matrix[1,0]"]);
+    expect(detailOf(items, "matrix[2,2]")).toBe("INT");
+  });
+
+  it("honours negative bounds", () => {
+    const items = arrayCompletions();
+    expect(labelled(items, "negative[")).toEqual(["negative[-2]", "negative[-1]", "negative[0]"]);
+  });
+
+  it("offers the bare name only for an array past the element cap", () => {
+    const items = arrayCompletions();
+    expect(labelled(items, "huge[")).toEqual([]);
+    // …but the array itself is still completable, with a readable type.
+    expect(detailOf(items, "huge")).toBe("ARRAY [1..500] OF INT");
+  });
+
+  it("restores the declaration's casing on synthesized element labels", () => {
+    const items = arrayCompletions();
+    // The compiler uppercases identifiers; an element label is synthesized by
+    // the server and so never appears verbatim in the source. Without explicit
+    // handling the editor would insert a shouting `SOMEARRAY[0]`.
+    expect(labelled(items, "someArray[").every((l) => l.startsWith("someArray["))).toBe(true);
+  });
+
+  it("leaves non-array variables untouched", () => {
+    const items = arrayCompletions();
+    expect(detailOf(items, "plain")).toBe("BOOL");
+    expect(labelled(items, "plain[")).toEqual([]);
+  });
+});
