@@ -8,10 +8,59 @@
  */
 
 import { Range, Position } from "vscode-languageserver/node.js";
-import type { SourceSpan } from "strucpp";
+import type { ConstantSymbol, SourceSpan, VariableSymbol } from "strucpp";
+import { typeName } from "strucpp";
+
+/** Any symbol carrying a declared type — variables and constants both do. */
+type TypedSymbol = VariableSymbol | ConstantSymbol;
 
 /** Resolves a bare compiler fileName to a file:// URI. */
 export type FileNameResolver = (fileName: string) => string | undefined;
+
+/**
+ * The inline-ARRAY facts the AST records alongside the synthetic type name.
+ * `undefined` when the declaration isn't a fixed-bound inline array (a plain
+ * type, a named array TYPE, or a variable-length `ARRAY[*]`).
+ */
+export interface InlineArrayInfo {
+  elementType: string;
+  dimensions: Array<{ start: number; end: number }>;
+}
+
+export function inlineArrayInfo(sym: TypedSymbol): InlineArrayInfo | undefined {
+  const decl = sym.declaration?.type;
+  if (!decl?.elementTypeName) return undefined;
+  const dimensions = decl.arrayDimensions;
+  if (!dimensions || dimensions.length === 0) return undefined;
+  return { elementType: decl.elementTypeName, dimensions };
+}
+
+/**
+ * Render a variable's type the way the user wrote it in ST.
+ *
+ * The AST names inline arrays with synthetic internal identifiers
+ * (`__INLINE_ARRAY_BOOL`, `__VLA_1D_INT`) and keeps the real element type and
+ * bounds beside them on the same `TypeReference`. Publishing the raw name
+ * leaks a compiler internal across the LSP boundary and destroys the only
+ * information a client needs to make sense of the symbol: an editor sees
+ * `__INLINE_ARRAY_BOOL` where it expected `ARRAY [0..10] OF BOOL`, cannot tell
+ * the element type, and rejects `someArray[0]` as an unknown expression.
+ *
+ * Reconstruct the declaration instead. Anything not reconstructible falls back
+ * to the declared name, which for every non-array type is already exactly what
+ * the user typed.
+ *
+ * Every LSP surface that shows a variable's type — completion detail, hover,
+ * signature help — must go through here, so no internal name can escape.
+ */
+export function renderVariableType(sym: TypedSymbol): string | undefined {
+  const array = inlineArrayInfo(sym);
+  if (array) {
+    const dims = array.dimensions.map((d) => `${d.start}..${d.end}`).join(", ");
+    return `ARRAY [${dims}] OF ${array.elementType}`;
+  }
+  return sym.declaration?.type?.name ?? (sym.type ? typeName(sym.type) : undefined);
+}
 
 /**
  * Restore an identifier's original casing using the workspace case map.
