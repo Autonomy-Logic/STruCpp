@@ -23,7 +23,7 @@ import type {
 } from "strucpp";
 import { typeName } from "strucpp";
 import { resolveSymbolAtPosition, lookupSymbolByName } from "./resolve-symbol.js";
-import { sourceSpanToRange, restoreCase } from "./lsp-utils.js";
+import { renderVariableType, sourceSpanToRange, restoreCase } from "./lsp-utils.js";
 import { isTestFile, getWordAt } from "../../shared/test-utils.js";
 import { getIecTypeDoc } from "./iec-type-docs.js";
 
@@ -153,7 +153,7 @@ function formatVariable(sym: VariableSymbol, symbolTables: SymbolTables | undefi
           : sym.isExternal
             ? "VAR_EXTERNAL"
             : "VAR";
-  const typStr = rc(sym.declaration?.type?.name ?? (sym.type ? typeName(sym.type) : "unknown"));
+  const typStr = rc(renderVariableType(sym) ?? "unknown");
   let result = `\`\`\`\n${qualifier} ${rc(sym.name)} : ${typStr}\n\`\`\``;
   if (sym.address) {
     result += `\n\nAddress: \`${sym.address}\``;
@@ -188,10 +188,10 @@ function expandFBDetails(fbSym: FunctionBlockSymbol, symbolTables: SymbolTables 
   // Try inputs/outputs from the symbol first
   if (fbSym.inputs.length > 0 || fbSym.outputs.length > 0) {
     for (const v of fbSym.inputs) {
-      parts.push(`  VAR_INPUT ${rc(v.name)} : ${rc(v.declaration?.type?.name ?? (v.type ? typeName(v.type) : "unknown"))}`);
+      parts.push(`  VAR_INPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
     }
     for (const v of fbSym.outputs) {
-      parts.push(`  VAR_OUTPUT ${rc(v.name)} : ${rc(v.declaration?.type?.name ?? (v.type ? typeName(v.type) : "unknown"))}`);
+      parts.push(`  VAR_OUTPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
     }
   } else if (symbolTables) {
     // Fall back to the FB scope (semantic analyzer may store vars only there)
@@ -200,7 +200,7 @@ function expandFBDetails(fbSym: FunctionBlockSymbol, symbolTables: SymbolTables 
       for (const s of fbScope.getAllSymbols()) {
         if (s.kind !== "variable") continue;
         const varSym = s as VariableSymbol;
-        const typeStr = rc(varSym.declaration?.type?.name ?? (varSym.type ? typeName(varSym.type) : "unknown"));
+        const typeStr = rc(renderVariableType(varSym) ?? "unknown");
         if (varSym.isInput) {
           parts.push(`  VAR_INPUT ${rc(varSym.name)} : ${typeStr}`);
         } else if (varSym.isOutput) {
@@ -217,7 +217,7 @@ function expandFBDetails(fbSym: FunctionBlockSymbol, symbolTables: SymbolTables 
 }
 
 function formatConstant(sym: ConstantSymbol, rc: RestoreFn): string {
-  const typeStr = rc(sym.declaration?.type?.name ?? (sym.type ? typeName(sym.type) : "unknown"));
+  const typeStr = rc(renderVariableType(sym) ?? "unknown");
   let result = `\`\`\`\nVAR CONSTANT ${rc(sym.name)} : ${typeStr}\n\`\`\``;
   if (sym.value !== undefined) {
     result += `\n\nValue: \`${String(sym.value)}\``;
@@ -229,7 +229,7 @@ function formatFunction(sym: FunctionSymbol, rc: RestoreFn): string {
   const params = (sym.parameters ?? [])
     .map((p) => {
       const qualifier = p.isInput ? "" : p.isOutput ? "VAR_OUTPUT " : p.isInOut ? "VAR_IN_OUT " : "";
-      const typeStr = rc(p.declaration?.type?.name ?? (p.type ? typeName(p.type) : "unknown"));
+      const typeStr = rc(renderVariableType(p) ?? "unknown");
       return `${qualifier}${rc(p.name)} : ${typeStr}`;
     })
     .join("; ");
@@ -241,10 +241,10 @@ function formatFunctionBlock(sym: FunctionBlockSymbol, symbolTables: SymbolTable
   const lines: string[] = [`FUNCTION_BLOCK ${rc(sym.name)}`];
   if (sym.inputs.length > 0 || sym.outputs.length > 0) {
     for (const v of sym.inputs) {
-      lines.push(`  VAR_INPUT ${rc(v.name)} : ${rc(v.declaration?.type?.name ?? (v.type ? typeName(v.type) : "unknown"))}`);
+      lines.push(`  VAR_INPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
     }
     for (const v of sym.outputs) {
-      lines.push(`  VAR_OUTPUT ${rc(v.name)} : ${rc(v.declaration?.type?.name ?? (v.type ? typeName(v.type) : "unknown"))}`);
+      lines.push(`  VAR_OUTPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
     }
   } else if (symbolTables) {
     const fbScope = symbolTables.getFBScope(sym.name);
@@ -252,7 +252,7 @@ function formatFunctionBlock(sym: FunctionBlockSymbol, symbolTables: SymbolTable
       for (const s of fbScope.getAllSymbols()) {
         if (s.kind !== "variable") continue;
         const varSym = s as VariableSymbol;
-        const typeStr = rc(varSym.declaration?.type?.name ?? (varSym.type ? typeName(varSym.type) : "unknown"));
+        const typeStr = rc(renderVariableType(varSym) ?? "unknown");
         if (varSym.isInput) {
           lines.push(`  VAR_INPUT ${rc(varSym.name)} : ${typeStr}`);
         } else if (varSym.isOutput) {
