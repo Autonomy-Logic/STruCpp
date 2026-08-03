@@ -518,4 +518,109 @@ describe('Phase 2.3 - Located Variables', () => {
       expect(result.cppCode).toMatch(/placeholder.*locatedVarsCount is 0/);
     });
   });
+
+  // locatedGlobals[] states which locatedVars[] entries are CONFIGURATION
+  // VAR_GLOBAL ... AT. Without it a host runtime has to infer the split, and
+  // inferring it from array position is what broke every located global as soon
+  // as a POU declared a located variable (forum: "%MX locations now invalid").
+  describe('Code Generation: Located Globals Array', () => {
+    const mixedProject = `
+      PROGRAM Main
+        VAR_EXTERNAL
+          gWord : DINT;
+          gBit  : BOOL;
+        END_VAR
+        VAR localBit AT %IX0.1 : BOOL; END_VAR
+        localBit := gBit;
+      END_PROGRAM
+
+      CONFIGURATION Config0
+        VAR_GLOBAL
+          gWord AT %MD0   : DINT;
+          gBit  AT %MX0.0 : BOOL;
+        END_VAR
+        RESOURCE Res0 ON PLC
+          TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+          PROGRAM p WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+
+    it('declares locatedGlobals with only the config-scope located vars', () => {
+      const result = compile(mixedProject);
+      expect(result.success).toBe(true);
+      // 3 located vars total, but only the 2 globals belong in locatedGlobals.
+      expect(result.headerCode).toContain('constexpr uint32_t locatedVarsCount = 3;');
+      expect(result.headerCode).toContain('extern void *locatedGlobals[2];');
+      expect(result.headerCode).toContain('constexpr uint32_t locatedGlobalsCount = 2;');
+    });
+
+    it('defines the array and exports C-linkage accessors', () => {
+      const result = compile(mixedProject);
+      expect(result.cppCode).toContain('void *locatedGlobals[2] = {');
+      expect(result.cppCode).toContain(
+        'extern "C" void *const *strucpp_get_located_globals(void)',
+      );
+      expect(result.cppCode).toContain(
+        'extern "C" uint32_t strucpp_get_located_global_count(void)',
+      );
+    });
+
+    it('populates locatedGlobals in the configuration constructor', () => {
+      const result = compile(mixedProject);
+      // Same raw_ptr() value written into locatedVars[].pointer, so a runtime can
+      // identify the config-scope entries by pointer identity.
+      expect(result.cppCode).toContain('locatedGlobals[0] = GWORD.value.raw_ptr();');
+      expect(result.cppCode).toContain('locatedGlobals[1] = GBIT.value.raw_ptr();');
+    });
+
+    it('excludes POU-local located variables', () => {
+      const result = compile(mixedProject);
+      // LOCALBIT is located but program-owned: it must never enter locatedGlobals.
+      expect(result.cppCode).toContain('locatedVars[2].pointer = LOCALBIT.raw_ptr();');
+      expect(result.cppCode).not.toMatch(/locatedGlobals\[\d+\] = LOCALBIT/);
+    });
+
+    it('guards array, accessors and population behind STRUCPP_THREADED', () => {
+      // Freestanding targets bind every located variable directly and have no
+      // dispatcher, so they must pay nothing for this.
+      const result = compile(mixedProject);
+      expect(result.headerCode).toMatch(
+        /#ifdef STRUCPP_THREADED\s*\nextern void \*locatedGlobals\[2\];/,
+      );
+      expect(result.cppCode).toMatch(
+        /#ifdef STRUCPP_THREADED\s*\n\/\/ Canonical storage pointers/,
+      );
+      expect(result.cppCode).toMatch(
+        /#ifdef STRUCPP_THREADED\s*\n\s*\/\/ Initialize located-global pointers/,
+      );
+    });
+
+    it('emits a placeholder and count 0 when no global is located', () => {
+      // A runtime must be able to tell "accessors absent" (older project) from
+      // "present but count 0" (no located globals), so the accessors are still
+      // emitted in this case.
+      const source = `
+        PROGRAM Main
+          VAR localBit AT %IX0.1 : BOOL; END_VAR
+          localBit := FALSE;
+        END_PROGRAM
+
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain('constexpr uint32_t locatedGlobalsCount = 0;');
+      expect(result.headerCode).toContain('extern void *locatedGlobals[1];');
+      expect(result.cppCode).toMatch(/placeholder.*locatedGlobalsCount is 0/);
+      expect(result.cppCode).toContain(
+        'extern "C" uint32_t strucpp_get_located_global_count(void)',
+      );
+    });
+  });
 });
