@@ -4,16 +4,18 @@
    traffic lights, pedestrian signals, and vehicle detection. *)
 
 PROGRAM IntersectionController
-  VAR_INPUT
+  (* Located I/O belongs in VAR, not in the interface sections. Only VAR and
+     VAR_GLOBAL may carry an "AT" location: VAR_INPUT / VAR_OUTPUT describe a
+     call contract, and a located interface declaration would leave the runtime
+     with two owners for one image slot. *)
+  VAR
     (* Sensor inputs — mapped to physical I/O *)
     northSensor AT %IX0.0 : BOOL;
     southSensor AT %IX0.1 : BOOL;
     eastSensor  AT %IX0.2 : BOOL;
     westSensor  AT %IX0.3 : BOOL;
     pedestrianButton AT %IX0.4 : BOOL;
-  END_VAR
 
-  VAR_OUTPUT
     (* Signal outputs — mapped to physical I/O *)
     northRed    AT %QX0.0 : BOOL;
     northYellow AT %QX0.1 : BOOL;

@@ -226,6 +226,288 @@ describe('Phase 2.3 - Located Variables', () => {
     });
   });
 
+  // Only VAR and VAR_GLOBAL may own an address; interface sections describe a
+  // call contract, not hardware. Enforced here to match the editor
+  // (DISALLOWED_LOCATION_CLASSES, GitHub issue #904) — and because a located
+  // interface declaration hands the runtime two owners for one image slot, a
+  // hazard strucpp cannot see from the generated code alone.
+  describe('Semantic: Only VAR and VAR_GLOBAL May Be Located', () => {
+    // VAR_EXTERNAL is covered separately below: without a matching VAR_GLOBAL a
+    // pre-existing rule reports the missing global first.
+    const cases: Array<[string, string]> = [
+      ['VAR_INPUT', 'VAR_INPUT inp AT %IX0.0 : BOOL; END_VAR'],
+      ['VAR_OUTPUT', 'VAR_OUTPUT outp AT %QX0.1 : BOOL; END_VAR'],
+      ['VAR_IN_OUT', 'VAR_IN_OUT io AT %QX0.2 : BOOL; END_VAR'],
+    ];
+
+    for (const [label, block] of cases) {
+      it(`rejects a located ${label}`, () => {
+        const result = compile(`
+          PROGRAM Main
+            ${block}
+            VAR local : BOOL; END_VAR
+            local := local;
+          END_PROGRAM
+        `);
+        expect(result.success).toBe(false);
+        expect(
+          result.errors.some(e =>
+            e.message.includes('Only VAR and VAR_GLOBAL declarations may be located'),
+          ),
+        ).toBe(true);
+      });
+    }
+
+    it('allows a located plain VAR in a PROGRAM', () => {
+      const result = compile(`
+        PROGRAM Main
+          VAR
+            sensor AT %IX0.0 : BOOL;
+            lamp   AT %QX0.0 : BOOL;
+          END_VAR
+          lamp := sensor;
+        END_PROGRAM
+      `);
+      expect(result.success).toBe(true);
+    });
+
+    it('points a located VAR_EXTERNAL at the right fix', () => {
+      const result = compile(`
+        PROGRAM Main
+          VAR_EXTERNAL run AT %QX0.0 : BOOL; END_VAR
+          run := run;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL run AT %QX0.0 : BOOL; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(false);
+      // Must NOT be reported as a duplicate address against the global it names.
+      expect(result.errors.some(e => e.message.includes('Duplicate address'))).toBe(false);
+      expect(
+        result.errors.some(e =>
+          e.message.includes('references storage owned by a CONFIGURATION VAR_GLOBAL'),
+        ),
+      ).toBe(true);
+    });
+
+    it('allows the corrected form: address on the global, plain VAR_EXTERNAL', () => {
+      const result = compile(`
+        PROGRAM Main
+          VAR_EXTERNAL run : BOOL; END_VAR
+          run := run;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL run AT %QX0.0 : BOOL; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(true);
+    });
+  });
+
+  // Configuration VAR_GLOBALs live in ast.configurations[].varBlocks, not
+  // ast.globalVarBlocks, so they used to bypass every located-variable rule.
+  describe('Semantic: Configuration VAR_GLOBAL Participates In Address Checks', () => {
+    it('errors when a POU-local var collides with a located global', () => {
+      // Worst case for the runtime: the POU-local entry is serviced by the owning
+      // task while the global is serviced by the dispatcher at the quiescent
+      // frame boundary, so two paths write one image bit.
+      const result = compile(`
+        PROGRAM Main
+          VAR s AT %MX0.0 : BOOL; END_VAR
+          s := s;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL g AT %MX0.0 : BOOL; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.message.includes('Duplicate address %MX0.0'))).toBe(true);
+    });
+
+    it('errors on two located globals at the same address', () => {
+      const result = compile(`
+        PROGRAM Main
+          VAR x : BOOL; END_VAR
+          x := x;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL
+            g1 AT %MX0.0 : BOOL;
+            g2 AT %MX0.0 : BOOL;
+          END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.message.includes('Duplicate address %MX0.0'))).toBe(true);
+    });
+
+    it('validates type compatibility on located globals too', () => {
+      const result = compile(`
+        PROGRAM Main
+          VAR x : BOOL; END_VAR
+          x := x;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL bad AT %MX0.0 : INT; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.message.includes('not compatible with address size'))).toBe(
+        true,
+      );
+    });
+
+    it('accepts the same global declared in two configurations (one canonical global)', () => {
+      // Codegen dedupes file-scope globals by name, so this must not be reported
+      // as a duplicate address against itself.
+      const result = compile(`
+        PROGRAM Main
+          VAR_EXTERNAL g : BOOL; END_VAR
+          g := g;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL g AT %MX0.0 : BOOL; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+        CONFIGURATION Config1
+          VAR_GLOBAL g AT %MX0.0 : BOOL; END_VAR
+          RESOURCE Res1 ON PLC
+            TASK t2(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p2 WITH t2 : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.errors.some(e => e.message.includes('Duplicate address'))).toBe(false);
+    });
+  });
+
+  // A physical address belongs to one point of hardware, so a POU type that is
+  // instantiated more than once cannot own one. Same reasoning as the FUNCTION_BLOCK
+  // restriction. Left unchecked it fails silently: codegen allocates one
+  // locatedVars[] slot per declaration and each instance's constructor overwrites
+  // its pointer, so only the last instance constructed is ever serviced.
+  describe('Semantic: Located Variables In Multiply-Instantiated Programs', () => {
+    const worker = `
+      PROGRAM worker
+        VAR sensor AT %IX3.0 : BOOL; seen : BOOL; END_VAR
+        seen := sensor;
+      END_PROGRAM
+    `;
+
+    it('errors when the program is instantiated twice in different tasks', () => {
+      const result = compile(`
+        ${worker}
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK t1(INTERVAL := T#20ms, PRIORITY := 1);
+            TASK t2(INTERVAL := T#50ms, PRIORITY := 2);
+            PROGRAM i1 WITH t1 : worker;
+            PROGRAM i2 WITH t2 : worker;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(false);
+      expect(
+        result.errors.some(e => e.message.includes('instantiated 2 times')),
+      ).toBe(true);
+    });
+
+    it('errors when the program is instantiated twice in the SAME task', () => {
+      // Task count is irrelevant — the trigger is instance count.
+      const result = compile(`
+        ${worker}
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK t1(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM i1 WITH t1 : worker;
+            PROGRAM i2 WITH t1 : worker;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(false);
+      expect(
+        result.errors.some(e => e.message.includes('instantiated 2 times')),
+      ).toBe(true);
+    });
+
+    it('allows a single instance', () => {
+      const result = compile(`
+        ${worker}
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK t1(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM i1 WITH t1 : worker;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(true);
+    });
+
+    it('allows multiple instances when the program declares no located variable', () => {
+      const result = compile(`
+        PROGRAM plain
+          VAR c : INT; END_VAR
+          c := c + 1;
+        END_PROGRAM
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK t1(INTERVAL := T#20ms, PRIORITY := 1);
+            TASK t2(INTERVAL := T#50ms, PRIORITY := 2);
+            PROGRAM i1 WITH t1 : plain;
+            PROGRAM i2 WITH t2 : plain;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(true);
+    });
+
+    it('allows multiple instances sharing a located global via VAR_EXTERNAL', () => {
+      // The sanctioned way for several POUs to reach one physical point: the
+      // configuration owns the address, instances only reference it.
+      const result = compile(`
+        PROGRAM reader
+          VAR_EXTERNAL shared : BOOL; END_VAR
+          VAR seen : BOOL; END_VAR
+          seen := shared;
+        END_PROGRAM
+        CONFIGURATION Config0
+          VAR_GLOBAL shared AT %MX0.0 : BOOL; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK t1(INTERVAL := T#20ms, PRIORITY := 1);
+            TASK t2(INTERVAL := T#50ms, PRIORITY := 2);
+            PROGRAM i1 WITH t1 : reader;
+            PROGRAM i2 WITH t2 : reader;
+          END_RESOURCE
+        END_CONFIGURATION
+      `);
+      expect(result.success).toBe(true);
+    });
+  });
+
   describe('Semantic: Type Size Compatibility', () => {
     it('should accept BOOL for bit address', () => {
       const source = `
@@ -516,6 +798,111 @@ describe('Phase 2.3 - Located Variables', () => {
       expect(result.headerCode).toContain('constexpr uint32_t locatedVarsCount = 0;');
       expect(result.cppCode).toContain('LocatedVar locatedVars[1] = {');
       expect(result.cppCode).toMatch(/placeholder.*locatedVarsCount is 0/);
+    });
+  });
+
+  // locatedGlobals[] states which locatedVars[] entries are CONFIGURATION
+  // VAR_GLOBAL ... AT. Without it a host runtime has to infer the split, and
+  // inferring it from array position is what broke every located global as soon
+  // as a POU declared a located variable (forum: "%MX locations now invalid").
+  describe('Code Generation: Located Globals Array', () => {
+    const mixedProject = `
+      PROGRAM Main
+        VAR_EXTERNAL
+          gWord : DINT;
+          gBit  : BOOL;
+        END_VAR
+        VAR localBit AT %IX0.1 : BOOL; END_VAR
+        localBit := gBit;
+      END_PROGRAM
+
+      CONFIGURATION Config0
+        VAR_GLOBAL
+          gWord AT %MD0   : DINT;
+          gBit  AT %MX0.0 : BOOL;
+        END_VAR
+        RESOURCE Res0 ON PLC
+          TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+          PROGRAM p WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+
+    it('declares locatedGlobals with only the config-scope located vars', () => {
+      const result = compile(mixedProject);
+      expect(result.success).toBe(true);
+      // 3 located vars total, but only the 2 globals belong in locatedGlobals.
+      expect(result.headerCode).toContain('constexpr uint32_t locatedVarsCount = 3;');
+      expect(result.headerCode).toContain('extern void *locatedGlobals[2];');
+      expect(result.headerCode).toContain('constexpr uint32_t locatedGlobalsCount = 2;');
+    });
+
+    it('defines the array and exports C-linkage accessors', () => {
+      const result = compile(mixedProject);
+      expect(result.cppCode).toContain('void *locatedGlobals[2] = {');
+      expect(result.cppCode).toContain(
+        'extern "C" void *const *strucpp_get_located_globals(void)',
+      );
+      expect(result.cppCode).toContain(
+        'extern "C" uint32_t strucpp_get_located_global_count(void)',
+      );
+    });
+
+    it('populates locatedGlobals in the configuration constructor', () => {
+      const result = compile(mixedProject);
+      // Same raw_ptr() value written into locatedVars[].pointer, so a runtime can
+      // identify the config-scope entries by pointer identity.
+      expect(result.cppCode).toContain('locatedGlobals[0] = GWORD.value.raw_ptr();');
+      expect(result.cppCode).toContain('locatedGlobals[1] = GBIT.value.raw_ptr();');
+    });
+
+    it('excludes POU-local located variables', () => {
+      const result = compile(mixedProject);
+      // LOCALBIT is located but program-owned: it must never enter locatedGlobals.
+      expect(result.cppCode).toContain('locatedVars[2].pointer = LOCALBIT.raw_ptr();');
+      expect(result.cppCode).not.toMatch(/locatedGlobals\[\d+\] = LOCALBIT/);
+    });
+
+    it('guards array, accessors and population behind STRUCPP_THREADED', () => {
+      // Freestanding targets bind every located variable directly and have no
+      // dispatcher, so they must pay nothing for this.
+      const result = compile(mixedProject);
+      expect(result.headerCode).toMatch(
+        /#ifdef STRUCPP_THREADED\s*\nextern void \*locatedGlobals\[2\];/,
+      );
+      expect(result.cppCode).toMatch(
+        /#ifdef STRUCPP_THREADED\s*\n\/\/ Canonical storage pointers/,
+      );
+      expect(result.cppCode).toMatch(
+        /#ifdef STRUCPP_THREADED\s*\n\s*\/\/ Initialize located-global pointers/,
+      );
+    });
+
+    it('emits a placeholder and count 0 when no global is located', () => {
+      // A runtime must be able to tell "accessors absent" (older project) from
+      // "present but count 0" (no located globals), so the accessors are still
+      // emitted in this case.
+      const source = `
+        PROGRAM Main
+          VAR localBit AT %IX0.1 : BOOL; END_VAR
+          localBit := FALSE;
+        END_PROGRAM
+
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+            PROGRAM p WITH t : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain('constexpr uint32_t locatedGlobalsCount = 0;');
+      expect(result.headerCode).toContain('extern void *locatedGlobals[1];');
+      expect(result.cppCode).toMatch(/placeholder.*locatedGlobalsCount is 0/);
+      expect(result.cppCode).toContain(
+        'extern "C" uint32_t strucpp_get_located_global_count(void)',
+      );
     });
   });
 });

@@ -5868,6 +5868,19 @@ export class CodeGenerator {
       `constexpr uint32_t locatedVarsCount = ${this.locatedVars.length};`,
     );
     this.emitHeader("");
+
+    // Located CONFIGURATION VAR_GLOBALs — see generateLocatedGlobalsDefinition()
+    // for why the scope has to be stated rather than inferred by the runtime.
+    const globalCount = this.locatedVars.filter(
+      (v) => v.programName === "@config",
+    ).length;
+    this.emitHeader("#ifdef STRUCPP_THREADED");
+    this.emitHeader(
+      `extern void *locatedGlobals[${globalCount === 0 ? 1 : globalCount}];`,
+    );
+    this.emitHeader(`constexpr uint32_t locatedGlobalsCount = ${globalCount};`);
+    this.emitHeader("#endif");
+    this.emitHeader("");
   }
 
   /**
@@ -5908,6 +5921,78 @@ export class CodeGenerator {
     }
 
     this.emit("};");
+    this.emit("");
+
+    this.generateLocatedGlobalsDefinition();
+  }
+
+  /**
+   * Emit the located-globals pointer array plus its C-linkage accessors.
+   *
+   * `locatedVars[]` mixes two ownership classes: POU-local `VAR ... AT` (serviced
+   * by the owning IEC task around run()) and CONFIGURATION `VAR_GLOBAL ... AT`
+   * (owned by no task, so a host dispatcher must copy them at a quiescent frame
+   * boundary). The descriptors carry no scope, and a runtime cannot recover it:
+   * globals are file-scope singletons that appear nowhere in the configuration
+   * object graph. Runtimes previously *inferred* the split from each entry's
+   * position in locatedVars[], which broke as soon as a POU declared a located
+   * variable and silently stopped servicing every located global.
+   *
+   * So state it here instead. locatedGlobals[] holds the canonical storage
+   * pointer of every located VAR_GLOBAL — the same raw_ptr() value written into
+   * locatedVars[].pointer — letting a runtime identify the config-scope entries by
+   * pointer identity, independent of array order. Located variables are always
+   * elementary types, so every entry is a scalar IECVar and raw_ptr() exists.
+   *
+   * Emitted only under STRUCPP_THREADED: freestanding targets bind every located
+   * variable directly and have no dispatcher, so they would pay RAM for nothing.
+   *
+   * The accessors are emitted here rather than left to a host runtime's shim so
+   * the generated code stays self-contained. A shim referencing these symbols
+   * would fail to COMPILE against an older project's generated header, whereas an
+   * accessor emitted beside its own array always matches. A runtime predating
+   * this simply never resolves the symbols and skips located globals.
+   */
+  private generateLocatedGlobalsDefinition(): void {
+    const globals = this.locatedVars.filter((v) => v.programName === "@config");
+    // C++ forbids zero-length arrays at namespace scope; emit a placeholder and
+    // report count 0, exactly as locatedVars[] does. That lets a runtime tell
+    // "accessors absent" (older project — cannot service globals) apart from
+    // "present but count 0" (project genuinely has no located globals).
+    const arrayLen = globals.length === 0 ? 1 : globals.length;
+
+    this.emit("#ifdef STRUCPP_THREADED");
+    this.emit(
+      "// Canonical storage pointers of the located CONFIGURATION VAR_GLOBALs.",
+    );
+    this.emit(
+      "// Populated in the configuration constructor (like locatedVars[] above).",
+    );
+    this.emit(`void *locatedGlobals[${arrayLen}] = {`);
+    if (globals.length === 0) {
+      this.emit(`    nullptr  // placeholder; locatedGlobalsCount is 0`);
+    } else {
+      for (let i = 0; i < globals.length; i++) {
+        const g = globals[i]!;
+        const comma = i < globals.length - 1 ? "," : "";
+        this.emit(`    nullptr${comma}  // ${g.varName} AT ${g.address}`);
+      }
+    }
+    this.emit("};");
+    this.emit("");
+    this.emit(
+      "// C linkage: a host runtime is built once and loads many .so files, so it",
+    );
+    this.emit(
+      "// cannot reach namespaced C++ symbols by mangled name portably.",
+    );
+    this.emit(
+      'extern "C" void *const *strucpp_get_located_globals(void) { return locatedGlobals; }',
+    );
+    this.emit(
+      'extern "C" uint32_t strucpp_get_located_global_count(void) { return locatedGlobalsCount; }',
+    );
+    this.emit("#endif  // STRUCPP_THREADED");
     this.emit("");
   }
 
@@ -5962,6 +6047,24 @@ export class CodeGenerator {
           `${indent}locatedVars[${index}].pointer = ${locVar.varName}${memberAccess}.raw_ptr();`,
         );
       }
+    }
+
+    // Configuration VAR_GLOBALs additionally record their storage pointer in
+    // locatedGlobals[], which is what lets a host runtime tell config-scope
+    // entries from POU-local ones without guessing from array position. Emitted
+    // here (rather than as a static initializer) because raw_ptr() is not a
+    // constant expression, and to keep it beside the locatedVars[] population it
+    // must agree with.
+    if (programName === "@config") {
+      this.emit("#ifdef STRUCPP_THREADED");
+      this.emit(`${indent}// Initialize located-global pointers`);
+      for (let g = 0; g < progVars.length; g++) {
+        const locVar = progVars[g]!;
+        this.emit(
+          `${indent}locatedGlobals[${g}] = ${locVar.varName}${memberAccess}.raw_ptr();`,
+        );
+      }
+      this.emit("#endif");
     }
   }
 
