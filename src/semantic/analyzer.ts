@@ -102,7 +102,31 @@ function getCompatibleTypes(size: "X" | "B" | "W" | "D" | "L"): string[] {
 }
 
 /**
+ * Variable-block kinds that may carry a physical location ("AT %...").
+ *
+ * IEC 61131-3 allows located declarations in VAR and VAR_GLOBAL only — interface
+ * sections describe a call contract, not hardware. The editor enforces the same
+ * set at edit and load time (DISALLOWED_LOCATION_CLASSES, GitHub issue #904), so
+ * enforcing it here keeps hand-written and editor-authored ST consistent.
+ *
+ * VAR_EXTERNAL is the sharpest case: it references storage a CONFIGURATION
+ * VAR_GLOBAL owns, codegen emits it as `GlobalVar<T>*` and collects located
+ * variables from local declarations only, so an address written there is silently
+ * dropped while also duplicating the address the global legitimately claims.
+ */
+const LOCATABLE_BLOCK_TYPES: ReadonlySet<string> = new Set([
+  "VAR",
+  "VAR_GLOBAL",
+]);
+
+/**
  * Create a canonical address key for duplicate detection.
+ *
+ * Exact match is the right test: the image is not flat memory. Each size class
+ * has its own array in the runtime (bool_memory[][], int_memory[], dint_memory[],
+ * lint_memory[]) and byte_index indexes that array, so %MW0 and %MD0 name
+ * unrelated storage rather than overlapping bytes. Two declarations collide only
+ * when area, size, byte and bit all match.
  */
 function addressKey(parsed: ParsedAddress): string {
   return `${parsed.area}${parsed.size}${parsed.byteIndex}.${parsed.bitIndex}`;
@@ -149,7 +173,11 @@ interface LocatedVarInfo {
   address: string;
   parsed: ParsedAddress;
   typeName: string;
-  scopeType: "program" | "function" | "functionBlock";
+  /** "configuration" covers CONFIGURATION VAR_GLOBAL ... AT. Those live in
+   *  ast.configurations[].varBlocks rather than ast.globalVarBlocks, so they are
+   *  gathered during validation (collectConfigurationLocatedVars) instead of
+   *  during symbol building. */
+  scopeType: "program" | "function" | "functionBlock" | "configuration";
   scopeName: string;
   declaration: VarDeclaration;
 }
@@ -555,8 +583,23 @@ export class SemanticAnalyzer {
                 address: decl.address,
               });
 
-              // Track located variables for validation
-              if (decl.address) {
+              // Track located variables for validation.
+              //
+              // Only VAR and VAR_GLOBAL may own an address (see
+              // LOCATABLE_BLOCK_TYPES). Report and do NOT record the declaration,
+              // so a located VAR_EXTERNAL cannot also collide with the global that
+              // legitimately claims the address.
+              if (decl.address && !LOCATABLE_BLOCK_TYPES.has(block.blockType)) {
+                this.addError(
+                  `Variable '${name}' in ${block.blockType} cannot have a location ('AT ${decl.address}'). Only VAR and VAR_GLOBAL declarations may be located.` +
+                    (block.blockType === "VAR_EXTERNAL"
+                      ? ` A VAR_EXTERNAL references storage owned by a CONFIGURATION VAR_GLOBAL — declare the address on that VAR_GLOBAL and drop it here.`
+                      : ` Move '${name}' to a VAR block, or to CONFIGURATION VAR_GLOBAL if other POUs need it.`),
+                  decl.sourceSpan.startLine,
+                  decl.sourceSpan.startCol,
+                  decl.sourceSpan.file,
+                );
+              } else if (decl.address) {
                 const parsed = parseAddress(decl.address);
                 if (parsed) {
                   this.locatedVars.push({
@@ -604,7 +647,7 @@ export class SemanticAnalyzer {
     this.validateUndeclaredVariables(ast);
 
     // Validate located variables
-    this.validateLocatedVariables();
+    this.validateLocatedVariables(ast);
 
     // Validate CONSTANT assignment restrictions
     this.validateConstantAssignments(ast);
@@ -731,17 +774,103 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * Collect located CONFIGURATION VAR_GLOBALs.
+   *
+   * These are NOT gathered by buildVarBlockSymbols: that runs per POU scope
+   * (program / function / functionBlock) over ast.programs et al, while
+   * configuration globals live in ast.configurations[].varBlocks. Without this
+   * they escaped every located-variable rule, so a POU-local `VAR ... AT %MX0.0`
+   * and a `VAR_GLOBAL ... AT %MX0.0` could both claim the same image slot — and
+   * they are serviced by different paths (the owning task vs. the dispatcher at
+   * the quiescent frame boundary), which makes the outcome nondeterministic.
+   *
+   * Globals sharing a name across configurations are one canonical global (codegen
+   * emits a single file-scope singleton, deduping by name), so dedupe here too —
+   * otherwise a project declaring the same global in two configurations would
+   * report a spurious duplicate-address error against itself.
+   */
+  private collectConfigurationLocatedVars(
+    ast: CompilationUnit,
+  ): LocatedVarInfo[] {
+    const collected: LocatedVarInfo[] = [];
+    const seen = new Set<string>();
+
+    for (const config of ast.configurations) {
+      for (const block of config.varBlocks) {
+        if (block.blockType !== "VAR_GLOBAL") continue;
+        for (const decl of block.declarations) {
+          if (!decl.address) continue;
+          for (const name of decl.names) {
+            const key = name.toUpperCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+
+            const parsed = parseAddress(decl.address);
+            if (!parsed) {
+              this.addError(
+                `Invalid address format: ${decl.address}`,
+                decl.sourceSpan.startLine,
+                decl.sourceSpan.startCol,
+                decl.sourceSpan.file,
+              );
+              continue;
+            }
+            collected.push({
+              name,
+              address: decl.address,
+              parsed,
+              typeName: decl.type.name,
+              scopeType: "configuration",
+              scopeName: config.name,
+              declaration: decl,
+            });
+          }
+        }
+      }
+    }
+    return collected;
+  }
+
+  /**
+   * How many times each PROGRAM type is instantiated across all configurations.
+   * Keyed by upper-cased program type name.
+   */
+  private countProgramInstantiations(
+    ast: CompilationUnit,
+  ): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const config of ast.configurations) {
+      for (const resource of config.resources) {
+        for (const instance of resource.programInstances) {
+          const key = instance.programType.toUpperCase();
+          counts.set(key, (counts.get(key) ?? 0) + 1);
+        }
+      }
+    }
+    return counts;
+  }
+
+  /**
    * Validate located variables for IEC 61131-3 compliance.
    * Checks:
    * - Located variables not allowed in function blocks
-   * - No duplicate addresses
+   * - Located variables not allowed in a PROGRAM instantiated more than once
+   * - No duplicate addresses (POU-local and configuration globals together)
    * - Type must be compatible with address size
    * - Bit index must be 0-7 for bit addresses
    */
-  private validateLocatedVariables(): void {
+  private validateLocatedVariables(ast: CompilationUnit): void {
     const addressMap = new Map<string, LocatedVarInfo>();
+    const instanceCounts = this.countProgramInstantiations(ast);
 
-    for (const locVar of this.locatedVars) {
+    // Configuration globals participate in every rule below, above all in the
+    // duplicate-address check they were previously invisible to.
+    const allLocatedVars = [
+      ...this.locatedVars,
+      ...this.collectConfigurationLocatedVars(ast),
+    ];
+
+    for (const locVar of allLocatedVars) {
       const decl = locVar.declaration;
 
       // Rule 1: Located variables not allowed in function blocks
@@ -753,6 +882,32 @@ export class SemanticAnalyzer {
           decl.sourceSpan.file,
         );
         continue;
+      }
+
+      // Rule 1b: a fully specified address cannot live in a PROGRAM that is
+      // instantiated more than once. Same reasoning as Rule 1 for function
+      // blocks: a physical address belongs to exactly one point of hardware, so
+      // several instances of one POU type cannot each own it. IEC 61131-3 permits
+      // multiple program instances, and its answer for per-instance addressing is
+      // a partly specified location (`AT %I*`) resolved by VAR_CONFIG — which is
+      // not supported here, so the fully specified form must be rejected.
+      //
+      // Left unchecked this fails silently rather than loudly: codegen allocates
+      // one locatedVars[] slot per *declaration*, and each instance's constructor
+      // overwrites its pointer, so the last instance constructed wins and the
+      // other instances' copies of the variable are never serviced at all.
+      if (locVar.scopeType === "program") {
+        const instances =
+          instanceCounts.get(locVar.scopeName.toUpperCase()) ?? 0;
+        if (instances > 1) {
+          this.addError(
+            `Located variable '${locVar.name}' at ${locVar.address} not allowed in PROGRAM '${locVar.scopeName}': the program is instantiated ${instances} times, and a physical address cannot be shared by several instances. Declare the variable in CONFIGURATION VAR_GLOBAL and access it with VAR_EXTERNAL, or instantiate '${locVar.scopeName}' only once.`,
+            decl.sourceSpan.startLine,
+            decl.sourceSpan.startCol,
+            decl.sourceSpan.file,
+          );
+          continue;
+        }
       }
 
       // Rule 2: Validate type compatibility with address size
