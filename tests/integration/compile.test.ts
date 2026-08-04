@@ -469,9 +469,12 @@ describe('Error Handling Tests', () => {
   // gated (fail-loud) until locked field/element/call codegen lands.
   describe('Shared globals (mutex model)', () => {
     it('compiles a scalar located shared global end-to-end', () => {
+      // The address lives on the CONFIGURATION VAR_GLOBAL, which owns the
+      // storage; the VAR_EXTERNAL only names it. Repeating `AT` on the external
+      // is rejected (see 'rejects a located VAR_EXTERNAL' below).
       const source = `
         PROGRAM Main
-          VAR_EXTERNAL run AT %QX0.0 : BOOL; END_VAR
+          VAR_EXTERNAL run : BOOL; END_VAR
           VAR seed : BOOL := TRUE; END_VAR
           run := seed;
         END_PROGRAM
