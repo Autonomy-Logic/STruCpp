@@ -18,7 +18,7 @@
 
 import { writeFileSync } from "fs";
 import { resolve, dirname } from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -37,7 +37,7 @@ export async function buildIecTypesJson() {
   // `tsc` pass before importing, so by the time this runs the dist
   // mirror of `iec-types-data.ts` is current.
   const data = await import(
-    resolve(projectRoot, "dist/semantic/iec-types-data.js")
+    pathToFileURL(resolve(projectRoot, "dist/semantic/iec-types-data.js")).href
   );
 
   const out = {
