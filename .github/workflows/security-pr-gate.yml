@@ -88,7 +88,22 @@ jobs:
       # THE GATE — non-zero exit here fails the check and (with branch protection)
       # blocks the merge. It also writes /tmp/gate-comment.md and /tmp/gate-status.
       - name: Evaluate — block on newly-introduced advisories
-        run: node scripts/pr-gate-diff.mjs /tmp/base.json /tmp/head.json "${GATE_THRESHOLD}"
+        run: |
+          BASE="${{ github.event.pull_request.base.sha }}"
+          # Run the decision script AND read the threshold from BASE, not HEAD: a PR
+          # must not be able to weaken its own gate by editing pr-gate-diff.mjs or
+          # GATE_THRESHOLD in the same PR (pull_request runs the merge-ref code).
+          # Falls back to the HEAD copy only when base has no gate yet (first landing).
+          if git cat-file -e "$BASE:scripts/pr-gate-diff.mjs" 2>/dev/null; then
+            git show "$BASE:scripts/pr-gate-diff.mjs" > /tmp/pr-gate-diff.base.mjs
+            BT=$(git show "$BASE:.github/workflows/security-pr-gate.yml" 2>/dev/null \
+                 | sed -nE 's/^[[:space:]]*GATE_THRESHOLD:[[:space:]]*"?([A-Za-z]+)"?.*/\1/p' | head -1)
+            echo "Evaluating with the base copy of the gate (threshold=${BT:-$GATE_THRESHOLD})."
+          else
+            cp scripts/pr-gate-diff.mjs /tmp/pr-gate-diff.base.mjs
+            echo "::warning::base has no pr-gate-diff.mjs yet (first introduction) — using the HEAD copy."
+          fi
+          node /tmp/pr-gate-diff.base.mjs /tmp/base.json /tmp/head.json "${BT:-$GATE_THRESHOLD}"
 
       # Post/update ONE sticky comment on the PR with the actionable result.
       # Runs even when the gate failed (always()); never flips the verdict

@@ -62,3 +62,84 @@ test('cdx-to-spdx: multiple licenses join with OR (dual-licensed), not AND', () 
   const x = doc.packages.find((p) => p.name === 'x');
   assert.equal(x.licenseDeclared, 'MIT OR GPL-3.0-only');
 });
+
+// ---------- build-report: B1 (VEX numbers derive + reconcile) ----------
+const MIN_CFG = {
+  product: 'p', title: 'P', subtitle: 's', version: '1', sbomBasename: 'p', securityContact: 'x@y',
+  advisories: { total: 0, critical: 0, high: 0, moderate: 0, low: 0 },
+  counts: { affected: { n: 0, sev: '' }, mitigated: { n: 0, sev: '' }, notAffected: { n: 0, pct: '0%' } },
+  headline: 'h', scope: 's', scopeNote: 's', methodologyNote: 'm', licenseNote: 'l',
+  affected: [], mitigated: [],
+  notAffected: [{ justification: 'component_not_present / x', count: '?', components: 'c', basis: 'b' }],
+  remediation: ['r'], practices: [{ practice: 'p', status: 'In place' }],
+};
+function report({ baselineToml, raw, delta, cfg = MIN_CFG }) {
+  const cdxP = w('r.cdx.json', { components: [] });
+  const cfgP = w('cfg.json', cfg);
+  const a = ['--config', cfgP, '--cdx', cdxP, '--out', dir, '--date', '2026-08'];
+  if (raw) a.push('--osv-raw', w('raw.json', raw));
+  if (delta) a.push('--osv-delta', w('delta.json', delta));
+  if (baselineToml != null) { const p = join(dir, 'osv.toml'); writeFileSync(p, baselineToml); a.push('--baseline', p); }
+  const r = spawnSync('node', [join(SCRIPTS, 'build-report.mjs'), ...a], { encoding: 'utf8' });
+  return { ...r, md: r.status === 0 ? readFileSync(join(dir, 'P-Security-Report.md'), 'utf8') : '' };
+}
+const entry = (id, reason) => `\n[[IgnoredVulns]]\nid = "${id}"\nignoreUntil = "2026-10-01T00:00:00Z"\nreason = "${reason}"\n`;
+
+test('build-report: reconciles raw = surfacing + suppressed, derives §5 count', () => {
+  const raw = scan(['x', [adv('GHSA-A', 'CRITICAL')]], ['y', [adv('GHSA-B', 'HIGH')]], ['z', [adv('GHSA-C', 'HIGH')]]);
+  const delta = scan(['z', [adv('GHSA-C', 'HIGH')]]); // A,B suppressed; C surfaces
+  const baseline = entry('GHSA-A', 'VEX not_affected/component_not_present [x / critical]: dev-only')
+    + entry('GHSA-B', 'VEX affected/mitigated [y / high]: control');
+  const r = report({ baselineToml: baseline, raw, delta });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.md, /Not affected — suppressed by the VEX baseline \| 1/);
+  assert.match(r.md, /Affected, mitigated[^|]*\| 1/);
+  assert.match(r.md, /requires triage \| 1/);
+  assert.match(r.md, /component_not_present \/ x` \| 1 /); // §5 count derived, not "?"
+});
+test('build-report: fails CLOSED when a suppressed advisory has no VEX entry', () => {
+  const raw = scan(['x', [adv('GHSA-A', 'HIGH')]], ['z', [adv('GHSA-C', 'HIGH')]]);
+  const delta = scan(['z', [adv('GHSA-C', 'HIGH')]]); // A suppressed but not in baseline
+  const r = report({ baselineToml: entry('GHSA-OTHER', 'VEX not_affected/component_not_present [q / low]: x'), raw, delta });
+  assert.equal(r.status, 1, 'must refuse to render when numbers do not reconcile');
+});
+test('build-report: matches a GHSA advisory to its CVE-keyed baseline entry (alias)', () => {
+  const raw = scan(['x', [adv('GHSA-A', 'HIGH', { aliases: ['CVE-2026-1'] })]], ['z', [adv('GHSA-C', 'HIGH')]]);
+  const delta = scan(['z', [adv('GHSA-C', 'HIGH')]]);
+  const baseline = entry('CVE-2026-1', 'VEX not_affected/component_not_present [x / high]: dev-only');
+  assert.equal(report({ baselineToml: baseline, raw, delta }).status, 0);
+});
+test('build-report: surfacing>0 with affected:[] never says "None" — DRAFT banner + surfacing table', () => {
+  const one = scan(['p', [adv('GHSA-S', 'HIGH', { summary: 'boom' })]]);
+  const r = report({ raw: one, delta: one }); // 1 surfacing, nothing suppressed, cfg.affected == []
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.md, /DRAFT — 1 advisory surfacing/);
+  assert.match(r.md, /GHSA-S/, 'the surfacing advisory must be listed in §4');
+  assert.doesNotMatch(r.md, /\*\*None\.\*\*/, 'must not claim None while an advisory surfaces');
+});
+test('build-report: surfacing==0 renders §4 None and no DRAFT banner', () => {
+  const raw = scan(['p', [adv('GHSA-S', 'HIGH')]]);
+  const r = report({ raw, delta: { results: [] } }); // all suppressed, 0 surfacing
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.md, /DRAFT/);
+  assert.match(r.md, /\*\*None\.\*\*/);
+});
+
+// ---------- gen-osv-ignores: B2 (distinct mitigated status, CISA enum required) ----------
+function genOsv(csv) {
+  const p = join(dir, 'v.csv'); writeFileSync(p, csv);
+  return spawnSync('node', [join(SCRIPTS, 'gen-osv-ignores.mjs'), p, '2026-10-01'], { encoding: 'utf8' });
+}
+test('gen-osv-ignores: mitigated → affected/mitigated (distinct from not_affected)', () => {
+  const out = genOsv('advisory,package,severity,verdict,basis\nCVE-1,dompurify,high,mitigated,allow-list').stdout;
+  assert.match(out, /VEX affected\/mitigated \[dompurify \/ high\]/);
+  assert.doesNotMatch(out, /not_affected/);
+});
+test('gen-osv-ignores: not_affected without a CISA enum stays visible (not suppressed)', () => {
+  const r = genOsv('advisory,package,verdict,basis\nCVE-2,foo,not_affected,we think it is fine\nCVE-3,bar,not_affected,vulnerable_code_not_in_execute_path');
+  assert.doesNotMatch(r.stdout, /CVE-2/);
+  assert.match(r.stdout, /CVE-3.*[\s\S]*vulnerable_code_not_in_execute_path/);
+});
+test('gen-osv-ignores: affected/requires-action row is never suppressed', () => {
+  assert.doesNotMatch(genOsv('advisory,package,verdict,basis\nCVE-9,node-forge,affected,upgrade').stdout, /CVE-9/);
+});
