@@ -42,6 +42,31 @@ test('gate: CVSS 3.1 vector (9.8) scored as blocking', () => {
   const head = w('h.json', scan(['c', [adv('CVE-CVSS', null, { severity: [{ type: 'CVSS_V3', score: 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' }] })]]));
   assert.equal(gate(w('b.json', { results: [] }), head).status, 1);
 });
+test('gate: PYSEC+GHSA alias group counts once at its real (max) severity, not a double HIGH', () => {
+  // osv-scanner emits the PYSEC and GHSA records for one issue separately; the
+  // PYSEC one carries no severity (would fall back to approx HIGH and block).
+  const head = w('h.json', { results: [{ packages: [{
+    package: { name: 'filelock', version: '3.19.1' },
+    vulnerabilities: [
+      { id: 'PYSEC-2026-1374' },
+      { id: 'GHSA-qmgc-5h2g-mvrw', database_specific: { severity: 'MODERATE' } },
+    ],
+    groups: [{ ids: ['PYSEC-2026-1374', 'GHSA-qmgc-5h2g-mvrw'], max_severity: '5.3' }],
+  }] }] });
+  const r = gate(w('b.json', { results: [] }), head); // threshold HIGH
+  assert.equal(r.status, 0, 'a MODERATE group must not block at HIGH, and PYSEC must not double-count as HIGH');
+  assert.match(r.stdout, /introduced by this PR \(1\)/, 'the aliased pair counts once');
+  assert.match(r.stdout, /\[MODERATE\] filelock/);
+  assert.doesNotMatch(r.stdout, /PYSEC-2026-1374/, 'group represented by its GHSA id, not a duplicate PYSEC row');
+});
+test('gate: PYSEC-only group with a real max_severity of HIGH still blocks', () => {
+  const head = w('h.json', { results: [{ packages: [{
+    package: { name: 'x', version: '1' },
+    vulnerabilities: [{ id: 'PYSEC-2026-9999' }],
+    groups: [{ ids: ['PYSEC-2026-9999'], max_severity: '8.1' }],
+  }] }] });
+  assert.equal(gate(w('b.json', { results: [] }), head).status, 1, 'a genuine HIGH must still block');
+});
 
 function spdx(cdx) {
   const out = join(dir, 'o.spdx.json');
