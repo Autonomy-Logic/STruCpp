@@ -27,6 +27,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | TYPE ... END_TYPE | Supported | Type aliases |
 | STRUCT ... END_STRUCT | Supported | With nested structs |
 | Enumerations | Supported | With optional base type |
+| Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
 | ARRAY (3D) | Supported | ARRAY[1..3, 1..4, 1..5] OF INT |
@@ -41,6 +42,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Type | Notes |
 |------|-------|
 | UNION | CODESYS extension |
+| Array repetition initializer | `:= [10(0)]` — write the elements out instead |
 
 ## Program Organization Units
 
@@ -59,14 +61,16 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | VAR_INPUT | Supported | Input parameters |
 | VAR_OUTPUT | Supported | Output parameters |
 | VAR_IN_OUT | Supported | Pass-by-reference parameters |
-| VAR_EXTERNAL | Supported | External references to VAR_GLOBAL |
-| VAR_GLOBAL | Supported | Global variables |
+| VAR_EXTERNAL | Supported | References either a CONFIGURATION or a file-level VAR_GLOBAL |
+| VAR_GLOBAL | Supported | Global variables (CONFIGURATION-scoped or file-level) |
 | CONSTANT | Supported | Compile-time constants |
 | RETAIN | Supported | Tracked in retain variable table |
 | NON_RETAIN | Supported | |
 | AT %IX0.0 | Supported | Located variables (I/Q/M areas, X/B/W/D/L sizes) |
 | Multiple names | Supported | `a, b, c : INT := 0;` |
 | Initialization | Supported | `:= expression` |
+| Array initialization | Supported | `:= [1, 2, 3]` and the legacy `:= 1, 2, 3` |
+| Structure initialization | Supported | `:= (x := 1.0, y := 2.0)`; nested, in array literals, and for FB instances. Omitted elements keep their own declared default |
 
 ## Operators and Expressions
 

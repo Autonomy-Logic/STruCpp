@@ -46,6 +46,8 @@ import type {
   NewExpression,
   DeleteStatement,
   ArrayLiteralExpression,
+  StructInitializerExpression,
+  StructElementInitializer,
   FunctionCallExpression,
   MethodCallExpression,
   FunctionCallStatement,
@@ -64,6 +66,7 @@ import type {
   BinaryOperator,
   UnaryOperator,
 } from "./ast.js";
+import { applyTypeDefaults } from "./type-defaults.js";
 import type { SourceSpan } from "../types.js";
 
 // =============================================================================
@@ -404,7 +407,7 @@ export class ASTBuilder {
       globalVarBlocks.push(this.buildVarBlock(node));
     }
 
-    return {
+    const unit: CompilationUnit = {
       kind: "CompilationUnit",
       sourceSpan: nodeToSourceSpan(cst),
       programs,
@@ -415,6 +418,8 @@ export class ASTBuilder {
       configurations,
       globalVarBlocks,
     };
+    applyTypeDefaults(unit);
+    return unit;
   }
 
   /**
@@ -824,11 +829,48 @@ export class ASTBuilder {
 
     const definition = this.buildTypeDefinition(node);
 
+    // Default value carried by the type itself (IEC 61131-3 Annex B.1.3.3
+    // `initialized_*_type_declaration`). Simple enums keep their `:= MEMBER`
+    // default inside the simpleEnumType rule, so look there too.
+    const defaultValue =
+      this.buildInitializerExpression(
+        getFirstNode(children.initializerExpression),
+      ) ?? this.buildSimpleEnumDefault(getFirstNode(children.simpleEnumType));
+
     return {
       kind: "TypeDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
       definition,
+      ...(defaultValue !== undefined ? { defaultValue } : {}),
+    };
+  }
+
+  /**
+   * Extract the `:= MEMBER` default of a simple enum type, if any.
+   * `TYPE Light : (RED, GREEN) := GREEN; END_TYPE`
+   */
+  private buildSimpleEnumDefault(
+    simpleEnumNode: CstNode | undefined,
+  ): Expression | undefined {
+    if (!simpleEnumNode) return undefined;
+    const children = simpleEnumNode.children as CstChildren;
+    if (!children.Assign) return undefined;
+    // The enum members are Identifier tokens too; the default is the last one,
+    // the only Identifier that follows the Assign token.
+    const assign = getFirstToken(children.Assign);
+    const idents = getAllTokens(children.Identifier);
+    const defaultToken = assign
+      ? idents.find((t) => t.startOffset > assign.startOffset)
+      : undefined;
+    if (!defaultToken) return undefined;
+    return {
+      kind: "VariableExpression",
+      sourceSpan: tokenToSourceSpan(defaultToken),
+      name: defaultToken.image,
+      subscripts: [],
+      fieldAccess: [],
+      isDereference: false,
     };
   }
 
@@ -1300,6 +1342,40 @@ export class ASTBuilder {
   }
 
   /**
+   * Build the expression behind an `initializerExpression` CST node.
+   *
+   * A single expression is used as-is; the legacy comma-separated form
+   * (`arr : ARRAY[0..3] OF INT := 0, 31, 59, 90;`) collapses into an
+   * ArrayLiteralExpression. Structure initializers need no special handling
+   * here — they are ordinary primary expressions.
+   *
+   * Returns undefined when there is no initialiser.
+   */
+  private buildInitializerExpression(
+    initExprNode: CstNode | undefined,
+  ): Expression | undefined {
+    if (!initExprNode) return undefined;
+    const initChildren = initExprNode.children as CstChildren;
+    const exprNodes = getAllNodes(initChildren.expression);
+    if (exprNodes.length > 1) {
+      const elements: Expression[] = [];
+      for (const en of exprNodes) {
+        const e = this.buildExpression(en);
+        if (e) elements.push(e);
+      }
+      return {
+        kind: "ArrayLiteralExpression",
+        sourceSpan: nodeToSourceSpan(initExprNode),
+        elements,
+      };
+    }
+    if (exprNodes.length === 1) {
+      return this.buildExpression(exprNodes[0]!);
+    }
+    return undefined;
+  }
+
+  /**
    * Build a VarDeclaration from a CST node.
    */
   buildVarDeclaration(node: CstNode): VarDeclaration {
@@ -1339,31 +1415,9 @@ export class ASTBuilder {
     }
 
     // Get initial value if present (from initializerExpression rule)
-    let initialValue: Expression | undefined;
-    const initExprNode = getFirstNode(children.initializerExpression);
-    if (initExprNode) {
-      const initChildren = initExprNode.children as CstChildren;
-      const exprNodes = getAllNodes(initChildren.expression);
-      if (exprNodes.length > 1) {
-        // Multiple expressions → ArrayLiteralExpression
-        const elements: Expression[] = [];
-        for (const en of exprNodes) {
-          const e = this.buildExpression(en);
-          if (e) elements.push(e);
-        }
-        initialValue = {
-          kind: "ArrayLiteralExpression",
-          sourceSpan: nodeToSourceSpan(initExprNode),
-          elements,
-        };
-      } else if (exprNodes.length === 1) {
-        // Single expression → use directly
-        const expr = this.buildExpression(exprNodes[0]!);
-        if (expr) {
-          initialValue = expr;
-        }
-      }
-    }
+    const initialValue = this.buildInitializerExpression(
+      getFirstNode(children.initializerExpression),
+    );
 
     // Get address if present (AT %IX0.0)
     let address: string | undefined;
@@ -2303,6 +2357,13 @@ export class ASTBuilder {
       } as ArrayLiteralExpression;
     }
 
+    // Check for structure initializer (field := value, ...)
+    if (children.structInitializer) {
+      return this.buildStructInitializerExpression(
+        getFirstNode(children.structInitializer)!,
+      );
+    }
+
     // Check for __NEW(type) or __NEW(type, size) expression
     if (children.newExpression) {
       return this.buildNewExpression(getFirstNode(children.newExpression)!);
@@ -2360,6 +2421,36 @@ export class ASTBuilder {
 
     // Try to extract a literal or variable directly
     return this.tryBuildDirectExpression(node);
+  }
+
+  /**
+   * Build a StructInitializerExpression from a structInitializer CST node.
+   * Element order is preserved as written; codegen assigns element by element.
+   */
+  buildStructInitializerExpression(node: CstNode): StructInitializerExpression {
+    const children = node.children as CstChildren;
+    const elements: StructElementInitializer[] = [];
+
+    for (const elemNode of getAllNodes(children.structElementInitializer)) {
+      const elemChildren = elemNode.children as CstChildren;
+      const nameNode = getFirstNode(elemChildren.identifierOrKeyword);
+      const valueNode = getFirstNode(elemChildren.expression);
+      if (!nameNode || !valueNode) continue;
+      const value = this.buildExpression(valueNode);
+      if (!value) continue;
+      elements.push({
+        kind: "StructElementInitializer",
+        sourceSpan: nodeToSourceSpan(elemNode),
+        name: getIdentifierOrKeywordImage(nameNode),
+        value,
+      });
+    }
+
+    return {
+      kind: "StructInitializerExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      elements,
+    };
   }
 
   /**

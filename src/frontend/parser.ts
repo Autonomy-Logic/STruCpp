@@ -484,6 +484,38 @@ export class STParser extends CstParser {
     this.CONSUME(tokens.RBracket);
   });
 
+  /**
+   * Structure initializer: `(field := value, field := value)`
+   *
+   * IEC 61131-3 Annex B.1.4.3 `structure_initialization`, used to initialise a
+   * STRUCT-typed variable (`p : Point := (x := 1.0, y := 2.0)`) or the inputs of
+   * a function block instance (`t : TON := (PT := T#1s)`).
+   *
+   * Reached through `primaryExpression`, which is what lets element values be
+   * arbitrary expressions — including a nested structure initializer or an array
+   * literal — without a second grammar for initialisers.
+   */
+  public structInitializer = this.RULE("structInitializer", () => {
+    this.CONSUME(tokens.LParen);
+    this.AT_LEAST_ONE_SEP({
+      SEP: tokens.Comma,
+      DEF: () => this.SUBRULE(this.structElementInitializer),
+    });
+    this.CONSUME(tokens.RParen);
+  });
+
+  /**
+   * One `element := value` pair of a structure initializer.
+   */
+  public structElementInitializer = this.RULE(
+    "structElementInitializer",
+    () => {
+      this.SUBRULE(this.identifierOrKeyword);
+      this.CONSUME(tokens.Assign);
+      this.SUBRULE(this.expression);
+    },
+  );
+
   // ==========================================================================
   // Type declarations
   // ==========================================================================
@@ -533,6 +565,14 @@ export class STParser extends CstParser {
         { ALT: () => this.SUBRULE(this.typedEnumOrSubrangeOrAlias) },
       ],
       IGNORE_AMBIGUITIES: true,
+    });
+    // Default value carried by the type itself: `Temp : REAL := 25.0;`,
+    // `Origin : Point := (x := 0.0, y := 0.0);`. IEC 61131-3 Annex B.1.3.3
+    // (`initialized_simple_type_declaration` and friends). Every declaration of
+    // the type inherits it unless it supplies its own initialiser.
+    this.OPTION4(() => {
+      this.CONSUME(tokens.Assign);
+      this.SUBRULE(this.initializerExpression);
     });
     // Semicolon is optional after END_STRUCT END_TYPE (CODESYS tolerance)
     this.OPTION3(() => {
@@ -974,6 +1014,21 @@ export class STParser extends CstParser {
     return (
       tokenType === tokens.Identifier ||
       STParser.CONTEXTUAL_KEYWORDS.includes(tokenType)
+    );
+  }
+
+  /**
+   * Lookahead helper: does a structure initializer start here?
+   *
+   * `(NAME :=` can only be `structure_initialization` — `:=` is not an operator
+   * inside an expression, so this never competes with a parenthesised
+   * expression.
+   */
+  private isStructInitializerAhead(): boolean {
+    return (
+      this.LA(1).tokenType === tokens.LParen &&
+      this.isIdentifierOrKeywordToken(this.LA(2).tokenType) &&
+      this.LA(3).tokenType === tokens.Assign
     );
   }
 
@@ -1469,6 +1524,13 @@ export class STParser extends CstParser {
         {
           ALT: () => this.SUBRULE(this.arrayLiteral),
           GATE: () => this.LA(1).tokenType === tokens.LBracket,
+        },
+        // Structure initializer `(field := value, ...)` — must precede the
+        // parenthesised-expression alternative below, which would otherwise
+        // consume the `(` and then demand `)` at the `:=`.
+        {
+          ALT: () => this.SUBRULE(this.structInitializer),
+          GATE: () => this.isStructInitializerAhead(),
         },
         // functionCall and variable both start with Identifier;
         // functionCall needs Ident( lookahead to disambiguate

@@ -253,6 +253,16 @@ export interface TypeDeclaration extends ASTNode {
   kind: "TypeDeclaration";
   name: string;
   definition: TypeDefinition;
+  /**
+   * Default value attached to the type itself
+   * (`TYPE Temp : REAL := 25.0; END_TYPE`, `TYPE Origin : Point := (x := 0.0);`).
+   *
+   * IEC 61131-3 Annex B.1.3.3 `initialized_simple_type_declaration` /
+   * `initialized_structure` / `initialized_array_type_declaration`. Applied to
+   * every declaration of the type that does not carry its own initialiser — see
+   * `applyTypeDefaults` in the AST builder.
+   */
+  defaultValue?: Expression;
 }
 
 /**
@@ -569,7 +579,8 @@ export type Expression =
   | RefExpression
   | DrefExpression
   | NewExpression
-  | ArrayLiteralExpression;
+  | ArrayLiteralExpression
+  | StructInitializerExpression;
 
 /**
  * Binary operator
@@ -733,6 +744,31 @@ export interface NewExpression extends TypedNode {
 export interface ArrayLiteralExpression extends TypedNode {
   kind: "ArrayLiteralExpression";
   elements: Expression[];
+}
+
+/**
+ * One `element := value` pair inside a structure initializer.
+ * IEC 61131-3 Annex B.1.4.3 `structure_element_initialization`.
+ */
+export interface StructElementInitializer extends ASTNode {
+  kind: "StructElementInitializer";
+  /** Structure element (field) name, as written in the source. */
+  name: string;
+  value: Expression;
+}
+
+/**
+ * Structure initializer: `(field := value, field := value)`
+ *
+ * IEC 61131-3 Annex B.1.4.3 `structure_initialization`. Used to initialise
+ * STRUCT-typed variables in a declaration and to set the initial inputs of a
+ * function block instance (`t : TON := (PT := T#1s)`). Elements may be given in
+ * any order and may be omitted, in which case the element keeps the default
+ * from its own declaration.
+ */
+export interface StructInitializerExpression extends TypedNode {
+  kind: "StructInitializerExpression";
+  elements: StructElementInitializer[];
 }
 
 // =============================================================================

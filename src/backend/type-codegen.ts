@@ -32,6 +32,11 @@ import {
   buildEnumMemberMap,
   type EnumMemberEntry,
 } from "../semantic/type-utils.js";
+import {
+  generateInitializerValue,
+  isStructInitializerValue,
+  type StructInitEmitter,
+} from "./struct-init-codegen.js";
 
 /**
  * Options for type code generation
@@ -136,6 +141,22 @@ export class TypeCodeGenerator {
   private knownEnumNames: Set<string> = new Set();
   /** Reverse map: enum member name (upper case) → owning enum type */
   private enumMemberToType: Map<string, EnumMemberEntry> = new Map();
+
+  /**
+   * Hooks for structure-initializer lowering (a STRUCT element whose own default
+   * is a structure initializer: `origin : Point := (x := 0.0);`).
+   *
+   * The type generator works from one type definition at a time and has no
+   * cross-type field index, so it cannot resolve nested element types or the
+   * member-name collision mangle. Nested levels take their type from
+   * `decltype(...)` of the member being assigned, which needs no metadata.
+   */
+  private structInitEmitter: StructInitEmitter = {
+    emitValue: (value: Expression): string => this.expressionToCpp(value),
+    memberName: (fieldName: string): string => fieldName,
+    fieldTypeName: (): undefined => undefined,
+    arrayElementTypeName: (): undefined => undefined,
+  };
 
   constructor(options: Partial<TypeCodeGenOptions> = {}) {
     this.options = { ...defaultTypeCodeGenOptions, ...options };
@@ -308,7 +329,14 @@ export class TypeCodeGenerator {
             ? `${fieldName}_`
             : fieldName;
         if (field.initialValue) {
-          const initVal = this.expressionToCpp(field.initialValue);
+          const initVal = isStructInitializerValue(field.initialValue)
+            ? generateInitializerValue(
+                field.initialValue,
+                cppType,
+                field.type.name,
+                this.structInitEmitter,
+              )
+            : this.expressionToCpp(field.initialValue);
           // Array types can't be initialized with = 0; use {} instead
           const isArrayType = /^Array[123]D</.test(cppType);
           if (isArrayType && initVal === "0") {

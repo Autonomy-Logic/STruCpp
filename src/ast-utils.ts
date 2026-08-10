@@ -52,6 +52,8 @@ import type {
   DrefExpression,
   NewExpression,
   ArrayLiteralExpression,
+  StructInitializerExpression,
+  StructElementInitializer,
   AssertCall,
   MockFunctionStatement,
   MockVerifyCallCountStatement,
@@ -344,6 +346,7 @@ const EXPRESSION_KINDS = new Set([
   "DrefExpression",
   "NewExpression",
   "ArrayLiteralExpression",
+  "StructInitializerExpression",
 ]);
 
 function isExpression(node: ASTNode): boolean {
@@ -455,6 +458,7 @@ function getChildren(node: ASTNode): ASTNode[] {
     case "TypeDeclaration": {
       const td = node as TypeDeclaration;
       children.push(td.definition);
+      if (td.defaultValue) children.push(td.defaultValue);
       break;
     }
 
@@ -649,6 +653,18 @@ function getChildren(node: ASTNode): ASTNode[] {
     case "ArrayLiteralExpression": {
       const ale = node as ArrayLiteralExpression;
       children.push(...ale.elements);
+      break;
+    }
+
+    case "StructInitializerExpression": {
+      const sie = node as StructInitializerExpression;
+      children.push(...sie.elements);
+      break;
+    }
+
+    case "StructElementInitializer": {
+      const sei = node as StructElementInitializer;
+      children.push(sei.value);
       break;
     }
 

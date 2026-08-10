@@ -9,6 +9,7 @@
 
 import type { CompilationUnit } from "./frontend/ast.js";
 import { createCompilationUnit } from "./frontend/ast.js";
+import { applyTypeDefaults } from "./frontend/type-defaults.js";
 
 /**
  * Merge multiple CompilationUnits into a single unit.
@@ -40,6 +41,13 @@ export function mergeCompilationUnits(
 
   // Use the source span from the first unit
   merged.sourceSpan = units[0]!.sourceSpan;
+
+  // A TYPE with a default value (`Origin : Point := (x := 0.0)`) and the
+  // declarations that use it may live in different files, so the per-unit pass
+  // run by the AST builder can't see across. Re-run it on the merged unit; the
+  // pass only fills declarations that still have no initialiser, so declarations
+  // already resolved per-unit are untouched.
+  applyTypeDefaults(merged);
 
   return merged;
 }

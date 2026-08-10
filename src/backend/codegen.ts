@@ -40,12 +40,14 @@ import type {
   ProjectModel,
   ConfigurationDecl,
   ProgramDecl,
+  ProjectVarDeclaration,
 } from "../project-model.js";
 import type {
   LibraryChunk,
   StlibArchive,
 } from "../library/library-manifest.js";
 import {
+  collectFileScopeGlobals,
   getProjectNamespace,
   parseDateLiteralToDays,
   parseDtLiteralToNs,
@@ -60,10 +62,16 @@ import {
   getTypeCategory,
   isImplicitlyConvertible,
   resolveFieldType as resolveFieldTypeUtil,
+  resolveArrayElementType as resolveArrayElementTypeUtil,
   typeName as typeNameUtil,
   buildEnumMemberMap,
   type EnumMemberEntry,
 } from "../semantic/type-utils.js";
+import {
+  generateInitializerValue,
+  isStructInitializerValue,
+  type StructInitEmitter,
+} from "./struct-init-codegen.js";
 
 // =============================================================================
 // Located Variable Support
@@ -356,6 +364,12 @@ export class CodeGenerator {
 
   /** Reverse map: enum member name (upper case) → owning enum type (for bare enum qualification) */
   protected enumMemberToType: Map<string, EnumMemberEntry> = new Map();
+
+  /** Lazily built hooks for structure-initializer lowering (see getStructInitEmitter). */
+  private structInitEmitter?: StructInitEmitter;
+
+  /** Lazily built set of file-level VAR_GLOBAL names (see fileScopeGlobalNames). */
+  private fileScopeGlobalNameCache?: Set<string>;
 
   /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
   private libraryFBFieldTypes: Map<string, string> = new Map();
@@ -1064,6 +1078,7 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_located.hpp"');
     this.emitHeader('#include "iec_std_lib.hpp"');
     this.emitHeader('#include "iec_enum.hpp"');
+    this.emitHeader('#include "iec_struct.hpp"');
     this.emitHeader('#include "iec_memory.hpp"');
     this.emitHeader('#include "iec_pointer.hpp"');
     this.emitHeader('#include "iec_string.hpp"');
@@ -1169,7 +1184,11 @@ export class CodeGenerator {
           for (const name of decl.names) {
             this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
             if (decl.initialValue) {
-              const initExpr = this.generateExpression(decl.initialValue);
+              const initExpr = this.generateInitializer(
+                decl.initialValue,
+                cppType,
+                decl.type.name,
+              );
               this.emitHeader(
                 `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
               );
@@ -1425,24 +1444,45 @@ export class CodeGenerator {
   }
 
   /**
-   * Collect a function block's VAR_EXTERNAL references (name + resolved C++
-   * type). IEC 61131-3 lets an FB access configuration globals this way; each
-   * becomes a `GlobalVar<V>*` bound to the file-scope canonical.
+   * Collect a function block's VAR_EXTERNAL references to CONFIGURATION
+   * VAR_GLOBALs. IEC 61131-3 lets an FB access globals this way; each becomes a
+   * `GlobalVar<V>*` bound to the file-scope canonical.
+   *
+   * References to a **file-level** VAR_GLOBAL are excluded: that storage is a
+   * plain file-scope object the FB body already reaches by name, so it needs no
+   * pointer member — and adding one would shadow the global it references. Same
+   * rule the project model applies to PROGRAMs (see `addVarExternal`).
    */
   private collectFBExternals(
     fb: CompilationUnit["functionBlocks"][0],
-  ): Array<{ name: string; cppType: string }> {
-    const externals: Array<{ name: string; cppType: string }> = [];
+  ): Array<{ name: string; typeName: string; cppType: string }> {
+    const fileScopeGlobals = this.fileScopeGlobalNames();
+    const externals: Array<{
+      name: string;
+      typeName: string;
+      cppType: string;
+    }> = [];
     for (const block of fb.varBlocks) {
       if (block.blockType !== "VAR_EXTERNAL") continue;
       for (const decl of block.declarations) {
         const cppType = this.mapTypeRefToCpp(decl.type);
         for (const name of decl.names) {
-          externals.push({ name, cppType });
+          if (fileScopeGlobals.has(name.toUpperCase())) continue;
+          externals.push({ name, typeName: decl.type.name, cppType });
         }
       }
     }
     return externals;
+  }
+
+  /** Upper-case names of the compilation unit's file-level VAR_GLOBALs. */
+  private fileScopeGlobalNames(): Set<string> {
+    if (!this.fileScopeGlobalNameCache) {
+      this.fileScopeGlobalNameCache = this.ast
+        ? new Set(collectFileScopeGlobals(this.ast).keys())
+        : new Set<string>();
+    }
+    return this.fileScopeGlobalNameCache;
   }
 
   /**
@@ -1968,12 +2008,11 @@ export class CodeGenerator {
       if (block.blockType === "VAR" || block.blockType === "VAR_TEMP") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
+            const cppType = this.mapTypeRefToCpp(decl.type);
             const initValue = decl.initialValue
-              ? ` = ${this.generateExpression(decl.initialValue)}`
+              ? ` = ${this.generateInitializer(decl.initialValue, cppType, decl.type.name)}`
               : "";
-            this.emit(
-              `    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`,
-            );
+            this.emit(`    ${cppType} ${name}${initValue};`);
           }
         }
       }
@@ -2052,7 +2091,11 @@ export class CodeGenerator {
     for (const block of prog.varBlocks) {
       for (const decl of block.declarations) {
         if (decl.initialValue !== undefined) {
-          const initExpr = this.generateExpression(decl.initialValue);
+          const initExpr = this.generateInitializer(
+            decl.initialValue,
+            this.mapTypeRefToCpp(decl.type),
+            decl.type.name,
+          );
           for (const name of decl.names) {
             this.emit(`    ${name} = ${initExpr};`);
           }
@@ -2098,13 +2141,7 @@ export class CodeGenerator {
     // VAR_EXTERNAL: body access (operator(), methods, properties) is rewritten
     // to go through the GlobalVar pointer (g->read()/write()/with_lock), exactly
     // like a PROGRAM. Set for the whole implementation, cleared at the end.
-    const externalDecls = fb.varBlocks
-      .filter((b) => b.blockType === "VAR_EXTERNAL")
-      .flatMap((b) =>
-        b.declarations.flatMap((d) =>
-          d.names.map((n) => ({ name: n, typeName: d.type.name })),
-        ),
-      );
+    const externalDecls = this.collectFBExternals(fb);
     this.programExternals = new Set(
       externalDecls.map((e) => e.name.toUpperCase()),
     );
@@ -2132,9 +2169,13 @@ export class CodeGenerator {
       if (block.blockType === "VAR_EXTERNAL") continue;
       for (const decl of block.declarations) {
         if (decl.initialValue) {
-          const initExpr = this.generateExpression(decl.initialValue);
+          const cppType = this.mapTypeRefToCpp(decl.type);
+          const initExpr = this.generateInitializer(
+            decl.initialValue,
+            cppType,
+            decl.type.name,
+          );
           for (const name of decl.names) {
-            const cppType = this.mapTypeRefToCpp(decl.type);
             const memberName = this.mangleMemberIfNeeded(
               name,
               cppType,
@@ -2217,12 +2258,11 @@ export class CodeGenerator {
         if (block.blockType === "VAR" || block.blockType === "VAR_TEMP") {
           for (const decl of block.declarations) {
             for (const name of decl.names) {
+              const cppType = this.mapTypeRefToCpp(decl.type);
               const initValue = decl.initialValue
-                ? ` = ${this.generateExpression(decl.initialValue)}`
+                ? ` = ${this.generateInitializer(decl.initialValue, cppType, decl.type.name)}`
                 : "";
-              this.emit(
-                `    ${this.mapTypeRefToCpp(decl.type)} ${name}${initValue};`,
-              );
+              this.emit(`    ${cppType} ${name}${initValue};`);
             }
           }
         }
@@ -2521,22 +2561,7 @@ export class CodeGenerator {
       // Initializer list
       const inits: string[] = [];
       for (const decl of prog.varDeclarations) {
-        // References (REF_TO / REFERENCE TO) and pointers (POINTER TO) wrap a
-        // pointer internally and must be default-constructed (unbound/null) —
-        // `name(0)` is ambiguous for IEC_REF_TO, and now also for IEC_Ptr,
-        // which gained an integer-address ctor (the `0` literal matches both
-        // the nullptr_t and the uintptr_t overload). The default ctor sets the
-        // pointer to nullptr, which is exactly the IEC default. References are
-        // bound later via REF= / := REF(); pointers via := ADR()/&.
-        if (
-          decl.referenceKind === "ref_to" ||
-          decl.referenceKind === "reference_to" ||
-          decl.referenceKind === "pointer_to"
-        ) {
-          continue;
-        }
-        const initVal = this.getDefaultValue(decl.typeName, decl.initialValue);
-        // Skip user-defined types (empty initVal) - they use default constructors
+        const initVal = this.projectVarInitializer(decl);
         if (initVal) {
           inits.push(`${decl.name}(${initVal})`);
         }
@@ -2561,22 +2586,7 @@ export class CodeGenerator {
       // Initializer list for local variables
       const inits: string[] = [];
       for (const decl of prog.varDeclarations) {
-        // References (REF_TO / REFERENCE TO) and pointers (POINTER TO) wrap a
-        // pointer internally and must be default-constructed (unbound/null) —
-        // `name(0)` is ambiguous for IEC_REF_TO, and now also for IEC_Ptr,
-        // which gained an integer-address ctor (the `0` literal matches both
-        // the nullptr_t and the uintptr_t overload). The default ctor sets the
-        // pointer to nullptr, which is exactly the IEC default. References are
-        // bound later via REF= / := REF(); pointers via := ADR()/&.
-        if (
-          decl.referenceKind === "ref_to" ||
-          decl.referenceKind === "reference_to" ||
-          decl.referenceKind === "pointer_to"
-        ) {
-          continue;
-        }
-        const initVal = this.getDefaultValue(decl.typeName, decl.initialValue);
-        // Skip user-defined types (empty initVal) - they use default constructors
+        const initVal = this.projectVarInitializer(decl);
         if (initVal) {
           inits.push(`${decl.name}(${initVal})`);
         }
@@ -2675,22 +2685,15 @@ export class CodeGenerator {
         if (seen.has(key)) continue;
         seen.add(key);
 
-        const cppType = this.mapTypeRefToCpp({
-          name: gvar.typeName,
-          ...(gvar.maxLength !== undefined
-            ? { maxLength: gvar.maxLength }
-            : {}),
-          ...(gvar.arrayDimensions !== undefined
-            ? { arrayDimensions: gvar.arrayDimensions }
-            : {}),
-          ...(gvar.elementTypeName !== undefined
-            ? { elementTypeName: gvar.elementTypeName }
-            : {}),
-          ...(gvar.referenceKind !== undefined
-            ? { referenceKind: gvar.referenceKind }
-            : {}),
-        });
-        const initVal = this.getDefaultValue(gvar.typeName, gvar.initialValue);
+        const cppType = this.mapTypeRefToCpp(this.projectVarToTypeRef(gvar));
+        // GlobalVar's initialising constructor is a template
+        // (`template<typename T> explicit GlobalVar(T)`), so a bare braced list
+        // has nothing to deduce from — name the type for aggregate initialisers
+        // (array literals) and pass everything else straight through.
+        const rawInit = this.projectVarInitializer(gvar) ?? "";
+        const initVal = rawInit.startsWith("{")
+          ? `${cppType}${rawInit}`
+          : rawInit;
 
         if (!emittedAny) {
           this.emitHeader(
@@ -3580,6 +3583,13 @@ export class CodeGenerator {
         const elements = expr.elements.map((e) => this.generateExpression(e));
         return `{${elements.join(", ")}}`;
       }
+      case "StructInitializerExpression":
+        // A structure initializer needs the target's C++ type, which only the
+        // declaration site knows — see generateInitializer. Reaching here means
+        // one appeared where no type is available (it is not an expression IEC
+        // allows in a statement), so value-initialise rather than emit code that
+        // would not compile.
+        return "{}";
     }
   }
 
@@ -4699,7 +4709,7 @@ export class CodeGenerator {
           ) {
             args.push(this.emitOutputTempVar(param.typeName));
           } else {
-            args.push(this.getDefaultValue(param.typeName));
+            args.push(this.getTypeDefaultValue(param.typeName));
           }
         }
       }
@@ -4755,7 +4765,11 @@ export class CodeGenerator {
               blockType: block.blockType,
             };
             if (decl.initialValue) {
-              entry.defaultExpr = this.generateExpression(decl.initialValue);
+              entry.defaultExpr = this.generateInitializer(
+                decl.initialValue,
+                this.mapTypeRefToCpp(decl.type),
+                decl.type.name,
+              );
             }
             params.push(entry);
           }
@@ -4857,7 +4871,8 @@ export class CodeGenerator {
         ) {
           result[i] = this.emitOutputTempVar(param.typeName);
         } else {
-          result[i] = param.defaultExpr ?? this.getDefaultValue(param.typeName);
+          result[i] =
+            param.defaultExpr ?? this.getTypeDefaultValue(param.typeName);
         }
       }
     }
@@ -4871,7 +4886,7 @@ export class CodeGenerator {
       ) {
         return this.emitOutputTempVar(param.typeName);
       }
-      return param.defaultExpr ?? this.getDefaultValue(param.typeName);
+      return param.defaultExpr ?? this.getTypeDefaultValue(param.typeName);
     });
   }
 
@@ -5560,95 +5575,109 @@ export class CodeGenerator {
   }
 
   /**
-   * Get the default value for a type.
+   * Initialiser for a project-model variable, or undefined when the member
+   * should be left to its default constructor.
+   *
+   * Shared by the PROGRAM constructor initialiser lists and the file-scope
+   * VAR_GLOBAL definitions so all three agree on how a declaration initialises.
    */
-  private getDefaultValue(typeName: string, initialValue?: string): string {
-    if (initialValue) {
-      // Convert enum dot-notation (TRAFFICSTATE.RED) to C++ scoped access (TRAFFICSTATE::RED)
-      const dotIdx = initialValue.indexOf(".");
-      if (dotIdx > 0) {
-        const prefix = initialValue.substring(0, dotIdx).toUpperCase();
-        if (this.enumTypeMembers.has(prefix)) {
-          return initialValue.replace(".", "::");
-        }
-      }
-      // Bare enum initializer: Stopped → Irrigation_State::Stopped
-      const bareEntry = this.enumMemberToType.get(initialValue.toUpperCase());
-      if (bareEntry?.typeName) {
-        return `${bareEntry.typeName}::${initialValue}`;
-      }
-      // Convert TIME/LTIME literals (T#30s, TIME#1m2s) to nanoseconds
-      const upperInit = initialValue.toUpperCase();
-      if (
-        upperInit.startsWith("T#") ||
-        upperInit.startsWith("TIME#") ||
-        upperInit.startsWith("LTIME#") ||
-        upperInit.startsWith("LT#")
-      ) {
-        const timeVal = parseTimeLiteral(initialValue);
-        return `${timeVal.nanoseconds}LL`;
-      }
-      // Convert temporal calendar literals at the PROGRAM-init path —
-      // FB initialisers route through `generateExpression` which
-      // handles these in `generateLiteralExpression`, but PROGRAM VAR
-      // initialisers come through this helper with the literal as a
-      // raw string.  Without these branches the PROGRAM constructor
-      // emits `D(DATE#1970-01-15)` verbatim and the C++ side fails
-      // to compile.  Lowering rule matches the literal-expression
-      // path: DATE → days, TOD → ns since midnight, DT → ns since
-      // epoch.  Same rule the runtime helpers consume.
-      if (upperInit.startsWith("D#") || upperInit.startsWith("DATE#")) {
-        return `${parseDateLiteralToDays(initialValue)}LL`;
-      }
-      if (
-        upperInit.startsWith("TOD#") ||
-        upperInit.startsWith("TIME_OF_DAY#")
-      ) {
-        return `${parseTodLiteralToNs(initialValue)}LL`;
-      }
-      if (
-        upperInit.startsWith("DT#") ||
-        upperInit.startsWith("DATE_AND_TIME#")
-      ) {
-        return `${parseDtLiteralToNs(initialValue)}LL`;
-      }
-      // Convert IEC BOOL literals to C++ bool literals
-      if (upperInit === "TRUE") return "true";
-      if (upperInit === "FALSE") return "false";
-      // Convert IEC string literals to the matching C++ literal shape:
-      //   'foo' (STRING)  → "foo"  (const char*)
-      //   "foo" (WSTRING) → u"foo" (const char16_t*, what IECWStringVar
-      //                            binds to — `L"…"` is wchar_t and
-      //                            32-bit on Linux/AVR, wrong type)
-      // The two literal kinds are NOT interchangeable per IEC 61131-3;
-      // a mismatch (e.g. WSTRING := 'foo') is a type error and is the
-      // type-checker's responsibility, not codegen's. Codegen just
-      // mirrors the literal it was handed.
-      if (initialValue.startsWith("'") && initialValue.endsWith("'")) {
-        const inner = initialValue.slice(1, -1);
-        const escaped = this.translateIECString(inner);
-        return `"${escaped}"`;
-      }
-      if (initialValue.startsWith('"') && initialValue.endsWith('"')) {
-        const inner = initialValue.slice(1, -1);
-        const escaped = this.translateIECString(inner);
-        return `u"${escaped}"`;
-      }
-      // Lower IEC numeric literals (based 16#FF/8#17/2#1010, decimals
-      // with underscore separators, typed prefixes like INT#5, optional
-      // sign). PROGRAM/GLOBAL VAR initialisers arrive here as raw IEC
-      // strings; without this they're emitted verbatim (`X(16#FF)`,
-      // `X(1_000)`, `X(INT#5)`) and the C++ build fails. Mirrors the
-      // expression-statement path (formatIntegerLiteral). Returns null
-      // for non-numeric initialisers (enum names, constants), which then
-      // pass through unchanged.
-      const numeric = this.lowerNumericInitializer(initialValue);
-      if (numeric !== null) {
-        return numeric;
-      }
-      return initialValue;
+  private projectVarInitializer(
+    decl: ProjectVarDeclaration,
+  ): string | undefined {
+    // References (REF_TO / REFERENCE TO) and pointers (POINTER TO) wrap a
+    // pointer internally and must be default-constructed (unbound/null) —
+    // `name(0)` is ambiguous for IEC_REF_TO, and also for IEC_Ptr, which has an
+    // integer-address ctor (the `0` literal matches both the nullptr_t and the
+    // uintptr_t overload). The default ctor sets the pointer to nullptr, which
+    // is exactly the IEC default. References are bound later via REF= / :=
+    // REF(); pointers via := ADR()/&.
+    if (
+      decl.referenceKind === "ref_to" ||
+      decl.referenceKind === "reference_to" ||
+      decl.referenceKind === "pointer_to"
+    ) {
+      return undefined;
     }
+    if (decl.initialValue) {
+      return this.generateInitializer(
+        decl.initialValue,
+        this.mapTypeRefToCpp(this.projectVarToTypeRef(decl)),
+        decl.typeName,
+      );
+    }
+    // Composite types (struct, enum, array, FB instance) report no default here
+    // (empty string) and are skipped, so their own default constructor runs.
+    const typeDefault = this.getTypeDefaultValue(decl.typeName);
+    return typeDefault === "" ? undefined : typeDefault;
+  }
 
+  /**
+   * Emit C++ for a declaration initialiser.
+   *
+   * Everything but a structure initializer is an ordinary expression;
+   * `structure_initialization` additionally needs the target's C++ type, which
+   * only the declaration site knows, so it routes through
+   * {@link generateInitializerValue}.
+   */
+  protected generateInitializer(
+    value: Expression,
+    cppType: string,
+    stTypeName: string | undefined,
+  ): string {
+    if (!isStructInitializerValue(value)) {
+      return this.generateExpression(value);
+    }
+    return generateInitializerValue(
+      value,
+      cppType,
+      stTypeName,
+      this.getStructInitEmitter(),
+    );
+  }
+
+  /**
+   * Hooks {@link generateInitializerValue} uses to resolve element names and
+   * nested element types. Reuses the same member-mangling and field-resolution
+   * helpers the statement path uses, so `p.X` in a body and `X :=` in an
+   * initializer always name the same C++ member.
+   */
+  private getStructInitEmitter(): StructInitEmitter {
+    this.structInitEmitter ??= {
+      emitValue: (value: Expression): string => this.generateExpression(value),
+      memberName: (
+        fieldName: string,
+        ownerTypeName: string | undefined,
+      ): string =>
+        this.needsFieldMangling(
+          fieldName,
+          this.resolveMemberType(ownerTypeName, fieldName),
+          ownerTypeName,
+        )
+          ? `${fieldName}_`
+          : fieldName,
+      fieldTypeName: (
+        fieldName: string,
+        ownerTypeName: string | undefined,
+      ): string | undefined => this.resolveMemberType(ownerTypeName, fieldName),
+      arrayElementTypeName: (
+        typeName: string | undefined,
+      ): string | undefined =>
+        typeName !== undefined && typeName !== "" && this.ast
+          ? resolveArrayElementTypeUtil(typeName, this.ast)
+          : undefined,
+    };
+    return this.structInitEmitter;
+  }
+
+  /**
+   * Value-initialisation for a type that has no declared initialiser.
+   *
+   * Returns an empty string for composite types (structs, enums, arrays, FB
+   * instances), whose default constructor already does the right thing — the
+   * callers use that to skip the member entirely in a constructor initialiser
+   * list.
+   */
+  private getTypeDefaultValue(typeName: string): string {
     const upperType = typeName.toUpperCase();
     if (upperType === "BOOL") return "false";
     if (upperType === "REAL" || upperType === "LREAL") return "0.0";
@@ -5687,45 +5716,6 @@ export class CodeGenerator {
     // User-defined types (structs, enums, arrays, subranges, type aliases)
     // use default initialization - return empty string to skip in initializer list
     return "";
-  }
-
-  /**
-   * Lower an IEC numeric literal initializer string to a C++ literal.
-   *
-   * Handles based literals (16#FF, 8#17, 2#1010), decimals/reals with
-   * IEC underscore separators (1_000, 16#FF_FF), an optional leading
-   * sign (-5, +3), and an optional IEC type prefix (INT#5, BYTE#16#AB,
-   * REAL#1.5). Reuses {@link iecBaseToCppLiteral}, the same helper the
-   * expression path uses, so declaration initialisers and statement
-   * bodies lower identically.
-   *
-   * Returns `null` when `raw` is not a recognised numeric literal, so
-   * non-numeric initialisers (enum names, named constants) pass through
-   * unchanged at the call site.
-   */
-  private lowerNumericInitializer(raw: string): string | null {
-    let s = raw.trim();
-    let sign = "";
-    if (s.startsWith("-") || s.startsWith("+")) {
-      sign = s[0]!;
-      s = s.slice(1).trimStart();
-    }
-    // Strip an optional IEC type prefix (TYPE#...). The leading
-    // identifier must start with a letter/underscore, which excludes
-    // radix markers like `16#` whose left side is numeric.
-    const typePrefix = /^[A-Za-z_][A-Za-z0-9_]*#(.+)$/.exec(s);
-    if (typePrefix) {
-      s = typePrefix[1]!;
-    }
-    const isNumeric =
-      /^16#[0-9A-Fa-f][0-9A-Fa-f_]*$/.test(s) ||
-      /^8#[0-7][0-7_]*$/.test(s) ||
-      /^2#[01][01_]*$/.test(s) ||
-      /^[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9]+)?$/.test(s);
-    if (!isNumeric) {
-      return null;
-    }
-    return sign + iecBaseToCppLiteral(s);
   }
 
   /**
