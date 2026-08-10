@@ -29,6 +29,7 @@ import type {
 } from "../frontend/ast.js";
 import type { ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
+import { formatArrayElementAccess } from "./codegen-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
@@ -426,17 +427,29 @@ export function generateDebugTable(
     }
   };
 
+  /**
+   * Enumerate every element of an array, emitting one debug entry per element.
+   *
+   * Indices are collected across all dimensions and only turned into C++ at the
+   * innermost level, because the accessor depends on the array's rank:
+   * `Array2D`/`Array3D` take every index in one `operator()` call, so emitting a
+   * subscript per dimension as we descend would produce `arr[i][j]` — which has
+   * no matching operator on those containers and fails to compile.
+   * {@link formatArrayElementAccess} owns that rank rule. The IEC display path
+   * stays `[i][j]`, which is what the debug UI shows.
+   */
   const walkArrayDims = (
     path: string,
     cppExpr: string,
     dims: Array<{ start: number; end: number }>,
     dimIdx: number,
     elementTypeName: string,
+    indices: number[] = [],
   ): void => {
     if (dimIdx >= dims.length) {
       // Innermost element — visit as a TypeReference with the element type
       // name. Manufacture a minimal TypeReference for recursion.
-      visitTypeRef(path, cppExpr, {
+      visitTypeRef(path, formatArrayElementAccess(cppExpr, indices), {
         kind: "TypeReference",
         name: elementTypeName,
         isReference: false,
@@ -448,10 +461,11 @@ export function generateDebugTable(
     for (let i = start; i <= end; i++) {
       walkArrayDims(
         `${path}[${i}]`,
-        `${cppExpr}[${i}]`,
+        cppExpr,
         dims,
         dimIdx + 1,
         elementTypeName,
+        [...indices, i],
       );
     }
   };

@@ -54,6 +54,30 @@ export function formatArrayType(
 }
 
 /**
+ * Append an unchecked element access for one full set of array indices,
+ * matching the container {@link formatArrayType} picked for that rank.
+ *
+ * `Array1D` subscripts with `operator[]`; `Array2D` / `Array3D` take all indices
+ * at once through `operator()`; 4+ dimensions are nested `Array1D`, so they
+ * subscript once per dimension. Getting this wrong doesn't just read the wrong
+ * element — `arr[i][j]` on an `Array2D` has no matching operator and fails to
+ * compile.
+ *
+ * Unchecked (rather than `.at()`) because these accessors are `constexpr`, which
+ * is what lets `&arr[i]` be a constant expression — required for the debug
+ * pointer table's PROGMEM placement on AVR.
+ */
+export function formatArrayElementAccess(
+  base: string,
+  indices: number[],
+): string {
+  if (indices.length === 2 || indices.length === 3) {
+    return `${base}(${indices.join(", ")})`;
+  }
+  return base + indices.map((i) => `[${i}]`).join("");
+}
+
+/**
  * Translate IEC 61131-3 `$`-escape sequences in a string literal's body to C++
  * escape sequences, and escape what C++ needs escaped.
  *
