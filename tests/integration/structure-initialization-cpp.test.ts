@@ -430,5 +430,79 @@ describeIfGpp(
       );
       expect(output).toBe("1 4");
     });
+
+    it("expands repetition groups to the right values in the right slots", () => {
+      const output = run(
+        `
+      PROGRAM Main
+        VAR
+          a : ARRAY[0..4] OF INT := [3(1), 2(5)];
+          b : ARRAY[0..5] OF INT := [7, 4(2), 9];
+          c : ARRAY[0..3] OF INT := 2(3), 2(4);
+        END_VAR
+        a[0] := a[0];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    for (int i = 0; i < 5; ++i) std::cout << p.A[i].get();
+    std::cout << " ";
+    for (int i = 0; i < 6; ++i) std::cout << p.B[i].get();
+    std::cout << " ";
+    for (int i = 0; i < 4; ++i) std::cout << p.C[i].get();
+    std::cout << std::endl;`,
+        "arrayinit_repetition",
+      );
+      expect(output).toBe("11155 722229 3344");
+    });
+
+    it("repeats a structure initializer across array elements", () => {
+      const output = run(
+        `
+      TYPE
+        Point : STRUCT x : REAL; y : REAL; END_STRUCT;
+      END_TYPE
+      PROGRAM Main
+        VAR pts : ARRAY[0..1] OF Point := [2((x := 1.5, y := 2.5))]; END_VAR
+        pts[0].x := pts[0].x;
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    std::cout << p.PTS[0].X.get() << " " << p.PTS[1].Y.get() << std::endl;`,
+        "arrayinit_repetition_struct",
+      );
+      expect(output).toBe("1.5 2.5");
+    });
+
+    it("repeats into a 2D array and a STRING array", () => {
+      const output = run(
+        `
+      PROGRAM Main
+        VAR
+          m : ARRAY[0..1, 0..1] OF INT := [4(6)];
+          s : ARRAY[0..3] OF STRING := [4('hi')];
+        END_VAR
+        m[0, 0] := m[0, 0];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    std::cout << p.M(0, 0).get() << p.M(1, 1).get() << " "
+              << p.S[0].get().c_str() << p.S[3].get().c_str() << std::endl;`,
+        "arrayinit_repetition_2d_string",
+      );
+      expect(output).toBe("66 hihi");
+    });
+
+    it("expands a repetition in a file-level VAR_GLOBAL", () => {
+      const output = run(
+        `
+      VAR_GLOBAL
+        g : ARRAY[0..3] OF INT := [4(8)];
+      END_VAR
+      `,
+        `    std::cout << G[0].get() << G[3].get() << std::endl;`,
+        "arrayinit_repetition_global",
+      );
+      expect(output).toBe("88");
+    });
   },
 );

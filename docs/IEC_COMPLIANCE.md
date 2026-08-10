@@ -42,7 +42,6 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Type | Notes |
 |------|-------|
 | UNION | CODESYS extension |
-| Array repetition initializer | `:= [10(0)]` — write the elements out instead |
 
 ## Program Organization Units
 
@@ -69,8 +68,17 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | AT %IX0.0 | Supported | Located variables (I/Q/M areas, X/B/W/D/L sizes) |
 | Multiple names | Supported | `a, b, c : INT := 0;` |
 | Initialization | Supported | `:= expression` |
-| Array initialization | Supported | `:= [1, 2, 3]` and the legacy `:= 1, 2, 3` |
+| Array initialization | Supported | `:= [1, 2, 3]` and the bracket-less `:= 1, 2, 3`. Multi-dimensional arrays take a flat row-major list |
+| Array repetition | Supported | `:= [10(0)]`, `:= [3(1), 2(5)]`, `:= [7, 4(2), 9]`. The repeated value may be a structure initializer. Max count 65536 |
 | Structure initialization | Supported | `:= (x := 1.0, y := 2.0)`; nested, in array literals, and for FB instances. Omitted elements keep their own declared default |
+
+### Initialization gaps
+
+| Form | Notes |
+|------|-------|
+| Nested array initializer | `:= [[1, 2], [3, 4]]` for a multi-dimensional array. Use the flat row-major form `:= [1, 2, 3, 4]` |
+| 3D array initializer | `ARRAY[0..1, 0..1, 0..1] OF INT := [1, 2, ...]` — the runtime `Array3D` has no initializer-list constructor, so any 3D initializer fails to build |
+| Repetition with no value | `:= [10()]` (ten copies of the element default) — write `:= [10(0)]`, or omit the elements entirely. Matches matiec and CODESYS, which also require a value |
 
 ## Operators and Expressions
 

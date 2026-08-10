@@ -264,6 +264,25 @@ function getAllIdentifierOrKeywordImages(
 }
 
 /**
+ * Upper bound on an array repetition count (`[N(value)]`).
+ *
+ * Repetition groups are expanded element by element, so the count directly sizes
+ * the AST and the generated initialiser list. The limit is far above any
+ * practical PLC array and exists only so a typo cannot exhaust memory.
+ */
+const MAX_ARRAY_REPETITION = 65536;
+
+/**
+ * True when an `arrayInitialElements` node is a repetition group `count(value)`
+ * rather than a single value.
+ */
+function isRepetitionGroup(entry: CstNode): boolean {
+  return (
+    getFirstToken((entry.children as CstChildren).IntegerLiteral) !== undefined
+  );
+}
+
+/**
  * Parse an IEC 61131-3 integer literal that may use based notation (16#FF, 8#77, 2#1010).
  */
 function parseIECInteger(raw: string): number {
@@ -330,10 +349,18 @@ export class ASTBuilder {
         const initExprNode = getFirstNode(declChildren.initializerExpression);
         if (!initExprNode || names.length === 0) continue;
         const initChildren = initExprNode.children as CstChildren;
-        const exprNodes = getAllNodes(initChildren.expression);
-        if (exprNodes.length !== 1) continue;
+        // Only a lone scalar initialiser can be a dimension constant; a list or
+        // a repetition group is an array initialiser.
+        const entryNodes = getAllNodes(initChildren.arrayInitialElements);
+        if (entryNodes.length !== 1 || isRepetitionGroup(entryNodes[0]!)) {
+          continue;
+        }
+        const valueNode = getFirstNode(
+          (entryNodes[0]!.children as CstChildren).expression,
+        );
+        if (!valueNode) continue;
         try {
-          const expr = this.buildExpression(exprNodes[0]!);
+          const expr = this.buildExpression(valueNode);
           if (!expr) continue;
           let val: number | undefined;
           if (expr.kind === "LiteralExpression") {
@@ -1344,10 +1371,11 @@ export class ASTBuilder {
   /**
    * Build the expression behind an `initializerExpression` CST node.
    *
-   * A single expression is used as-is; the legacy comma-separated form
+   * A single value is used as-is; the bracket-less comma-separated form
    * (`arr : ARRAY[0..3] OF INT := 0, 31, 59, 90;`) collapses into an
-   * ArrayLiteralExpression. Structure initializers need no special handling
-   * here — they are ordinary primary expressions.
+   * ArrayLiteralExpression, as does a lone repetition group (`:= 4(0)`).
+   * Structure initializers need no special handling here — they are ordinary
+   * primary expressions.
    *
    * Returns undefined when there is no initialiser.
    */
@@ -1356,23 +1384,67 @@ export class ASTBuilder {
   ): Expression | undefined {
     if (!initExprNode) return undefined;
     const initChildren = initExprNode.children as CstChildren;
-    const exprNodes = getAllNodes(initChildren.expression);
-    if (exprNodes.length > 1) {
-      const elements: Expression[] = [];
-      for (const en of exprNodes) {
-        const e = this.buildExpression(en);
-        if (e) elements.push(e);
+    const entryNodes = getAllNodes(initChildren.arrayInitialElements);
+    const elements = this.buildArrayInitialElements(entryNodes);
+    // A single plain value is the variable's initialiser, not a one-element
+    // array. A repetition group always means an array, even on its own.
+    if (
+      elements.length === 1 &&
+      entryNodes.length === 1 &&
+      !isRepetitionGroup(entryNodes[0]!)
+    ) {
+      return elements[0];
+    }
+    if (elements.length === 0) return undefined;
+    return {
+      kind: "ArrayLiteralExpression",
+      sourceSpan: nodeToSourceSpan(initExprNode),
+      elements,
+    };
+  }
+
+  /**
+   * Expand a list of `arrayInitialElements` CST nodes into the element values
+   * they stand for.
+   *
+   * A repetition group `count(value)` (IEC 61131-3 Annex B.1.4.3) contributes
+   * `count` copies of the value. Expanding here keeps every consumer —
+   * semantic analysis, the project model, codegen — working on a plain list of
+   * element expressions, so the repetition form needs no support of its own
+   * downstream.
+   */
+  private buildArrayInitialElements(entryNodes: CstNode[]): Expression[] {
+    const elements: Expression[] = [];
+    for (const entry of entryNodes) {
+      const entryChildren = entry.children as CstChildren;
+      const valueNode = getFirstNode(entryChildren.expression);
+      if (!valueNode) continue;
+      const value = this.buildExpression(valueNode);
+      if (!value) continue;
+
+      const countToken = getFirstToken(entryChildren.IntegerLiteral);
+      if (!countToken) {
+        elements.push(value);
+        continue;
       }
-      return {
-        kind: "ArrayLiteralExpression",
-        sourceSpan: nodeToSourceSpan(initExprNode),
-        elements,
-      };
+      const count = parseIECInteger(countToken.image);
+      if (!Number.isFinite(count) || count < 0) continue;
+      if (count > MAX_ARRAY_REPETITION) {
+        // Expansion is linear in the count, so a runaway count would exhaust
+        // memory. Fail loudly rather than silently dropping the tail — the
+        // compile driver turns this into a reported error.
+        throw new Error(
+          `Array repetition count ${count} exceeds the supported maximum of ${MAX_ARRAY_REPETITION}`,
+        );
+      }
+      for (let i = 0; i < count; i++) {
+        // Each repeat gets its own node: consumers may annotate elements
+        // (resolvedType, and codegen's per-element lowering), and sharing one
+        // object across positions would make those annotations collide.
+        elements.push(i === 0 ? value : this.buildExpression(valueNode)!);
+      }
     }
-    if (exprNodes.length === 1) {
-      return this.buildExpression(exprNodes[0]!);
-    }
-    return undefined;
+    return elements;
   }
 
   /**
@@ -2344,16 +2416,12 @@ export class ASTBuilder {
     if (children.arrayLiteral) {
       const litNode = getFirstNode(children.arrayLiteral)!;
       const litChildren = litNode.children as CstChildren;
-      const exprNodes = getAllNodes(litChildren.expression);
-      const elements: Expression[] = [];
-      for (const en of exprNodes) {
-        const e = this.buildExpression(en);
-        if (e) elements.push(e);
-      }
       return {
         kind: "ArrayLiteralExpression",
         sourceSpan: nodeToSourceSpan(litNode),
-        elements,
+        elements: this.buildArrayInitialElements(
+          getAllNodes(litChildren.arrayInitialElements),
+        ),
       } as ArrayLiteralExpression;
     }
 

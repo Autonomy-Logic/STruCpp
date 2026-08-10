@@ -459,29 +459,57 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Initializer expression: single expression or comma-separated list for array init.
-   * Handles: x := 5; and arr := 0, 31, 59, 90, ...;
+   * Initializer expression: a single value, or a comma-separated list for the
+   * bracket-less array-initialiser form OpenPLC emits.
+   * Handles: `x := 5;`, `arr := 0, 31, 59, 90;` and `arr := 4(0), 31;`
    */
   public initializerExpression = this.RULE("initializerExpression", () => {
-    this.SUBRULE(this.expression);
-    this.MANY(() => {
-      this.CONSUME(tokens.Comma);
-      this.SUBRULE2(this.expression);
+    this.AT_LEAST_ONE_SEP({
+      SEP: tokens.Comma,
+      DEF: () => this.SUBRULE(this.arrayInitialElements),
     });
   });
 
   /**
-   * Array literal: [expr, expr, ...]
-   * Bracket-enclosed comma-separated expressions for array initialization.
+   * Array literal: `[value, value, ...]`
+   *
+   * IEC 61131-3 Annex B.1.4.3 `array_initialization`.
    */
   public arrayLiteral = this.RULE("arrayLiteral", () => {
     this.CONSUME(tokens.LBracket);
-    this.SUBRULE(this.expression);
-    this.MANY(() => {
-      this.CONSUME(tokens.Comma);
-      this.SUBRULE2(this.expression);
+    this.AT_LEAST_ONE_SEP({
+      SEP: tokens.Comma,
+      DEF: () => this.SUBRULE(this.arrayInitialElements),
     });
     this.CONSUME(tokens.RBracket);
+  });
+
+  /**
+   * One entry of an array initialiser: a single value, or a repetition group
+   * `count(value)` standing for `count` copies of that value.
+   *
+   * IEC 61131-3 Annex B.1.4.3 `array_initial_elements`:
+   *
+   *   arr : ARRAY[0..9] OF INT := [10(0)];
+   *   arr : ARRAY[0..4] OF INT := [3(1), 2(5)];
+   *   pts : ARRAY[0..1] OF Point := [2((x := 1.0, y := 2.0))];
+   *
+   * The repeated value is a full expression, so a repetition group may itself
+   * hold a structure initializer or a nested array literal.
+   */
+  public arrayInitialElements = this.RULE("arrayInitialElements", () => {
+    this.OR([
+      {
+        ALT: () => {
+          this.CONSUME(tokens.IntegerLiteral);
+          this.CONSUME(tokens.LParen);
+          this.SUBRULE(this.expression);
+          this.CONSUME(tokens.RParen);
+        },
+        GATE: () => this.isArrayRepetitionAhead(),
+      },
+      { ALT: () => this.SUBRULE2(this.expression) },
+    ]);
   });
 
   /**
@@ -1029,6 +1057,20 @@ export class STParser extends CstParser {
       this.LA(1).tokenType === tokens.LParen &&
       this.isIdentifierOrKeywordToken(this.LA(2).tokenType) &&
       this.LA(3).tokenType === tokens.Assign
+    );
+  }
+
+  /**
+   * Lookahead helper: does an array repetition group `count(value)` start here?
+   *
+   * An integer immediately followed by `(` is never an expression — ST has no
+   * implicit multiplication and only an identifier can be called — so this never
+   * competes with a function call or a parenthesised sub-expression.
+   */
+  private isArrayRepetitionAhead(): boolean {
+    return (
+      this.LA(1).tokenType === tokens.IntegerLiteral &&
+      this.LA(2).tokenType === tokens.LParen
     );
   }
 
