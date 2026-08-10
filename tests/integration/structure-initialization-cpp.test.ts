@@ -636,6 +636,41 @@ describeIfGpp(
       expect(output).toBe("3 6 1 3 12");
     });
 
+    it("invokes elements of a named ARRAY OF function-block type", () => {
+      // `AccumGrid : ARRAY[…] OF Accum` emits `using ACCUMGRID = Array2D<ACCUM, …>`
+      // in the user-types block, which used to precede the POU forward
+      // declarations — so `ACCUM` was undeclared at that point.
+      const output = run(
+        `
+      FUNCTION_BLOCK Accum
+        VAR_INPUT step : REAL := 1.0; END_VAR
+        VAR_OUTPUT val : REAL; END_VAR
+        val := val + step;
+      END_FUNCTION_BLOCK
+      TYPE
+        AccumGrid : ARRAY[0..1, 0..1] OF Accum;
+        AccumRow : ARRAY[0..1] OF Accum;
+      END_TYPE
+      PROGRAM Main
+        VAR
+          grid : AccumGrid;
+          row : AccumRow;
+          total : REAL;
+        END_VAR
+        grid[0, 1](step := 3.0);
+        row[1](step := 7.0);
+        total := grid[0, 1].val + row[1].val;
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    p.run();
+    std::cout << p.GRID.at(0, 1).VAL.get() << " " << p.ROW.at(1).VAL.get()
+              << " " << p.TOTAL.get() << std::endl;`,
+        "fb_array_named_type",
+      );
+      expect(output).toBe("3 7 10");
+    });
+
     it("initialises function block instances across an array", () => {
       const output = run(
         `

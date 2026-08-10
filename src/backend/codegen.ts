@@ -1163,6 +1163,17 @@ export class CodeGenerator {
       this.emitHeader("");
     }
 
+    // Forward-declare the POU classes before the user-defined types.
+    //
+    // A TYPE may name a function block — `AccumGrid : ARRAY[0..1,0..1] OF Accum`
+    // emits `using ACCUMGRID = Array2D<ACCUM, …>`, and an alias to a class
+    // template needs the argument to at least be declared. An incomplete type is
+    // enough here because the alias doesn't instantiate anything; instantiation
+    // happens where the alias is used as a member, by which point the full
+    // definition has been emitted. Repeated below with the rest of the forward
+    // declarations, which is harmless — redundant class declarations are legal.
+    this.emitPouForwardDeclarations(ast);
+
     // Generate user-defined types (Phase 2.2)
     if (ast.types.length > 0) {
       const typeRegistry = new TypeRegistry();
@@ -1243,26 +1254,7 @@ export class CodeGenerator {
     }
 
     // Generate forward declarations
-    for (const iface of ast.interfaces) {
-      this.emitHeader(`class ${iface.name};`);
-    }
-    for (const fb of ast.functionBlocks) {
-      this.emitHeader(`class ${fb.name};`);
-    }
-    for (const prog of ast.programs) {
-      this.emitHeader(`class Program_${prog.name};`);
-    }
-    for (const config of ast.configurations) {
-      this.emitHeader(`class Configuration_${config.name};`);
-    }
-    if (
-      ast.interfaces.length > 0 ||
-      ast.functionBlocks.length > 0 ||
-      ast.programs.length > 0 ||
-      ast.configurations.length > 0
-    ) {
-      this.emitHeader("");
-    }
+    this.emitPouForwardDeclarations(ast);
 
     // Generate interface declarations (before FBs since FBs may implement interfaces)
     for (const iface of ast.interfaces) {
@@ -2677,6 +2669,34 @@ export class CodeGenerator {
    * bodies can name the globals. Also registers located VAR_GLOBALs so the
    * runtime binds them to the I/O image.
    */
+  /**
+   * Forward-declare every interface, function block, program and configuration
+   * class. Emitted twice: once ahead of the user-defined types, which may name a
+   * function block, and once in the usual forward-declaration block.
+   */
+  private emitPouForwardDeclarations(ast: CompilationUnit): void {
+    for (const iface of ast.interfaces) {
+      this.emitHeader(`class ${iface.name};`);
+    }
+    for (const fb of ast.functionBlocks) {
+      this.emitHeader(`class ${fb.name};`);
+    }
+    for (const prog of ast.programs) {
+      this.emitHeader(`class Program_${prog.name};`);
+    }
+    for (const config of ast.configurations) {
+      this.emitHeader(`class Configuration_${config.name};`);
+    }
+    if (
+      ast.interfaces.length > 0 ||
+      ast.functionBlocks.length > 0 ||
+      ast.programs.length > 0 ||
+      ast.configurations.length > 0
+    ) {
+      this.emitHeader("");
+    }
+  }
+
   private emitFileScopeGlobals(): void {
     if (!this.projectModel) return;
     const seen = new Set<string>();
