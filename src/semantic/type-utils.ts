@@ -565,6 +565,132 @@ export function resolveArrayElementType(
   return undefined;
 }
 
+/**
+ * Evaluate a compile-time integer expression; undefined when it isn't one.
+ *
+ * Deliberately narrow — array bounds and similar declaration-time integers are
+ * literals or a negated literal in practice, and anything else is better left
+ * unresolved than guessed at.
+ */
+export function evalIntConst(e: unknown): number | undefined {
+  if (e === null || e === undefined || typeof e !== "object") return undefined;
+  const expr = e as {
+    kind?: string;
+    value?: unknown;
+    operand?: unknown;
+    operator?: string;
+  };
+  if (expr.kind === "LiteralExpression") {
+    if (typeof expr.value === "number") return expr.value;
+    if (typeof expr.value === "bigint") {
+      const n = Number(expr.value);
+      if (Number.isSafeInteger(n)) return n;
+    }
+  }
+  if (expr.kind === "UnaryExpression" && expr.operator === "-") {
+    const inner = evalIntConst(expr.operand);
+    return inner === undefined ? undefined : -inner;
+  }
+  return undefined;
+}
+
+/** One declared array dimension; `null` when its extent isn't known statically. */
+export type ArrayDimExtent = { start: number; end: number } | null;
+
+/** The declared shape of an array type: its dimensions and element type name. */
+export interface ArrayShape {
+  /** One entry per dimension. `null` for a variable-length (`ARRAY[*]`) or
+   *  non-constant bound — the rank is still known, the extent isn't. */
+  dims: ArrayDimExtent[];
+  elementTypeName: string;
+}
+
+/** Guard against a cyclic alias chain while resolving a type name. */
+const MAX_TYPE_ALIAS_DEPTH = 32;
+
+/**
+ * Resolve the declared shape of an array-typed reference, following type
+ * aliases. Returns undefined when the reference is not an array.
+ *
+ * Covers both spellings: an inline `ARRAY[…] OF T` (whose bounds the AST builder
+ * has already resolved onto the TypeReference) and a named ARRAY type.
+ */
+export function resolveArrayShape(
+  type: {
+    name: string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+  },
+  ast: CompilationUnit,
+): ArrayShape | undefined {
+  if (type.arrayDimensions && type.arrayDimensions.length > 0) {
+    return {
+      dims: type.arrayDimensions.map((d) => ({ start: d.start, end: d.end })),
+      elementTypeName: type.elementTypeName ?? "",
+    };
+  }
+  return resolveArrayShapeByName(type.name, ast);
+}
+
+/**
+ * Resolve the declared shape of a named type, following alias chains.
+ * Returns undefined when the name doesn't (transitively) name an array.
+ */
+export function resolveArrayShapeByName(
+  typeName: string,
+  ast: CompilationUnit,
+  depth = 0,
+): ArrayShape | undefined {
+  if (depth >= MAX_TYPE_ALIAS_DEPTH) return undefined;
+  const upper = typeName.toUpperCase();
+
+  // Internal marker for an inline array whose bounds live on the declaration;
+  // the rank isn't recoverable from the name alone.
+  if (upper.startsWith("__INLINE_ARRAY_")) return undefined;
+
+  for (const td of ast.types) {
+    if (td.name.toUpperCase() !== upper) continue;
+    const def = td.definition;
+    if (def.kind === "ArrayDefinition") {
+      return {
+        dims: def.dimensions.map((d) => {
+          if (d.isVariableLength) return null;
+          const start = evalIntConst(d.start);
+          const end = evalIntConst(d.end);
+          return start === undefined || end === undefined
+            ? null
+            : { start, end };
+        }),
+        elementTypeName: def.elementType.name,
+      };
+    }
+    if (def.kind === "TypeReference") {
+      // Alias — keep walking toward the underlying array, if any.
+      return resolveArrayShapeByName(def.name, ast, depth + 1);
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/** Number of elements a dimension holds, or undefined when its extent is unknown. */
+export function arrayDimSize(dim: ArrayDimExtent): number | undefined {
+  if (!dim) return undefined;
+  const size = dim.end - dim.start + 1;
+  return size > 0 ? size : undefined;
+}
+
+/** Total element count across every dimension, or undefined if any is unknown. */
+export function arrayTotalSize(dims: ArrayDimExtent[]): number | undefined {
+  let total = 1;
+  for (const d of dims) {
+    const size = arrayDimSize(d);
+    if (size === undefined) return undefined;
+    total *= size;
+  }
+  return total;
+}
+
 // =============================================================================
 // Display Helper
 // =============================================================================

@@ -30,6 +30,7 @@ import type {
 import type { ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import { formatArrayElementAccess } from "./codegen-utils.js";
+import { evalIntConst } from "../semantic/type-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
@@ -648,29 +649,6 @@ function renderCpp(
 // ---------------------------------------------------------------------------
 // Expression helpers
 // ---------------------------------------------------------------------------
-
-/** Evaluate a compile-time integer Expression; returns undefined on failure. */
-function evalIntConst(e: unknown): number | undefined {
-  if (!e || typeof e !== "object") return undefined;
-  const expr = e as {
-    kind?: string;
-    value?: unknown;
-    operand?: unknown;
-    operator?: string;
-  };
-  if (expr.kind === "LiteralExpression") {
-    if (typeof expr.value === "number") return expr.value;
-    if (typeof expr.value === "bigint") {
-      const n = Number(expr.value);
-      if (Number.isSafeInteger(n)) return n;
-    }
-  }
-  if (expr.kind === "UnaryExpression" && expr.operator === "-") {
-    const inner = evalIntConst(expr.operand);
-    return inner === undefined ? undefined : -inner;
-  }
-  return undefined;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers exposed for tests
