@@ -908,6 +908,13 @@ export class STParser extends CstParser {
           ALT: () => this.SUBRULE(this.methodCallStatement),
           GATE: () => this.isMethodCallAhead(),
         },
+        // `units[0](…)` — invoking an FB instance in an array element. Must also
+        // precede assignmentStatement, which would otherwise consume the
+        // subscripted variable and then demand `:=`.
+        {
+          ALT: () => this.SUBRULE(this.instanceCallStatement),
+          GATE: () => this.isInstanceCallAhead(),
+        },
         // assignmentStatement and functionCallStatement both start with Identifier;
         // Chevrotain resolves by trying assignmentStatement first (it has := after the LHS)
         { ALT: () => this.SUBRULE(this.assignmentStatement) },
@@ -1124,6 +1131,37 @@ export class STParser extends CstParser {
   }
 
   /**
+   * Lookahead helper: does an invocation of a subscripted function block
+   * instance start here (`units[0](…)`, `grid[i, j]()`)?
+   *
+   * Requires the `(` to follow the closing `]` directly, so this claims exactly
+   * the array-element invocation and leaves `arr[0].m(…)` — which could equally
+   * be a method call on the element — to the existing rules.
+   */
+  private isInstanceCallAhead(): boolean {
+    if (!this.isIdentifierOrKeywordToken(this.LA(1).tokenType)) return false;
+    if (this.LA(2).tokenType !== tokens.LBracket) return false;
+
+    // Walk to the matching `]`, allowing nested subscripts in the index
+    // expressions (`a[b[i]]`). 64 tokens covers any realistic index list.
+    const MAX_LOOKAHEAD = 64;
+    let depth = 0;
+    for (let i = 2; i <= MAX_LOOKAHEAD; i++) {
+      const tokenType = this.LA(i)?.tokenType;
+      if (tokenType === undefined) return false;
+      if (tokenType === tokens.LBracket) {
+        depth++;
+      } else if (tokenType === tokens.RBracket) {
+        depth--;
+        if (depth === 0) return this.LA(i + 1)?.tokenType === tokens.LParen;
+      } else if (tokenType === tokens.Semicolon) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
    * instance.method(args); statement
    */
   public methodCallStatement = this.RULE("methodCallStatement", () => {
@@ -1139,6 +1177,21 @@ export class STParser extends CstParser {
     this.MANY(() => {
       this.SUBRULE(this.chainedMethodCall);
     });
+    this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
+   * `units[0](args);` — invoke a function block instance held in an array
+   * element. IEC 61131-3 allows an array of function block instances, and an
+   * element is invoked like any other instance.
+   */
+  public instanceCallStatement = this.RULE("instanceCallStatement", () => {
+    this.SUBRULE(this.variable);
+    this.CONSUME(tokens.LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.argumentList);
+    });
+    this.CONSUME(tokens.RParen);
     this.CONSUME(tokens.Semicolon);
   });
 

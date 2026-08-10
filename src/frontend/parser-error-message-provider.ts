@@ -51,6 +51,8 @@ const RULE_DESCRIPTIONS: Record<string, string> = {
   assignmentStatement: "parsing an assignment",
   refAssignStatement: "parsing a reference assignment",
   functionCallStatement: "parsing a function call",
+  instanceCallStatement:
+    "invoking a function block instance in an array element",
   methodCallStatement: "parsing a method call",
   ifStatement: "parsing an IF statement",
   caseStatement: "parsing a CASE statement",

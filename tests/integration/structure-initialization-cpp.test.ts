@@ -455,6 +455,210 @@ describeIfGpp(
       expect(output).toBe("11155 722229 3344");
     });
 
+    it("initialises a 3D array, and lets its elements be read and written", () => {
+      // `IEC_ARRAY_3D` had neither an initializer-list constructor nor `at()`,
+      // so a 3D array was unusable: the initializer failed to build and so did
+      // any subscript in a body (codegen emits the bounds-checked `.at()`).
+      const output = run(
+        `
+      PROGRAM Main
+        VAR
+          c : ARRAY[0..1, 0..1, 0..1] OF INT := [1, 2, 3, 4, 5, 6, 7, 8];
+          x : INT;
+        END_VAR
+        c[0, 0, 0] := 9;
+        x := c[1, 1, 1];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    p.run();
+    std::cout << p.C(0, 0, 0).get() << " " << p.C(0, 0, 1).get() << " "
+              << p.C(1, 1, 1).get() << " " << p.X.get() << std::endl;`,
+        "arrayinit_3d",
+      );
+      // Flat list fills row-major, then the body writes [0,0,0] and reads [1,1,1].
+      expect(output).toBe("9 2 8 8");
+    });
+
+    it("fills a 2D array from a row-nested initializer", () => {
+      const output = run(
+        `
+      PROGRAM Main
+        VAR m : ARRAY[0..1, 0..2] OF INT := [[1, 2, 3], [4, 5, 6]]; END_VAR
+        m[0, 0] := m[0, 0];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    for (int i = 0; i < 2; ++i)
+      for (int j = 0; j < 3; ++j) std::cout << p.M(i, j).get();
+    std::cout << std::endl;`,
+        "arrayinit_2d_nested",
+      );
+      expect(output).toBe("123456");
+    });
+
+    it("fills each row from its own bound, so a short row does not shift", () => {
+      // This is the semantic difference from writing the values flat: `[[1],[4]]`
+      // leaves the rest of each row at its default instead of packing 4 into
+      // row 0.
+      const output = run(
+        `
+      PROGRAM Main
+        VAR m : ARRAY[0..1, 0..2] OF INT := [[1], [4]]; END_VAR
+        m[0, 0] := m[0, 0];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    for (int i = 0; i < 2; ++i)
+      for (int j = 0; j < 3; ++j) std::cout << p.M(i, j).get();
+    std::cout << std::endl;`,
+        "arrayinit_2d_nested_short",
+      );
+      expect(output).toBe("100400");
+    });
+
+    it("fills a 3D array from a plane/row-nested initializer", () => {
+      const output = run(
+        `
+      PROGRAM Main
+        VAR c : ARRAY[0..1, 0..1, 0..1] OF INT := [[[1, 2], [3, 4]], [[5, 6], [7, 8]]]; END_VAR
+        c[0, 0, 0] := c[0, 0, 0];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    for (int i = 0; i < 2; ++i)
+      for (int j = 0; j < 2; ++j)
+        for (int k = 0; k < 2; ++k) std::cout << p.C(i, j, k).get();
+    std::cout << std::endl;`,
+        "arrayinit_3d_nested",
+      );
+      expect(output).toBe("12345678");
+    });
+
+    it("nests into an array whose element type is itself an array", () => {
+      // Lowers to a nested Array1D, which needs the element-typed
+      // initializer-list overload rather than the deducing template.
+      const output = run(
+        `
+      TYPE Row : ARRAY[0..2] OF INT; END_TYPE
+      PROGRAM Main
+        VAR a : ARRAY[0..1] OF Row := [[1, 2, 3], [4, 5, 6]]; END_VAR
+        a[0][0] := a[0][0];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    std::cout << p.A[0][0].get() << p.A[0][2].get()
+              << p.A[1][0].get() << p.A[1][2].get() << std::endl;`,
+        "arrayinit_array_of_array",
+      );
+      expect(output).toBe("1346");
+    });
+
+    it("nests structure initializers inside a 2D array initializer", () => {
+      // The element type must not descend a second time — that produced
+      // `typename typename …::element_type::element_type`.
+      const output = run(
+        `
+      TYPE Point : STRUCT x : INT; y : INT; END_STRUCT; END_TYPE
+      PROGRAM Main
+        VAR
+          g : ARRAY[0..1, 0..1] OF Point := [[(x := 1, y := 2), (x := 3, y := 4)], [(x := 5, y := 6), (x := 7, y := 8)]];
+        END_VAR
+        g[0, 0].x := g[0, 0].x;
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    std::cout << p.G(0, 0).X.get() << p.G(0, 1).Y.get()
+              << p.G(1, 0).X.get() << p.G(1, 1).Y.get() << std::endl;`,
+        "arrayinit_2d_of_struct_nested",
+      );
+      // G[0,0].x=1, G[0,1].y=4, G[1,0].x=5, G[1,1].y=8
+      expect(output).toBe("1458");
+    });
+
+    it("still fills a multi-dimensional array from a flat list", () => {
+      const output = run(
+        `
+      PROGRAM Main
+        VAR
+          m : ARRAY[0..1, 0..2] OF INT := [1, 2, 3, 4, 5, 6];
+          c : ARRAY[0..1, 0..1, 0..1] OF INT := [4(7)];
+        END_VAR
+        m[0, 0] := m[0, 0];
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    std::cout << p.M(0, 2).get() << p.M(1, 0).get() << " "
+              << p.C(0, 0, 0).get() << p.C(0, 1, 1).get() << p.C(1, 0, 0).get()
+              << std::endl;`,
+        "arrayinit_multidim_flat",
+      );
+      // Flat still fills row-major; the 3D repetition covers only the first 4
+      // slots, leaving the rest at their default.
+      expect(output).toBe("34 770");
+    });
+
+    it("invokes function block instances held in array elements", () => {
+      // Each element is its own instance with its own state, so the values after
+      // the scan are what distinguishes a working element invocation from one
+      // that accidentally drives a single shared instance.
+      const output = run(
+        `
+      FUNCTION_BLOCK Accum
+        VAR_INPUT step : REAL := 1.0; END_VAR
+        VAR_OUTPUT val : REAL; END_VAR
+        val := val + step;
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR
+          units : ARRAY[0..2] OF Accum;
+          grid : ARRAY[0..1, 0..1] OF Accum;
+          i : INT;
+          total : REAL;
+        END_VAR
+        units[0](step := 2.0);
+        units[1](step := 5.0);
+        FOR i := 0 TO 2 DO
+          units[i](step := 1.0);
+        END_FOR;
+        grid[0, 1](step := 3.0);
+        total := units[0].val + units[1].val + grid[0, 1].val;
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    p.run();
+    std::cout << p.UNITS.at(0).VAL.get() << " " << p.UNITS.at(1).VAL.get() << " "
+              << p.UNITS.at(2).VAL.get() << " " << p.GRID.at(0, 1).VAL.get()
+              << " " << p.TOTAL.get() << std::endl;`,
+        "fb_array_invocation",
+      );
+      // units[0]: 2 then +1 in the loop; units[1]: 5 then +1; units[2]: loop only.
+      expect(output).toBe("3 6 1 3 12");
+    });
+
+    it("initialises function block instances across an array", () => {
+      const output = run(
+        `
+      FUNCTION_BLOCK Accum
+        VAR_INPUT step : REAL := 1.0; limit : REAL := 99.0; END_VAR
+        VAR_OUTPUT val : REAL; END_VAR
+        val := val + step;
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR units : ARRAY[0..1] OF Accum := [2((step := 4.0))]; END_VAR
+        units[0]();
+      END_PROGRAM
+      `,
+        `    Program_MAIN p;
+    p.run();
+    std::cout << p.UNITS.at(0).STEP.get() << " " << p.UNITS.at(1).LIMIT.get()
+              << " " << p.UNITS.at(0).VAL.get() << std::endl;`,
+        "fb_array_initialised",
+      );
+      // Both elements get step 4.0; limit keeps its VAR_INPUT default.
+      expect(output).toBe("4 99 4");
+    });
+
     it("repeats a structure initializer across array elements", () => {
       const output = run(
         `

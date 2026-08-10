@@ -1688,6 +1688,11 @@ export class ASTBuilder {
         getFirstNode(children.functionCallStatement)!,
       );
     }
+    if (children.instanceCallStatement) {
+      return this.buildInstanceCallStatement(
+        getFirstNode(children.instanceCallStatement)!,
+      );
+    }
     if (children.methodCallStatement) {
       return this.buildMethodCallStatement(
         getFirstNode(children.methodCallStatement)!,
@@ -3276,6 +3281,42 @@ export class ASTBuilder {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),
       call,
+    };
+  }
+
+  /**
+   * Build `units[0](args);` — invoking a function block instance held in an
+   * array element.
+   *
+   * Reuses FunctionCallStatement: `functionName` is the base variable name, so
+   * the declared type still resolves the usual way, and `instance` carries the
+   * subscripted expression the invocation is emitted against.
+   */
+  buildInstanceCallStatement(node: CstNode): FunctionCallStatement {
+    const children = node.children as CstChildren;
+    const variableNode = getFirstNode(children.variable);
+    const instance = variableNode
+      ? this.buildVariableExpression(variableNode)
+      : undefined;
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "FunctionCallStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      call: {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: instance?.name ?? "",
+        arguments: args,
+        ...(instance !== undefined ? { instance } : {}),
+      },
     };
   }
 

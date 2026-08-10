@@ -79,10 +79,17 @@ export function generateInitializerValue(
   if (value.kind === "ArrayLiteralExpression") {
     // `typename <array type>::element_type` names the element type of every
     // Array1D/2D/3D, so an array of STRUCTs needs no metadata lookup.
-    const elementCppType =
-      cppTypeExpr !== undefined && cppTypeExpr !== ""
-        ? `typename ${cppTypeExpr}::element_type`
-        : undefined;
+    //
+    // A nested list keeps the outer element type rather than descending again:
+    // for a multi-dimensional array the inner lists are rows of the *same*
+    // element type (the container's nested initializer-list constructor fills
+    // row by row), and where the inner elements really are a further array the
+    // type is unused because they lower as scalars. Descending twice produced
+    // `typename typename …::element_type::element_type`, which is not even valid
+    // C++.
+    const elementCppType = isArrayLiteralOf(value)
+      ? cppTypeExpr
+      : arrayElementCppType(cppTypeExpr);
     const elementStType = emitter.arrayElementTypeName(stTypeName);
     const elements = value.elements.map((element) =>
       generateInitializerValue(
@@ -97,6 +104,26 @@ export function generateInitializerValue(
   }
 
   return emitter.emitValue(value);
+}
+
+/** True when every element of an array literal is itself an array literal. */
+function isArrayLiteralOf(value: Expression): boolean {
+  return (
+    value.kind === "ArrayLiteralExpression" &&
+    value.elements.length > 0 &&
+    value.elements.every((e) => e.kind === "ArrayLiteralExpression")
+  );
+}
+
+/** `typename <array type>::element_type`, or undefined when the type is unknown. */
+function arrayElementCppType(
+  cppTypeExpr: string | undefined,
+): string | undefined {
+  if (cppTypeExpr === undefined || cppTypeExpr === "") return undefined;
+  // One `typename` covers a whole qualified name, so never add a second.
+  return cppTypeExpr.startsWith("typename ")
+    ? `${cppTypeExpr}::element_type`
+    : `typename ${cppTypeExpr}::element_type`;
 }
 
 /**

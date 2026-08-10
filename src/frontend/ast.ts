@@ -633,6 +633,15 @@ export interface FunctionCallExpression extends TypedNode {
   kind: "FunctionCallExpression";
   functionName: string;
   arguments: Argument[];
+  /**
+   * Set when the callee is a function block instance reached through an
+   * expression rather than a bare name — today an array element, `units[0]()`.
+   *
+   * `functionName` still carries the base variable name (`units`), which is what
+   * resolves the declared type; this expression is what the invocation is
+   * emitted against.
+   */
+  instance?: Expression;
 }
 
 /**

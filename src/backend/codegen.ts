@@ -2988,7 +2988,10 @@ export class CodeGenerator {
             `${indent}${this.generateMethodCallExpression(stmt.call)};`,
           );
         } else {
-          const fbType = this.getFBInvocationType(stmt.call.functionName);
+          const fbType = this.getFBInvocationType(
+            stmt.call.functionName,
+            stmt.call.instance !== undefined,
+          );
           if (fbType) {
             this.generateFBInvocation(stmt.call, indent);
           } else if (
@@ -5165,9 +5168,23 @@ export class CodeGenerator {
   /**
    * Check if a function call statement is actually an FB invocation.
    * Returns the FB type name if it is, undefined otherwise.
+   *
+   * `isElementCall` distinguishes `units[0]()` from `units()`: there the
+   * declared type is the array, so the instance type is its element type.
    */
-  private getFBInvocationType(functionName: string): string | undefined {
-    const varType = this.currentScopeVarTypes.get(functionName.toUpperCase());
+  private getFBInvocationType(
+    functionName: string,
+    isElementCall = false,
+  ): string | undefined {
+    const declaredType = this.currentScopeVarTypes.get(
+      functionName.toUpperCase(),
+    );
+    if (!declaredType) return undefined;
+    const varType = isElementCall
+      ? this.ast
+        ? resolveArrayElementTypeUtil(declaredType, this.ast)
+        : undefined
+      : declaredType;
     if (
       varType &&
       (this.isFBType(varType) ||
@@ -5286,14 +5303,23 @@ export class CodeGenerator {
       );
     }
 
+    // `units[0](…)` invokes an element rather than a bare instance: the target
+    // is the subscripted expression, and the FB type is the array's element
+    // type. Everything below (input assignment, the call, inout copy-back,
+    // output capture) then works against that expression unchanged.
     const instanceName =
-      this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName;
+      call.instance !== undefined
+        ? this.generateExpression(call.instance)
+        : (this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName);
 
     // Extract implicit EN/ENO parameters
     const { enExpr, enoVar, filteredArgs } = this.extractEnEno(call.arguments);
 
     // Resolve FB type for positional argument mapping
-    const fbTypeName = this.currentScopeVarTypes.get(rawName.toUpperCase());
+    const fbTypeName = this.getFBInvocationType(
+      call.functionName,
+      call.instance !== undefined,
+    );
     const inputParamNames = fbTypeName
       ? this.fbInputParams.get(fbTypeName.toUpperCase())
       : undefined;

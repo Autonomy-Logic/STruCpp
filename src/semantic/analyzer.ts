@@ -2783,6 +2783,11 @@ export class SemanticAnalyzer {
           );
           this.checkNameDeclared(objName, scope, ctx, expr.sourceSpan);
         }
+        // An FB instance reached through an expression (`units[0]()`) — check
+        // the instance and its subscripts, which are ordinary variables.
+        if (expr.instance) {
+          this.checkExpressionForUndeclaredVars(expr.instance, scope, ctx);
+        }
         // Don't check non-dotted function names — they're function/FB symbols
         for (const arg of expr.arguments) {
           this.checkExpressionForUndeclaredVars(arg.value, scope, ctx);

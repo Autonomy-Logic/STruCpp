@@ -596,6 +596,7 @@ function getChildren(node: ASTNode): ASTNode[] {
 
     case "FunctionCallExpression": {
       const fce = node as FunctionCallExpression;
+      if (fce.instance) children.push(fce.instance);
       children.push(...fce.arguments);
       break;
     }
