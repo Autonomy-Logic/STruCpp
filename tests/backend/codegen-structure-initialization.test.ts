@@ -289,6 +289,95 @@ describe("structure initializers — STRUCT element defaults", () => {
       "INNER I = strucpp::iec_struct_init<INNER>([](auto& v0) { v0.A = 5; });",
     );
   });
+
+  it("keeps the values of an array-literal default on a STRUCT element", () => {
+    // These were dropped to `{}` with no diagnostic: the type generator's
+    // expression emitter had no array-literal case, so the value fell through to
+    // its `0` fallback and the array guard rewrote that as `{}`.
+    const result = compileST(`
+      TYPE
+        Buf : STRUCT
+          data : ARRAY[0..3] OF INT := [7, 8, 9, 10];
+          n : INT := 4;
+        END_STRUCT;
+      END_TYPE
+      VAR_GLOBAL
+        b : Buf;
+      END_VAR
+    `);
+    expectOk(result);
+    expect(result.headerCode).toContain(
+      "Array1D<IEC_INT, 0, 3> DATA = {7, 8, 9, 10};",
+    );
+  });
+
+  it("expands a repetition group in a STRUCT element default", () => {
+    const result = compileST(`
+      TYPE
+        Buf : STRUCT
+          data : ARRAY[0..3] OF INT := [4(7)];
+        END_STRUCT;
+      END_TYPE
+      VAR_GLOBAL
+        b : Buf;
+      END_VAR
+    `);
+    expectOk(result);
+    expect(result.headerCode).toContain(
+      "Array1D<IEC_INT, 0, 3> DATA = {7, 7, 7, 7};",
+    );
+  });
+
+  it("escapes a STRING element default the way the expression path does", () => {
+    // The type generator used to emit the literal body verbatim, so an embedded
+    // `"` closed the C++ string early. Latent until array-literal defaults
+    // started emitting (OSCAT's HTML-entity tables are STRING arrays full of
+    // quotes and backslashes).
+    const result = compileST(`
+      TYPE
+        Msg : STRUCT
+          quoted : STRING := 'say "hi"';
+          tabbed : STRING := 'a$Tb';
+        END_STRUCT;
+      END_TYPE
+      VAR_GLOBAL
+        m : Msg;
+      END_VAR
+    `);
+    expectOk(result);
+    expect(result.headerCode).toContain('QUOTED = "say \\"hi\\""');
+    expect(result.headerCode).toContain('TABBED = "a\\tb"');
+  });
+
+  it("escapes STRING elements inside an array-literal default", () => {
+    const result = compileST(`
+      TYPE
+        Table : STRUCT
+          names : ARRAY[0..1] OF STRING := ['a"b', 'plain'];
+        END_STRUCT;
+      END_TYPE
+      VAR_GLOBAL
+        t : Table;
+      END_VAR
+    `);
+    expectOk(result);
+    expect(result.headerCode).toContain('{"a\\"b", "plain"}');
+  });
+
+  it("still value-initialises an array element with no default", () => {
+    const result = compileST(`
+      TYPE
+        Buf : STRUCT
+          data : ARRAY[0..3] OF INT;
+        END_STRUCT;
+      END_TYPE
+      VAR_GLOBAL
+        b : Buf;
+      END_VAR
+    `);
+    expectOk(result);
+    expect(result.headerCode).toContain("Array1D<IEC_INT, 0, 3> DATA{};");
+  });
 });
 
 describe("structure initializers — type-level defaults", () => {

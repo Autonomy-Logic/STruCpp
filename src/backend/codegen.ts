@@ -56,7 +56,11 @@ import {
 } from "../project-model.js";
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
-import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
+import {
+  formatArrayType,
+  iecBaseToCppLiteral,
+  translateIECString,
+} from "./codegen-utils.js";
 import {
   getTypeBits,
   getTypeCategory,
@@ -3624,7 +3628,7 @@ export class CodeGenerator {
       case "STRING": {
         // rawValue includes surrounding single quotes: 'hello' → strip them
         const inner = expr.rawValue.replace(/^'|'$/g, "");
-        const escaped = this.translateIECString(inner);
+        const escaped = translateIECString(inner);
         return `"${escaped}"`;
       }
       case "WSTRING": {
@@ -3633,7 +3637,7 @@ export class CodeGenerator {
         // (wchar_t — wchar_t is 32-bit on Linux/AVR, so L"…" wouldn't
         // bind to IECWStringVar's char16_t* constructor).
         const wInner = expr.rawValue.replace(/^["']|["']$/g, "");
-        const wEscaped = this.translateIECString(wInner);
+        const wEscaped = translateIECString(wInner);
         return `u"${wEscaped}"`;
       }
       case "TIME": {
@@ -3659,13 +3663,6 @@ export class CodeGenerator {
     }
   }
 
-  /**
-   * Translate IEC 61131-3 $-escape sequences to C++ escape sequences.
-   * Handles: $N/$n (newline), $L/$l (line feed), $R/$r (CR), $T/$t (tab),
-   * $P/$p (form feed), $$ (literal $), $' (single quote), $XX (hex byte),
-   * '' (doubled single quote), and C++ escaping for backslash and double-quote.
-   */
-
   private formatIntegerLiteral(rawValue: string, value: number): string {
     // Based literals (16#FF, 8#77, 2#1010) → C++ notation; plain decimals use numeric value
     const upper = rawValue.toUpperCase().replace(/_/g, "");
@@ -3677,67 +3674,6 @@ export class CodeGenerator {
       return iecBaseToCppLiteral(rawValue);
     }
     return String(value);
-  }
-
-  private translateIECString(inner: string): string {
-    let result = "";
-    for (let i = 0; i < inner.length; i++) {
-      const ch = inner[i]!;
-      if (ch === "$" && i + 1 < inner.length) {
-        const next = inner[i + 1]!;
-        switch (next.toUpperCase()) {
-          case "N":
-          case "L":
-            result += "\\n";
-            i++;
-            break;
-          case "R":
-            result += "\\r";
-            i++;
-            break;
-          case "T":
-            result += "\\t";
-            i++;
-            break;
-          case "P":
-            result += "\\f";
-            i++;
-            break;
-          case "$":
-            result += "$";
-            i++;
-            break;
-          case "'":
-            result += "'";
-            i++;
-            break;
-          default:
-            // $XX hex escape: two hex digits
-            if (
-              i + 2 < inner.length &&
-              /^[0-9A-Fa-f]{2}$/.test(inner.substring(i + 1, i + 3))
-            ) {
-              result += "\\x" + inner.substring(i + 1, i + 3);
-              i += 2;
-            } else {
-              // Unknown $-escape, pass through
-              result += "\\\\$";
-            }
-            break;
-        }
-      } else if (ch === "'" && i + 1 < inner.length && inner[i + 1] === "'") {
-        // ST doubled-quote → single quote
-        result += "'";
-        i++;
-      } else if (ch === "\\") {
-        result += "\\\\";
-      } else if (ch === '"') {
-        result += '\\"';
-      } else {
-        result += ch;
-      }
-    }
-    return result;
   }
 
   /**

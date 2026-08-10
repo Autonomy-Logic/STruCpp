@@ -21,7 +21,7 @@ import type {
   UnaryExpression,
 } from "../frontend/ast.js";
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
-import { formatArrayType } from "./codegen-utils.js";
+import { formatArrayType, translateIECString } from "./codegen-utils.js";
 import {
   parseDateLiteralToDays,
   parseDtLiteralToNs,
@@ -34,7 +34,6 @@ import {
 } from "../semantic/type-utils.js";
 import {
   generateInitializerValue,
-  isStructInitializerValue,
   type StructInitEmitter,
 } from "./struct-init-codegen.js";
 
@@ -329,14 +328,18 @@ export class TypeCodeGenerator {
             ? `${fieldName}_`
             : fieldName;
         if (field.initialValue) {
-          const initVal = isStructInitializerValue(field.initialValue)
-            ? generateInitializerValue(
-                field.initialValue,
-                cppType,
-                field.type.name,
-                this.structInitEmitter,
-              )
-            : this.expressionToCpp(field.initialValue);
+          // Routes composite initialisers (array literals, structure
+          // initializers) through the shared lowering and everything else
+          // through expressionToCpp. Before this, an array-literal default on a
+          // STRUCT element fell through to expressionToCpp's `0` fallback and
+          // the `isArrayType` guard below turned it into `{}` — the declared
+          // values were dropped with no diagnostic.
+          const initVal = generateInitializerValue(
+            field.initialValue,
+            cppType,
+            field.type.name,
+            this.structInitEmitter,
+          );
           // Array types can't be initialized with = 0; use {} instead
           const isArrayType = /^Array[123]D</.test(cppType);
           if (isArrayType && initVal === "0") {
@@ -572,8 +575,12 @@ export class TypeCodeGenerator {
         // IEC STRING literals carry their surrounding single quotes
         // in `rawValue` (`'wide hello'`); strip them before wrapping
         // in C++ double quotes — otherwise we end up with `"'…'"`.
+        // The body then goes through the same `$`-escape translation the
+        // expression emitter uses: a literal containing `"` or `\` (OSCAT's
+        // HTML-entity tables, for one) would otherwise terminate the C++ string
+        // early and fail to compile.
         const inner = expr.rawValue.replace(/^'|'$/g, "");
-        return `"${inner}"`;
+        return `"${translateIECString(inner)}"`;
       }
       case "WSTRING": {
         // IEC WSTRING literals are double-quoted; strip either form
@@ -581,7 +588,7 @@ export class TypeCodeGenerator {
         // (wchar_t) is 32-bit on Linux/AVR and wouldn't bind to
         // IECWStringVar's char16_t* ctor.
         const inner = expr.rawValue.replace(/^["']|["']$/g, "");
-        return `u"${inner}"`;
+        return `u"${translateIECString(inner)}"`;
       }
       case "TIME": {
         const timeVal = parseTimeLiteral(String(expr.value));

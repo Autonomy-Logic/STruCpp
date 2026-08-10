@@ -71,6 +71,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Array initialization | Supported | `:= [1, 2, 3]` and the bracket-less `:= 1, 2, 3`. Multi-dimensional arrays take a flat row-major list |
 | Array repetition | Supported | `:= [10(0)]`, `:= [3(1), 2(5)]`, `:= [7, 4(2), 9]`. The repeated value may be a structure initializer. Max count 65536 |
 | Structure initialization | Supported | `:= (x := 1.0, y := 2.0)`; nested, in array literals, and for FB instances. Omitted elements keep their own declared default |
+| STRUCT element defaults | Supported | Scalar, array-literal and structure-initializer defaults on a STRUCT element all carry their values |
 
 ### Initialization gaps
 

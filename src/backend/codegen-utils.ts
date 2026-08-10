@@ -52,3 +52,77 @@ export function formatArrayType(
   }
   return result;
 }
+
+/**
+ * Translate IEC 61131-3 `$`-escape sequences in a string literal's body to C++
+ * escape sequences, and escape what C++ needs escaped.
+ *
+ * Handles `$N`/`$n` (newline), `$L`/`$l` (line feed), `$R`/`$r` (CR), `$T`/`$t`
+ * (tab), `$P`/`$p` (form feed), `$$` (literal `$`), `$'` (single quote), `$XX`
+ * (hex byte) and `''` (doubled single quote), then escapes backslash and
+ * double-quote so the result is safe inside a C++ `"…"` literal.
+ *
+ * Shared by the expression emitter and the type generator: a STRING literal has
+ * to lower identically whether it appears in a statement, a variable
+ * initialiser, or a STRUCT element default.
+ */
+export function translateIECString(inner: string): string {
+  let result = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (ch === "$" && i + 1 < inner.length) {
+      const next = inner[i + 1]!;
+      switch (next.toUpperCase()) {
+        case "N":
+        case "L":
+          result += "\\n";
+          i++;
+          break;
+        case "R":
+          result += "\\r";
+          i++;
+          break;
+        case "T":
+          result += "\\t";
+          i++;
+          break;
+        case "P":
+          result += "\\f";
+          i++;
+          break;
+        case "$":
+          result += "$";
+          i++;
+          break;
+        case "'":
+          result += "'";
+          i++;
+          break;
+        default:
+          // $XX hex escape: two hex digits
+          if (
+            i + 2 < inner.length &&
+            /^[0-9A-Fa-f]{2}$/.test(inner.substring(i + 1, i + 3))
+          ) {
+            result += "\\x" + inner.substring(i + 1, i + 3);
+            i += 2;
+          } else {
+            // Unknown $-escape, pass through
+            result += "\\\\$";
+          }
+          break;
+      }
+    } else if (ch === "'" && i + 1 < inner.length && inner[i + 1] === "'") {
+      // ST doubled-quote → single quote
+      result += "'";
+      i++;
+    } else if (ch === "\\") {
+      result += "\\\\";
+    } else if (ch === '"') {
+      result += '\\"';
+    } else {
+      result += ch;
+    }
+  }
+  return result;
+}
