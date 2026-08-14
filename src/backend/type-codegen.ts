@@ -21,7 +21,11 @@ import type {
   UnaryExpression,
 } from "../frontend/ast.js";
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
-import { formatArrayType, translateIECString } from "./codegen-utils.js";
+import {
+  formatArrayType,
+  formatIntegerLiteral,
+  translateIECString,
+} from "./codegen-utils.js";
 import {
   parseDateLiteralToDays,
   parseDtLiteralToNs,
@@ -571,6 +575,11 @@ export class TypeCodeGenerator {
     switch (expr.literalType) {
       case "BOOL":
         return expr.value === true ? "true" : "false";
+      case "INT":
+        // Same lowering the expression path uses, so a STRUCT element default
+        // and the identical literal in a body can't disagree — and so a 64-bit
+        // default keeps every digit (`String(expr.value)` rounds above 2^53).
+        return formatIntegerLiteral(expr.rawValue, expr.value as number);
       case "STRING": {
         // IEC STRING literals carry their surrounding single quotes
         // in `rawValue` (`'wide hello'`); strip them before wrapping

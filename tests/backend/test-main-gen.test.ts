@@ -5,8 +5,13 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { generateTestMain } from "../../src/backend/test-main-gen.js";
+import {
+  generateTestMain,
+  buildPOUInfoFromAST,
+} from "../../src/backend/test-main-gen.js";
 import type { POUInfo } from "../../src/backend/test-main-gen.js";
+import { compile } from "../../src/index.js";
+import { parseTestFile } from "../../src/testing/test-parser.js";
 import type { TestFile } from "../../src/testing/test-model.js";
 
 /** Helper to create a basic POUInfo for a program */
@@ -869,5 +874,57 @@ describe("Test Main Generator", () => {
       // Should call set_json_mode when flag is found
       expect(code).toContain("set_json_mode");
     });
+  });
+});
+
+describe("declaration initializers in a TEST var block", () => {
+  /** Compile ST for its types, then generate a test main against a parsed .stst. */
+  function generateFor(stSource: string, testSource: string): string {
+    const compiled = compile(stSource);
+    expect(compiled.errors.map((e) => e.message)).toEqual([]);
+    const parsed = parseTestFile(testSource, "t.stst");
+    expect(parsed.errors).toEqual([]);
+    const { pous } = buildPOUInfoFromAST(compiled.ast!);
+    return generateTestMain([parsed.testFile!], {
+      headerFileName: "generated.hpp",
+      pous,
+      ast: compiled.ast!,
+      isTestBuild: true,
+    });
+  }
+
+  const PROGRAM = `
+    TYPE
+      Point : STRUCT
+        x : REAL := 9.0;
+        y : REAL := 8.0;
+      END_STRUCT;
+    END_TYPE
+    PROGRAM Main
+      VAR n : INT; END_VAR
+      n := n + 1;
+    END_PROGRAM
+  `;
+
+  it("lowers a structure initializer instead of value-initialising it", () => {
+    // A TEST var is a declaration, so this form is legal here. It used to go
+    // through the plain expression emitter, which has no target type and
+    // emitted `POINT P = {};` — every named element silently discarded.
+    const code = generateFor(
+      PROGRAM,
+      `TEST 'local'\n  VAR p : Point := (x := 1.5); END_VAR\n  ASSERT_TRUE(TRUE);\nEND_TEST\n`,
+    );
+    expect(code).toContain(
+      "POINT P = strucpp::iec_struct_init<POINT>([](auto& v0) { v0.X = 1.5; });",
+    );
+    expect(code).not.toContain("POINT P = {};");
+  });
+
+  it("still emits an ordinary scalar initializer unchanged", () => {
+    const code = generateFor(
+      PROGRAM,
+      `TEST 'local'\n  VAR k : INT := 5; END_VAR\n  ASSERT_TRUE(TRUE);\nEND_TEST\n`,
+    );
+    expect(code).toContain("IEC_INT K = 5;");
   });
 });

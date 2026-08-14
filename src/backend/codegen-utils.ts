@@ -4,6 +4,8 @@
  * Shared utility functions for C++ code generation.
  */
 
+import { exactIntegerLiteralValue } from "../literal-utils.js";
+
 /**
  * Convert an IEC 61131-3 based numeric string to a C++ literal string.
  * Handles 16#FF → 0xFF, 8#77 → 077, 2#1010 → 0b1010, and plain decimals.
@@ -15,6 +17,44 @@ export function iecBaseToCppLiteral(raw: string): string {
   if (upper.startsWith("8#")) return "0" + upper.slice(2);
   if (upper.startsWith("2#")) return "0b" + upper.slice(2);
   return raw.replace(/_/g, "");
+}
+
+/** Largest value a C++ *decimal* literal can name without a suffix. */
+const CPP_SIGNED_LITERAL_MAX = 9223372036854775807n;
+
+/**
+ * Lower an IEC 61131-3 integer literal to a C++ integer literal.
+ *
+ * Based literals (16#FF, 8#77, 2#1010) keep their notation. Plain decimals are
+ * re-emitted from the *exact* value rather than from the parsed `number`, which
+ * matters twice over:
+ *
+ *   - `number` rounds above 2^53, so a LINT/ULINT initializer such as
+ *     `9007199254740993` would silently become ...992, and `ULINT` bounds would
+ *     round past the type's range into a literal g++ rejects outright.
+ *   - passing the raw digits straight through instead would make a leading zero
+ *     an octal prefix in C++ (`0010` → 8, `008` → a compile error), so the
+ *     digits are normalized rather than copied.
+ *
+ * A value above `CPP_SIGNED_LITERAL_MAX` gets a `ULL` suffix: a C++ decimal
+ * literal is only ever given a *signed* type (C++17 [lex.icon]/3), so without
+ * it `18446744073709551615` names no type at all.
+ *
+ * `value` is the pre-parsed fallback for a literal whose raw text is not a
+ * plain integer (synthesized nodes, for one).
+ */
+export function formatIntegerLiteral(rawValue: string, value: number): string {
+  const upper = rawValue.toUpperCase().replace(/_/g, "");
+  if (
+    upper.startsWith("16#") ||
+    upper.startsWith("8#") ||
+    upper.startsWith("2#")
+  ) {
+    return iecBaseToCppLiteral(rawValue);
+  }
+  const exact = exactIntegerLiteralValue(rawValue);
+  if (exact === undefined) return String(value);
+  return exact > CPP_SIGNED_LITERAL_MAX ? `${exact}ULL` : exact.toString();
 }
 
 /**

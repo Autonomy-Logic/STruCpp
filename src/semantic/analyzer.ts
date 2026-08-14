@@ -17,8 +17,10 @@ import type {
   Expression,
   FunctionBlockDeclaration,
   FunctionCallExpression,
+  LiteralExpression,
   MethodDeclaration,
   MockFunctionStatement,
+  TypeDeclaration,
   TypeDefinition,
   TypeReference,
   VarBlock,
@@ -53,6 +55,11 @@ import {
   stripEnEno,
   walkAST,
 } from "../ast-utils.js";
+import {
+  exactIntegerLiteralValue,
+  IEC_INTEGER_MAX,
+  IEC_INTEGER_MIN,
+} from "../literal-utils.js";
 
 // =============================================================================
 // Located Variable Address Parsing
@@ -684,6 +691,12 @@ export class SemanticAnalyzer {
     // Validate array initializer shape/size and subscript counts
     this.validateArrayShapes(ast);
 
+    // Validate that structure initializers only appear where IEC allows them
+    this.validateStructInitializerPlacement(ast);
+
+    // Validate that integer literals fit an IEC integer type
+    this.validateIntegerLiteralRange(ast);
+
     // TODO: Implement additional semantic validation
     // - Check CASE statement coverage
     // - Validate reference operations
@@ -982,6 +995,92 @@ export class SemanticAnalyzer {
         return;
       }
     }
+  }
+
+  /**
+   * Reject a structure initializer written anywhere but a declaration's initial
+   * value.
+   *
+   * `structure_initialization` (Annex B.1.4.3) belongs to `var_init_decl`; it is
+   * not an expression, so IEC has no position for it inside a statement. The
+   * lowering needs the target's C++ type, which only a declaration supplies —
+   * reaching codegen without one used to value-initialise silently, so
+   *
+   *     arr := [(x := 1.0), (x := 2.0)];   ->  ARR = {{}, {}};
+   *     f(P := (x := 3.0));                ->  F.P = {};
+   *
+   * compiled clean and ran with every written element discarded, the members
+   * left at their declared defaults. Reported here instead, against the source.
+   *
+   * The walk prunes at every initial value a declaration can carry — a variable
+   * or STRUCT element's (`VarDeclaration.initialValue`) and a type-level default's
+   * (`TypeDeclaration.defaultValue`, Annex B.1.3.3) — so the legal forms, including
+   * a structure initializer nested inside an array literal, are never visited.
+   */
+  private validateStructInitializerPlacement(ast: CompilationUnit): void {
+    // Identity set rather than a node-kind test: only the initializer's own root
+    // is legal, and pruning there covers everything beneath it.
+    const declarationInitializers = new Set<Expression>();
+    walkAST(ast, (node) => {
+      if (node.kind === "VarDeclaration") {
+        const decl = node as VarDeclaration;
+        if (decl.initialValue) declarationInitializers.add(decl.initialValue);
+      } else if (node.kind === "TypeDeclaration") {
+        const type = node as TypeDeclaration;
+        if (type.defaultValue) declarationInitializers.add(type.defaultValue);
+      }
+    });
+
+    walkAST(ast, (node) => {
+      if (declarationInitializers.has(node as Expression)) return false;
+      if (node.kind !== "StructInitializerExpression") return;
+      const span = node.sourceSpan;
+      this.addError(
+        "A structure initializer '(NAME := value, ...)' is only valid as a " +
+          "variable's initial value in a declaration, not inside a statement. " +
+          "Assign the elements individually instead.",
+        span.startLine,
+        span.startCol,
+        span.file,
+      );
+      // One diagnostic per initializer, not one per nesting level.
+      return false;
+    });
+  }
+
+  /**
+   * Reject an integer literal that no IEC 61131-3 integer type can hold.
+   *
+   * The widest are LINT (signed 64-bit) and ULINT (unsigned 64-bit), so a value
+   * outside `[LINT_MIN, ULINT_MAX]` is a mistake against *every* declared type
+   * and can be reported without knowing which one it initialises — the same
+   * conservative rule the array-shape checks follow. In range but wrong for the
+   * specific type (`INT := 70000`) is left to the type checker.
+   *
+   * Checked on the exact value rather than the parsed `number`, which rounds
+   * above 2^53; codegen lowers from the same exact value (see
+   * `formatIntegerLiteral`), so the two agree on what is representable.
+   */
+  private validateIntegerLiteralRange(ast: CompilationUnit): void {
+    walkAST(ast, (node) => {
+      if (node.kind !== "LiteralExpression") return;
+      const literal = node as LiteralExpression;
+      if (literal.literalType !== "INT") return;
+      const exact = exactIntegerLiteralValue(literal.rawValue);
+      if (exact === undefined) return;
+      // A negative literal parses as unary minus over a positive one, so the
+      // magnitude LINT_MIN needs the unsigned bound to stay accepted here.
+      if (exact <= IEC_INTEGER_MAX && exact >= IEC_INTEGER_MIN) return;
+      const span = literal.sourceSpan;
+      this.addError(
+        `Integer literal '${literal.rawValue}' is outside the range of every ` +
+          `IEC 61131-3 integer type (LINT holds ${IEC_INTEGER_MIN} to ` +
+          `${-IEC_INTEGER_MIN - 1n}, ULINT holds 0 to ${IEC_INTEGER_MAX}).`,
+        span.startLine,
+        span.startCol,
+        span.file,
+      );
+    });
   }
 
   /**

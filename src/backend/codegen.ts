@@ -58,6 +58,7 @@ import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
   formatArrayType,
+  formatIntegerLiteral,
   iecBaseToCppLiteral,
   translateIECString,
 } from "./codegen-utils.js";
@@ -3611,12 +3612,19 @@ export class CodeGenerator {
         return `{${elements.join(", ")}}`;
       }
       case "StructInitializerExpression":
-        // A structure initializer needs the target's C++ type, which only the
-        // declaration site knows — see generateInitializer. Reaching here means
-        // one appeared where no type is available (it is not an expression IEC
-        // allows in a statement), so value-initialise rather than emit code that
-        // would not compile.
-        return "{}";
+        // A structure initializer needs the target's C++ type, which only a
+        // declaration supplies — declarations route through
+        // `generateInitializer` instead. It is not an expression IEC allows in a
+        // statement either, and the analyzer rejects it there
+        // (`validateStructInitializerPlacement`), so this is unreachable for any
+        // unit that got past semantic analysis. Loud rather than silent: the
+        // previous `return "{}"` value-initialised, which discarded every
+        // element the initializer named and produced no diagnostic anywhere.
+        throw new Error(
+          `Internal error: structure initializer at ${expr.sourceSpan.startLine}:` +
+            `${expr.sourceSpan.startCol} reached expression codegen, where the ` +
+            `target type is unknown. It is only valid as a declaration's initial value.`,
+        );
     }
   }
 
@@ -3629,7 +3637,12 @@ export class CodeGenerator {
       const cppType = `IEC_${expr.typePrefix}`;
       const hashIdx = expr.rawValue.indexOf("#");
       const valuePart = expr.rawValue.substring(hashIdx + 1);
-      const cppValue = iecBaseToCppLiteral(valuePart);
+      // An integer payload goes through the exact lowering too — `LINT#<64-bit>`
+      // must not round, and `INT#0010` must not become a C++ octal constant.
+      const cppValue =
+        expr.literalType === "INT"
+          ? formatIntegerLiteral(valuePart, expr.value as number)
+          : iecBaseToCppLiteral(valuePart);
       return `static_cast<${cppType}>(${cppValue})`;
     }
 
@@ -3641,7 +3654,7 @@ export class CodeGenerator {
           ? "true"
           : "false";
       case "INT": {
-        return this.formatIntegerLiteral(expr.rawValue, expr.value as number);
+        return formatIntegerLiteral(expr.rawValue, expr.value as number);
       }
       case "REAL": {
         const str = String(expr.value);
@@ -3684,19 +3697,6 @@ export class CodeGenerator {
       default:
         return String(expr.value);
     }
-  }
-
-  private formatIntegerLiteral(rawValue: string, value: number): string {
-    // Based literals (16#FF, 8#77, 2#1010) → C++ notation; plain decimals use numeric value
-    const upper = rawValue.toUpperCase().replace(/_/g, "");
-    if (
-      upper.startsWith("16#") ||
-      upper.startsWith("8#") ||
-      upper.startsWith("2#")
-    ) {
-      return iecBaseToCppLiteral(rawValue);
-    }
-    return String(value);
   }
 
   /**
