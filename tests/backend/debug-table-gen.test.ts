@@ -380,3 +380,57 @@ END_CONFIGURATION
     });
   });
 });
+
+describe("member whose name matches its type", () => {
+  /**
+   * CODESYS allows `RunningLights : RunningLights`, and real projects use it. Codegen
+   * emits that member as `RUNNINGLIGHTS_` because GCC rejects a member that changes the
+   * meaning of its own type name — so the debug table has to address it by the same
+   * name. When it did not, every entry for the instance named a member that does not
+   * exist and `generated_debug.cpp` failed to compile, taking the whole build with it.
+   */
+  const src = `
+FUNCTION_BLOCK Motor
+VAR_INPUT run : BOOL; END_VAR
+VAR_OUTPUT spinning : BOOL; END_VAR
+  spinning := run;
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR
+  Motor : Motor;
+  plain : BOOL;
+END_VAR
+  Motor(run := plain);
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`;
+
+  it("addresses it by the mangled name codegen emitted", () => {
+    const result = compile(src);
+    expect(result.success).toBe(true);
+
+    const cpp = result.debugTableCpp ?? "";
+    // The declaration codegen produced, and the reference the table must match.
+    expect(result.headerCode ?? "").toContain("MOTOR MOTOR_;");
+    expect(cpp).toContain("g_config.INSTANCE0.MOTOR_.RUN");
+    // Only the C++ expression is mangled; the trailing comment keeps the ST path the
+    // editor shows the user.
+    const addresses = cpp
+      .split("\n")
+      .map((line) => line.split("//")[0])
+      .join("\n");
+    expect(addresses).not.toMatch(/INSTANCE0\.MOTOR\./);
+  });
+
+  it("leaves a member whose name differs from its type alone", () => {
+    const cpp = compile(src).debugTableCpp ?? "";
+    expect(cpp).toContain("g_config.INSTANCE0.PLAIN");
+    expect(cpp).not.toContain("PLAIN_");
+  });
+});

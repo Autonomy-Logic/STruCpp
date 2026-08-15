@@ -456,6 +456,27 @@ export function generateDebugTable(
     }
   };
 
+  /**
+   * C++ member name for a declaration, mirroring codegen's collision mangling.
+   *
+   * A variable whose name matches its own type (`RunningLights : RunningLights`, which
+   * CODESYS allows and real projects use) is emitted by codegen as `RUNNINGLIGHTS_`,
+   * because GCC rejects a member that changes the meaning of its type name. The debug
+   * table addresses those members by name, so it has to mangle identically — otherwise
+   * every entry for that instance names a member that does not exist and the generated
+   * `generated_debug.cpp` fails to compile, taking the whole build with it.
+   */
+  const memberCppName = (
+    varName: string,
+    typeRef: TypeReference | undefined,
+  ): string => {
+    const typeName = typeRef?.name;
+    return typeof typeName === "string" &&
+      varName.toUpperCase() === typeName.toUpperCase()
+      ? `${varName}_`
+      : varName;
+  };
+
   const visitVarDecl = (
     path: string,
     cppExpr: string,
@@ -464,7 +485,7 @@ export function generateDebugTable(
     for (const varName of decl.names) {
       visitTypeRef(
         `${path}.${varName.toUpperCase()}`,
-        `${cppExpr}.${varName}`,
+        `${cppExpr}.${memberCppName(varName, decl.type)}`,
         decl.type,
       );
     }
