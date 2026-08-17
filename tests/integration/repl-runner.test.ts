@@ -405,10 +405,15 @@ VAR Motor : Motor; idle : BOOL; END_VAR
   Motor(run := NOT idle);
 END_FUNCTION_BLOCK
 
+TYPE AiRange : STRUCT lo : REAL := 4.0; hi : REAL := 20.0; END_STRUCT; END_TYPE
+
 PROGRAM Main
 VAR
   Motor : Motor;
   rig : Rig;
+  (* an *initialised* colliding member also exercises the constructor
+     initializer list, which named the un-mangled member *)
+  AiRange : AiRange := (hi := 22.0);
   Time : TIME;
   Word : WORD;
   counter : INT;

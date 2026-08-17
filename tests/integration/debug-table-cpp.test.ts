@@ -208,12 +208,6 @@ END_PROGRAM${CFG}`,
   it("compiles for an ordinary project with arrays and nested structs", () => {
     // A broad shape check, so this file also guards the table's other address
     // forms against the next change to the walker.
-    //
-    // Deliberately 1-dimensional: the table indexes a multi-dimensional array as
-    // `[i][j]`, which `Array2D`/`Array3D` have no operator for, so any project
-    // with one fails here. That is a separate pre-existing defect, fixed by the
-    // `formatArrayElementAccess` change on the structure-initialization branch
-    // (PR #205); add the 2D case to this test once that lands.
     expect(
       buildDebugTable(
         `
@@ -231,6 +225,48 @@ END_VAR
   flag := FALSE;
 END_PROGRAM${CFG}`,
         "ordinary",
+      ),
+    ).toBe("");
+  });
+
+  it("compiles for multi-dimensional arrays", () => {
+    // `Array2D`/`Array3D` have no chained `[i][j]` operator, so the table has to
+    // address an element as `(i, j)` — `formatArrayElementAccess` owns that rank
+    // rule. Until it did, any project with a 2D array and debug enabled failed
+    // to build; this keeps the table and the runtime containers in step.
+    expect(
+      buildDebugTable(
+        `
+TYPE Point : STRUCT x : REAL; y : REAL; END_STRUCT; END_TYPE
+PROGRAM Main
+VAR
+  counts : ARRAY[0..1, 0..1] OF INT;
+  cube : ARRAY[0..1, 0..1, 0..1] OF BOOL;
+  places : ARRAY[0..1, 0..1] OF Point;
+  flag : BOOL;
+END_VAR
+  flag := FALSE;
+END_PROGRAM${CFG}`,
+        "multi_dim",
+      ),
+    ).toBe("");
+  });
+
+  it("compiles for a multi-dimensional array of a type whose name matches its member", () => {
+    // Both rules on the same expression: the rank-aware subscript from
+    // `formatArrayElementAccess` and the member mangling underneath it.
+    expect(
+      buildDebugTable(
+        `${MOTOR}
+FUNCTION_BLOCK Rig
+VAR Motor : Motor; idle : BOOL; END_VAR
+  Motor(run := idle);
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR bank : ARRAY[0..1, 0..1] OF Rig; END_VAR
+  bank[0, 0]();
+END_PROGRAM${CFG}`,
+        "multi_dim_mangled",
       ),
     ).toBe("");
   });

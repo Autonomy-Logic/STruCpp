@@ -1548,11 +1548,7 @@ export class CodeGenerator {
         const cppType = this.mapTypeRefToCpp(decl.type);
         const tag = this.elaboratedTagIfShadowed(decl.type.name, fbMemberNames);
         for (const name of decl.names) {
-          const memberName = this.mangleMemberIfNeeded(
-            name,
-            cppType,
-            decl.type.name,
-          );
+          const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
           this.emitHeader(`    ${tag}${cppType} ${memberName};`);
@@ -1649,11 +1645,7 @@ export class CodeGenerator {
       for (const decl of block.declarations) {
         const cppType = this.mapTypeRefToCpp(decl.type);
         for (const name of decl.names) {
-          const memberName = this.mangleMemberIfNeeded(
-            name,
-            cppType,
-            decl.type.name,
-          );
+          const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
           if (decl.address) {
@@ -2177,11 +2169,7 @@ export class CodeGenerator {
             decl.type.name,
           );
           for (const name of decl.names) {
-            const memberName = this.mangleMemberIfNeeded(
-              name,
-              cppType,
-              decl.type.name,
-            );
+            const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
             fbInits.push(`${memberName}(${initExpr})`);
           }
         }
@@ -2401,11 +2389,7 @@ export class CodeGenerator {
             ? { referenceKind: decl.referenceKind }
             : {}),
         });
-        const memberName = this.mangleMemberIfNeeded(
-          decl.name,
-          cppType,
-          decl.typeName,
-        );
+        const memberName = this.mangleMemberIfNeeded(decl.name, decl.typeName);
         // Map variable ST line → header member line
         const stLine = varSourceLines.get(decl.name);
         if (stLine !== undefined) {
@@ -2564,7 +2548,13 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const initVal = this.projectVarInitializer(decl);
         if (initVal) {
-          inits.push(`${decl.name}(${initVal})`);
+          // Name the member as `generateProgramHeaderFromModel` declared it —
+          // `scale : Scale` is a collision (ST names are case-insensitive) and
+          // is declared `SCALE_`, so an initializer list naming `SCALE` does not
+          // compile. The FUNCTION_BLOCK constructor already does this.
+          inits.push(
+            `${this.mangleMemberIfNeeded(decl.name, decl.typeName)}(${initVal})`,
+          );
         }
       }
       // External globals: bind the pointer member to the canonical GlobalVar<V>
@@ -2589,7 +2579,13 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const initVal = this.projectVarInitializer(decl);
         if (initVal) {
-          inits.push(`${decl.name}(${initVal})`);
+          // Name the member as `generateProgramHeaderFromModel` declared it —
+          // `scale : Scale` is a collision (ST names are case-insensitive) and
+          // is declared `SCALE_`, so an initializer list naming `SCALE` does not
+          // compile. The FUNCTION_BLOCK constructor already does this.
+          inits.push(
+            `${this.mangleMemberIfNeeded(decl.name, decl.typeName)}(${initVal})`,
+          );
         }
       }
       if (inits.length > 0) {
@@ -5489,11 +5485,7 @@ export class CodeGenerator {
    * method name (case-insensitive), append '_' to avoid C++ errors.
    * Populates memberMangledNames map and returns the (possibly mangled) name.
    */
-  private mangleMemberIfNeeded(
-    name: string,
-    _cppType: string,
-    stTypeName: string,
-  ): string {
+  private mangleMemberIfNeeded(name: string, stTypeName: string): string {
     // Declaring a member of the FB currently being generated, so the interface
     // methods in scope are that FB's.
     const mangled = mangledMemberName(name, stTypeName, {
