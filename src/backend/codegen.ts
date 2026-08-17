@@ -5352,13 +5352,13 @@ export class CodeGenerator {
       if (arg.name) {
         // Named argument: assign directly
         this.emit(
-          `${indent}${instanceName}.${arg.name} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)} = ${this.generateExpression(arg.value)};`,
         );
       } else if (inputParamNames && positionalIndex < inputParamNames.length) {
         // Positional argument: map to VAR_INPUT by position
         const paramName = inputParamNames[positionalIndex];
         this.emit(
-          `${indent}${instanceName}.${paramName} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName!, fbTypeName)} = ${this.generateExpression(arg.value)};`,
         );
         positionalIndex++;
       } else {
@@ -5398,7 +5398,7 @@ export class CodeGenerator {
         if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
           this.emitCaptureToLvalue(
             arg.value,
-            `${instanceName}.${arg.name}`,
+            `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
             indent,
           );
         }
@@ -5410,7 +5410,7 @@ export class CodeGenerator {
       if (arg.name && arg.isOutput) {
         this.emitCaptureToLvalue(
           arg.value,
-          `${instanceName}.${arg.name}`,
+          `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
           indent,
         );
       }
@@ -5496,6 +5496,29 @@ export class CodeGenerator {
       this.memberMangledNames.set(name.toUpperCase(), mangled);
     }
     return mangled;
+  }
+
+  /**
+   * C++ member name for a parameter of the function block being invoked, by the
+   * same rule its declaration used (see member-mangling.ts).
+   *
+   * An FB whose input is named after its own type, or after an interface method
+   * it implements, is declared with a trailing underscore — so assigning through
+   * the bare name reaches a member that does not exist. Left alone when the FB
+   * type is unknown, which only disables the check.
+   */
+  private fbParamMemberName(
+    paramName: string,
+    fbTypeName: string | undefined,
+  ): string {
+    if (fbTypeName === undefined) return paramName;
+    return this.needsFieldMangling(
+      paramName,
+      this.resolveMemberType(fbTypeName, paramName),
+      fbTypeName,
+    )
+      ? `${paramName}_`
+      : paramName;
   }
 
   /**

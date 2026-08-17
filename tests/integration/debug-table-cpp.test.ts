@@ -71,16 +71,22 @@ describeIfGpp("generated debug table compiles", () => {
     fs.writeFileSync(path.join(dir, "generated.hpp"), result.headerCode);
     const tablePath = path.join(dir, "generated_debug.cpp");
     fs.writeFileSync(tablePath, result.debugTableCpp!);
+    // The program's own C++ goes through the same member names, so check it in
+    // the same pass — the invocation paths appear only there.
+    const programPath = path.join(dir, "generated.cpp");
+    fs.writeFileSync(programPath, result.cppCode);
 
-    try {
-      execSync(
-        `g++ -std=c++17 -fsyntax-only -I"${RUNTIME_INCLUDE}" -I"${dir}" "${tablePath}" 2>&1`,
-        { encoding: "utf-8" },
-      );
-      return "";
-    } catch (e) {
-      return (e as { stdout?: string }).stdout ?? String(e);
+    for (const target of [programPath, tablePath]) {
+      try {
+        execSync(
+          `g++ -std=c++17 -fsyntax-only -I"${RUNTIME_INCLUDE}" -I"${dir}" "${target}" 2>&1`,
+          { encoding: "utf-8" },
+        );
+      } catch (e) {
+        return (e as { stdout?: string }).stdout ?? String(e);
+      }
     }
+    return "";
   }
 
   it("compiles for a member whose name matches its type, in a PROGRAM", () => {
@@ -225,6 +231,38 @@ END_VAR
   flag := FALSE;
 END_PROGRAM${CFG}`,
         "ordinary",
+      ),
+    ).toBe("");
+  });
+
+  it("compiles for an FB whose parameters collide, invoked with all forms", () => {
+    // The invocation assigns inputs, copies VAR_IN_OUT back and captures `=>`
+    // through `instance.MEMBER`; a colliding parameter used to reach nothing
+    // ("no member named 'READING' in 'strucpp::SENSOR'"). Compiling the program
+    // is the assertion here — the table only exercises the declarations.
+    expect(
+      buildDebugTable(
+        `
+TYPE Reading : STRUCT v : REAL; END_STRUCT; END_TYPE
+INTERFACE IProbe
+  METHOD Arm : BOOL
+  END_METHOD
+END_INTERFACE
+FUNCTION_BLOCK Sensor IMPLEMENTS IProbe
+VAR_INPUT Reading : Reading; Arm : BOOL; gain : REAL; END_VAR
+VAR_OUTPUT out1 : REAL; END_VAR
+VAR_IN_OUT acc : Reading; END_VAR
+  METHOD Arm : BOOL
+    Arm := TRUE;
+  END_METHOD
+  out1 := Reading.v * gain;
+  acc.v := out1;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR s : Sensor; inp : Reading; tally : Reading; got : REAL; END_VAR
+  s(Reading := inp, Arm := TRUE, gain := 2.0, acc := tally, out1 => got);
+END_PROGRAM${CFG}`,
+        "fb_invocation",
       ),
     ).toBe("");
   });

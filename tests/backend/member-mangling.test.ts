@@ -186,3 +186,103 @@ END_PROGRAM`);
     expect(cpp).toContain("START_(");
   });
 });
+
+describe("declaration and function-block invocation agree", () => {
+  /**
+   * Invoking an FB assigns its inputs, copies VAR_IN_OUT back, and captures
+   * `=>` outputs — all through `instance.MEMBER`. A parameter named after its
+   * own type, or after an interface method the FB implements, is declared with
+   * the underscore, so the bare name reaches nothing:
+   *
+   *   error: no member named 'READING' in 'strucpp::SENSOR'
+   */
+  const READING = `
+TYPE Reading : STRUCT v : REAL; END_STRUCT; END_TYPE`;
+
+  it("mangles a named input whose name matches its type", () => {
+    const { header, cpp } = build(`${READING}
+FUNCTION_BLOCK Sensor
+VAR_INPUT Reading : Reading; END_VAR
+VAR_OUTPUT o : REAL; END_VAR
+  o := Reading.v;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR s : Sensor; inp : Reading; END_VAR
+  s(Reading := inp);
+END_PROGRAM`);
+    expect(header).toContain("READING READING_;");
+    expect(cpp).toContain("S.READING_ = INP;");
+  });
+
+  it("mangles a positional input too", () => {
+    const { cpp } = build(`${READING}
+FUNCTION_BLOCK Sensor
+VAR_INPUT Reading : Reading; END_VAR
+VAR_OUTPUT o : REAL; END_VAR
+  o := Reading.v;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR s : Sensor; inp : Reading; END_VAR
+  s(inp);
+END_PROGRAM`);
+    expect(cpp).toContain("S.READING_ = INP;");
+  });
+
+  it("mangles an input colliding with an implemented interface method", () => {
+    const { header, cpp } = build(`
+INTERFACE IProbe
+  METHOD Arm : BOOL
+  END_METHOD
+END_INTERFACE
+FUNCTION_BLOCK Sensor IMPLEMENTS IProbe
+VAR_INPUT Arm : BOOL; gain : REAL; END_VAR
+VAR_OUTPUT o : REAL; END_VAR
+  METHOD Arm : BOOL
+    Arm := TRUE;
+  END_METHOD
+  o := gain;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR s : Sensor; END_VAR
+  s(Arm := TRUE, gain := 2.0);
+END_PROGRAM`);
+    expect(header).toContain("IEC_BOOL ARM_;");
+    expect(cpp).toContain("S.ARM_ = true;");
+    // A non-colliding sibling is untouched.
+    expect(cpp).toContain("S.GAIN = 2.0;");
+  });
+
+  it("mangles the VAR_IN_OUT copy-back and the => output capture", () => {
+    const { cpp } = build(`${READING}
+FUNCTION_BLOCK Sensor
+VAR_INPUT gain : REAL; END_VAR
+VAR_OUTPUT Reading : Reading; END_VAR
+VAR_IN_OUT acc : Reading; END_VAR
+  Reading.v := gain;
+  acc.v := gain;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR s : Sensor; tally : Reading; got : Reading; END_VAR
+  s(gain := 1.0, acc := tally, Reading => got);
+END_PROGRAM`);
+    // copy-out of the inout, and the => capture, both name the mangled member
+    expect(cpp).toContain("TALLY = S.ACC;");
+    expect(cpp).toContain("GOT = S.READING_;");
+  });
+
+  it("leaves an elementary-named FB input alone", () => {
+    const { header, cpp } = build(`
+FUNCTION_BLOCK Sensor
+VAR_INPUT Time : TIME; END_VAR
+VAR_OUTPUT o : TIME; END_VAR
+  o := Time;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR s : Sensor; END_VAR
+  s(Time := T#1s);
+END_PROGRAM`);
+    expect(header).toContain("IEC_TIME TIME;");
+    expect(cpp).toContain("S.TIME = ");
+    expect(cpp).not.toContain("S.TIME_");
+  });
+});
