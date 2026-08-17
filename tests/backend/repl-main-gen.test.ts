@@ -553,3 +553,84 @@ END_PROGRAM`;
     });
   });
 });
+
+describe('member mangling in VarDescriptor addresses', () => {
+  /**
+   * Each descriptor holds `&instance.MEMBER`, so it has to name the member as
+   * codegen declared it. A variable named after its own type is emitted with a
+   * trailing underscore (see member-mangling.ts) — without the same rule here
+   * the REPL binary does not link:
+   *
+   *   main.cpp:466: error: no member named 'RIG' in 'strucpp::Program_MAIN'
+   *
+   * The descriptor's *display* name keeps the un-mangled name (upper-cased, as
+   * the REPL shows every name), since that is what the user types at the
+   * prompt — only the address is mangled.
+   */
+  function mainFor(source: string): string {
+    const result = compile(source);
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+    expect(result.success).toBe(true);
+    return generateReplMain(result.ast!, result.projectModel!);
+  }
+
+  const MOTOR = `
+FUNCTION_BLOCK Motor
+VAR_INPUT run : BOOL; END_VAR
+VAR_OUTPUT spinning : BOOL; END_VAR
+  spinning := run;
+END_FUNCTION_BLOCK`;
+
+  it('addresses a variable named after its type by the mangled name', () => {
+    const mainCpp = mainFor(`${MOTOR}
+PROGRAM Main
+VAR Motor : Motor; plain : BOOL; END_VAR
+  Motor(run := plain);
+END_PROGRAM`);
+    // Address mangled, display name left as the user wrote it.
+    expect(mainCpp).toContain('{"MOTOR", VarTypeTag::OTHER, &prog_MAIN.MOTOR_}');
+  });
+
+  it('matches case-insensitively, as ST names do', () => {
+    // `rig : Rig` is a collision — ST is case-insensitive, so codegen mangles it.
+    const mainCpp = mainFor(`${MOTOR}
+FUNCTION_BLOCK Rig
+VAR Motor : Motor; END_VAR
+  Motor(run := TRUE);
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR rig : Rig; END_VAR
+  rig();
+END_PROGRAM`);
+    expect(mainCpp).toContain('&prog_MAIN.RIG_}');
+  });
+
+  it('leaves a variable named after an elementary type alone', () => {
+    // `Time : TIME` is an ordinary declaration; codegen emits plain `TIME`, so
+    // mangling here would address a member that does not exist.
+    const mainCpp = mainFor(`
+PROGRAM Main
+VAR Time : TIME; Word : WORD; counter : INT; END_VAR
+  counter := counter + 1;
+END_PROGRAM`);
+    expect(mainCpp).toContain('{"TIME", VarTypeTag::TIME, &prog_MAIN.TIME}');
+    expect(mainCpp).toContain('{"WORD", VarTypeTag::WORD, &prog_MAIN.WORD}');
+    expect(mainCpp).not.toContain('TIME_');
+    expect(mainCpp).not.toContain('WORD_');
+  });
+
+  it('applies to program instances under a CONFIGURATION too', () => {
+    const mainCpp = mainFor(`${MOTOR}
+PROGRAM Main
+VAR Motor : Motor; END_VAR
+  Motor(run := TRUE);
+END_PROGRAM
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`);
+    expect(mainCpp).toContain('&config_CONFIG0.INSTANCE0.MOTOR_}');
+  });
+});

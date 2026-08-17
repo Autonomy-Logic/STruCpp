@@ -55,6 +55,7 @@ import {
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import { formatArrayType, iecBaseToCppLiteral } from "./codegen-utils.js";
+import { mangledMemberName, needsMemberMangling } from "./member-mangling.js";
 import {
   getTypeBits,
   getTypeCategory,
@@ -1152,6 +1153,9 @@ export class CodeGenerator {
         indent: this.options.indent,
         lineEnding: this.options.lineEnding,
         emitChunkMarkers: this.options.emitChunkMarkers ?? false,
+        // Struct fields must mangle by the same rule as everything else that
+        // names them, and only codegen knows the FB / program type names.
+        isUserDefinedType: (t) => this.isUserDefinedType(t),
       });
       const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
       for (const line of typeCode.split(this.options.lineEnding)) {
@@ -5493,50 +5497,37 @@ export class CodeGenerator {
     _cppType: string,
     stTypeName: string,
   ): string {
-    // Variable name vs type name collision (GCC -Wchanges-meaning)
-    if (this.isUserDefinedType(stTypeName)) {
-      if (name.toUpperCase() === stTypeName.toUpperCase()) {
-        const mangled = `${name}_`;
-        this.memberMangledNames.set(name.toUpperCase(), mangled);
-        return mangled;
-      }
-    }
-    // Variable name vs interface method name collision
-    if (this.currentFBInterfaceMethods.has(name.toUpperCase())) {
-      const mangled = `${name}_`;
+    // Declaring a member of the FB currently being generated, so the interface
+    // methods in scope are that FB's.
+    const mangled = mangledMemberName(name, stTypeName, {
+      isUserDefinedType: (t) => this.isUserDefinedType(t),
+      interfaceMethods: this.currentFBInterfaceMethods,
+    });
+    if (mangled !== name) {
       this.memberMangledNames.set(name.toUpperCase(), mangled);
-      return mangled;
     }
-    return name;
+    return mangled;
   }
 
   /**
    * Check if a field access needs mangling — true when the field name collides
    * with its type name (GCC -Wchanges-meaning) or with an interface method name.
+   *
+   * Reaching a member through a named owner rather than from inside it, so the
+   * interface methods come from that owner's entry.
    */
-  private needsFieldMangling(
+  protected needsFieldMangling(
     fieldName: string,
     fieldTypeName: string | undefined,
     parentTypeName?: string,
   ): boolean {
-    // Field name vs type name collision
-    if (
-      fieldTypeName &&
-      this.isUserDefinedType(fieldTypeName) &&
-      fieldName.toUpperCase() === fieldTypeName.toUpperCase()
-    ) {
-      return true;
-    }
-    // Field name vs interface method name collision
-    if (parentTypeName) {
-      const ifaceMethods = this.fbInterfaceMethodNames.get(
-        parentTypeName.toUpperCase(),
-      );
-      if (ifaceMethods?.has(fieldName.toUpperCase())) {
-        return true;
-      }
-    }
-    return false;
+    return needsMemberMangling(fieldName, fieldTypeName, {
+      isUserDefinedType: (t) => this.isUserDefinedType(t),
+      interfaceMethods:
+        parentTypeName !== undefined
+          ? this.fbInterfaceMethodNames.get(parentTypeName.toUpperCase())
+          : undefined,
+    });
   }
 
   /**

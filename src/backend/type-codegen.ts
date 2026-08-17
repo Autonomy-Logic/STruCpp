@@ -22,6 +22,7 @@ import type {
 } from "../frontend/ast.js";
 import { TypeRegistry, isElementaryType } from "../semantic/type-registry.js";
 import { formatArrayType } from "./codegen-utils.js";
+import { mangledMemberName } from "./member-mangling.js";
 import {
   parseDateLiteralToDays,
   parseDtLiteralToNs,
@@ -44,6 +45,12 @@ export interface TypeCodeGenOptions {
    *  it can slice per-symbol chunks for tree-shaking. See
    *  `CodeGenOptions.emitChunkMarkers`. */
   emitChunkMarkers: boolean;
+  /** Whether a type name is user-defined, for the shared member-mangling rule
+   *  (see `member-mangling.ts`). `CodeGenerator` injects its own resolution,
+   *  which also recognises function blocks and programs; standalone use falls
+   *  back to "anything that is not elementary", all a bare TypeCodeGenerator
+   *  can tell from a list of type declarations. */
+  isUserDefinedType: (typeName: string) => boolean;
 }
 
 /**
@@ -53,6 +60,8 @@ export const defaultTypeCodeGenOptions: TypeCodeGenOptions = {
   indent: "    ",
   lineEnding: "\n",
   emitChunkMarkers: false,
+  isUserDefinedType: (typeName: string) =>
+    !isElementaryType(typeName.toUpperCase()),
 };
 
 /**
@@ -299,14 +308,13 @@ export class TypeCodeGenerator {
         cppType += "*";
       }
       for (const fieldName of field.names) {
-        // Mangle field name if it matches its user-defined type name
-        // to avoid GCC -Wchanges-meaning error. Compare against the ST
-        // type name, not cppType (which may include pointer '*' suffix).
-        const emitName =
-          !isElementaryType(field.type.name.toUpperCase()) &&
-          fieldName.toUpperCase() === field.type.name.toUpperCase()
-            ? `${fieldName}_`
-            : fieldName;
+        // One rule, shared with the class definition and the debug table — see
+        // member-mangling.ts. Compare against the ST type name, not cppType
+        // (which may carry a pointer '*' suffix). A STRUCT implements no
+        // interfaces, so only the type collision can apply here.
+        const emitName = mangledMemberName(fieldName, field.type.name, {
+          isUserDefinedType: this.options.isUserDefinedType,
+        });
         if (field.initialValue) {
           const initVal = this.expressionToCpp(field.initialValue);
           // Array types can't be initialized with = 0; use {} instead

@@ -159,21 +159,13 @@ export class TestCodeGenerator extends CodeGenerator {
       const field = path[i]!;
       if (currentType && this.ast) {
         const memberType = this.resolveMemberType(currentType, field);
-        // Check for field name vs type name collision
-        const typeCollision =
-          memberType &&
-          this.isUserDefinedType(memberType) &&
-          field.toUpperCase() === memberType.toUpperCase();
-        // Check for field name vs interface method name collision
-        const ifaceCollision =
-          this.fbInterfaceMethodNames
-            .get(currentType.toUpperCase())
-            ?.has(field.toUpperCase()) ?? false;
-        if (typeCollision || ifaceCollision) {
-          parts.push(`${field}_`);
-        } else {
-          parts.push(field);
-        }
+        // One rule, shared with the class definition and the debug table —
+        // see member-mangling.ts.
+        parts.push(
+          this.needsFieldMangling(field, memberType, currentType)
+            ? `${field}_`
+            : field,
+        );
         currentType = memberType;
       } else {
         parts.push(field);

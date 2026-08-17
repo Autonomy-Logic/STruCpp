@@ -380,4 +380,52 @@ END_PROGRAM`;
     // C++ side should also show statement code
     expect(output).toContain('COUNT = COUNT + 1');
   });
+
+  /**
+   * A variable named after its own type is declared with a trailing underscore
+   * (GCC rejects a member that changes the meaning of its type name), so the
+   * REPL's VarDescriptor addresses have to use the same name. When they did not,
+   * the binary simply failed to build:
+   *
+   *   main.cpp: error: no member named 'RIG' in 'strucpp::Program_MAIN'
+   *
+   * Building and running is the assertion — nothing else in the pipeline links
+   * the REPL harness against the generated header.
+   */
+  it('builds and runs with members named after their own type', () => {
+    const source = `
+FUNCTION_BLOCK Motor
+VAR_INPUT run : BOOL; END_VAR
+VAR_OUTPUT spinning : BOOL; END_VAR
+  spinning := run;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Rig
+VAR Motor : Motor; idle : BOOL; END_VAR
+  Motor(run := NOT idle);
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR
+  Motor : Motor;
+  rig : Rig;
+  Time : TIME;
+  Word : WORD;
+  counter : INT;
+END_VAR
+  counter := counter + 1;
+  Motor(run := TRUE);
+  rig();
+  Word := WORD#7;
+END_PROGRAM`;
+    const output = buildAndRun(
+      source,
+      ['run 3', 'get MAIN.COUNTER', 'get MAIN.WORD', 'quit'].join('\n'),
+      'member_mangling',
+    );
+    // Both the mangled composites and the elementary-named scalars are exposed
+    // under the names the user wrote.
+    expect(output).toContain('MAIN.COUNTER : INT = 3');
+    expect(output).toContain('MAIN.WORD : WORD = 16#0007');
+  });
 });
