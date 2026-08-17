@@ -68,6 +68,24 @@ public:
             ++i;
         }
     }
+
+    // Element-typed initializer list, for an array whose element is itself a
+    // composite: `ARRAY[0..1] OF Row := [[1,2,3],[4,5,6]]`, and the nested
+    // Array1D chain a 4+-dimensional array lowers to. The template above can't
+    // serve these — `U` has nothing to deduce from a braced element — while
+    // this overload lets each element convert through its own constructor.
+    //
+    // Not ambiguous with the template for a scalar list: `{1, 2, 3}` deduces
+    // `U = int` exactly, whereas this overload would need a user-defined
+    // conversion per element, so the template wins.
+    IEC_ARRAY_1D(std::initializer_list<T> init) noexcept : data_{} {
+        size_t i = 0;
+        for (const auto& val : init) {
+            if (i >= size) break;
+            data_[i] = val;
+            ++i;
+        }
+    }
     
     // Element access (1-based IEC indexing) - no bounds checking.
     // constexpr so &arr[i] is a constant expression — required by AVR
@@ -159,6 +177,28 @@ public:
         }
     }
 
+    // Row-nested initializer list — IEC 61131-3 Annex B.1.4.3 allows an
+    // `array_initialization` as an element, which is the natural way to write a
+    // 2D initializer: `ARRAY[0..1,0..2] OF INT := [[1,2,3],[4,5,6]]`.
+    //
+    // Each inner list fills one row from its own lower bound, so a short row
+    // leaves the rest of that row at its default instead of shifting the next
+    // row up — which is the difference from writing the same values flat.
+    template<typename U>
+    IEC_ARRAY_2D(std::initializer_list<std::initializer_list<U>> init) noexcept : data_{} {
+        size_t row = 0;
+        for (const auto& rowInit : init) {
+            if (row >= rows) break;
+            size_t col = 0;
+            for (const auto& val : rowInit) {
+                if (col >= cols) break;
+                data_[row * cols + col] = val;
+                ++col;
+            }
+            ++row;
+        }
+    }
+
     // Element access (1-based IEC indexing) - no bounds checking.
     // constexpr so &arr(i, j) is a constant expression — see the
     // matching note on IEC_ARRAY_1D::operator[] above.
@@ -236,7 +276,48 @@ private:
     
 public:
     IEC_ARRAY_3D() noexcept : data_{} {}
-    
+
+    // Flat (row-major) initializer-list constructor — mirrors IEC_ARRAY_1D/2D.
+    // ST aggregate inits for a 3D array codegen to a flat brace list; fill
+    // row-major, ignoring any overflow.
+    template<typename U>
+    IEC_ARRAY_3D(std::initializer_list<U> init) noexcept : data_{} {
+        size_t i = 0;
+        for (const auto& val : init) {
+            if (i >= total_size) break;
+            data_[i] = val;
+            ++i;
+        }
+    }
+
+    // Plane/row-nested initializer list — the 3D form of the nested
+    // `array_initialization` IEC allows as an element:
+    // `ARRAY[0..1,0..1,0..1] OF INT := [[[1,2],[3,4]],[[5,6],[7,8]]]`.
+    // Each level fills from its own lower bound, so a short inner list leaves
+    // the remainder of that row at its default.
+    template<typename U>
+    IEC_ARRAY_3D(
+        std::initializer_list<std::initializer_list<std::initializer_list<U>>> init) noexcept
+        : data_{} {
+        size_t i = 0;
+        for (const auto& planeInit : init) {
+            if (i >= dim1) break;
+            size_t j = 0;
+            for (const auto& rowInit : planeInit) {
+                if (j >= dim2) break;
+                size_t k = 0;
+                for (const auto& val : rowInit) {
+                    if (k >= dim3) break;
+                    data_[i * dim2 * dim3 + j * dim3 + k] = val;
+                    ++k;
+                }
+                ++j;
+            }
+            ++i;
+        }
+    }
+
+    // Element access (IEC indexing) - no bounds checking.
     // constexpr so &arr(i, j, k) is a constant expression — see the
     // matching note on IEC_ARRAY_1D::operator[] above.
     constexpr var_type& operator()(int64_t i, int64_t j, int64_t k) noexcept {
@@ -246,13 +327,55 @@ public:
     constexpr const var_type& operator()(int64_t i, int64_t j, int64_t k) const noexcept {
         return data_[to_linear_index(i, j, k)];
     }
-    
+
+    // Bounds-checked access - throws std::out_of_range on invalid index.
+    // This is what codegen emits for a subscript in a body, so it has to exist
+    // at every rank, not just 1D/2D.
+    var_type& at(int64_t i, int64_t j, int64_t k) {
+        if (!Bounds1::in_bounds(i) || !Bounds2::in_bounds(j) || !Bounds3::in_bounds(k)) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::out_of_range("Array index out of bounds");
+#else
+            iec_runtime_fault(IecFault::ArrayBounds);
+#endif
+        }
+        return data_[to_linear_index(i, j, k)];
+    }
+
+    const var_type& at(int64_t i, int64_t j, int64_t k) const {
+        if (!Bounds1::in_bounds(i) || !Bounds2::in_bounds(j) || !Bounds3::in_bounds(k)) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::out_of_range("Array index out of bounds");
+#else
+            iec_runtime_fault(IecFault::ArrayBounds);
+#endif
+        }
+        return data_[to_linear_index(i, j, k)];
+    }
+
+    // Size information
     static constexpr size_t size1() noexcept { return dim1; }
     static constexpr size_t size2() noexcept { return dim2; }
     static constexpr size_t size3() noexcept { return dim3; }
-    
+    static constexpr size_t dim1_size() noexcept { return dim1; }
+    static constexpr size_t dim2_size() noexcept { return dim2; }
+    static constexpr size_t dim3_size() noexcept { return dim3; }
+    static constexpr int64_t dim1_lower() noexcept { return Bounds1::lower; }
+    static constexpr int64_t dim1_upper() noexcept { return Bounds1::upper; }
+    static constexpr int64_t dim2_lower() noexcept { return Bounds2::lower; }
+    static constexpr int64_t dim2_upper() noexcept { return Bounds2::upper; }
+    static constexpr int64_t dim3_lower() noexcept { return Bounds3::lower; }
+    static constexpr int64_t dim3_upper() noexcept { return Bounds3::upper; }
+
+    // Raw data access
     var_type* data() noexcept { return data_.data(); }
     const var_type* data() const noexcept { return data_.data(); }
+
+    // Iterators (linear traversal)
+    auto begin() noexcept { return data_.begin(); }
+    auto end() noexcept { return data_.end(); }
+    auto begin() const noexcept { return data_.begin(); }
+    auto end() const noexcept { return data_.end(); }
 };
 
 // Convenience type aliases

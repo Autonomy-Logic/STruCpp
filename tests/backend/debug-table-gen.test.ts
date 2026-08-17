@@ -219,6 +219,61 @@ END_CONFIGURATION
     }
   });
 
+  it("uses operator() for multi-dimensional array elements", () => {
+    // Array2D/Array3D take every index in one operator() call. Emitting a
+    // subscript per dimension gives `arr[i][j]`, which has no matching operator
+    // on those containers — the generated debug table then fails to compile
+    // (reported from an AVR build: "no match for 'operator[]'").
+    const source = `
+TYPE
+  Matrix2 : ARRAY[0..1, 0..1] OF INT;
+  Cube : ARRAY[0..1, 0..1, 0..1] OF INT;
+END_TYPE
+
+PROGRAM main
+  VAR
+    m : Matrix2;
+    c : Cube;
+    flat : ARRAY[0..2] OF INT;
+  END_VAR
+  m[0, 0] := 1;
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM p WITH t : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    const cpp = result.debugTableCpp!;
+
+    // 2D → one operator() call with both indices.
+    expect(cpp).toContain(".M(0, 0)");
+    expect(cpp).toContain(".M(1, 1)");
+    // 3D → one call with all three.
+    expect(cpp).toContain(".C(0, 0, 0)");
+    expect(cpp).toContain(".C(1, 1, 1)");
+    // 1D still subscripts. No chained subscripting survives in any pointer
+    // expression — the trailing comment keeps the IEC `[i][j]` path, so check
+    // only the code ahead of it.
+    expect(cpp).toContain(".FLAT[2]");
+    const pointerExprs = cpp
+      .split("\n")
+      .filter((l) => l.includes("(void*)&"))
+      .map((l) => l.split("//")[0]!);
+    expect(pointerExprs.length).toBeGreaterThan(0);
+    expect(pointerExprs.filter((e) => e.includes("]["))).toEqual([]);
+
+    // The IEC display paths keep the [i][j] form the debug UI shows.
+    const paths = result.debugMap!.leaves.map((l) => l.path);
+    expect(paths).toContain("P.M[0][0]");
+    expect(paths).toContain("P.C[1][1][1]");
+    expect(paths).toContain("P.FLAT[2]");
+  });
+
   it("applies maxEntriesPerArray split when exceeded", () => {
     // 10 leaves, cap at 4 -> expect 3 buckets (4, 4, 2)
     const manyVarsSource = `

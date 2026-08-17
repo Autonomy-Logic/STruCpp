@@ -179,6 +179,19 @@ export class TestCodeGenerator extends CodeGenerator {
     return this.generateExpression(expr);
   }
 
+  /**
+   * Generate C++ for a declaration's initial value, which unlike a plain
+   * expression may be a structure initializer — that form needs the target's
+   * C++ type to lower (see `generateInitializer`).
+   */
+  emitInitializer(
+    expr: Expression,
+    cppType: string,
+    stTypeName: string | undefined,
+  ): string {
+    return this.generateInitializer(expr, cppType, stTypeName);
+  }
+
   /** Generate C++ statement(s) and append to output buffer. */
   emitStatement(stmt: Statement, indent: string): void {
     this.generateStatement(stmt, indent);

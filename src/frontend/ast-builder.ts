@@ -46,6 +46,8 @@ import type {
   NewExpression,
   DeleteStatement,
   ArrayLiteralExpression,
+  StructInitializerExpression,
+  StructElementInitializer,
   FunctionCallExpression,
   MethodCallExpression,
   FunctionCallStatement,
@@ -64,6 +66,7 @@ import type {
   BinaryOperator,
   UnaryOperator,
 } from "./ast.js";
+import { applyTypeDefaults } from "./type-defaults.js";
 import type { SourceSpan } from "../types.js";
 
 // =============================================================================
@@ -261,6 +264,25 @@ function getAllIdentifierOrKeywordImages(
 }
 
 /**
+ * Upper bound on an array repetition count (`[N(value)]`).
+ *
+ * Repetition groups are expanded element by element, so the count directly sizes
+ * the AST and the generated initialiser list. The limit is far above any
+ * practical PLC array and exists only so a typo cannot exhaust memory.
+ */
+const MAX_ARRAY_REPETITION = 65536;
+
+/**
+ * True when an `arrayInitialElements` node is a repetition group `count(value)`
+ * rather than a single value.
+ */
+function isRepetitionGroup(entry: CstNode): boolean {
+  return (
+    getFirstToken((entry.children as CstChildren).IntegerLiteral) !== undefined
+  );
+}
+
+/**
  * Parse an IEC 61131-3 integer literal that may use based notation (16#FF, 8#77, 2#1010).
  */
 function parseIECInteger(raw: string): number {
@@ -327,10 +349,18 @@ export class ASTBuilder {
         const initExprNode = getFirstNode(declChildren.initializerExpression);
         if (!initExprNode || names.length === 0) continue;
         const initChildren = initExprNode.children as CstChildren;
-        const exprNodes = getAllNodes(initChildren.expression);
-        if (exprNodes.length !== 1) continue;
+        // Only a lone scalar initialiser can be a dimension constant; a list or
+        // a repetition group is an array initialiser.
+        const entryNodes = getAllNodes(initChildren.arrayInitialElements);
+        if (entryNodes.length !== 1 || isRepetitionGroup(entryNodes[0]!)) {
+          continue;
+        }
+        const valueNode = getFirstNode(
+          (entryNodes[0]!.children as CstChildren).expression,
+        );
+        if (!valueNode) continue;
         try {
-          const expr = this.buildExpression(exprNodes[0]!);
+          const expr = this.buildExpression(valueNode);
           if (!expr) continue;
           let val: number | undefined;
           if (expr.kind === "LiteralExpression") {
@@ -404,7 +434,7 @@ export class ASTBuilder {
       globalVarBlocks.push(this.buildVarBlock(node));
     }
 
-    return {
+    const unit: CompilationUnit = {
       kind: "CompilationUnit",
       sourceSpan: nodeToSourceSpan(cst),
       programs,
@@ -415,6 +445,8 @@ export class ASTBuilder {
       configurations,
       globalVarBlocks,
     };
+    applyTypeDefaults(unit);
+    return unit;
   }
 
   /**
@@ -824,11 +856,48 @@ export class ASTBuilder {
 
     const definition = this.buildTypeDefinition(node);
 
+    // Default value carried by the type itself (IEC 61131-3 Annex B.1.3.3
+    // `initialized_*_type_declaration`). Simple enums keep their `:= MEMBER`
+    // default inside the simpleEnumType rule, so look there too.
+    const defaultValue =
+      this.buildInitializerExpression(
+        getFirstNode(children.initializerExpression),
+      ) ?? this.buildSimpleEnumDefault(getFirstNode(children.simpleEnumType));
+
     return {
       kind: "TypeDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
       definition,
+      ...(defaultValue !== undefined ? { defaultValue } : {}),
+    };
+  }
+
+  /**
+   * Extract the `:= MEMBER` default of a simple enum type, if any.
+   * `TYPE Light : (RED, GREEN) := GREEN; END_TYPE`
+   */
+  private buildSimpleEnumDefault(
+    simpleEnumNode: CstNode | undefined,
+  ): Expression | undefined {
+    if (!simpleEnumNode) return undefined;
+    const children = simpleEnumNode.children as CstChildren;
+    if (!children.Assign) return undefined;
+    // The enum members are Identifier tokens too; the default is the last one,
+    // the only Identifier that follows the Assign token.
+    const assign = getFirstToken(children.Assign);
+    const idents = getAllTokens(children.Identifier);
+    const defaultToken = assign
+      ? idents.find((t) => t.startOffset > assign.startOffset)
+      : undefined;
+    if (!defaultToken) return undefined;
+    return {
+      kind: "VariableExpression",
+      sourceSpan: tokenToSourceSpan(defaultToken),
+      name: defaultToken.image,
+      subscripts: [],
+      fieldAccess: [],
+      isDereference: false,
     };
   }
 
@@ -1300,6 +1369,85 @@ export class ASTBuilder {
   }
 
   /**
+   * Build the expression behind an `initializerExpression` CST node.
+   *
+   * A single value is used as-is; the bracket-less comma-separated form
+   * (`arr : ARRAY[0..3] OF INT := 0, 31, 59, 90;`) collapses into an
+   * ArrayLiteralExpression, as does a lone repetition group (`:= 4(0)`).
+   * Structure initializers need no special handling here — they are ordinary
+   * primary expressions.
+   *
+   * Returns undefined when there is no initialiser.
+   */
+  private buildInitializerExpression(
+    initExprNode: CstNode | undefined,
+  ): Expression | undefined {
+    if (!initExprNode) return undefined;
+    const initChildren = initExprNode.children as CstChildren;
+    const entryNodes = getAllNodes(initChildren.arrayInitialElements);
+    const elements = this.buildArrayInitialElements(entryNodes);
+    // A single plain value is the variable's initialiser, not a one-element
+    // array. A repetition group always means an array, even on its own.
+    if (
+      elements.length === 1 &&
+      entryNodes.length === 1 &&
+      !isRepetitionGroup(entryNodes[0]!)
+    ) {
+      return elements[0];
+    }
+    if (elements.length === 0) return undefined;
+    return {
+      kind: "ArrayLiteralExpression",
+      sourceSpan: nodeToSourceSpan(initExprNode),
+      elements,
+    };
+  }
+
+  /**
+   * Expand a list of `arrayInitialElements` CST nodes into the element values
+   * they stand for.
+   *
+   * A repetition group `count(value)` (IEC 61131-3 Annex B.1.4.3) contributes
+   * `count` copies of the value. Expanding here keeps every consumer —
+   * semantic analysis, the project model, codegen — working on a plain list of
+   * element expressions, so the repetition form needs no support of its own
+   * downstream.
+   */
+  private buildArrayInitialElements(entryNodes: CstNode[]): Expression[] {
+    const elements: Expression[] = [];
+    for (const entry of entryNodes) {
+      const entryChildren = entry.children as CstChildren;
+      const valueNode = getFirstNode(entryChildren.expression);
+      if (!valueNode) continue;
+      const value = this.buildExpression(valueNode);
+      if (!value) continue;
+
+      const countToken = getFirstToken(entryChildren.IntegerLiteral);
+      if (!countToken) {
+        elements.push(value);
+        continue;
+      }
+      const count = parseIECInteger(countToken.image);
+      if (!Number.isFinite(count) || count < 0) continue;
+      if (count > MAX_ARRAY_REPETITION) {
+        // Expansion is linear in the count, so a runaway count would exhaust
+        // memory. Fail loudly rather than silently dropping the tail — the
+        // compile driver turns this into a reported error.
+        throw new Error(
+          `Array repetition count ${count} exceeds the supported maximum of ${MAX_ARRAY_REPETITION}`,
+        );
+      }
+      for (let i = 0; i < count; i++) {
+        // Each repeat gets its own node: consumers may annotate elements
+        // (resolvedType, and codegen's per-element lowering), and sharing one
+        // object across positions would make those annotations collide.
+        elements.push(i === 0 ? value : this.buildExpression(valueNode)!);
+      }
+    }
+    return elements;
+  }
+
+  /**
    * Build a VarDeclaration from a CST node.
    */
   buildVarDeclaration(node: CstNode): VarDeclaration {
@@ -1339,31 +1487,9 @@ export class ASTBuilder {
     }
 
     // Get initial value if present (from initializerExpression rule)
-    let initialValue: Expression | undefined;
-    const initExprNode = getFirstNode(children.initializerExpression);
-    if (initExprNode) {
-      const initChildren = initExprNode.children as CstChildren;
-      const exprNodes = getAllNodes(initChildren.expression);
-      if (exprNodes.length > 1) {
-        // Multiple expressions → ArrayLiteralExpression
-        const elements: Expression[] = [];
-        for (const en of exprNodes) {
-          const e = this.buildExpression(en);
-          if (e) elements.push(e);
-        }
-        initialValue = {
-          kind: "ArrayLiteralExpression",
-          sourceSpan: nodeToSourceSpan(initExprNode),
-          elements,
-        };
-      } else if (exprNodes.length === 1) {
-        // Single expression → use directly
-        const expr = this.buildExpression(exprNodes[0]!);
-        if (expr) {
-          initialValue = expr;
-        }
-      }
-    }
+    const initialValue = this.buildInitializerExpression(
+      getFirstNode(children.initializerExpression),
+    );
 
     // Get address if present (AT %IX0.0)
     let address: string | undefined;
@@ -1560,6 +1686,11 @@ export class ASTBuilder {
     if (children.functionCallStatement) {
       return this.buildFunctionCallStatement(
         getFirstNode(children.functionCallStatement)!,
+      );
+    }
+    if (children.instanceCallStatement) {
+      return this.buildInstanceCallStatement(
+        getFirstNode(children.instanceCallStatement)!,
       );
     }
     if (children.methodCallStatement) {
@@ -2290,17 +2421,20 @@ export class ASTBuilder {
     if (children.arrayLiteral) {
       const litNode = getFirstNode(children.arrayLiteral)!;
       const litChildren = litNode.children as CstChildren;
-      const exprNodes = getAllNodes(litChildren.expression);
-      const elements: Expression[] = [];
-      for (const en of exprNodes) {
-        const e = this.buildExpression(en);
-        if (e) elements.push(e);
-      }
       return {
         kind: "ArrayLiteralExpression",
         sourceSpan: nodeToSourceSpan(litNode),
-        elements,
+        elements: this.buildArrayInitialElements(
+          getAllNodes(litChildren.arrayInitialElements),
+        ),
       } as ArrayLiteralExpression;
+    }
+
+    // Check for structure initializer (field := value, ...)
+    if (children.structInitializer) {
+      return this.buildStructInitializerExpression(
+        getFirstNode(children.structInitializer)!,
+      );
     }
 
     // Check for __NEW(type) or __NEW(type, size) expression
@@ -2360,6 +2494,36 @@ export class ASTBuilder {
 
     // Try to extract a literal or variable directly
     return this.tryBuildDirectExpression(node);
+  }
+
+  /**
+   * Build a StructInitializerExpression from a structInitializer CST node.
+   * Element order is preserved as written; codegen assigns element by element.
+   */
+  buildStructInitializerExpression(node: CstNode): StructInitializerExpression {
+    const children = node.children as CstChildren;
+    const elements: StructElementInitializer[] = [];
+
+    for (const elemNode of getAllNodes(children.structElementInitializer)) {
+      const elemChildren = elemNode.children as CstChildren;
+      const nameNode = getFirstNode(elemChildren.identifierOrKeyword);
+      const valueNode = getFirstNode(elemChildren.expression);
+      if (!nameNode || !valueNode) continue;
+      const value = this.buildExpression(valueNode);
+      if (!value) continue;
+      elements.push({
+        kind: "StructElementInitializer",
+        sourceSpan: nodeToSourceSpan(elemNode),
+        name: getIdentifierOrKeywordImage(nameNode),
+        value,
+      });
+    }
+
+    return {
+      kind: "StructInitializerExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      elements,
+    };
   }
 
   /**
@@ -3117,6 +3281,42 @@ export class ASTBuilder {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),
       call,
+    };
+  }
+
+  /**
+   * Build `units[0](args);` — invoking a function block instance held in an
+   * array element.
+   *
+   * Reuses FunctionCallStatement: `functionName` is the base variable name, so
+   * the declared type still resolves the usual way, and `instance` carries the
+   * subscripted expression the invocation is emitted against.
+   */
+  buildInstanceCallStatement(node: CstNode): FunctionCallStatement {
+    const children = node.children as CstChildren;
+    const variableNode = getFirstNode(children.variable);
+    const instance = variableNode
+      ? this.buildVariableExpression(variableNode)
+      : undefined;
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+
+    return {
+      kind: "FunctionCallStatement",
+      sourceSpan: nodeToSourceSpan(node),
+      call: {
+        kind: "FunctionCallExpression",
+        sourceSpan: nodeToSourceSpan(node),
+        functionName: instance?.name ?? "",
+        arguments: args,
+        ...(instance !== undefined ? { instance } : {}),
+      },
     };
   }
 

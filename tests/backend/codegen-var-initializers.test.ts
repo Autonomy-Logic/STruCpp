@@ -2,14 +2,17 @@
  * Regression tests for issue #133 — numeric literal lowering in VAR
  * initializers.
  *
- * IEC numeric literals used as VAR initial values reach the program /
- * global codegen path as raw IEC strings (project-model stringifies the
- * initializer expression). They must be lowered to valid C++ the same
- * way the expression-statement path lowers them — otherwise the
- * constructor initializer list emits e.g. `X(16#FF)` / `X(INT#5)` /
- * `X(1_000)` verbatim and the generated C++ fails to compile
- * (`stray '#' in program`, bad digit separators), or a signed literal
- * like `-5` is silently dropped to the type default.
+ * IEC numeric literals used as VAR initial values must be lowered to valid C++
+ * the same way the expression-statement path lowers them — otherwise the
+ * constructor initializer list emits e.g. `X(16#FF)` / `X(INT#5)` / `X(1_000)`
+ * verbatim and the generated C++ fails to compile (`stray '#' in program`, bad
+ * digit separators), or a signed literal like `-5` is silently dropped to the
+ * type default.
+ *
+ * The project model now carries the initializer as the AST expression rather
+ * than a stringified copy, so these initializers go through the one expression
+ * emitter instead of a parallel string-lowering pass. The expected output below
+ * is therefore exactly what the same literal produces in a statement body.
  */
 
 import { describe, it, expect } from "vitest";
@@ -89,10 +92,12 @@ describe("issue #133: VAR initializer literal lowering", () => {
     `);
     expect(success).toBe(true);
     const inits = initList(cppCode);
-    expect(inits).toContain("A(5)");
-    expect(inits).toContain("B(0x10)");
-    expect(inits).toContain("C(0xAB)");
-    expect(inits).toContain("D(1.5)");
+    // A typed literal keeps its type via the same static_cast the expression
+    // path emits; what matters is that the IEC `TYPE#` syntax is gone.
+    expect(inits).toContain("A(static_cast<IEC_INT>(5))");
+    expect(inits).toContain("B(static_cast<IEC_INT>(0x10))");
+    expect(inits).toContain("C(static_cast<IEC_BYTE>(0xAB))");
+    expect(inits).toContain("D(static_cast<IEC_REAL>(1.5))");
     expect(inits).not.toContain("#");
   });
 
@@ -129,7 +134,9 @@ describe("issue #133: VAR initializer literal lowering", () => {
     const inits = initList(cppCode);
     expect(inits).toContain("D(255)");
     expect(inits).toContain("R(1.5)");
-    expect(inits).toContain("E(1.5E3)");
+    // Scientific notation is normalised to a plain C++ double literal, as in a
+    // statement body — still valid C++ with the same value.
+    expect(inits).toContain("E(1500.0)");
     expect(inits).toContain("T(true)");
   });
 

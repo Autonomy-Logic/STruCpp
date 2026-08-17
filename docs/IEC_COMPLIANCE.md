@@ -27,9 +27,11 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | TYPE ... END_TYPE | Supported | Type aliases |
 | STRUCT ... END_STRUCT | Supported | With nested structs |
 | Enumerations | Supported | With optional base type |
+| Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
 | ARRAY (3D) | Supported | ARRAY[1..3, 1..4, 1..5] OF INT |
+| ARRAY OF function block | Supported | Declaration, member access, and element invocation (`units[i](step := 1.0)`). A *method* call on an element (`units[0].M()`) is not yet parsed |
 | ARRAY[*] (VLA) | Supported | Variable-length array parameters |
 | Subranges | Supported | Runtime validation |
 | REF_TO | Supported | IEC reference type (explicit dereference) |
@@ -59,14 +61,24 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | VAR_INPUT | Supported | Input parameters |
 | VAR_OUTPUT | Supported | Output parameters |
 | VAR_IN_OUT | Supported | Pass-by-reference parameters |
-| VAR_EXTERNAL | Supported | External references to VAR_GLOBAL |
-| VAR_GLOBAL | Supported | Global variables |
+| VAR_EXTERNAL | Supported | References either a CONFIGURATION or a file-level VAR_GLOBAL |
+| VAR_GLOBAL | Supported | Global variables (CONFIGURATION-scoped or file-level) |
 | CONSTANT | Supported | Compile-time constants |
 | RETAIN | Supported | Tracked in retain variable table |
 | NON_RETAIN | Supported | |
 | AT %IX0.0 | Supported | Located variables (I/Q/M areas, X/B/W/D/L sizes) |
 | Multiple names | Supported | `a, b, c : INT := 0;` |
 | Initialization | Supported | `:= expression` |
+| Array initialization | Supported | `:= [1, 2, 3]` and the bracket-less `:= 1, 2, 3`. Multi-dimensional arrays take either a flat row-major list or a nested one (`:= [[1, 2], [3, 4]]`), where each inner list fills one row from its own bound. Nesting depth and value count are validated against the declared dimensions |
+| Array repetition | Supported | `:= [10(0)]`, `:= [3(1), 2(5)]`, `:= [7, 4(2), 9]`. The repeated value may be a structure initializer. Max count 65536 |
+| Structure initialization | Supported | `:= (x := 1.0, y := 2.0)`; nested, in array literals, and for FB instances. Omitted elements keep their own declared default. Only valid as a declaration's initial value, as in the standard — one written inside a statement is rejected |
+| STRUCT element defaults | Supported | Scalar, array-literal and structure-initializer defaults on a STRUCT element all carry their values |
+
+### Initialization gaps
+
+| Form | Notes |
+|------|-------|
+| Repetition with no value | `:= [10()]` (ten copies of the element default) — write `:= [10(0)]`, or omit the elements entirely. Matches matiec and CODESYS, which also require a value |
 
 ## Operators and Expressions
 
@@ -84,9 +96,10 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Parentheses | `( )` | Supported |
 | Function call | `name(args)` | Supported (positional + named) |
 | Method call | `obj.method(args)` | Supported |
-| Array access | `arr[i]`, `arr[i, j]` | Supported |
+| Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
 | Typed literals | `INT#5`, `DINT#42`, `REAL#3.14` | Supported |
+| Integer literals | `9223372036854775807`, `16#FF`, `1_000` | Supported — the full 64-bit LINT/ULINT range is preserved exactly; a value wider than ULINT is rejected |
 | NEW | `__NEW(type)`, `__NEW(type, size)` | Supported |
 | DELETE | `__DELETE(ptr)` | Supported |
 

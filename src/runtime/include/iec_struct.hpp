@@ -26,11 +26,35 @@ namespace strucpp {
 class IEC_STRUCT_Base {
 public:
     virtual ~IEC_STRUCT_Base() = default;
-    
+
     // Optional: type name for debugging/reflection
     // Subclasses can override to return their type name
     virtual const char* type_name() const noexcept { return "STRUCT"; }
 };
+
+/**
+ * Build a value of T from an IEC 61131-3 structure initializer
+ * (`p : Point := (y := 2.0, x := 1.0)`).
+ *
+ * `T v{}` gives every element the default from its own declaration; `setter`
+ * then overwrites only the elements the initializer actually names. That is
+ * exactly the semantics the standard asks for, and it is why this is a helper
+ * rather than a braced aggregate initializer: elements may appear in any order
+ * and may be omitted, and C++17 has no designated initializers to express that.
+ *
+ * Works for anything default-constructible and movable, so a STRUCT, an array
+ * of STRUCTs, and a function block instance all initialise through this one
+ * path:
+ *
+ *   inline POINT ORIGIN = iec_struct_init<POINT>(
+ *       [](POINT& v0) { v0.Y = 2.0; v0.X = 1.0; });
+ */
+template <typename T, typename Setter>
+inline T iec_struct_init(Setter&& setter) {
+    T value{};
+    setter(value);
+    return value;
+}
 
 /*
  * Example generated structure:
