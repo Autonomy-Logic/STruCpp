@@ -62,6 +62,7 @@ import {
   iecBaseToCppLiteral,
   translateIECString,
 } from "./codegen-utils.js";
+import { mangledMemberName, needsMemberMangling } from "./member-mangling.js";
 import {
   getTypeBits,
   getTypeCategory,
@@ -1183,6 +1184,9 @@ export class CodeGenerator {
         indent: this.options.indent,
         lineEnding: this.options.lineEnding,
         emitChunkMarkers: this.options.emitChunkMarkers ?? false,
+        // Struct fields must mangle by the same rule as everything else that
+        // names them, and only codegen knows the FB / program type names.
+        isUserDefinedType: (t) => this.isUserDefinedType(t),
       });
       const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
       for (const line of typeCode.split(this.options.lineEnding)) {
@@ -1544,11 +1548,7 @@ export class CodeGenerator {
         const cppType = this.mapTypeRefToCpp(decl.type);
         const tag = this.elaboratedTagIfShadowed(decl.type.name, fbMemberNames);
         for (const name of decl.names) {
-          const memberName = this.mangleMemberIfNeeded(
-            name,
-            cppType,
-            decl.type.name,
-          );
+          const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
           this.emitHeader(`    ${tag}${cppType} ${memberName};`);
@@ -1645,11 +1645,7 @@ export class CodeGenerator {
       for (const decl of block.declarations) {
         const cppType = this.mapTypeRefToCpp(decl.type);
         for (const name of decl.names) {
-          const memberName = this.mangleMemberIfNeeded(
-            name,
-            cppType,
-            decl.type.name,
-          );
+          const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
           if (decl.address) {
@@ -2173,11 +2169,7 @@ export class CodeGenerator {
             decl.type.name,
           );
           for (const name of decl.names) {
-            const memberName = this.mangleMemberIfNeeded(
-              name,
-              cppType,
-              decl.type.name,
-            );
+            const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
             fbInits.push(`${memberName}(${initExpr})`);
           }
         }
@@ -2397,11 +2389,7 @@ export class CodeGenerator {
             ? { referenceKind: decl.referenceKind }
             : {}),
         });
-        const memberName = this.mangleMemberIfNeeded(
-          decl.name,
-          cppType,
-          decl.typeName,
-        );
+        const memberName = this.mangleMemberIfNeeded(decl.name, decl.typeName);
         // Map variable ST line → header member line
         const stLine = varSourceLines.get(decl.name);
         if (stLine !== undefined) {
@@ -2560,7 +2548,13 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const initVal = this.projectVarInitializer(decl);
         if (initVal) {
-          inits.push(`${decl.name}(${initVal})`);
+          // Name the member as `generateProgramHeaderFromModel` declared it —
+          // `scale : Scale` is a collision (ST names are case-insensitive) and
+          // is declared `SCALE_`, so an initializer list naming `SCALE` does not
+          // compile. The FUNCTION_BLOCK constructor already does this.
+          inits.push(
+            `${this.mangleMemberIfNeeded(decl.name, decl.typeName)}(${initVal})`,
+          );
         }
       }
       // External globals: bind the pointer member to the canonical GlobalVar<V>
@@ -2585,7 +2579,13 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const initVal = this.projectVarInitializer(decl);
         if (initVal) {
-          inits.push(`${decl.name}(${initVal})`);
+          // Name the member as `generateProgramHeaderFromModel` declared it —
+          // `scale : Scale` is a collision (ST names are case-insensitive) and
+          // is declared `SCALE_`, so an initializer list naming `SCALE` does not
+          // compile. The FUNCTION_BLOCK constructor already does this.
+          inits.push(
+            `${this.mangleMemberIfNeeded(decl.name, decl.typeName)}(${initVal})`,
+          );
         }
       }
       if (inits.length > 0) {
@@ -5352,13 +5352,13 @@ export class CodeGenerator {
       if (arg.name) {
         // Named argument: assign directly
         this.emit(
-          `${indent}${instanceName}.${arg.name} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)} = ${this.generateExpression(arg.value)};`,
         );
       } else if (inputParamNames && positionalIndex < inputParamNames.length) {
         // Positional argument: map to VAR_INPUT by position
         const paramName = inputParamNames[positionalIndex];
         this.emit(
-          `${indent}${instanceName}.${paramName} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName!, fbTypeName)} = ${this.generateExpression(arg.value)};`,
         );
         positionalIndex++;
       } else {
@@ -5398,7 +5398,7 @@ export class CodeGenerator {
         if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
           this.emitCaptureToLvalue(
             arg.value,
-            `${instanceName}.${arg.name}`,
+            `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
             indent,
           );
         }
@@ -5410,7 +5410,7 @@ export class CodeGenerator {
       if (arg.name && arg.isOutput) {
         this.emitCaptureToLvalue(
           arg.value,
-          `${instanceName}.${arg.name}`,
+          `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
           indent,
         );
       }
@@ -5485,55 +5485,61 @@ export class CodeGenerator {
    * method name (case-insensitive), append '_' to avoid C++ errors.
    * Populates memberMangledNames map and returns the (possibly mangled) name.
    */
-  private mangleMemberIfNeeded(
-    name: string,
-    _cppType: string,
-    stTypeName: string,
-  ): string {
-    // Variable name vs type name collision (GCC -Wchanges-meaning)
-    if (this.isUserDefinedType(stTypeName)) {
-      if (name.toUpperCase() === stTypeName.toUpperCase()) {
-        const mangled = `${name}_`;
-        this.memberMangledNames.set(name.toUpperCase(), mangled);
-        return mangled;
-      }
-    }
-    // Variable name vs interface method name collision
-    if (this.currentFBInterfaceMethods.has(name.toUpperCase())) {
-      const mangled = `${name}_`;
+  private mangleMemberIfNeeded(name: string, stTypeName: string): string {
+    // Declaring a member of the FB currently being generated, so the interface
+    // methods in scope are that FB's.
+    const mangled = mangledMemberName(name, stTypeName, {
+      isUserDefinedType: (t) => this.isUserDefinedType(t),
+      interfaceMethods: this.currentFBInterfaceMethods,
+    });
+    if (mangled !== name) {
       this.memberMangledNames.set(name.toUpperCase(), mangled);
-      return mangled;
     }
-    return name;
+    return mangled;
+  }
+
+  /**
+   * C++ member name for a parameter of the function block being invoked, by the
+   * same rule its declaration used (see member-mangling.ts).
+   *
+   * An FB whose input is named after its own type, or after an interface method
+   * it implements, is declared with a trailing underscore — so assigning through
+   * the bare name reaches a member that does not exist. Left alone when the FB
+   * type is unknown, which only disables the check.
+   */
+  private fbParamMemberName(
+    paramName: string,
+    fbTypeName: string | undefined,
+  ): string {
+    if (fbTypeName === undefined) return paramName;
+    return this.needsFieldMangling(
+      paramName,
+      this.resolveMemberType(fbTypeName, paramName),
+      fbTypeName,
+    )
+      ? `${paramName}_`
+      : paramName;
   }
 
   /**
    * Check if a field access needs mangling — true when the field name collides
    * with its type name (GCC -Wchanges-meaning) or with an interface method name.
+   *
+   * Reaching a member through a named owner rather than from inside it, so the
+   * interface methods come from that owner's entry.
    */
-  private needsFieldMangling(
+  protected needsFieldMangling(
     fieldName: string,
     fieldTypeName: string | undefined,
     parentTypeName?: string,
   ): boolean {
-    // Field name vs type name collision
-    if (
-      fieldTypeName &&
-      this.isUserDefinedType(fieldTypeName) &&
-      fieldName.toUpperCase() === fieldTypeName.toUpperCase()
-    ) {
-      return true;
-    }
-    // Field name vs interface method name collision
-    if (parentTypeName) {
-      const ifaceMethods = this.fbInterfaceMethodNames.get(
-        parentTypeName.toUpperCase(),
-      );
-      if (ifaceMethods?.has(fieldName.toUpperCase())) {
-        return true;
-      }
-    }
-    return false;
+    return needsMemberMangling(fieldName, fieldTypeName, {
+      isUserDefinedType: (t) => this.isUserDefinedType(t),
+      interfaceMethods:
+        parentTypeName !== undefined
+          ? this.fbInterfaceMethodNames.get(parentTypeName.toUpperCase())
+          : undefined,
+    });
   }
 
   /**
