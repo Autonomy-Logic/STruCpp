@@ -29,6 +29,7 @@ export const PCH_INCLUDES = `#pragma once
 #include "iec_located.hpp"
 #include "iec_std_lib.hpp"
 #include "iec_enum.hpp"
+#include "iec_struct.hpp"
 #include "iec_memory.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
