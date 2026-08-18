@@ -459,30 +459,90 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Initializer expression: single expression or comma-separated list for array init.
-   * Handles: x := 5; and arr := 0, 31, 59, 90, ...;
+   * Initializer expression: a single value, or a comma-separated list for the
+   * bracket-less array-initialiser form OpenPLC emits.
+   * Handles: `x := 5;`, `arr := 0, 31, 59, 90;` and `arr := 4(0), 31;`
    */
   public initializerExpression = this.RULE("initializerExpression", () => {
-    this.SUBRULE(this.expression);
-    this.MANY(() => {
-      this.CONSUME(tokens.Comma);
-      this.SUBRULE2(this.expression);
+    this.AT_LEAST_ONE_SEP({
+      SEP: tokens.Comma,
+      DEF: () => this.SUBRULE(this.arrayInitialElements),
     });
   });
 
   /**
-   * Array literal: [expr, expr, ...]
-   * Bracket-enclosed comma-separated expressions for array initialization.
+   * Array literal: `[value, value, ...]`
+   *
+   * IEC 61131-3 Annex B.1.4.3 `array_initialization`.
    */
   public arrayLiteral = this.RULE("arrayLiteral", () => {
     this.CONSUME(tokens.LBracket);
-    this.SUBRULE(this.expression);
-    this.MANY(() => {
-      this.CONSUME(tokens.Comma);
-      this.SUBRULE2(this.expression);
+    this.AT_LEAST_ONE_SEP({
+      SEP: tokens.Comma,
+      DEF: () => this.SUBRULE(this.arrayInitialElements),
     });
     this.CONSUME(tokens.RBracket);
   });
+
+  /**
+   * One entry of an array initialiser: a single value, or a repetition group
+   * `count(value)` standing for `count` copies of that value.
+   *
+   * IEC 61131-3 Annex B.1.4.3 `array_initial_elements`:
+   *
+   *   arr : ARRAY[0..9] OF INT := [10(0)];
+   *   arr : ARRAY[0..4] OF INT := [3(1), 2(5)];
+   *   pts : ARRAY[0..1] OF Point := [2((x := 1.0, y := 2.0))];
+   *
+   * The repeated value is a full expression, so a repetition group may itself
+   * hold a structure initializer or a nested array literal.
+   */
+  public arrayInitialElements = this.RULE("arrayInitialElements", () => {
+    this.OR([
+      {
+        ALT: () => {
+          this.CONSUME(tokens.IntegerLiteral);
+          this.CONSUME(tokens.LParen);
+          this.SUBRULE(this.expression);
+          this.CONSUME(tokens.RParen);
+        },
+        GATE: () => this.isArrayRepetitionAhead(),
+      },
+      { ALT: () => this.SUBRULE2(this.expression) },
+    ]);
+  });
+
+  /**
+   * Structure initializer: `(field := value, field := value)`
+   *
+   * IEC 61131-3 Annex B.1.4.3 `structure_initialization`, used to initialise a
+   * STRUCT-typed variable (`p : Point := (x := 1.0, y := 2.0)`) or the inputs of
+   * a function block instance (`t : TON := (PT := T#1s)`).
+   *
+   * Reached through `primaryExpression`, which is what lets element values be
+   * arbitrary expressions — including a nested structure initializer or an array
+   * literal — without a second grammar for initialisers.
+   */
+  public structInitializer = this.RULE("structInitializer", () => {
+    this.CONSUME(tokens.LParen);
+    this.AT_LEAST_ONE_SEP({
+      SEP: tokens.Comma,
+      DEF: () => this.SUBRULE(this.structElementInitializer),
+    });
+    this.CONSUME(tokens.RParen);
+  });
+
+  /**
+   * One `element := value` pair of a structure initializer.
+   */
+  public structElementInitializer = this.RULE(
+    "structElementInitializer",
+    () => {
+      this.SUBRULE(this.identifierOrKeyword);
+      this.CONSUME(tokens.Assign);
+      this.SUBRULE(this.expression);
+    },
+  );
 
   // ==========================================================================
   // Type declarations
@@ -533,6 +593,14 @@ export class STParser extends CstParser {
         { ALT: () => this.SUBRULE(this.typedEnumOrSubrangeOrAlias) },
       ],
       IGNORE_AMBIGUITIES: true,
+    });
+    // Default value carried by the type itself: `Temp : REAL := 25.0;`,
+    // `Origin : Point := (x := 0.0, y := 0.0);`. IEC 61131-3 Annex B.1.3.3
+    // (`initialized_simple_type_declaration` and friends). Every declaration of
+    // the type inherits it unless it supplies its own initialiser.
+    this.OPTION4(() => {
+      this.CONSUME(tokens.Assign);
+      this.SUBRULE(this.initializerExpression);
     });
     // Semicolon is optional after END_STRUCT END_TYPE (CODESYS tolerance)
     this.OPTION3(() => {
@@ -840,6 +908,13 @@ export class STParser extends CstParser {
           ALT: () => this.SUBRULE(this.methodCallStatement),
           GATE: () => this.isMethodCallAhead(),
         },
+        // `units[0](…)` — invoking an FB instance in an array element. Must also
+        // precede assignmentStatement, which would otherwise consume the
+        // subscripted variable and then demand `:=`.
+        {
+          ALT: () => this.SUBRULE(this.instanceCallStatement),
+          GATE: () => this.isInstanceCallAhead(),
+        },
         // assignmentStatement and functionCallStatement both start with Identifier;
         // Chevrotain resolves by trying assignmentStatement first (it has := after the LHS)
         { ALT: () => this.SUBRULE(this.assignmentStatement) },
@@ -978,6 +1053,35 @@ export class STParser extends CstParser {
   }
 
   /**
+   * Lookahead helper: does a structure initializer start here?
+   *
+   * `(NAME :=` can only be `structure_initialization` — `:=` is not an operator
+   * inside an expression, so this never competes with a parenthesised
+   * expression.
+   */
+  private isStructInitializerAhead(): boolean {
+    return (
+      this.LA(1).tokenType === tokens.LParen &&
+      this.isIdentifierOrKeywordToken(this.LA(2).tokenType) &&
+      this.LA(3).tokenType === tokens.Assign
+    );
+  }
+
+  /**
+   * Lookahead helper: does an array repetition group `count(value)` start here?
+   *
+   * An integer immediately followed by `(` is never an expression — ST has no
+   * implicit multiplication and only an identifier can be called — so this never
+   * competes with a function call or a parenthesised sub-expression.
+   */
+  private isArrayRepetitionAhead(): boolean {
+    return (
+      this.LA(1).tokenType === tokens.IntegerLiteral &&
+      this.LA(2).tokenType === tokens.LParen
+    );
+  }
+
+  /**
    * Lookahead helper to detect if the current position starts a CASE label.
    * Scans forward looking for a bare Colon (:) before finding Assign (:=),
    * Semicolon, or LParen — which would indicate a statement, not a label.
@@ -1027,6 +1131,37 @@ export class STParser extends CstParser {
   }
 
   /**
+   * Lookahead helper: does an invocation of a subscripted function block
+   * instance start here (`units[0](…)`, `grid[i, j]()`)?
+   *
+   * Requires the `(` to follow the closing `]` directly, so this claims exactly
+   * the array-element invocation and leaves `arr[0].m(…)` — which could equally
+   * be a method call on the element — to the existing rules.
+   */
+  private isInstanceCallAhead(): boolean {
+    if (!this.isIdentifierOrKeywordToken(this.LA(1).tokenType)) return false;
+    if (this.LA(2).tokenType !== tokens.LBracket) return false;
+
+    // Walk to the matching `]`, allowing nested subscripts in the index
+    // expressions (`a[b[i]]`). 64 tokens covers any realistic index list.
+    const MAX_LOOKAHEAD = 64;
+    let depth = 0;
+    for (let i = 2; i <= MAX_LOOKAHEAD; i++) {
+      const tokenType = this.LA(i)?.tokenType;
+      if (tokenType === undefined) return false;
+      if (tokenType === tokens.LBracket) {
+        depth++;
+      } else if (tokenType === tokens.RBracket) {
+        depth--;
+        if (depth === 0) return this.LA(i + 1)?.tokenType === tokens.LParen;
+      } else if (tokenType === tokens.Semicolon) {
+        return false;
+      }
+    }
+    return false;
+  }
+
+  /**
    * instance.method(args); statement
    */
   public methodCallStatement = this.RULE("methodCallStatement", () => {
@@ -1042,6 +1177,21 @@ export class STParser extends CstParser {
     this.MANY(() => {
       this.SUBRULE(this.chainedMethodCall);
     });
+    this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
+   * `units[0](args);` — invoke a function block instance held in an array
+   * element. IEC 61131-3 allows an array of function block instances, and an
+   * element is invoked like any other instance.
+   */
+  public instanceCallStatement = this.RULE("instanceCallStatement", () => {
+    this.SUBRULE(this.variable);
+    this.CONSUME(tokens.LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.argumentList);
+    });
+    this.CONSUME(tokens.RParen);
     this.CONSUME(tokens.Semicolon);
   });
 
@@ -1469,6 +1619,13 @@ export class STParser extends CstParser {
         {
           ALT: () => this.SUBRULE(this.arrayLiteral),
           GATE: () => this.LA(1).tokenType === tokens.LBracket,
+        },
+        // Structure initializer `(field := value, ...)` — must precede the
+        // parenthesised-expression alternative below, which would otherwise
+        // consume the `(` and then demand `)` at the `:=`.
+        {
+          ALT: () => this.SUBRULE(this.structInitializer),
+          GATE: () => this.isStructInitializerAhead(),
         },
         // functionCall and variable both start with Identifier;
         // functionCall needs Ident( lookahead to disambiguate

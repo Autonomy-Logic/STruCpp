@@ -12,6 +12,7 @@ import type { CompilationUnit, VarBlock } from "../frontend/ast.js";
 import type { ProjectModel } from "../project-model.js";
 import type { LineMapEntry } from "../types.js";
 import { getProjectNamespace } from "../project-model.js";
+import { mangledMemberName, userDefinedTypeNames } from "./member-mangling.js";
 
 /**
  * Escape ST source for embedding in a C++ raw string literal with delimiter STRUCPP_SRC.
@@ -240,14 +241,30 @@ interface ProgramInfo {
 /**
  * Emit VarDescriptor arrays for each program.
  */
-function emitVarDescriptors(lines: string[], programs: ProgramInfo[]): void {
+function emitVarDescriptors(
+  lines: string[],
+  programs: ProgramInfo[],
+  ast: CompilationUnit,
+): void {
+  // Program variables only, and a PROGRAM implements no interfaces, so the
+  // name-matches-its-own-type collision is the only one that can apply.
+  const userTypes = userDefinedTypeNames(ast);
+  const ctx = {
+    isUserDefinedType: (typeName: string): boolean =>
+      userTypes.has(typeName.toUpperCase()),
+  };
   for (const prog of programs) {
     if (prog.vars.length > 0) {
       lines.push(`static VarDescriptor ${prog.varsDescName}[] = {`);
       for (const v of prog.vars) {
         const tag = getTypeTag(v.typeName);
+        // The address must name the member as codegen declared it — a variable
+        // named after its own type is emitted with a trailing underscore (see
+        // member-mangling.ts). The descriptor's display name stays the ST name,
+        // which is what the user types at the REPL prompt.
+        const member = mangledMemberName(v.name, v.typeName, ctx);
         lines.push(
-          `    {"${v.name}", VarTypeTag::${tag}, &${prog.instanceExpr}.${v.name}},`,
+          `    {"${v.name}", VarTypeTag::${tag}, &${prog.instanceExpr}.${member}},`,
         );
       }
       lines.push("};");
@@ -323,7 +340,7 @@ function generateStandalone(
   }
   lines.push("");
 
-  emitVarDescriptors(lines, programs);
+  emitVarDescriptors(lines, programs, ast);
   emitProgramDescriptorsAndMain(lines, programs);
 }
 
@@ -365,6 +382,6 @@ function generateWithConfiguration(
     }
   }
 
-  emitVarDescriptors(lines, programs);
+  emitVarDescriptors(lines, programs, ast);
   emitProgramDescriptorsAndMain(lines, programs);
 }

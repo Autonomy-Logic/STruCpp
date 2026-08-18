@@ -219,6 +219,61 @@ END_CONFIGURATION
     }
   });
 
+  it("uses operator() for multi-dimensional array elements", () => {
+    // Array2D/Array3D take every index in one operator() call. Emitting a
+    // subscript per dimension gives `arr[i][j]`, which has no matching operator
+    // on those containers — the generated debug table then fails to compile
+    // (reported from an AVR build: "no match for 'operator[]'").
+    const source = `
+TYPE
+  Matrix2 : ARRAY[0..1, 0..1] OF INT;
+  Cube : ARRAY[0..1, 0..1, 0..1] OF INT;
+END_TYPE
+
+PROGRAM main
+  VAR
+    m : Matrix2;
+    c : Cube;
+    flat : ARRAY[0..2] OF INT;
+  END_VAR
+  m[0, 0] := 1;
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM p WITH t : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    const cpp = result.debugTableCpp!;
+
+    // 2D → one operator() call with both indices.
+    expect(cpp).toContain(".M(0, 0)");
+    expect(cpp).toContain(".M(1, 1)");
+    // 3D → one call with all three.
+    expect(cpp).toContain(".C(0, 0, 0)");
+    expect(cpp).toContain(".C(1, 1, 1)");
+    // 1D still subscripts. No chained subscripting survives in any pointer
+    // expression — the trailing comment keeps the IEC `[i][j]` path, so check
+    // only the code ahead of it.
+    expect(cpp).toContain(".FLAT[2]");
+    const pointerExprs = cpp
+      .split("\n")
+      .filter((l) => l.includes("(void*)&"))
+      .map((l) => l.split("//")[0]!);
+    expect(pointerExprs.length).toBeGreaterThan(0);
+    expect(pointerExprs.filter((e) => e.includes("]["))).toEqual([]);
+
+    // The IEC display paths keep the [i][j] form the debug UI shows.
+    const paths = result.debugMap!.leaves.map((l) => l.path);
+    expect(paths).toContain("P.M[0][0]");
+    expect(paths).toContain("P.C[1][1][1]");
+    expect(paths).toContain("P.FLAT[2]");
+  });
+
   it("applies maxEntriesPerArray split when exceeded", () => {
     // 10 leaves, cap at 4 -> expect 3 buckets (4, 4, 2)
     const manyVarsSource = `
@@ -378,5 +433,213 @@ END_CONFIGURATION
       expect(paths).toContain("NUMS[1]");
       expect(paths).toContain("NUMS[2]");
     });
+  });
+});
+
+describe("member whose name matches its type", () => {
+  /**
+   * CODESYS allows `RunningLights : RunningLights`, and real projects use it. Codegen
+   * emits that member as `RUNNINGLIGHTS_` because GCC rejects a member that changes the
+   * meaning of its own type name — so the debug table has to address it by the same
+   * name. When it did not, every entry for the instance named a member that does not
+   * exist and `generated_debug.cpp` failed to compile, taking the whole build with it.
+   */
+  const src = `
+FUNCTION_BLOCK Motor
+VAR_INPUT run : BOOL; END_VAR
+VAR_OUTPUT spinning : BOOL; END_VAR
+  spinning := run;
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR
+  Motor : Motor;
+  plain : BOOL;
+END_VAR
+  Motor(run := plain);
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`;
+
+  it("addresses it by the mangled name codegen emitted", () => {
+    const result = compile(src);
+    expect(result.success).toBe(true);
+
+    const cpp = result.debugTableCpp ?? "";
+    // The declaration codegen produced, and the reference the table must match.
+    expect(result.headerCode ?? "").toContain("MOTOR MOTOR_;");
+    expect(cpp).toContain("g_config.INSTANCE0.MOTOR_.RUN");
+    // Only the C++ expression is mangled; the trailing comment keeps the ST path the
+    // editor shows the user.
+    const addresses = cpp
+      .split("\n")
+      .map((line) => line.split("//")[0])
+      .join("\n");
+    expect(addresses).not.toMatch(/INSTANCE0\.MOTOR\./);
+  });
+
+  it("leaves a member whose name differs from its type alone", () => {
+    const cpp = compile(src).debugTableCpp ?? "";
+    expect(cpp).toContain("g_config.INSTANCE0.PLAIN");
+    expect(cpp).not.toContain("PLAIN_");
+  });
+});
+
+describe("member mangling agrees with the class definition", () => {
+  /**
+   * The table addresses members by name, so it has to name exactly what codegen
+   * declared — in both directions. Mangling too little names a member that does
+   * not exist; mangling too much does the same in reverse. Either way
+   * `generated_debug.cpp` fails to compile and takes the firmware build with it,
+   * and nothing catches it earlier because `strucpp file.st` emits no table.
+   *
+   * The rule now lives in one place (`member-mangling.ts`) and covers both
+   * collisions — a member named after its own type, and a member named after an
+   * interface method the owning FB implements — at every site the table builds a
+   * member expression: PROGRAM variables, FB members, and STRUCT fields.
+   */
+  const CFG = `
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`;
+
+  /** Debug-table entry addresses, with the trailing ST-path comments stripped. */
+  function addresses(source: string): string {
+    const result = compile(source);
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+    expect(result.success).toBe(true);
+    return (result.debugTableCpp ?? "")
+      .split("\n")
+      .map((line) => line.split("//")[0])
+      .join("\n");
+  }
+
+  function header(source: string): string {
+    return compile(source).headerCode ?? "";
+  }
+
+  const MOTOR = `
+FUNCTION_BLOCK Motor
+VAR_INPUT run : BOOL; END_VAR
+VAR_OUTPUT spinning : BOOL; END_VAR
+  spinning := run;
+END_FUNCTION_BLOCK`;
+
+  it("mangles a colliding member of a FUNCTION_BLOCK, not just of a PROGRAM", () => {
+    const src = `${MOTOR}
+FUNCTION_BLOCK Rig
+VAR Motor : Motor; idle : BOOL; END_VAR
+  Motor(run := idle);
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR r : Rig; END_VAR
+  r();
+END_PROGRAM${CFG}`;
+    expect(header(src)).toContain("MOTOR MOTOR_;");
+    const addr = addresses(src);
+    expect(addr).toContain("g_config.INSTANCE0.R.MOTOR_.RUN");
+    expect(addr).not.toMatch(/\.R\.MOTOR\./);
+    // A sibling that does not collide is untouched.
+    expect(addr).toContain("g_config.INSTANCE0.R.IDLE");
+  });
+
+  it("mangles a colliding STRUCT field", () => {
+    const src = `
+TYPE
+  Inner : STRUCT v : BOOL; END_STRUCT;
+  Rig : STRUCT Inner : Inner; plain : BOOL; END_STRUCT;
+END_TYPE
+PROGRAM Main
+VAR r : Rig; END_VAR
+  r.plain := FALSE;
+END_PROGRAM${CFG}`;
+    expect(header(src)).toContain("INNER INNER_");
+    const addr = addresses(src);
+    expect(addr).toContain("g_config.INSTANCE0.R.INNER_.V");
+    expect(addr).not.toMatch(/\.R\.INNER\./);
+    expect(addr).toContain("g_config.INSTANCE0.R.PLAIN");
+  });
+
+  it("mangles a member colliding with an implemented interface method", () => {
+    // Codegen renames the variable because the method already owns the name;
+    // addressing `.START` would take the address of the member function instead
+    // ("cannot create a non-constant pointer to member function").
+    const src = `
+INTERFACE IMotor
+  METHOD Start : BOOL
+  END_METHOD
+END_INTERFACE
+FUNCTION_BLOCK Drive IMPLEMENTS IMotor
+VAR Start : BOOL; other : INT; END_VAR
+  METHOD Start : BOOL
+    Start := TRUE;
+  END_METHOD
+  other := 1;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR d : Drive; END_VAR
+  d();
+END_PROGRAM${CFG}`;
+    expect(header(src)).toContain("IEC_BOOL START_;");
+    const addr = addresses(src);
+    expect(addr).toContain("g_config.INSTANCE0.D.START_");
+    expect(addr).not.toMatch(/\.D\.START\b(?!_)/);
+    expect(addr).toContain("g_config.INSTANCE0.D.OTHER");
+  });
+
+  it("does NOT mangle a variable named after an elementary type", () => {
+    // `Time : TIME` is an ordinary declaration — codegen emits it as plain
+    // `TIME`, because the collision rule only applies to user-defined types. A
+    // name-only comparison would mangle it and address a `TIME_` that does not
+    // exist, breaking a build that works today.
+    const src = `
+PROGRAM Main
+VAR Time : TIME; Word : WORD; Date : DATE; Real : REAL; END_VAR
+  Time := T#0s;
+END_PROGRAM${CFG}`;
+    expect(header(src)).toContain("IEC_TIME TIME;");
+    const addr = addresses(src);
+    for (const name of ["TIME", "WORD", "DATE", "REAL"]) {
+      expect(addr).toContain(`g_config.INSTANCE0.${name},`);
+    }
+    expect(addr).not.toContain("_,");
+  });
+
+  it("does NOT mangle elementary-named members of an FB or a STRUCT", () => {
+    const src = `
+TYPE Bag : STRUCT Time : TIME; Word : WORD; END_STRUCT; END_TYPE
+FUNCTION_BLOCK Holder
+VAR Time : TIME; b : Bag; END_VAR
+  Time := T#0s;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR h : Holder; g : Bag; END_VAR
+  h();
+END_PROGRAM${CFG}`;
+    const addr = addresses(src);
+    expect(addr).toContain("g_config.INSTANCE0.H.TIME,");
+    expect(addr).toContain("g_config.INSTANCE0.H.B.TIME,");
+    expect(addr).toContain("g_config.INSTANCE0.G.WORD,");
+    expect(addr).not.toContain("TIME_");
+    expect(addr).not.toContain("WORD_");
+  });
+
+  it("mangles a variable named after an enum type, matching codegen", () => {
+    const src = `
+TYPE Color : (Red, Green, Blue); END_TYPE
+PROGRAM Main
+VAR Color : Color; plain : BOOL; END_VAR
+  plain := FALSE;
+END_PROGRAM${CFG}`;
+    expect(header(src)).toContain("IEC_COLOR COLOR_;");
+    expect(addresses(src)).toContain("g_config.INSTANCE0.COLOR_");
   });
 });

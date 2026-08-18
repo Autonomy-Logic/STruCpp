@@ -51,6 +51,8 @@ const RULE_DESCRIPTIONS: Record<string, string> = {
   assignmentStatement: "parsing an assignment",
   refAssignStatement: "parsing a reference assignment",
   functionCallStatement: "parsing a function call",
+  instanceCallStatement:
+    "invoking a function block instance in an array element",
   methodCallStatement: "parsing a method call",
   ifStatement: "parsing an IF statement",
   caseStatement: "parsing a CASE statement",
@@ -93,6 +95,9 @@ const RULE_DESCRIPTIONS: Record<string, string> = {
   varDeclaration: "parsing a variable declaration",
   initializerExpression: "parsing a variable initializer",
   arrayLiteral: "parsing an array literal",
+  arrayInitialElements: "parsing an array initializer element",
+  structInitializer: "parsing a structure initializer",
+  structElementInitializer: "parsing a structure initializer element",
   dataType: "parsing a data type",
   singleTypeDeclaration: "parsing a type declaration",
   structType: "parsing a STRUCT type",

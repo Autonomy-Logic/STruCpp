@@ -4,6 +4,8 @@
  * Shared utility functions for C++ code generation.
  */
 
+import { exactIntegerLiteralValue } from "../literal-utils.js";
+
 /**
  * Convert an IEC 61131-3 based numeric string to a C++ literal string.
  * Handles 16#FF → 0xFF, 8#77 → 077, 2#1010 → 0b1010, and plain decimals.
@@ -15,6 +17,44 @@ export function iecBaseToCppLiteral(raw: string): string {
   if (upper.startsWith("8#")) return "0" + upper.slice(2);
   if (upper.startsWith("2#")) return "0b" + upper.slice(2);
   return raw.replace(/_/g, "");
+}
+
+/** Largest value a C++ *decimal* literal can name without a suffix. */
+const CPP_SIGNED_LITERAL_MAX = 9223372036854775807n;
+
+/**
+ * Lower an IEC 61131-3 integer literal to a C++ integer literal.
+ *
+ * Based literals (16#FF, 8#77, 2#1010) keep their notation. Plain decimals are
+ * re-emitted from the *exact* value rather than from the parsed `number`, which
+ * matters twice over:
+ *
+ *   - `number` rounds above 2^53, so a LINT/ULINT initializer such as
+ *     `9007199254740993` would silently become ...992, and `ULINT` bounds would
+ *     round past the type's range into a literal g++ rejects outright.
+ *   - passing the raw digits straight through instead would make a leading zero
+ *     an octal prefix in C++ (`0010` → 8, `008` → a compile error), so the
+ *     digits are normalized rather than copied.
+ *
+ * A value above `CPP_SIGNED_LITERAL_MAX` gets a `ULL` suffix: a C++ decimal
+ * literal is only ever given a *signed* type (C++17 [lex.icon]/3), so without
+ * it `18446744073709551615` names no type at all.
+ *
+ * `value` is the pre-parsed fallback for a literal whose raw text is not a
+ * plain integer (synthesized nodes, for one).
+ */
+export function formatIntegerLiteral(rawValue: string, value: number): string {
+  const upper = rawValue.toUpperCase().replace(/_/g, "");
+  if (
+    upper.startsWith("16#") ||
+    upper.startsWith("8#") ||
+    upper.startsWith("2#")
+  ) {
+    return iecBaseToCppLiteral(rawValue);
+  }
+  const exact = exactIntegerLiteralValue(rawValue);
+  if (exact === undefined) return String(value);
+  return exact > CPP_SIGNED_LITERAL_MAX ? `${exact}ULL` : exact.toString();
 }
 
 /**
@@ -49,6 +89,104 @@ export function formatArrayType(
   for (let i = dimensions.length - 1; i >= 0; i--) {
     const dim = dimensions[i]!;
     result = `Array1D<${result}, ${dim.start}, ${dim.end}>`;
+  }
+  return result;
+}
+
+/**
+ * Append an unchecked element access for one full set of array indices,
+ * matching the container {@link formatArrayType} picked for that rank.
+ *
+ * `Array1D` subscripts with `operator[]`; `Array2D` / `Array3D` take all indices
+ * at once through `operator()`; 4+ dimensions are nested `Array1D`, so they
+ * subscript once per dimension. Getting this wrong doesn't just read the wrong
+ * element — `arr[i][j]` on an `Array2D` has no matching operator and fails to
+ * compile.
+ *
+ * Unchecked (rather than `.at()`) because these accessors are `constexpr`, which
+ * is what lets `&arr[i]` be a constant expression — required for the debug
+ * pointer table's PROGMEM placement on AVR.
+ */
+export function formatArrayElementAccess(
+  base: string,
+  indices: number[],
+): string {
+  if (indices.length === 2 || indices.length === 3) {
+    return `${base}(${indices.join(", ")})`;
+  }
+  return base + indices.map((i) => `[${i}]`).join("");
+}
+
+/**
+ * Translate IEC 61131-3 `$`-escape sequences in a string literal's body to C++
+ * escape sequences, and escape what C++ needs escaped.
+ *
+ * Handles `$N`/`$n` (newline), `$L`/`$l` (line feed), `$R`/`$r` (CR), `$T`/`$t`
+ * (tab), `$P`/`$p` (form feed), `$$` (literal `$`), `$'` (single quote), `$XX`
+ * (hex byte) and `''` (doubled single quote), then escapes backslash and
+ * double-quote so the result is safe inside a C++ `"…"` literal.
+ *
+ * Shared by the expression emitter and the type generator: a STRING literal has
+ * to lower identically whether it appears in a statement, a variable
+ * initialiser, or a STRUCT element default.
+ */
+export function translateIECString(inner: string): string {
+  let result = "";
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i]!;
+    if (ch === "$" && i + 1 < inner.length) {
+      const next = inner[i + 1]!;
+      switch (next.toUpperCase()) {
+        case "N":
+        case "L":
+          result += "\\n";
+          i++;
+          break;
+        case "R":
+          result += "\\r";
+          i++;
+          break;
+        case "T":
+          result += "\\t";
+          i++;
+          break;
+        case "P":
+          result += "\\f";
+          i++;
+          break;
+        case "$":
+          result += "$";
+          i++;
+          break;
+        case "'":
+          result += "'";
+          i++;
+          break;
+        default:
+          // $XX hex escape: two hex digits
+          if (
+            i + 2 < inner.length &&
+            /^[0-9A-Fa-f]{2}$/.test(inner.substring(i + 1, i + 3))
+          ) {
+            result += "\\x" + inner.substring(i + 1, i + 3);
+            i += 2;
+          } else {
+            // Unknown $-escape, pass through
+            result += "\\\\$";
+          }
+          break;
+      }
+    } else if (ch === "'" && i + 1 < inner.length && inner[i + 1] === "'") {
+      // ST doubled-quote → single quote
+      result += "'";
+      i++;
+    } else if (ch === "\\") {
+      result += "\\\\";
+    } else if (ch === '"') {
+      result += '\\"';
+    } else {
+      result += ch;
+    }
   }
   return result;
 }

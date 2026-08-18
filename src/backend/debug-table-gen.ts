@@ -29,6 +29,10 @@ import type {
 } from "../frontend/ast.js";
 import type { ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
+import { isElementaryType } from "../semantic/type-registry.js";
+import { evalIntConst } from "../semantic/type-utils.js";
+import { formatArrayElementAccess } from "./codegen-utils.js";
+import { mangledMemberName } from "./member-mangling.js";
 
 // ---------------------------------------------------------------------------
 // Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
@@ -221,6 +225,59 @@ export function generateDebugTable(
   const programByName = new Map<string, ProgramDeclaration>();
   for (const p of ast.programs) programByName.set(p.name.toUpperCase(), p);
 
+  // --- Inputs to the shared member-mangling rule (see member-mangling.ts) ----
+  // The table addresses members by the name codegen declared them under, so
+  // both predicates have to resolve the same way codegen's do.
+
+  const interfaceNames = new Set(
+    ast.interfaces.map((i) => i.name.toUpperCase()),
+  );
+
+  /**
+   * Mirrors `CodeGenerator.isUserDefinedType`: a function block, interface,
+   * STRUCT/UDT, or program. Elementary types are excluded explicitly — codegen
+   * leaves `Time : TIME` unmangled, so mangling it here would name a member
+   * that does not exist.
+   */
+  const isUserDefinedType = (typeName: string): boolean => {
+    const upper = typeName.toUpperCase();
+    if (isElementaryType(upper)) return false;
+    return (
+      symbolTables.lookupType(upper) !== undefined ||
+      symbolTables.lookupFunctionBlock(upper) !== undefined ||
+      interfaceNames.has(upper) ||
+      programByName.has(upper)
+    );
+  };
+
+  /**
+   * FB type name → upper-cased method names of every interface it implements,
+   * mirroring `CodeGenerator.fbInterfaceMethodNames`. Directly implemented
+   * interfaces only, which is what codegen consults.
+   */
+  const fbInterfaceMethods = new Map<string, Set<string>>();
+  {
+    const methodsByInterface = new Map<string, Set<string>>();
+    for (const iface of ast.interfaces) {
+      methodsByInterface.set(
+        iface.name.toUpperCase(),
+        new Set(iface.methods.map((m) => m.name.toUpperCase())),
+      );
+    }
+    for (const fb of ast.functionBlocks) {
+      if (!fb.implements || fb.implements.length === 0) continue;
+      const methods = new Set<string>();
+      for (const ifaceName of fb.implements) {
+        for (const m of methodsByInterface.get(ifaceName.toUpperCase()) ?? []) {
+          methods.add(m);
+        }
+      }
+      if (methods.size > 0) {
+        fbInterfaceMethods.set(fb.name.toUpperCase(), methods);
+      }
+    }
+  }
+
   // Buckets of entries — grown in order, flushed at program boundary or size cap.
   const arrays: Entry[][] = [[]];
   const leaves: DebugLeaf[] = [];
@@ -376,11 +433,13 @@ export function generateDebugTable(
         ...fbSym.outputs,
         ...fbSym.inouts,
       ];
+      // `name` is the FB type declaring these members, so it is the owner for
+      // both mangling collisions.
       if (interfaceVars.length > 0) {
         for (const v of interfaceVars) {
           visitTypeRef(
             `${path}.${v.name.toUpperCase()}`,
-            `${cppExpr}.${v.name}`,
+            `${cppExpr}.${memberCppName(v.name, v.declaration.type, name)}`,
             v.declaration.type,
           );
         }
@@ -396,7 +455,7 @@ export function generateDebugTable(
               for (const fieldName of fieldDecl.names) {
                 visitTypeRef(
                   `${path}.${fieldName.toUpperCase()}`,
-                  `${cppExpr}.${fieldName}`,
+                  `${cppExpr}.${memberCppName(fieldName, fieldDecl.type, name)}`,
                   fieldDecl.type,
                 );
               }
@@ -419,24 +478,38 @@ export function generateDebugTable(
       for (const fieldName of fieldDecl.names) {
         visitTypeRef(
           `${path}.${fieldName.toUpperCase()}`,
-          `${cppExpr}.${fieldName}`,
+          // No owner: a STRUCT implements no interfaces, so only the
+          // field-name-matches-its-type collision can apply.
+          `${cppExpr}.${memberCppName(fieldName, fieldDecl.type)}`,
           fieldDecl.type,
         );
       }
     }
   };
 
+  /**
+   * Enumerate every element of an array, emitting one debug entry per element.
+   *
+   * Indices are collected across all dimensions and only turned into C++ at the
+   * innermost level, because the accessor depends on the array's rank:
+   * `Array2D`/`Array3D` take every index in one `operator()` call, so emitting a
+   * subscript per dimension as we descend would produce `arr[i][j]` — which has
+   * no matching operator on those containers and fails to compile.
+   * {@link formatArrayElementAccess} owns that rank rule. The IEC display path
+   * stays `[i][j]`, which is what the debug UI shows.
+   */
   const walkArrayDims = (
     path: string,
     cppExpr: string,
     dims: Array<{ start: number; end: number }>,
     dimIdx: number,
     elementTypeName: string,
+    indices: number[] = [],
   ): void => {
     if (dimIdx >= dims.length) {
       // Innermost element — visit as a TypeReference with the element type
       // name. Manufacture a minimal TypeReference for recursion.
-      visitTypeRef(path, cppExpr, {
+      visitTypeRef(path, formatArrayElementAccess(cppExpr, indices), {
         kind: "TypeReference",
         name: elementTypeName,
         isReference: false,
@@ -448,23 +521,54 @@ export function generateDebugTable(
     for (let i = start; i <= end; i++) {
       walkArrayDims(
         `${path}[${i}]`,
-        `${cppExpr}[${i}]`,
+        cppExpr,
         dims,
         dimIdx + 1,
         elementTypeName,
+        [...indices, i],
       );
     }
   };
+
+  /**
+   * C++ member name for a declaration, by the same rule codegen used to emit it
+   * (see `member-mangling.ts`).
+   *
+   * The table addresses members by name, so it has to agree with the class
+   * definition exactly, in *both* directions. Mangling too little named a member
+   * that does not exist (`RunningLights : RunningLights` is declared
+   * `RUNNINGLIGHTS_`); mangling too much would do the same in reverse, since
+   * `Time : TIME` is declared plain `TIME`. Either way `generated_debug.cpp`
+   * fails to compile and takes the whole firmware build with it — and nothing
+   * catches it earlier, because `strucpp file.st` emits no debug table.
+   *
+   * `ownerTypeName` is the type declaring the member, needed for the
+   * interface-method collision; undefined for a PROGRAM or a STRUCT, neither of
+   * which can implement an interface.
+   */
+  const memberCppName = (
+    varName: string,
+    typeRef: TypeReference | undefined,
+    ownerTypeName?: string,
+  ): string =>
+    mangledMemberName(varName, typeRef?.name, {
+      isUserDefinedType,
+      interfaceMethods:
+        ownerTypeName !== undefined
+          ? fbInterfaceMethods.get(ownerTypeName.toUpperCase())
+          : undefined,
+    });
 
   const visitVarDecl = (
     path: string,
     cppExpr: string,
     decl: VarDeclaration,
+    ownerTypeName?: string,
   ): void => {
     for (const varName of decl.names) {
       visitTypeRef(
         `${path}.${varName.toUpperCase()}`,
-        `${cppExpr}.${varName}`,
+        `${cppExpr}.${memberCppName(varName, decl.type, ownerTypeName)}`,
         decl.type,
       );
     }
@@ -634,29 +738,6 @@ function renderCpp(
 // ---------------------------------------------------------------------------
 // Expression helpers
 // ---------------------------------------------------------------------------
-
-/** Evaluate a compile-time integer Expression; returns undefined on failure. */
-function evalIntConst(e: unknown): number | undefined {
-  if (!e || typeof e !== "object") return undefined;
-  const expr = e as {
-    kind?: string;
-    value?: unknown;
-    operand?: unknown;
-    operator?: string;
-  };
-  if (expr.kind === "LiteralExpression") {
-    if (typeof expr.value === "number") return expr.value;
-    if (typeof expr.value === "bigint") {
-      const n = Number(expr.value);
-      if (Number.isSafeInteger(n)) return n;
-    }
-  }
-  if (expr.kind === "UnaryExpression" && expr.operator === "-") {
-    const inner = evalIntConst(expr.operand);
-    return inner === undefined ? undefined : -inner;
-  }
-  return undefined;
-}
 
 // ---------------------------------------------------------------------------
 // Helpers exposed for tests
