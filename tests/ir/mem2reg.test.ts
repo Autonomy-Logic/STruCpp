@@ -132,3 +132,42 @@ describe("mem2reg", () => {
     expect(printModule(m)).toBe(once);
   });
 });
+
+describe("mem2reg leaves I/O and retentive state in memory", () => {
+  it("does not promote a located variable, preserving its terminal binding", () => {
+    const { ast } = analyze(`
+      PROGRAM P
+      VAR
+        a AT %IX0.0 : BOOL;
+        q AT %QX0.0 : BOOL;
+      END_VAR
+        q := a;
+      END_PROGRAM
+    `);
+    const m = lowerToIr(ast!, { moduleName: "t", producerVersion: "t" }).module;
+    runPasses(m, [mem2reg]);
+    const allocas = m.functions[0]!.blocks.flatMap((b) => b.instrs).filter(
+      (i) => i.op === "alloca",
+    );
+    const located = allocas.map((a) =>
+      a.op === "alloca" ? a.located : undefined,
+    );
+    expect(located).toContain("%IX0.0");
+    expect(located).toContain("%QX0.0");
+  });
+
+  it("does not promote a RETAIN variable", () => {
+    const { ast } = analyze(`
+      PROGRAM P
+      VAR RETAIN keep : INT; END_VAR
+        keep := keep + 1;
+      END_PROGRAM
+    `);
+    const m = lowerToIr(ast!, { moduleName: "t", producerVersion: "t" }).module;
+    runPasses(m, [mem2reg]);
+    const allocas = m.functions[0]!.blocks.flatMap((b) => b.instrs).filter(
+      (i) => i.op === "alloca",
+    );
+    expect(allocas.length).toBe(1);
+  });
+});

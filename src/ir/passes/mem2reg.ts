@@ -259,7 +259,18 @@ function findPromotableAllocas(fn: IrFunction): Map<number, IrType> {
   const allocas = new Map<number, IrType>();
   for (const block of fn.blocks) {
     for (const instr of block.instrs) {
-      if (instr.op === "alloca") allocas.set(instr.id, instr.allocatedType);
+      // A located variable aliases a hardware terminal, so its loads and stores
+      // are real I/O and its address must survive to the backend, which binds it
+      // to %IX0.0 and the like. Treat it as volatile: never promoted. The same
+      // goes for a RETAIN variable, whose store is observable across a power
+      // cycle, not just across a scan.
+      if (
+        instr.op === "alloca" &&
+        instr.located === undefined &&
+        !instr.retain
+      ) {
+        allocas.set(instr.id, instr.allocatedType);
+      }
     }
   }
   if (allocas.size === 0) return allocas;
