@@ -15,6 +15,8 @@
  *   --line-directives         Include #line directives
  *   --source-comments         Include ST source as comments
  *   -O, --optimize <level>    Optimization level (0, 1, 2)
+ *   --emit-ir                 Emit the lowered SSA IR instead of C++ (JSON)
+ *   --emit-ir-text            Also write a human-readable .ll-style dump
  *   --build                   Compile to executable binary with interactive REPL
  *   --gpp <path>              Custom g++ path (default: g++)
  *   --cc <path>               Custom C compiler path (default: cc)
@@ -40,7 +42,14 @@ import {
 import { resolve, basename, dirname, join, relative, sep } from "path";
 import { tmpdir, platform } from "os";
 import { execFileSync } from "child_process";
-import { compile, getVersion, compileStlib } from "../index.js";
+import { analyze, compile, getVersion, compileStlib } from "../index.js";
+import {
+  lowerToIr,
+  printModule,
+  toJson,
+  verifyModule,
+  formatIssues,
+} from "../ir/index.js";
 import {
   formatDiagnostic,
   buildSourceMap,
@@ -91,6 +100,10 @@ interface CLIOptions {
   importLib?: string;
   test: string[];
   defines: Record<string, number>;
+  /** Stop after lowering and write the target-independent IR instead of C++. */
+  emitIr: boolean;
+  /** Alongside the JSON, write the readable textual form. */
+  emitIrText: boolean;
 }
 
 /**
@@ -157,6 +170,8 @@ function parseArgs(args: string[]): CLIOptions {
     builtin: false,
     test: [],
     defines: {},
+    emitIr: false,
+    emitIrText: false,
   };
 
   let i = 0;
@@ -269,6 +284,11 @@ function parseArgs(args: string[]): CLIOptions {
           parseDefine(nextArg, options.defines);
         }
       }
+    } else if (arg === "--emit-ir") {
+      options.emitIr = true;
+    } else if (arg === "--emit-ir-text") {
+      options.emitIr = true;
+      options.emitIrText = true;
     } else if (arg === "--test") {
       // Collect all following arguments that don't start with '-' as test files
       i++;
@@ -307,6 +327,8 @@ Options:
   --line-directives         Include #line directives in output
   --source-comments         Include ST source as comments
   -O, --optimize <level>    Optimization level (0, 1, 2)
+  --emit-ir                 Emit lowered SSA IR as JSON instead of C++
+  --emit-ir-text            As --emit-ir, plus a readable .ll-style dump
   --build                   Compile to executable with interactive REPL
   --gpp <path>              Custom g++ path (default: g++)
   --cc <path>               Custom C compiler path (default: cc)
@@ -1050,6 +1072,78 @@ async function main(): Promise<void> {
   }
   if (Object.keys(options.defines).length > 0) {
     compileOptions.globalConstants = options.defines;
+  }
+
+  // --emit-ir stops after lowering. It shares the front end with the C++ path
+  // and touches nothing downstream of it: when the flag is absent this branch is
+  // skipped entirely and code generation proceeds exactly as before.
+  if (options.emitIr) {
+    const irPath = options.output
+      ? resolve(options.output)
+      : inputPath.replace(/\.(st|il)$/i, ".ir.json");
+    console.log(`Lowering ${basename(inputPath)} to IR...`);
+
+    const analysis = analyze(source, compileOptions);
+    const diagSourcesIr: DiagnosticSource[] = [
+      { fileName: basename(inputPath), source },
+      ...additionalSources,
+    ];
+    const fatal = analysis.errors.filter((e) => e.severity !== "warning");
+    if (fatal.length > 0 || analysis.ast === undefined) {
+      console.error("\nAnalysis failed:\n");
+      printDiagnostics(analysis.errors, diagSourcesIr);
+      process.exit(1);
+    }
+    if (analysis.warnings.length > 0) {
+      printDiagnostics(analysis.warnings, diagSourcesIr);
+    }
+
+    const lowered = lowerToIr(analysis.ast, {
+      moduleName: basename(inputPath).replace(/\.(st|il)$/i, ""),
+      producerVersion: getVersion(),
+    });
+
+    for (const d of lowered.diagnostics) {
+      const where =
+        d.pou !== undefined
+          ? `${d.pou}:${d.line}:${d.column}`
+          : `${d.line}:${d.column}`;
+      console.error(
+        `warning: ${where}: ${d.message} (not represented in the IR)`,
+      );
+    }
+
+    const verdict = verifyModule(lowered.module);
+    if (!verdict.ok) {
+      // A malformed module is a bug in lowering, not in the user's program, so it
+      // is reported loudly rather than written out.
+      console.error("\nInternal error: the lowered IR did not verify:\n");
+      console.error(formatIssues(verdict));
+      process.exit(1);
+    }
+
+    mkdirSync(dirname(irPath), { recursive: true });
+    writeFileSync(irPath, toJson(lowered.module), "utf-8");
+    console.log(`IR written to ${irPath}`);
+
+    if (options.emitIrText) {
+      const textPath = irPath.replace(/\.json$/i, ".ll");
+      writeFileSync(textPath, printModule(lowered.module), "utf-8");
+      console.log(`IR dump written to ${textPath}`);
+    }
+
+    const fnCount = lowered.module.functions.length;
+    const instrCount = lowered.module.functions.reduce(
+      (n, f) => n + f.blocks.reduce((m, b) => m + b.instrs.length, 0),
+      0,
+    );
+    console.log(
+      `${fnCount} function(s), ${instrCount} instruction(s)` +
+        (lowered.diagnostics.length > 0
+          ? `, ${lowered.diagnostics.length} construct(s) not represented`
+          : ""),
+    );
+    return;
   }
 
   const fileLabel =
