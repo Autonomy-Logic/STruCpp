@@ -128,3 +128,5 @@ export type {
 } from "./passes/pass.js";
 
 export { mem2reg } from "./passes/mem2reg.js";
+
+export { constFold } from "./passes/constfold.js";
