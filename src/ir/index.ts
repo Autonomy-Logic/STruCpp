@@ -133,3 +133,6 @@ export { constFold } from "./passes/constfold.js";
 
 export { dce } from "./passes/dce.js";
 export { flatten, FlattenError } from "./passes/flatten.js";
+
+export { schedule, ScheduleError } from "./passes/schedule.js";
+export { ssaPipeline, flatPipeline, pipelineLevel } from "./passes/pipeline.js";

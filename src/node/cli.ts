@@ -17,6 +17,7 @@
  *   -O, --optimize <level>    Optimization level (0, 1, 2)
  *   --emit-ir                 Emit the lowered SSA IR instead of C++ (JSON)
  *   --emit-ir-text            Also write a human-readable .ll-style dump
+ *   --flat                    With --emit-ir: lower all the way to the flat profile
  *   --build                   Compile to executable binary with interactive REPL
  *   --gpp <path>              Custom g++ path (default: g++)
  *   --cc <path>               Custom C compiler path (default: cc)
@@ -45,6 +46,9 @@ import { execFileSync } from "child_process";
 import { analyze, compile, getVersion, compileStlib } from "../index.js";
 import {
   lowerToIr,
+  runPasses,
+  ssaPipeline,
+  flatPipeline,
   printModule,
   toJson,
   verifyModule,
@@ -104,6 +108,8 @@ interface CLIOptions {
   emitIr: boolean;
   /** Alongside the JSON, write the readable textual form. */
   emitIrText: boolean;
+  /** With emitIr: run the flat pipeline instead of the SSA one. */
+  flatIr: boolean;
 }
 
 /**
@@ -172,6 +178,7 @@ function parseArgs(args: string[]): CLIOptions {
     defines: {},
     emitIr: false,
     emitIrText: false,
+    flatIr: false,
   };
 
   let i = 0;
@@ -289,6 +296,8 @@ function parseArgs(args: string[]): CLIOptions {
     } else if (arg === "--emit-ir-text") {
       options.emitIr = true;
       options.emitIrText = true;
+    } else if (arg === "--flat") {
+      options.flatIr = true;
     } else if (arg === "--test") {
       // Collect all following arguments that don't start with '-' as test files
       i++;
@@ -329,6 +338,7 @@ Options:
   -O, --optimize <level>    Optimization level (0, 1, 2)
   --emit-ir                 Emit lowered SSA IR as JSON instead of C++
   --emit-ir-text            As --emit-ir, plus a readable .ll-style dump
+  --flat                    With --emit-ir: reduce fully to the flat profile
   --build                   Compile to executable with interactive REPL
   --gpp <path>              Custom g++ path (default: g++)
   --cc <path>               Custom C compiler path (default: cc)
@@ -1113,7 +1123,24 @@ async function main(): Promise<void> {
       );
     }
 
-    const verdict = verifyModule(lowered.module);
+    // --flat runs the whole reduction to a single block per function; otherwise
+    // the SSA pipeline promotes memory but keeps control flow. Both verify
+    // between passes; the level asserted at the end matches the pipeline.
+    const level = options.flatIr ? "flat" : "ssa";
+    try {
+      runPasses(lowered.module, options.flatIr ? flatPipeline : ssaPipeline, {
+        verifyLevel: "ssa",
+      });
+    } catch (err) {
+      // A pass that declines representable ST (an unrollable loop reaching flatten,
+      // say) reports here rather than crashing.
+      console.error(
+        `\nLowering to ${level} IR failed: ${(err as Error).message}`,
+      );
+      process.exit(1);
+    }
+
+    const verdict = verifyModule(lowered.module, level);
     if (!verdict.ok) {
       // A malformed module is a bug in lowering, not in the user's program, so it
       // is reported loudly rather than written out.
