@@ -296,6 +296,26 @@ function verifyFlatProfile(fn: IrFunction, issues: IrVerifyIssue[]): void {
     });
   }
 
+  // Located allocas carry the I/O binding and legitimately survive to the
+  // backend (see strucpp-logo/docs/LOCATED_IO.md); loads and stores whose address
+  // is one of them are hardware I/O at a constant location, not addressable
+  // memory. That is the one memory form the flat profile admits. Every other
+  // memory op -- a promotable alloca left behind, a gep, a computed-address
+  // access -- is still forbidden.
+  const locatedAllocas = new Set<number>();
+  for (const b of fn.blocks) {
+    for (const instr of b.instrs) {
+      if (
+        instr.op === "alloca" &&
+        (instr.located !== undefined || instr.retain)
+      ) {
+        locatedAllocas.add(instr.id);
+      }
+    }
+  }
+  const isLocatedAddr = (v: { kind: string; id?: number }): boolean =>
+    v.kind === "temp" && v.id !== undefined && locatedAllocas.has(v.id);
+
   for (const b of fn.blocks) {
     for (const instr of b.instrs) {
       switch (instr.op) {
@@ -313,12 +333,37 @@ function verifyFlatProfile(fn: IrFunction, issues: IrVerifyIssue[]): void {
           });
           break;
         case "alloca":
+          if (!locatedAllocas.has(instr.id)) {
+            issues.push({
+              ...at(b.label, instr.id),
+              message:
+                "flat profile admits only located (I/O) allocas; this one must be promoted",
+            });
+          }
+          break;
         case "load":
+          if (!isLocatedAddr(instr.operands[0]!)) {
+            issues.push({
+              ...at(b.label, instr.id),
+              message:
+                "flat profile admits a load only from a located (I/O) address",
+            });
+          }
+          break;
         case "store":
+          if (!isLocatedAddr(instr.operands[1]!)) {
+            issues.push({
+              ...at(b.label, instr.id),
+              message:
+                "flat profile admits a store only to a located (I/O) address",
+            });
+          }
+          break;
         case "gep":
           issues.push({
             ...at(b.label, instr.id),
-            message: `flat profile admits no memory operations; '${instr.op}' must be promoted away`,
+            message:
+              "flat profile admits no address arithmetic; scalarise it away",
           });
           break;
         default:

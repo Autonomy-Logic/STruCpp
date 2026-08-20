@@ -130,3 +130,6 @@ export type {
 export { mem2reg } from "./passes/mem2reg.js";
 
 export { constFold } from "./passes/constfold.js";
+
+export { dce } from "./passes/dce.js";
+export { flatten, FlattenError } from "./passes/flatten.js";
