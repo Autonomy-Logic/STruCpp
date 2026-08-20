@@ -34,7 +34,7 @@ import {
   type IrPhiInstr,
   type IrValue,
 } from "../ir.js";
-import { typesEqual, type IrType } from "../types.js";
+import { pointerTo, typesEqual, type IrType } from "../types.js";
 import type { IrPass, PassContext } from "./pass.js";
 
 export const mem2reg: IrPass = {
@@ -55,16 +55,39 @@ class Mem2Reg {
   private readonly newPhis = new Map<string, IrPhiInstr[]>();
   private readonly subst = new Map<number, IrValue>();
   private phiId: number;
+  /** Allocas that carry state across scans: their entry value is a register read
+   *  and their exit value is written back. Kept, not deleted. */
+  private readonly stateful = new Set<number>();
+  private readonly persistentCandidate = new Set<number>();
+  private readonly boundaryLoads: IrInstr[] = [];
+  private readonly boundaryStores: IrInstr[] = [];
+  private nextBoundaryId: number;
+  /** varClass per promotable alloca, to tell persistent state from VAR_TEMP. */
+  private readonly varClass = new Map<number, string | undefined>();
 
   constructor(private readonly fn: IrFunction) {
     this.promotable = findPromotableAllocas(fn);
+    for (const b of fn.blocks) {
+      for (const instr of b.instrs) {
+        if (instr.op === "alloca" && this.promotable.has(instr.id)) {
+          this.varClass.set(instr.id, instr.varClass);
+        }
+      }
+    }
     this.preds = predecessors(fn);
     this.phiId = maxInstrId(fn) + 1;
+    this.nextBoundaryId = this.phiId + 100000; // boundary ids, kept clear of phis
     for (const id of this.promotable.keys()) this.currentDef.set(id, new Map());
+    this.classifyCandidates(fn);
   }
 
   run(ctx: PassContext): void {
     if (this.promotable.size === 0) return;
+
+    // Statefulness is discovered lazily during construction: a variable is a
+    // cross-scan register exactly when a read reaches the entry block with no
+    // prior definition (proven live-in). readRecursive emits the register-read
+    // boundary load there; the write-back is flushed at exit afterwards.
 
     // Fill blocks in reverse postorder, so a block's forward predecessors are
     // filled before it. Seal as soon as all predecessors are filled.
@@ -77,8 +100,48 @@ class Mem2Reg {
     // Loop headers whose latch has now filled.
     for (const b of this.fn.blocks) this.trySeal(b.label);
 
+    // Flush each stateful variable's final value back to its register at exit.
+    const exit = this.exitBlock();
+    if (exit !== undefined) {
+      for (const id of this.stateful) {
+        const type = this.promotable.get(id)!;
+        const value = this.readVariable(id, exit.label, type);
+        this.boundaryStores.push({
+          id: this.nextBoundaryId++,
+          op: "store",
+          type: { kind: "void" },
+          operands: [value, { kind: "temp", id, type: pointerTo(type) }],
+          comment: "register write (next scan)",
+        });
+      }
+    }
+
     this.commit();
-    ctx.note(`${this.fn.name}: promoted ${this.promotable.size} alloca(s)`);
+    ctx.note(
+      `${this.fn.name}: promoted ${this.promotable.size} alloca(s), ` +
+        `${this.stateful.size} stateful`,
+    );
+  }
+
+  /** Which promotable allocas *could* be cross-scan registers if proven live-in.
+   *  IEC FUNCTIONs are stateless, so none of their locals qualify; only a PROGRAM
+   *  or FUNCTION_BLOCK (and its methods) carries state. A VAR_TEMP is per-scan, so
+   *  a read-before-write there is genuinely undefined, not a register read. */
+  private classifyCandidates(fn: IrFunction): void {
+    if (fn.kind === "function") return;
+    for (const id of this.promotable.keys()) {
+      const cls = this.varClass.get(id);
+      if (cls !== "VAR_TEMP" && cls !== "RESULT")
+        this.persistentCandidate.add(id);
+    }
+  }
+
+  private exitBlock(): { label: string } | undefined {
+    for (const b of this.fn.blocks) {
+      const last = b.instrs[b.instrs.length - 1];
+      if (last?.op === "ret") return b;
+    }
+    return this.fn.blocks[this.fn.blocks.length - 1];
   }
 
   private fillBlock(label: string): void {
@@ -97,7 +160,10 @@ class Mem2Reg {
           this.subst.set(instr.id, this.readVariable(a, label, instr.type));
           continue;
         }
-      } else if (instr.op === "alloca" && this.promotable.has(instr.id)) {
+      } else if (instr.op === "alloca") {
+        // Keep every alloca through the fill; commit drops the fully-promoted
+        // ones once statefulness (proven live-in) is known.
+        kept.push(instr);
         continue;
       }
       kept.push(instr);
@@ -140,7 +206,21 @@ class Mem2Reg {
       if (ps.length === 1) {
         value = this.readVariable(alloca, ps[0]!, type);
       } else if (ps.length === 0) {
-        value = { kind: "undef", type };
+        if (this.persistentCandidate.has(alloca)) {
+          // Proven live-in: its entry value is last scan's -- a register read.
+          const load: IrInstr = {
+            id: this.nextBoundaryId++,
+            op: "load",
+            type,
+            operands: [{ kind: "temp", id: alloca, type: pointerTo(type) }],
+            comment: "register read (previous scan)",
+          };
+          this.boundaryLoads.push(load);
+          this.stateful.add(alloca);
+          value = { kind: "temp", id: load.id, type };
+        } else {
+          value = { kind: "undef", type };
+        }
       } else {
         const phi = this.makePhi(type, block);
         this.writeVariable(alloca, block, phiRef(phi)); // break cycles first
@@ -222,6 +302,32 @@ class Mem2Reg {
   }
 
   private commit(): void {
+    // Drop fully-promoted allocas; keep located, retain and stateful ones.
+    for (const block of this.fn.blocks) {
+      block.instrs = block.instrs.filter(
+        (i) =>
+          !(
+            i.op === "alloca" &&
+            this.promotable.has(i.id) &&
+            !this.stateful.has(i.id)
+          ),
+      );
+    }
+    // Boundary register reads go at the top of entry, after the surviving allocas.
+    const entry = this.fn.blocks[0];
+    if (entry !== undefined && this.boundaryLoads.length > 0) {
+      const firstNonAlloca = entry.instrs.findIndex((i) => i.op !== "alloca");
+      const at = firstNonAlloca < 0 ? entry.instrs.length : firstNonAlloca;
+      entry.instrs.splice(at, 0, ...this.boundaryLoads);
+    }
+    // Boundary register writes go just before the exit terminator.
+    const exit = this.exitBlock();
+    if (exit !== undefined && this.boundaryStores.length > 0) {
+      const block = findBlock(this.fn, exit.label)!;
+      const termAt = block.instrs.length - 1;
+      block.instrs.splice(termAt < 0 ? 0 : termAt, 0, ...this.boundaryStores);
+    }
+
     for (const [label, phis] of this.newPhis) {
       if (phis.length === 0) continue;
       findBlock(this.fn, label)!.instrs.unshift(...phis);
@@ -250,6 +356,16 @@ class Mem2Reg {
         }
       }
     }
+
+    // Emit blocks in reverse postorder so the block list matches control-flow
+    // order (exit last). The boundary register write lives in exit and may use a
+    // value defined in the loop body; only this ordering keeps def-before-use
+    // valid for the linear verifier.
+    const order = reversePostorder(this.fn);
+    const rank = new Map(order.map((l, i) => [l, i]));
+    this.fn.blocks.sort(
+      (a, b) => (rank.get(a.label) ?? 1e9) - (rank.get(b.label) ?? 1e9),
+    );
   }
 }
 

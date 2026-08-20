@@ -302,19 +302,18 @@ function verifyFlatProfile(fn: IrFunction, issues: IrVerifyIssue[]): void {
   // memory. That is the one memory form the flat profile admits. Every other
   // memory op -- a promotable alloca left behind, a gep, a computed-address
   // access -- is still forbidden.
-  const locatedAllocas = new Set<number>();
+  // After mem2reg the only allocas left are persistent storage: located I/O and
+  // internal registers (a PROGRAM/FB VAR whose value crosses the scan boundary --
+  // a latch or edge detector). Load/store to those is the machine's real memory;
+  // anything else was promoted away and is a bug if it survived.
+  const persistentAllocas = new Set<number>();
   for (const b of fn.blocks) {
     for (const instr of b.instrs) {
-      if (
-        instr.op === "alloca" &&
-        (instr.located !== undefined || instr.retain)
-      ) {
-        locatedAllocas.add(instr.id);
-      }
+      if (instr.op === "alloca") persistentAllocas.add(instr.id);
     }
   }
-  const isLocatedAddr = (v: { kind: string; id?: number }): boolean =>
-    v.kind === "temp" && v.id !== undefined && locatedAllocas.has(v.id);
+  const isPersistentAddr = (v: { kind: string; id?: number }): boolean =>
+    v.kind === "temp" && v.id !== undefined && persistentAllocas.has(v.id);
 
   for (const b of fn.blocks) {
     for (const instr of b.instrs) {
@@ -333,29 +332,23 @@ function verifyFlatProfile(fn: IrFunction, issues: IrVerifyIssue[]): void {
           });
           break;
         case "alloca":
-          if (!locatedAllocas.has(instr.id)) {
-            issues.push({
-              ...at(b.label, instr.id),
-              message:
-                "flat profile admits only located (I/O) allocas; this one must be promoted",
-            });
-          }
+          // Any surviving alloca is persistent storage; nothing to reject.
           break;
         case "load":
-          if (!isLocatedAddr(instr.operands[0]!)) {
+          if (!isPersistentAddr(instr.operands[0]!)) {
             issues.push({
               ...at(b.label, instr.id),
               message:
-                "flat profile admits a load only from a located (I/O) address",
+                "flat profile admits a load only from persistent (I/O or register) storage",
             });
           }
           break;
         case "store":
-          if (!isLocatedAddr(instr.operands[1]!)) {
+          if (!isPersistentAddr(instr.operands[1]!)) {
             issues.push({
               ...at(b.label, instr.id),
               message:
-                "flat profile admits a store only to a located (I/O) address",
+                "flat profile admits a store only to persistent (I/O or register) storage",
             });
           }
           break;

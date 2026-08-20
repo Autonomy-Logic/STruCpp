@@ -55,7 +55,7 @@ describe("mem2reg", () => {
   it("inserts a phi at an if/else join", () => {
     const m = promote(`
       PROGRAM P
-      VAR c : BOOL; r : INT; END_VAR
+      VAR c AT %IX0.0 : BOOL; r : INT; END_VAR
         IF c THEN
           r := 1;
         ELSE
@@ -66,8 +66,11 @@ describe("mem2reg", () => {
     `);
     const fn = m.functions[0]!;
     expect(ops(fn)).toContain("phi");
-    // The value read after the join must be the phi, not a reload.
-    expect(ops(fn)).not.toContain("load");
+    // r is promoted: the value after the join is the phi, not a reload of r.
+    const rLoads = fn.blocks
+      .flatMap((b) => b.instrs)
+      .filter((i) => i.op === "load" && i.comment === "R");
+    expect(rLoads).toHaveLength(0);
     expect(verifyModule(m).ok).toBe(true);
   });
 
@@ -101,7 +104,11 @@ describe("mem2reg", () => {
         END_FOR;
       END_PROGRAM
     `);
-    expect(ops(m.functions[0]!)).not.toContain("load");
+    // acc is read before written across the scan, so it is a cross-scan register;
+    // i is written first (i := 1) and promotes away. The module must verify.
+    const instrs = m.functions[0]!.blocks.flatMap((b) => b.instrs);
+    const iLoads = instrs.filter((x) => x.op === "load" && x.comment === "I");
+    expect(iLoads).toHaveLength(0);
     expect(verifyModule(m).ok).toBe(true);
   });
 
@@ -169,5 +176,80 @@ describe("mem2reg leaves I/O and retentive state in memory", () => {
       (i) => i.op === "alloca",
     );
     expect(allocas.length).toBe(1);
+  });
+});
+
+describe("mem2reg: stateful registers (latches, edge detection)", () => {
+  it("seeds a live-in PROGRAM VAR with a register read and writes it back", () => {
+    const { ast } = analyze(`
+      PROGRAM P
+      VAR s AT %IX0.0 : BOOL; q AT %QX0.0 : BOOL; state : BOOL; END_VAR
+        state := s OR state;
+        q := state;
+      END_PROGRAM
+    `);
+    const m = lowerToIr(ast!, { moduleName: "t", producerVersion: "t" }).module;
+    runPasses(m, [mem2reg]);
+    const instrs = m.functions[0]!.blocks.flatMap((b) => b.instrs);
+    // The STATE alloca survives as a register.
+    const stateAlloca = instrs.find(
+      (i) => i.op === "alloca" && i.name === "STATE",
+    );
+    expect(stateAlloca).toBeDefined();
+    // Exactly one register read (entry) and one register write (exit) remain.
+    const loads = instrs.filter(
+      (i) => i.op === "load" && i.comment?.includes("register read"),
+    );
+    const stores = instrs.filter(
+      (i) => i.op === "store" && i.comment?.includes("register write"),
+    );
+    expect(loads).toHaveLength(1);
+    expect(stores).toHaveLength(1);
+    // No undef leaked into the latch feedback.
+    const undefs = instrs
+      .flatMap((i) => i.operands)
+      .filter((o) => o.kind === "undef");
+    expect(undefs).toHaveLength(0);
+    expect(verifyModule(m).ok).toBe(true);
+  });
+
+  it("a write-then-read within the scan still sees the new value", () => {
+    // q := state must read the value STATE was just assigned, not last scan's.
+    const { ast } = analyze(`
+      PROGRAM P
+      VAR s AT %IX0.0 : BOOL; q AT %QX0.0 : BOOL; state : BOOL; END_VAR
+        state := s;
+        q := state;
+      END_PROGRAM
+    `);
+    const m = lowerToIr(ast!, { moduleName: "t", producerVersion: "t" }).module;
+    runPasses(m, [mem2reg]);
+    // state := s is written before read, so state is NOT live-in and does not
+    // become a register: it promotes away entirely, leaving just q <- s.
+    const instrs = m.functions[0]!.blocks.flatMap((b) => b.instrs);
+    const regReads = instrs.filter(
+      (i) => i.op === "load" && i.comment?.includes("register read"),
+    );
+    expect(regReads).toHaveLength(0);
+    // q gets s directly (a located load of s), not a stale value.
+    expect(instrs.some((i) => i.op === "store")).toBe(true);
+    expect(verifyModule(m).ok).toBe(true);
+  });
+
+  it("does not make a VAR_TEMP stateful", () => {
+    const { ast } = analyze(`
+      PROGRAM P
+      VAR q AT %QX0.0 : BOOL; END_VAR
+      VAR_TEMP t : BOOL; END_VAR
+        t := TRUE;
+        q := t;
+      END_PROGRAM
+    `);
+    const m = lowerToIr(ast!, { moduleName: "t", producerVersion: "t" }).module;
+    runPasses(m, [mem2reg]);
+    const regReads = m.functions[0]!.blocks.flatMap((b) => b.instrs).filter(
+      (i) => i.op === "load" && i.comment?.includes("register read"),
+    );
+    expect(regReads).toHaveLength(0);
   });
 });
