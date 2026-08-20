@@ -84,6 +84,50 @@ export interface LoweringResult {
   diagnostics: LoweringDiagnostic[];
 }
 
+/**
+ * Resolves a FUNCTION_BLOCK or FUNCTION declaration that the compilation unit
+ * references but does not itself define — the standard-library POUs, resolved on
+ * demand so only the ones actually reached get pulled in. The CLI backs this with
+ * the loaded `.stlib` sources; a null return means "not a known POU" (a builtin or
+ * an error), which lowering handles as it always has.
+ */
+export type PouProvider = (
+  upperName: string,
+) =>
+  | { kind: "fb"; decl: FunctionBlockDeclaration }
+  | { kind: "function"; decl: FunctionDeclaration }
+  | undefined;
+
+export interface LoweringOptions {
+  moduleName?: string;
+  producerVersion?: string;
+  /**
+   * Inline every FUNCTION_BLOCK invocation and FUNCTION call into its caller,
+   * lowering their bodies per instance, so the module becomes call-free (except
+   * for standard/builtin functions the backend lowers itself). This is what a
+   * netlist/FBD target needs: LOGO! has no call stack, and an FB instance's state
+   * is realised as scan-boundary registers. When false (the default), the neutral
+   * IR is emitted instead — FB instances stay opaque and calls stay as `fbcall` /
+   * `call`, so a backend that maps an FB onto native hardware can still do so.
+   */
+  inlineCalls?: boolean;
+  /** Resolves library POUs referenced by an inlined body (see {@link PouProvider}). */
+  pouProvider?: PouProvider;
+}
+
+/** A field of an inlined FB instance: either a scalar/aggregate storage slot or a
+ *  nested FB sub-instance (its own field set lives under a longer prefix). */
+type FieldSlot =
+  | { kind: "var"; address: IrValue; type: IrType }
+  | { kind: "fb"; fbType: string; prefix: string };
+
+/** A name in scope that refers to an FB instance rather than a plain variable. */
+interface InstanceRef {
+  fbType: string;
+  /** Qualified storage prefix, e.g. "counter" or "counter.CU_T". */
+  prefix: string;
+}
+
 // ---------------------------------------------------------------------------
 // IEC type mapping
 // ---------------------------------------------------------------------------
@@ -143,25 +187,53 @@ class Lowerer {
   private pou = "";
   private returnBlock: IrBlock | undefined;
 
-  constructor(moduleName: string, producerVersion: string) {
+  // -- inlining state ------------------------------------------------------
+  private readonly inlineCalls: boolean;
+  private readonly pouProvider: PouProvider | undefined;
+  /** FB / FUNCTION declarations available to inline, keyed by uppercase name. */
+  private readonly fbDecls = new Map<string, FunctionBlockDeclaration>();
+  private readonly fnDecls = new Map<string, FunctionDeclaration>();
+  /** Field layout of every declared FB instance, keyed by uppercase prefix. */
+  private readonly instanceFields = new Map<string, Map<string, FieldSlot>>();
+  /** Scoped map: local name (upper) -> the instance it denotes. Parallels `scopes`. */
+  private readonly instanceScopes: Array<Map<string, InstanceRef>> = [];
+  /** Guards against a cyclic (illegal in IEC) inline chain. */
+  private readonly inlineStack: string[] = [];
+
+  constructor(
+    moduleName: string,
+    producerVersion: string,
+    opts: { inlineCalls?: boolean; pouProvider?: PouProvider } = {},
+  ) {
     this.b = new IrBuilder(moduleName, producerVersion);
+    this.inlineCalls = opts.inlineCalls ?? false;
+    this.pouProvider = opts.pouProvider;
   }
 
   run(unit: CompilationUnit): LoweringResult {
     this.collectTypes(unit.types);
-    for (const fb of unit.functionBlocks)
+    for (const fb of unit.functionBlocks) {
       this.fbTypes.add(fb.name.toUpperCase());
+      this.fbDecls.set(fb.name.toUpperCase(), fb);
+    }
     for (const fn of unit.functions) {
       this.functionReturns.set(
         fn.name.toUpperCase(),
         this.mapType(fn.returnType),
       );
+      this.fnDecls.set(fn.name.toUpperCase(), fn);
     }
 
     for (const block of unit.globalVarBlocks) this.lowerGlobals(block);
     for (const p of unit.programs) this.lowerProgram(p);
-    for (const f of unit.functions) this.lowerFunction(f);
-    for (const fb of unit.functionBlocks) this.lowerFunctionBlock(fb);
+    // When inlining, PROGRAM bodies are self-contained: every reachable FUNCTION
+    // and FUNCTION_BLOCK has been spliced in, so emitting standalone POU functions
+    // would only add dead, never-selected copies. Emit them only in the neutral
+    // (non-inlining) mode, where a backend consumes them directly.
+    if (!this.inlineCalls) {
+      for (const f of unit.functions) this.lowerFunction(f);
+      for (const fb of unit.functionBlocks) this.lowerFunctionBlock(fb);
+    }
 
     return { module: this.b.finish(), diagnostics: this.diagnostics };
   }
@@ -364,6 +436,7 @@ class Lowerer {
     name: string,
   ): void {
     this.scopes.push(new Map());
+    this.instanceScopes.push(new Map());
     const exit = this.b.createBlock("exit");
     this.returnBlock = exit;
 
@@ -414,6 +487,21 @@ class Lowerer {
         continue;
       }
       for (const decl of block.declarations) {
+        // An FB-instance variable is not a plain slot: when inlining, it expands
+        // into a set of per-field storage slots (its state), and its calls are
+        // spliced in. Detected by the declared type resolving to a known FB.
+        const fbTypeName = this.fbTypeNameOf(decl.type);
+        if (this.inlineCalls && fbTypeName !== undefined) {
+          for (const vname of decl.names) {
+            this.declareFbInstance(vname, fbTypeName, {
+              varClass: block.blockType,
+              retain: block.isRetain,
+              origin: spanOf(decl.sourceSpan),
+            });
+            this.defineInstance(vname, { fbType: fbTypeName, prefix: vname });
+          }
+          continue;
+        }
         const type = this.mapType(decl.type);
         for (const vname of decl.names) {
           const slot = this.b.alloca(type, vname, {
@@ -444,6 +532,7 @@ class Lowerer {
 
     this.returnBlock = undefined;
     this.scopes.pop();
+    this.instanceScopes.pop();
   }
 
   private paramsOfCurrent(): IrParam[] {
@@ -982,6 +1071,19 @@ class Lowerer {
     const name = call.functionName;
     const upper = name.toUpperCase();
 
+    // Inlining mode: an FB invocation splices the body per instance; a call to a
+    // FUNCTION with a body splices it as a stateless value. Only builtins / IEC
+    // standard functions (no body available) survive as a `call` for the backend.
+    if (this.inlineCalls) {
+      const inst = this.lookupInstance(name);
+      if (inst !== undefined) {
+        this.inlineFbCall(inst, call);
+        return undefined;
+      }
+      const fn = this.resolveFn(upper);
+      if (fn !== undefined) return this.inlineFunctionCall(fn, call, hint);
+    }
+
     // A call whose name resolves to a declared variable is a FUNCTION_BLOCK
     // invocation. Keeping the FB type and instance rather than inlining is what
     // lets a backend map it onto native hardware later.
@@ -1003,6 +1105,13 @@ class Lowerer {
       });
     }
 
+    // IEC standard functions that are really operators (NOT/AND/OR/ADD/GT/SEL/…)
+    // lower to the corresponding IR op, so a value the netlist can select is
+    // produced rather than an opaque `call` no backend can honour. This is plain
+    // ST semantics — `NOT(x)` is the NOT operator — and applies in every mode.
+    const asOperator = this.lowerStandardOperator(upper, call);
+    if (asOperator !== undefined) return asOperator;
+
     const args: IrValue[] = [];
     for (const a of call.arguments) {
       const v = this.lowerExpr(a.value);
@@ -1019,6 +1128,120 @@ class Lowerer {
     });
   }
 
+  /**
+   * Lower an IEC standard function that corresponds directly to an IR operator.
+   * Returns undefined for names that are not operator-like (MAX, MUX, ABS, TIME,
+   * …), which stay as a `call` for the backend to lower or reject. `NOT(x)` is
+   * the common case: the timer/counter library writes `NOT(IN)` with parentheses,
+   * which parses as a call, not a unary expression.
+   */
+  private lowerStandardOperator(
+    upper: string,
+    call: FunctionCallExpression,
+  ): IrValue | undefined {
+    // Only bare positional arguments make sense for these operators.
+    if (call.arguments.some((a) => a.name !== undefined || a.isOutput))
+      return undefined;
+    const origin = spanOf(call.sourceSpan);
+    const argValues = (): IrValue[] | undefined => {
+      const vs: IrValue[] = [];
+      for (const a of call.arguments) {
+        const v = this.lowerExpr(a.value);
+        if (v === undefined) return undefined;
+        vs.push(v);
+      }
+      return vs;
+    };
+
+    const NARY: Readonly<Record<string, string>> = {
+      AND: "AND",
+      OR: "OR",
+      XOR: "XOR",
+      ADD: "+",
+      MUL: "*",
+    };
+    const BINARY: Readonly<Record<string, string>> = {
+      SUB: "-",
+      DIV: "/",
+      MOD: "MOD",
+    };
+    const COMPARE: Readonly<Record<string, string>> = {
+      GT: ">",
+      GE: ">=",
+      LT: "<",
+      LE: "<=",
+      EQ: "=",
+      NE: "<>",
+    };
+
+    if (upper === "NOT") {
+      if (call.arguments.length !== 1) return undefined;
+      const vs = argValues();
+      if (vs === undefined || vs[0] === undefined) return undefined;
+      return this.b.not(vs[0].type, vs[0], origin);
+    }
+
+    if (NARY[upper] !== undefined) {
+      const vs = argValues();
+      if (vs === undefined || vs.length === 0) return undefined;
+      let acc = vs[0]!;
+      for (let i = 1; i < vs.length; i++) {
+        const r = this.lowerBinary(NARY[upper], acc, vs[i]!, undefined, origin);
+        if (r === undefined) return undefined;
+        acc = r;
+      }
+      return acc;
+    }
+
+    if (BINARY[upper] !== undefined) {
+      if (call.arguments.length !== 2) return undefined;
+      const vs = argValues();
+      if (vs === undefined) return undefined;
+      return this.lowerBinary(BINARY[upper], vs[0]!, vs[1]!, undefined, origin);
+    }
+
+    if (COMPARE[upper] !== undefined) {
+      const vs = argValues();
+      if (vs === undefined || vs.length < 2) return undefined;
+      // IEC extends comparisons to N args as a monotonic chain: GT(a,b,c) is
+      // (a>b) AND (b>c).
+      let chain: IrValue | undefined;
+      for (let i = 1; i < vs.length; i++) {
+        const step = this.lowerBinary(
+          COMPARE[upper],
+          vs[i - 1]!,
+          vs[i]!,
+          boolType(),
+          origin,
+        );
+        if (step === undefined) return undefined;
+        chain =
+          chain === undefined
+            ? step
+            : this.b.bitwise("and", boolType(), chain, step, origin);
+      }
+      return chain;
+    }
+
+    if (upper === "SEL") {
+      // SEL(G, IN0, IN1): IN0 when G is FALSE, IN1 when TRUE.
+      if (call.arguments.length !== 3) return undefined;
+      const vs = argValues();
+      if (vs === undefined) return undefined;
+      const g = this.coerce(vs[0]!, boolType());
+      const t = promote(vs[1]!.type, vs[2]!.type) ?? vs[1]!.type;
+      return this.b.select(
+        t,
+        g,
+        this.coerce(vs[2]!, t),
+        this.coerce(vs[1]!, t),
+        origin,
+      );
+    }
+
+    return undefined;
+  }
+
   // -- addresses -----------------------------------------------------------
 
   /** Address of an lvalue, plus the type stored there. */
@@ -1032,6 +1255,19 @@ class Lowerer {
     if (e.isDereference) {
       this.unsupported(e.sourceSpan, "pointer dereference is not lowered yet");
       return undefined;
+    }
+
+    // `instance.field` (and deeper, through nested FB instances) resolves to the
+    // instance's per-field storage slot created at declaration. This is what makes
+    // an FB output readable — `timer.Q` — once instances are inlined.
+    if (
+      this.inlineCalls &&
+      e.fieldAccess.length > 0 &&
+      e.subscripts.length === 0
+    ) {
+      const inst = this.lookupInstance(e.name);
+      if (inst !== undefined)
+        return this.resolveInstanceField(inst, e.fieldAccess, e.sourceSpan);
     }
 
     const base = this.lookup(e.name);
@@ -1116,6 +1352,391 @@ class Lowerer {
     return undefined;
   }
 
+  // -- inlining ------------------------------------------------------------
+
+  /** The FB type a declaration names, or undefined if it is not an FB instance.
+   *  Pointers, arrays, elementary and named (struct/enum) types are excluded. */
+  private fbTypeNameOf(ref: TypeReference): string | undefined {
+    if (ref.referenceKind !== "none") return undefined;
+    if (ref.arrayDimensions !== undefined && ref.arrayDimensions.length > 0)
+      return undefined;
+    const upper = ref.name.toUpperCase();
+    if (ELEMENTARY[upper] !== undefined) return undefined;
+    if (this.namedTypes.has(upper)) return undefined;
+    return this.resolveFb(upper) !== undefined ? ref.name : undefined;
+  }
+
+  private resolveFb(upper: string): FunctionBlockDeclaration | undefined {
+    const local = this.fbDecls.get(upper);
+    if (local !== undefined) return local;
+    const ext = this.pouProvider?.(upper);
+    if (ext?.kind === "fb") {
+      this.fbDecls.set(upper, ext.decl);
+      this.fbTypes.add(upper);
+      return ext.decl;
+    }
+    return undefined;
+  }
+
+  private resolveFn(upper: string): FunctionDeclaration | undefined {
+    const local = this.fnDecls.get(upper);
+    if (local !== undefined) return local;
+    const ext = this.pouProvider?.(upper);
+    if (ext?.kind === "function") {
+      this.fnDecls.set(upper, ext.decl);
+      this.functionReturns.set(upper, this.mapType(ext.decl.returnType));
+      return ext.decl;
+    }
+    return undefined;
+  }
+
+  private defineInstance(name: string, ref: InstanceRef): void {
+    const scope = this.instanceScopes[this.instanceScopes.length - 1];
+    if (scope !== undefined) scope.set(name.toUpperCase(), ref);
+  }
+
+  private lookupInstance(name: string): InstanceRef | undefined {
+    const key = name.toUpperCase();
+    for (let i = this.instanceScopes.length - 1; i >= 0; i--) {
+      const hit = this.instanceScopes[i]?.get(key);
+      if (hit !== undefined) return hit;
+    }
+    return undefined;
+  }
+
+  /**
+   * Allocate the storage for an FB instance: one slot per field, recursively for
+   * nested FB fields. Every field of an FB instance is part of its state and so
+   * persists across calls — the slots are ordinary allocas (mem2reg turns the ones
+   * that are read before written into scan-boundary registers). An initial value
+   * is carried as the alloca's `init` (a power-on register seed), not stored each
+   * scan. RETAIN is dropped here: cross-scan persistence is already the model, and
+   * power-cycle retention is a separate device attribute.
+   */
+  private declareFbInstance(
+    prefix: string,
+    fbTypeName: string,
+    opts: {
+      varClass?: string | undefined;
+      retain?: boolean | undefined;
+      origin?: IrSourceRef | undefined;
+    },
+  ): void {
+    const decl = this.resolveFb(fbTypeName.toUpperCase());
+    if (decl === undefined) {
+      this.diagnostics.push({
+        message: `unknown function block '${fbTypeName}'`,
+        line: opts.origin?.line ?? 0,
+        column: opts.origin?.column ?? 0,
+        pou: this.pou,
+      });
+      return;
+    }
+    if (this.instanceFields.has(prefix.toUpperCase())) return; // already built
+
+    const fields = new Map<string, FieldSlot>();
+    this.instanceFields.set(prefix.toUpperCase(), fields);
+
+    for (const block of decl.varBlocks) {
+      const bt = block.blockType;
+      if (bt === "VAR_EXTERNAL" || bt === "VAR_GLOBAL") continue;
+      for (const d of block.declarations) {
+        const nestedFb = this.fbTypeNameOf(d.type);
+        for (const fieldName of d.names) {
+          const qualified = `${prefix}.${fieldName}`;
+          if (nestedFb !== undefined) {
+            this.declareFbInstance(qualified, nestedFb, {
+              varClass: bt,
+              retain: block.isRetain,
+              origin: spanOf(d.sourceSpan),
+            });
+            fields.set(fieldName.toUpperCase(), {
+              kind: "fb",
+              fbType: nestedFb,
+              prefix: qualified,
+            });
+            continue;
+          }
+          const type = this.mapType(d.type);
+          const init =
+            d.initialValue !== undefined
+              ? this.constantFold(d.initialValue, type)
+              : undefined;
+          const slot = this.b.alloca(type, qualified, {
+            varClass: bt,
+            ...(init !== undefined ? { init } : {}),
+            origin: spanOf(d.sourceSpan),
+          });
+          fields.set(fieldName.toUpperCase(), {
+            kind: "var",
+            address: slot,
+            type,
+          });
+        }
+      }
+    }
+  }
+
+  /** Field slots of the FB whose declaration owns `decl.varBlocks`, in order. */
+  private fbInputNames(decl: FunctionBlockDeclaration): string[] {
+    const names: string[] = [];
+    for (const block of decl.varBlocks) {
+      if (block.blockType !== "VAR_INPUT") continue;
+      for (const d of block.declarations) names.push(...d.names);
+    }
+    return names;
+  }
+
+  /** Resolve `instance.f.g...` to the addressable storage slot it names. */
+  private resolveInstanceField(
+    inst: InstanceRef,
+    path: readonly string[],
+    span: SourceSpan | undefined,
+    quiet = false,
+  ): { address: IrValue; type: IrType } | undefined {
+    let fields = this.instanceFields.get(inst.prefix.toUpperCase());
+    for (let i = 0; i < path.length; i++) {
+      const slot = fields?.get(path[i]!.toUpperCase());
+      if (slot === undefined) {
+        if (!quiet)
+          this.unsupported(
+            span,
+            `'${inst.fbType}' instance has no field '${path[i]}'`,
+          );
+        return undefined;
+      }
+      if (slot.kind === "var") {
+        if (i === path.length - 1)
+          return { address: slot.address, type: slot.type };
+        if (!quiet)
+          this.unsupported(span, `field '${path[i]}' is not a sub-instance`);
+        return undefined;
+      }
+      fields = this.instanceFields.get(slot.prefix.toUpperCase());
+    }
+    // Path ended on a sub-instance, which is not an addressable value.
+    return undefined;
+  }
+
+  /** Splice an FB invocation: assign inputs, inline the body against the
+   *  instance's slots, then write any `=>` outputs back. */
+  private inlineFbCall(inst: InstanceRef, call: FunctionCallExpression): void {
+    const decl = this.resolveFb(inst.fbType.toUpperCase());
+    const fields = this.instanceFields.get(inst.prefix.toUpperCase());
+    if (decl === undefined || fields === undefined) {
+      this.unsupported(
+        call.sourceSpan,
+        `unknown function block '${inst.fbType}'`,
+      );
+      return;
+    }
+    const inputs = this.fbInputNames(decl);
+    const outputs: Array<{ field: string; target: Expression }> = [];
+
+    // 1. Bind inputs into the instance's input slots (named or positional).
+    let positional = 0;
+    for (const arg of call.arguments) {
+      if (arg.isOutput) {
+        if (arg.name !== undefined)
+          outputs.push({ field: arg.name, target: arg.value });
+        continue;
+      }
+      const fieldName = arg.name ?? inputs[positional++];
+      if (fieldName === undefined) continue;
+      const slot = fields.get(fieldName.toUpperCase());
+      if (slot === undefined || slot.kind !== "var") {
+        this.unsupported(
+          call.sourceSpan,
+          `'${inst.fbType}' has no input '${fieldName}'`,
+        );
+        continue;
+      }
+      const v = this.lowerExpr(arg.value, slot.type);
+      if (v !== undefined)
+        this.b.store(this.coerce(v, slot.type), slot.address, {
+          origin: spanOf(call.sourceSpan),
+        });
+    }
+
+    // 2. Inline the body against the instance's slots.
+    this.inlineBody(inst, decl, spanOf(call.sourceSpan));
+
+    // 3. Route `output => target` writes back to the caller.
+    for (const o of outputs) {
+      const slot = fields.get(o.field.toUpperCase());
+      const target = this.lowerAddress(o.target);
+      if (slot?.kind === "var" && target !== undefined) {
+        const v = this.b.load(slot.type, slot.address);
+        this.b.store(this.coerce(v, target.type), target.address);
+      }
+    }
+  }
+
+  /** Lower an FB body into the current insert point, with the callee's field
+   *  names bound to the instance's storage slots. */
+  private inlineBody(
+    inst: InstanceRef,
+    decl: FunctionBlockDeclaration,
+    origin: IrSourceRef | undefined,
+  ): void {
+    const key = inst.prefix.toUpperCase();
+    if (this.inlineStack.includes(key)) {
+      this.diagnostics.push({
+        message: `recursive instantiation of '${inst.fbType}' (illegal in IEC 61131-3)`,
+        line: origin?.line ?? 0,
+        column: origin?.column ?? 0,
+        pou: this.pou,
+      });
+      return;
+    }
+    this.inlineStack.push(key);
+    const savedPou = this.pou;
+    const savedReturn = this.returnBlock;
+    this.pou = inst.fbType;
+    this.scopes.push(new Map());
+    this.instanceScopes.push(new Map());
+
+    const fields = this.instanceFields.get(key)!;
+    for (const [fieldName, slot] of fields) {
+      if (slot.kind === "var") this.define(fieldName, slot.address, slot.type);
+      else
+        this.defineInstance(fieldName, {
+          fbType: slot.fbType,
+          prefix: slot.prefix,
+        });
+    }
+
+    const exit = this.b.createBlock("inline.exit");
+    this.returnBlock = exit;
+    this.lowerStatements(decl.body);
+    this.b.brIfOpen(exit);
+    this.b.setInsertPoint(exit);
+
+    this.scopes.pop();
+    this.instanceScopes.pop();
+    this.returnBlock = savedReturn;
+    this.pou = savedPou;
+    this.inlineStack.pop();
+  }
+
+  /** Inline a FUNCTION call as a stateless value: fresh temp storage per call,
+   *  body spliced in, the RESULT slot read back as the call's value. */
+  private inlineFunctionCall(
+    decl: FunctionDeclaration,
+    call: FunctionCallExpression,
+    hint: IrType | undefined,
+  ): IrValue | undefined {
+    const key = decl.name.toUpperCase();
+    if (this.inlineStack.includes(`fn:${key}`)) {
+      this.unsupported(
+        call.sourceSpan,
+        `recursive call to '${decl.name}' (illegal in IEC 61131-3)`,
+      );
+      return hint !== undefined ? constant.undef(hint) : undefined;
+    }
+    this.inlineStack.push(`fn:${key}`);
+    const savedPou = this.pou;
+    const savedReturn = this.returnBlock;
+    this.pou = decl.name;
+    this.scopes.push(new Map());
+    this.instanceScopes.push(new Map());
+
+    const retType = this.mapType(decl.returnType);
+    const resultSlot =
+      retType.kind === "void"
+        ? undefined
+        : this.b.alloca(retType, decl.name, { varClass: "RESULT" });
+    if (resultSlot !== undefined) this.define(decl.name, resultSlot, retType);
+
+    // Collect the input parameters in declared order for positional matching.
+    const inputParams: Array<{ name: string; type: IrType }> = [];
+    for (const block of decl.varBlocks) {
+      if (block.blockType !== "VAR_INPUT") continue;
+      for (const d of block.declarations)
+        for (const n of d.names)
+          inputParams.push({ name: n, type: this.mapType(d.type) });
+    }
+
+    // Allocate every local (inputs, outputs, temps) as a fresh per-call slot so
+    // the function stays stateless — no value survives to the next call.
+    const outputBacks: Array<{
+      slot: IrValue;
+      type: IrType;
+      target: Expression;
+    }> = [];
+    const argByName = new Map<string, Expression>();
+    const positionalArgs: Expression[] = [];
+    for (const arg of call.arguments) {
+      if (arg.isOutput && arg.name !== undefined) continue;
+      if (arg.name !== undefined)
+        argByName.set(arg.name.toUpperCase(), arg.value);
+      else positionalArgs.push(arg.value);
+    }
+    const outputArgByName = new Map<string, Expression>();
+    for (const arg of call.arguments)
+      if (arg.isOutput && arg.name !== undefined)
+        outputArgByName.set(arg.name.toUpperCase(), arg.value);
+
+    let pos = 0;
+    for (const block of decl.varBlocks) {
+      const bt = block.blockType;
+      if (bt === "VAR_EXTERNAL" || bt === "VAR_GLOBAL") continue;
+      for (const d of block.declarations) {
+        const type = this.mapType(d.type);
+        for (const n of d.names) {
+          const slot = this.b.alloca(type, n, {
+            varClass: "VAR_TEMP",
+            origin: spanOf(d.sourceSpan),
+          });
+          this.define(n, slot, type);
+          if (bt === "VAR_INPUT") {
+            const argExpr =
+              argByName.get(n.toUpperCase()) ?? positionalArgs[pos++];
+            if (argExpr !== undefined) {
+              const v = this.lowerExpr(argExpr, type);
+              if (v !== undefined) this.b.store(this.coerce(v, type), slot);
+            }
+          } else if (bt === "VAR_OUTPUT" || bt === "VAR_IN_OUT") {
+            const t = outputArgByName.get(n.toUpperCase());
+            if (t !== undefined) outputBacks.push({ slot, type, target: t });
+          } else if (d.initialValue !== undefined) {
+            const init = this.lowerExpr(d.initialValue, type);
+            if (init !== undefined) this.b.store(this.coerce(init, type), slot);
+          }
+        }
+      }
+    }
+    void inputParams; // positional matching uses positionalArgs directly
+
+    const exit = this.b.createBlock("inline.exit");
+    this.returnBlock = exit;
+    this.lowerStatements(decl.body);
+    this.b.brIfOpen(exit);
+    this.b.setInsertPoint(exit);
+
+    const result =
+      resultSlot !== undefined
+        ? this.b.load(retType, resultSlot)
+        : hint !== undefined
+          ? constant.undef(hint)
+          : undefined;
+
+    for (const o of outputBacks) {
+      const target = this.lowerAddress(o.target);
+      if (target !== undefined) {
+        const v = this.b.load(o.type, o.slot);
+        this.b.store(this.coerce(v, target.type), target.address);
+      }
+    }
+
+    this.scopes.pop();
+    this.instanceScopes.pop();
+    this.returnBlock = savedReturn;
+    this.pou = savedPou;
+    this.inlineStack.pop();
+    return result;
+  }
+
   /** Insert a cast when an operand does not already have the wanted type. */
   private coerce(v: IrValue, want: IrType): IrValue {
     if (typesEqual(v.type, want)) return v;
@@ -1157,6 +1778,16 @@ class Lowerer {
       case "ParenthesizedExpression":
         return this.inferType(e.expression);
       case "VariableExpression": {
+        if (this.inlineCalls && e.fieldAccess.length > 0) {
+          const inst = this.lookupInstance(e.name);
+          if (inst !== undefined)
+            return this.resolveInstanceField(
+              inst,
+              e.fieldAccess,
+              e.sourceSpan,
+              true,
+            )?.type;
+        }
         const slot = this.lookup(e.name);
         if (slot === undefined) return undefined;
         let t = slot.type;
@@ -1383,11 +2014,19 @@ function spanOf(span: SourceSpan | undefined): IrSourceRef | undefined {
 /** Lower a parsed compilation unit to IR. Never throws on unsupported ST. */
 export function lowerToIr(
   unit: CompilationUnit,
-  opts: { moduleName?: string; producerVersion?: string } = {},
+  opts: LoweringOptions = {},
 ): LoweringResult {
   const lowerer = new Lowerer(
     opts.moduleName ?? "module",
     opts.producerVersion ?? "0.0.0",
+    {
+      ...(opts.inlineCalls !== undefined
+        ? { inlineCalls: opts.inlineCalls }
+        : {}),
+      ...(opts.pouProvider !== undefined
+        ? { pouProvider: opts.pouProvider }
+        : {}),
+    },
   );
   return lowerer.run(unit);
 }

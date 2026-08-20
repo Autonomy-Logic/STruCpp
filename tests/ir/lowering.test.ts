@@ -21,6 +21,22 @@ function lower(source: string) {
   return result;
 }
 
+/** Lower ST with FB/function inlining on, as the netlist path does. */
+function lowerInlined(source: string) {
+  const { ast, errors } = analyze(source);
+  expect(errors.filter((e) => e.severity !== "warning")).toEqual([]);
+  expect(ast).toBeDefined();
+  const result = lowerToIr(ast!, {
+    moduleName: "test",
+    producerVersion: "test",
+    inlineCalls: true,
+  });
+  const verdict = verifyModule(result.module);
+  expect(formatIssues(verdict)).toBe("");
+  expect(verdict.ok).toBe(true);
+  return result;
+}
+
 describe("lowering: basics", () => {
   it("lowers a program with declarations and arithmetic", () => {
     const { module, diagnostics } = lower(`
@@ -276,6 +292,101 @@ describe("lowering: POUs", () => {
     expect(call.fbType).toBe("MYTIMER");
     expect(call.instance).toBe("T");
     expect(call.argNames).toEqual(["IN", "PT"]);
+  });
+
+  it("inlines an FB invocation into a call-free program with member access", () => {
+    const { module, diagnostics } = lowerInlined(`
+      FUNCTION_BLOCK Latch
+      VAR_INPUT s, r : BOOL; END_VAR
+      VAR_OUTPUT q : BOOL; END_VAR
+        q := s OR (q AND NOT r);
+      END_FUNCTION_BLOCK
+
+      PROGRAM P
+      VAR
+        setb AT %IX0.0 : BOOL;
+        rstb AT %IX0.1 : BOOL;
+        outb AT %QX0.0 : BOOL;
+        l : Latch;
+      END_VAR
+        l(s := setb, r := rstb);
+        outb := l.q;
+      END_PROGRAM
+    `);
+    expect(diagnostics).toEqual([]);
+    const fns = module.functions;
+    // Only the program is emitted; the FB is inlined, not a standalone function.
+    expect(fns.map((f) => f.name)).toEqual(["P"]);
+    const ops = fns[0]!.blocks.flatMap((b) => b.instrs.map((i) => i.op));
+    expect(ops).not.toContain("fbcall");
+    expect(ops).not.toContain("call");
+    // The instance output `l.q` is a real, readable storage slot (its name is
+    // qualified by the instance), so member access lowered rather than dropping.
+    const allocas = fns[0]!.blocks
+      .flatMap((b) => b.instrs)
+      .filter((i) => i.op === "alloca");
+    expect(allocas.some((a) => a.op === "alloca" && a.name === "L.Q")).toBe(true);
+  });
+
+  it("gives each FB instance its own independent state", () => {
+    const { module } = lowerInlined(`
+      FUNCTION_BLOCK Edge
+      VAR_INPUT clk : BOOL; END_VAR
+      VAR_OUTPUT q : BOOL; END_VAR
+      VAR m : BOOL; END_VAR
+        q := clk AND NOT m;
+        m := clk;
+      END_FUNCTION_BLOCK
+
+      PROGRAM P
+      VAR
+        a AT %IX0.0 : BOOL; b AT %IX0.1 : BOOL;
+        x AT %QX0.0 : BOOL; y AT %QX0.1 : BOOL;
+        e1 : Edge; e2 : Edge;
+      END_VAR
+        e1(clk := a); x := e1.q;
+        e2(clk := b); y := e2.q;
+      END_PROGRAM
+    `);
+    const allocas = module.functions[0]!.blocks
+      .flatMap((b) => b.instrs)
+      .filter((i) => i.op === "alloca");
+    const names = allocas.map((a) => (a.op === "alloca" ? a.name : ""));
+    // Two disjoint state slots, one per instance.
+    expect(names).toContain("E1.M");
+    expect(names).toContain("E2.M");
+  });
+
+  it("inlines a FUNCTION call as a stateless value", () => {
+    const { module } = lowerInlined(`
+      FUNCTION Doubler : INT
+      VAR_INPUT x : INT; END_VAR
+        Doubler := x * 2;
+      END_FUNCTION
+
+      PROGRAM P
+      VAR a : INT; b : INT; END_VAR
+        b := Doubler(a) + 1;
+      END_PROGRAM
+    `);
+    const ops = module.functions[0]!.blocks.flatMap((b) =>
+      b.instrs.map((i) => i.op),
+    );
+    expect(ops).not.toContain("call");
+    expect(ops).toContain("mul");
+    expect(ops).toContain("add");
+  });
+
+  it("lowers NOT(x) written with parentheses as the NOT operator", () => {
+    const { module } = lowerInlined(`
+      PROGRAM P
+      VAR a AT %IX0.0 : BOOL; b AT %QX0.0 : BOOL; END_VAR
+        b := NOT(a);
+      END_PROGRAM
+    `);
+    const instrs = module.functions[0]!.blocks.flatMap((b) => b.instrs);
+    expect(instrs.some((i) => i.op === "not")).toBe(true);
+    expect(instrs.some((i) => i.op === "call")).toBe(false);
   });
 
   it("marks unknown callees as standard functions", () => {

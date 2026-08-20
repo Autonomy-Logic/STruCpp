@@ -209,6 +209,15 @@ export interface IrAllocaInstr extends IrInstrCommon {
   located?: string;
   /** VAR_INPUT / VAR_OUTPUT / VAR / VAR_TEMP / ... */
   varClass?: string;
+  /**
+   * Power-on value for a variable that becomes a cross-scan register. It seeds
+   * the register's first-scan read, distinct from an ordinary entry-block init
+   * store (which would re-run every scan and defeat persistence). Carried by the
+   * lowerer for FB-instance / program state that declares an initial value; a
+   * backend that keeps the alloca as a register realises it as the marker's
+   * power-up value. Ignored for allocas that promote to plain SSA values.
+   */
+  init?: IrValue;
 }
 
 export interface IrLoadInstr extends IrInstrCommon {

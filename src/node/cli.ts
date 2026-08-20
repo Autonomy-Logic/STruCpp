@@ -53,7 +53,11 @@ import {
   toJson,
   verifyModule,
   formatIssues,
+  type PouProvider,
 } from "../ir/index.js";
+import { parse as parseST } from "../frontend/parser.js";
+import { buildAST } from "../frontend/ast-builder.js";
+import type { StlibArchive } from "../library/library-manifest.js";
 import {
   formatDiagnostic,
   buildSourceMap,
@@ -486,6 +490,71 @@ function getEffectiveLibraryPaths(options: CLIOptions): string[] {
     }
   }
   return paths;
+}
+
+/**
+ * Build a POU provider over the loaded library archives, for IR inlining.
+ *
+ * The netlist/FBD lowering inlines every FUNCTION_BLOCK and FUNCTION into its
+ * caller, so it needs the *bodies* of the standard-library POUs a program calls
+ * (TON, R_TRIG, CTU, …) — not just their signatures. Each `.stlib` carries its
+ * original ST `sources`; this resolves a referenced name to its declaration by
+ * parsing the archive that declares it, on first use, and caching the result.
+ * Only libraries whose symbols are actually reached get parsed.
+ */
+function buildLibraryPouProvider(archives: StlibArchive[]): PouProvider {
+  // name (upper) -> archive that declares it.
+  const owner = new Map<string, StlibArchive>();
+  for (const ar of archives) {
+    for (const fb of ar.manifest.functionBlocks ?? [])
+      if (!owner.has(fb.name.toUpperCase()))
+        owner.set(fb.name.toUpperCase(), ar);
+    for (const fn of ar.manifest.functions ?? [])
+      if (!owner.has(fn.name.toUpperCase()))
+        owner.set(fn.name.toUpperCase(), ar);
+  }
+
+  const parsed = new Map<
+    string,
+    | {
+        kind: "fb";
+        decl: import("../frontend/ast.js").FunctionBlockDeclaration;
+      }
+    | {
+        kind: "function";
+        decl: import("../frontend/ast.js").FunctionDeclaration;
+      }
+  >();
+  const done = new Set<StlibArchive>();
+
+  const parseArchive = (ar: StlibArchive): void => {
+    if (done.has(ar)) return;
+    done.add(ar);
+    const sources = ar.sources ? Object.values(ar.sources) : [];
+    for (const s of sources as Array<{ fileName: string; source: string }>) {
+      const { cst } = parseST(s.source);
+      if (cst === null) continue;
+      let unit;
+      try {
+        unit = buildAST(cst, s.fileName, {});
+      } catch {
+        continue;
+      }
+      for (const fb of unit.functionBlocks)
+        parsed.set(fb.name.toUpperCase(), { kind: "fb", decl: fb });
+      for (const fn of unit.functions)
+        parsed.set(fn.name.toUpperCase(), { kind: "function", decl: fn });
+    }
+  };
+
+  return (upperName: string) => {
+    const hit = parsed.get(upperName);
+    if (hit !== undefined) return hit;
+    const ar = owner.get(upperName);
+    if (ar === undefined) return undefined;
+    parseArchive(ar);
+    return parsed.get(upperName);
+  };
 }
 
 /**
@@ -1108,9 +1177,15 @@ async function main(): Promise<void> {
       printDiagnostics(analysis.warnings, diagSourcesIr);
     }
 
+    // Inline library/user FBs and functions into their callers: the netlist path
+    // has no call stack, so each PROGRAM must be self-contained. The provider
+    // supplies the referenced standard-library POU bodies from the loaded archives.
+    const pouProvider = buildLibraryPouProvider(compileOptions.libraries ?? []);
     const lowered = lowerToIr(analysis.ast, {
       moduleName: basename(inputPath).replace(/\.(st|il)$/i, ""),
       producerVersion: getVersion(),
+      inlineCalls: true,
+      pouProvider,
     });
 
     for (const d of lowered.diagnostics) {

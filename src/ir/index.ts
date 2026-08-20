@@ -117,7 +117,12 @@ export type {
   IrVerifyResult,
 } from "./verify.js";
 export { lowerToIr } from "./from-ast.js";
-export type { LoweringDiagnostic, LoweringResult } from "./from-ast.js";
+export type {
+  LoweringDiagnostic,
+  LoweringResult,
+  LoweringOptions,
+  PouProvider,
+} from "./from-ast.js";
 
 export { runPasses, PassVerificationError } from "./passes/pass.js";
 export type {

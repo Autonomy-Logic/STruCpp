@@ -294,6 +294,7 @@ export class IrBuilder {
       retain?: boolean | undefined;
       located?: string | undefined;
       varClass?: string | undefined;
+      init?: IrValue | undefined;
       origin?: IrSourceRef | undefined;
     } = {},
   ): IrValue {
@@ -311,6 +312,7 @@ export class IrBuilder {
       operands: [],
       ...(opts.located !== undefined ? { located: opts.located } : {}),
       ...(opts.varClass !== undefined ? { varClass: opts.varClass } : {}),
+      ...(opts.init !== undefined ? { init: opts.init } : {}),
       ...this.meta(opts.origin, name),
     };
     // Allocas go at the top of entry, ahead of any code, and never after its
