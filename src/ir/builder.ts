@@ -50,6 +50,11 @@ export class IrBuilder {
 
   // -- module level ---------------------------------------------------------
 
+  /** Record the IEC TASK cyclic interval (nanoseconds), if the unit configures one. */
+  setTaskIntervalNs(ns: number): void {
+    this.module.taskIntervalNs = ns;
+  }
+
   declareNamedType(name: string, type: IrType): void {
     if (!this.module.types.some((t) => t.name === name)) {
       this.module.types.push({ name, type });

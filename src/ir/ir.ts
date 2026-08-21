@@ -387,6 +387,12 @@ export interface IrModule {
   types: Array<{ name: string; type: IrType }>;
   globals: IrGlobal[];
   functions: IrFunction[];
+  /**
+   * The IEC RESOURCE/TASK cyclic interval in nanoseconds, when the compilation
+   * unit configures one. A cyclic target (a PLC scan, a LOGO! tick clock) uses it
+   * as the execution period / time base. Absent when no TASK is configured.
+   */
+  taskIntervalNs?: number;
 }
 
 export function entryBlock(fn: IrFunction): IrBlock | undefined {

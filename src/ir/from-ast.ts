@@ -224,6 +224,7 @@ class Lowerer {
       this.fnDecls.set(fn.name.toUpperCase(), fn);
     }
 
+    this.extractTaskInterval(unit);
     for (const block of unit.globalVarBlocks) this.lowerGlobals(block);
     for (const p of unit.programs) this.lowerProgram(p);
     // When inlining, PROGRAM bodies are self-contained: every reachable FUNCTION
@@ -236,6 +237,39 @@ class Lowerer {
     }
 
     return { module: this.b.finish(), diagnostics: this.diagnostics };
+  }
+
+  /**
+   * Record the IEC RESOURCE/TASK cyclic INTERVAL (the first cyclic task found) on
+   * the module, in nanoseconds. A cyclic backend uses it as the execution period /
+   * time base; the LOGO! target realises TIME() as a tick clock of this period.
+   */
+  private extractTaskInterval(unit: CompilationUnit): void {
+    for (const config of unit.configurations) {
+      for (const resource of config.resources) {
+        for (const task of resource.tasks) {
+          const interval =
+            task.properties.get("INTERVAL") ?? task.properties.get("interval");
+          if (interval === undefined) continue;
+          const ns = this.durationOf(interval);
+          if (ns !== undefined) {
+            this.b.setTaskIntervalNs(ns);
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  /** Nanoseconds of a TIME-literal expression (`T#20ms`), or undefined. */
+  private durationOf(e: Expression): number | undefined {
+    if (e.kind === "ParenthesizedExpression")
+      return this.durationOf(e.expression);
+    if (e.kind === "LiteralExpression") {
+      if (typeof e.value === "number") return e.value;
+      return parseIecDuration(String(e.value));
+    }
+    return undefined;
   }
 
   // -- declarations --------------------------------------------------------
