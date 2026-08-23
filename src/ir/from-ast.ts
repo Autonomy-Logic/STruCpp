@@ -1577,6 +1577,9 @@ class Lowerer {
     const outputs: Array<{ field: string; target: Expression }> = [];
 
     // 1. Lower input arguments (named or positional) into fbcall operands.
+    //    Track which inputs the call supplies, so the rest can fall back to the
+    //    instance's field slots (the `inst.IN := ...; inst();` assignment style).
+    const supplied = new Map<string, IrValue>();
     let positional = 0;
     for (const arg of call.arguments) {
       if (arg.isOutput) {
@@ -1590,7 +1593,22 @@ class Lowerer {
       const type = slot?.kind === "var" ? slot.type : undefined;
       const v = this.lowerExpr(arg.value, type);
       if (v === undefined) continue;
-      inputVals.push(type !== undefined ? this.coerce(v, type) : v);
+      supplied.set(
+        fieldName.toUpperCase(),
+        type !== undefined ? this.coerce(v, type) : v,
+      );
+    }
+    // Emit inputs in declaration order; an input the call did not pass takes the
+    // current value of its slot (set earlier via `inst.<field> := ...`).
+    for (const fieldName of inputOrder) {
+      const key = fieldName.toUpperCase();
+      const slot = fields.get(key);
+      let v = supplied.get(key);
+      if (v === undefined) {
+        if (slot?.kind !== "var") continue;
+        v = this.b.load(slot.type, slot.address);
+      }
+      inputVals.push(v);
       inputNames.push(fieldName);
     }
 
