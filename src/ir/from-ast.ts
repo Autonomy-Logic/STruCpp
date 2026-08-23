@@ -113,6 +113,15 @@ export interface LoweringOptions {
   inlineCalls?: boolean;
   /** Resolves library POUs referenced by an inlined body (see {@link PouProvider}). */
   pouProvider?: PouProvider;
+  /**
+   * FB type names (upper-case) that a backend maps to a native hardware block and
+   * so must NOT be inlined even under {@link inlineCalls}. Such an instance keeps
+   * its field slots (so `inst.out` member access still resolves), but its call
+   * emits an opaque `fbcall` and each read output becomes an `fbout` -- the
+   * backend wires those to the native block, falling back to synthesis for any FB
+   * type not listed. Ignored when inlineCalls is false.
+   */
+  nativeFbTypes?: ReadonlySet<string>;
 }
 
 /** A field of an inlined FB instance: either a scalar/aggregate storage slot or a
@@ -190,6 +199,10 @@ class Lowerer {
   // -- inlining state ------------------------------------------------------
   private readonly inlineCalls: boolean;
   private readonly pouProvider: PouProvider | undefined;
+  /** FB types kept native (not inlined); see {@link LoweringOptions.nativeFbTypes}. */
+  private readonly nativeFbTypes: ReadonlySet<string>;
+  /** Instance prefixes (upper) declared native, so their calls emit fbcall/fbout. */
+  private readonly nativeInstances = new Set<string>();
   /** FB / FUNCTION declarations available to inline, keyed by uppercase name. */
   private readonly fbDecls = new Map<string, FunctionBlockDeclaration>();
   private readonly fnDecls = new Map<string, FunctionDeclaration>();
@@ -203,11 +216,16 @@ class Lowerer {
   constructor(
     moduleName: string,
     producerVersion: string,
-    opts: { inlineCalls?: boolean; pouProvider?: PouProvider } = {},
+    opts: {
+      inlineCalls?: boolean;
+      pouProvider?: PouProvider;
+      nativeFbTypes?: ReadonlySet<string>;
+    } = {},
   ) {
     this.b = new IrBuilder(moduleName, producerVersion);
     this.inlineCalls = opts.inlineCalls ?? false;
     this.pouProvider = opts.pouProvider;
+    this.nativeFbTypes = opts.nativeFbTypes ?? new Set();
   }
 
   run(unit: CompilationUnit): LoweringResult {
@@ -526,6 +544,7 @@ class Lowerer {
         // spliced in. Detected by the declared type resolving to a known FB.
         const fbTypeName = this.fbTypeNameOf(decl.type);
         if (this.inlineCalls && fbTypeName !== undefined) {
+          const native = this.nativeFbTypes.has(fbTypeName.toUpperCase());
           for (const vname of decl.names) {
             this.declareFbInstance(vname, fbTypeName, {
               varClass: block.blockType,
@@ -533,6 +552,9 @@ class Lowerer {
               origin: spanOf(decl.sourceSpan),
             });
             this.defineInstance(vname, { fbType: fbTypeName, prefix: vname });
+            // A native instance keeps its field slots (for member access) but its
+            // call is not inlined -- it emits fbcall + fbout for the backend.
+            if (native) this.nativeInstances.add(vname.toUpperCase());
           }
           continue;
         }
@@ -1111,7 +1133,11 @@ class Lowerer {
     if (this.inlineCalls) {
       const inst = this.lookupInstance(name);
       if (inst !== undefined) {
-        this.inlineFbCall(inst, call);
+        if (this.nativeInstances.has(inst.prefix.toUpperCase())) {
+          this.nativeFbCall(inst, call);
+        } else {
+          this.inlineFbCall(inst, call);
+        }
         return undefined;
       }
       const fn = this.resolveFn(upper);
@@ -1519,6 +1545,89 @@ class Lowerer {
       for (const d of block.declarations) names.push(...d.names);
     }
     return names;
+  }
+
+  /** VAR_OUTPUT field names of an FB declaration, in order. */
+  private fbOutputNames(decl: FunctionBlockDeclaration): string[] {
+    const names: string[] = [];
+    for (const block of decl.varBlocks) {
+      if (block.blockType !== "VAR_OUTPUT") continue;
+      for (const d of block.declarations) names.push(...d.names);
+    }
+    return names;
+  }
+
+  /** A native FB invocation: emit an opaque `fbcall` carrying the input values,
+   *  then store each output as an `fbout` into the instance's output slot, so
+   *  `inst.out` reads resolve normally and the backend wires them to a native
+   *  block. Not inlined -- the body is never lowered. */
+  private nativeFbCall(inst: InstanceRef, call: FunctionCallExpression): void {
+    const decl = this.resolveFb(inst.fbType.toUpperCase());
+    const fields = this.instanceFields.get(inst.prefix.toUpperCase());
+    if (decl === undefined || fields === undefined) {
+      this.unsupported(
+        call.sourceSpan,
+        `unknown function block '${inst.fbType}'`,
+      );
+      return;
+    }
+    const inputOrder = this.fbInputNames(decl);
+    const inputVals: IrValue[] = [];
+    const inputNames: string[] = [];
+    const outputs: Array<{ field: string; target: Expression }> = [];
+
+    // 1. Lower input arguments (named or positional) into fbcall operands.
+    let positional = 0;
+    for (const arg of call.arguments) {
+      if (arg.isOutput) {
+        if (arg.name !== undefined)
+          outputs.push({ field: arg.name, target: arg.value });
+        continue;
+      }
+      const fieldName = arg.name ?? inputOrder[positional++];
+      if (fieldName === undefined) continue;
+      const slot = fields.get(fieldName.toUpperCase());
+      const type = slot?.kind === "var" ? slot.type : undefined;
+      const v = this.lowerExpr(arg.value, type);
+      if (v === undefined) continue;
+      inputVals.push(type !== undefined ? this.coerce(v, type) : v);
+      inputNames.push(fieldName);
+    }
+
+    // 2. The opaque call itself (backend maps it to a native block).
+    this.b.fbcall(inst.fbType, inst.prefix, VOID, inputVals, {
+      argNames: inputNames,
+      ...(call.sourceSpan !== undefined
+        ? { origin: spanOf(call.sourceSpan) }
+        : {}),
+    });
+
+    // 3. Materialise every output as `fbout` -> its slot, so member reads work
+    //    and mem2reg promotes the slot (dead outputs are DCE'd away).
+    for (const field of this.fbOutputNames(decl)) {
+      const slot = fields.get(field.toUpperCase());
+      if (slot?.kind !== "var") continue;
+      const out = this.b.fbout(
+        inst.fbType,
+        inst.prefix,
+        field,
+        slot.type,
+        call.sourceSpan !== undefined
+          ? { origin: spanOf(call.sourceSpan) }
+          : {},
+      );
+      this.b.store(out, slot.address, { origin: spanOf(call.sourceSpan) });
+    }
+
+    // 4. Route `output => target` writes back to the caller.
+    for (const o of outputs) {
+      const slot = fields.get(o.field.toUpperCase());
+      const target = this.lowerAddress(o.target);
+      if (slot?.kind === "var" && target !== undefined) {
+        const v = this.b.load(slot.type, slot.address);
+        this.b.store(this.coerce(v, target.type), target.address);
+      }
+    }
   }
 
   /** Resolve `instance.f.g...` to the addressable storage slot it names. */
@@ -2059,6 +2168,9 @@ export function lowerToIr(
         : {}),
       ...(opts.pouProvider !== undefined
         ? { pouProvider: opts.pouProvider }
+        : {}),
+      ...(opts.nativeFbTypes !== undefined
+        ? { nativeFbTypes: opts.nativeFbTypes }
         : {}),
     },
   );

@@ -114,6 +114,8 @@ interface CLIOptions {
   emitIrText: boolean;
   /** With emitIr: run the flat pipeline instead of the SSA one. */
   flatIr: boolean;
+  /** FB type names (upper) to keep native (fbcall/fbout) instead of inlining. */
+  nativeFb?: string[];
 }
 
 /**
@@ -302,6 +304,13 @@ function parseArgs(args: string[]): CLIOptions {
       options.emitIrText = true;
     } else if (arg === "--flat") {
       options.flatIr = true;
+    } else if (arg === "--native-fb") {
+      // Comma-separated FB type names a backend maps to native blocks (kept as
+      // fbcall/fbout instead of inlined). Used by the LOGO! netlist backend.
+      options.nativeFb = (args[++i] ?? "")
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter((s) => s.length > 0);
     } else if (arg === "--test") {
       // Collect all following arguments that don't start with '-' as test files
       i++;
@@ -1186,6 +1195,9 @@ async function main(): Promise<void> {
       producerVersion: getVersion(),
       inlineCalls: true,
       pouProvider,
+      ...(options.nativeFb !== undefined && options.nativeFb.length > 0
+        ? { nativeFbTypes: new Set(options.nativeFb) }
+        : {}),
     });
 
     for (const d of lowered.diagnostics) {

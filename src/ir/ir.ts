@@ -116,6 +116,7 @@ export type IrOpcode =
   | "gep"
   | "call"
   | "fbcall"
+  | "fbout"
   | "phi"
   | "br"
   | "condbr"
@@ -262,6 +263,20 @@ export interface IrFbCallInstr extends IrInstrCommon {
   argNames?: string[];
 }
 
+/**
+ * Reads one output of a non-inlined FUNCTION_BLOCK instance (a `fbcall` that was
+ * kept opaque so a backend can map it to a native block). `field` names the
+ * VAR_OUTPUT, and the result is that output's value for this scan; the value is
+ * tied to the instance's `fbcall` by `instance` identity. Only emitted for FB
+ * types a backend has opted to keep native.
+ */
+export interface IrFbOutInstr extends IrInstrCommon {
+  op: "fbout";
+  fbType: string;
+  instance: string;
+  field: string;
+}
+
 export interface IrPhiInstr extends IrInstrCommon {
   op: "phi";
   incoming: Array<{ block: string; value: IrValue }>;
@@ -301,6 +316,7 @@ export type IrInstr =
   | IrGepInstr
   | IrCallInstr
   | IrFbCallInstr
+  | IrFbOutInstr
   | IrPhiInstr
   | IrBrInstr
   | IrCondBrInstr

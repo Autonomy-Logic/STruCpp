@@ -431,6 +431,27 @@ export class IrBuilder {
     return this.ref(instr);
   }
 
+  /** Read one output of a non-inlined FB instance (kept native by a backend). */
+  fbout(
+    fbType: string,
+    instance: string,
+    field: string,
+    type: IrType,
+    opts: { origin?: IrSourceRef | undefined } = {},
+  ): IrValue {
+    const instr = this.emit({
+      id: this.id(),
+      op: "fbout",
+      fbType,
+      instance,
+      field,
+      type,
+      operands: [],
+      ...this.meta(opts.origin),
+    });
+    return this.ref(instr);
+  }
+
   phi(
     type: IrType,
     incoming: Array<{ block: string; value: IrValue }>,
