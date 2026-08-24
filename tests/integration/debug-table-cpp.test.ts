@@ -413,3 +413,139 @@ int main() {
     expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("ALL_OK");
   });
 });
+
+/**
+ * The retain marshaller has to WORK, not just compile.
+ *
+ * `iec_retain.hpp` is shared source: the Arduino firmware and the OpenPLC v4
+ * daemon both vendor it, so a bug here is a bug on every target at once, and a
+ * blob written by one has to be readable by the other. That makes a real
+ * pack → wipe → unpack round-trip the only test worth having — and it is also
+ * the only way to check the properties that matter most and are invisible to a
+ * compile: that a non-retained variable is left alone, that restore does not
+ * FORCE anything, and that a corrupt or stale blob is refused rather than
+ * unpacked into the wrong variables.
+ */
+describeIfGpp("retain blob round-trips through the real runtime", () => {
+  let tempDir: string;
+
+  beforeAll(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-retain-"));
+  });
+
+  afterAll(() => {
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("saves, wipes and restores every retained leaf and nothing more", () => {
+    const result = compile(
+      `FUNCTION_BLOCK Inner
+VAR_INPUT en : BOOL; END_VAR
+VAR RETAIN ticks : DINT; END_VAR
+VAR NON_RETAIN scratch : DINT; END_VAR
+  IF en THEN ticks := ticks + 1; END_IF;
+  scratch := 1;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR RETAIN held : Inner; END_VAR
+VAR loose : Inner; END_VAR
+VAR RETAIN boots : DINT; END_VAR
+  held(); loose();
+END_PROGRAM
+CONFIGURATION Config0
+  VAR_GLOBAL RETAIN g_hours : DINT; END_VAR
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`,
+      { headerFileName: "generated.hpp" },
+    );
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+
+    const dir = path.join(tempDir, "roundtrip");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "generated.hpp"), result.headerCode);
+    fs.writeFileSync(path.join(dir, "generated.cpp"), result.cppCode);
+    fs.writeFileSync(path.join(dir, "generated_debug.cpp"), result.debugTableCpp!);
+
+    fs.writeFileSync(
+      path.join(dir, "main.cpp"),
+      `#include "generated.hpp"
+#include "debug_dispatch.hpp"
+#include "iec_retain.hpp"
+#include <cstdio>
+#include <cstring>
+strucpp::Configuration_CONFIG0 g_config;
+using namespace strucpp;
+static int fails = 0;
+static void chk(const char* what, bool ok) { if (!ok) { printf("FAIL %s\\n", what); ++fails; } }
+static uint16_t rd(uint8_t a, uint16_t e, uint8_t* d) { return debug::handle_read(a, e, d); }
+static uint8_t  wr(uint8_t a, uint16_t e, const uint8_t* b, uint16_t n) { return debug::handle_write(a, e, b, n); }
+static uint16_t sz(uint8_t a, uint16_t e) { return debug::handle_size(a, e); }
+
+int main() {
+  chk("something is retained", debug::retain_var_count > 0);
+  chk("blob is header + payload", retain::blob_size(sz) == retain::HEADER_SIZE + retain::payload_size(sz));
+
+  g_config.INSTANCE0.BOOTS = 4242;
+  g_config.INSTANCE0.HELD.TICKS = 777;
+  g_config.INSTANCE0.LOOSE.TICKS = 555;   // FB-local RETAIN in a NON-retained instance
+  G_HOURS.value = 99;
+
+  unsigned char blob[512] = {0};
+  size_t n = retain::pack(blob, sizeof(blob), rd, sz);
+  chk("packed", n == retain::blob_size(sz));
+
+  // A power cycle: every value back to zero.
+  g_config.INSTANCE0.BOOTS = 0;
+  g_config.INSTANCE0.HELD.TICKS = 0;
+  g_config.INSTANCE0.LOOSE.TICKS = 0;
+  G_HOURS.value = 0;
+  // Not retained — must NOT be resurrected.
+  g_config.INSTANCE0.HELD.SCRATCH = 31337;
+
+  chk("unpack ok", retain::unpack(blob, n, wr, sz) == retain::LoadResult::Ok);
+  chk("program local", (int)g_config.INSTANCE0.BOOTS == 4242);
+  chk("inherited fb member", (int)g_config.INSTANCE0.HELD.TICKS == 777);
+  chk("fb-local retain in non-retained instance", (int)g_config.INSTANCE0.LOOSE.TICKS == 555);
+  chk("configuration global", (int)G_HOURS.value == 99);
+  chk("NON_RETAIN left alone", (int)g_config.INSTANCE0.HELD.SCRATCH == 31337);
+  // Restore is a plain write: forcing would pin the value and stop the program
+  // moving it on the next scan.
+  chk("restore did not force", !g_config.INSTANCE0.BOOTS.is_forced());
+
+  unsigned char bad[512];
+  memcpy(bad, blob, n); bad[retain::HEADER_SIZE] ^= 0xFF;
+  chk("corrupt payload refused", retain::unpack(bad, n, wr, sz) == retain::LoadResult::BadCrc);
+
+  // Flip the layout hash and re-crc, so ONLY the layout differs.
+  memcpy(bad, blob, n); bad[4] ^= 0x01;
+  { uint32_t c = retain::crc32(bad, 10);
+    c = retain::crc32(bad + retain::HEADER_SIZE, retain::get_u16(bad + 8), c);
+    retain::put_u32(bad + 10, c ^ 0xFFFFFFFFu); }
+  chk("stale layout refused", retain::unpack(bad, n, wr, sz) == retain::LoadResult::StaleLayout);
+
+  memcpy(bad, blob, n); bad[0] ^= 0xFF;
+  chk("bad magic refused", retain::unpack(bad, n, wr, sz) == retain::LoadResult::BadMagic);
+  chk("empty store is Empty", retain::unpack(blob, 0, wr, sz) == retain::LoadResult::Empty);
+  chk("short blob is Truncated", retain::unpack(blob, retain::HEADER_SIZE - 1, wr, sz) == retain::LoadResult::Truncated);
+
+  printf(fails ? "FAILURES=%d\\n" : "ALL_OK\\n", fails);
+  return fails ? 1 : 0;
+}
+`,
+    );
+
+    const bin = path.join(dir, "retain");
+    execSync(
+      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" -o "${bin}" ` +
+        `"${path.join(dir, "main.cpp")}" "${path.join(dir, "generated.cpp")}" ` +
+        `"${path.join(dir, "generated_debug.cpp")}"`,
+      { encoding: "utf-8" },
+    );
+    expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("ALL_OK");
+  });
+});

@@ -74,6 +74,8 @@ export type TagName = keyof typeof TAG;
 // would leak the cleared value into the following sibling.
 // ---------------------------------------------------------------------------
 export const LEAF_FLAG_READONLY = 1 << 0;
+/** Mirrors LEAF_FLAG_RETAIN in runtime/include/debug_table.hpp. */
+export const LEAF_FLAG_RETAIN = 1 << 1;
 
 /**
  * Render an entry's flags byte as C++.
@@ -84,9 +86,58 @@ export const LEAF_FLAG_READONLY = 1 << 0;
  * compile against a header that renamed the flag instead of silently setting
  * the wrong bit.
  */
+/**
+ * Apply one var block's qualifiers to the flags inherited from its container.
+ *
+ * RETAIN is inherited: declaring `VAR RETAIN inst : FB;` retains every leaf
+ * inside `inst`, which is the CODESYS rule. NON_RETAIN is how a member opts
+ * back out, so it CLEARS the bit rather than merely failing to set it — and
+ * that is exactly why the walk passes flags down as a parameter instead of
+ * mutating shared state: a cleared bit must not leak into the next sibling.
+ */
+function applyBlockFlags(
+  inherited: number,
+  block: { isConstant: boolean; isRetain: boolean; isNonRetain: boolean },
+): number {
+  let flags = inherited;
+  if (block.isConstant) flags |= LEAF_FLAG_READONLY;
+  if (block.isRetain) flags |= LEAF_FLAG_RETAIN;
+  if (block.isNonRetain) flags &= ~LEAF_FLAG_RETAIN;
+  return flags;
+}
+
+/**
+ * FNV-1a (32-bit) over the retain layout — the ordered `path|typeTag` of every
+ * retained leaf.
+ *
+ * Identity of the LAYOUT, deliberately not of the program: a body edit leaves
+ * this unchanged and retained values survive, while adding, removing, retyping
+ * or reordering a retained variable changes it and the stored blob is refused.
+ * The project MD5 would have discarded retained state on every unrelated edit.
+ *
+ * FNV-1a rather than a cryptographic digest because this is a collision-check
+ * against accident, not against an attacker, and it has to be computable in a
+ * few lines on an AVR as well as here.
+ */
+function retainLayoutHashOf(
+  vars: Array<{ path: string; tagName: TagName }>,
+): string {
+  let hash = 0x811c9dc5;
+  for (const v of vars) {
+    for (const ch of `${v.path}|${v.tagName}`) {
+      hash ^= ch.codePointAt(0) ?? 0;
+      // >>> 0 after the multiply: JS bitwise ops are on int32, and FNV needs the
+      // product truncated to 32 unsigned bits at every step.
+      hash = Math.imul(hash, 0x01000193) >>> 0;
+    }
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
 function flagsLiteral(flags: number): string {
   const names: string[] = [];
   if (flags & LEAF_FLAG_READONLY) names.push("LEAF_FLAG_READONLY");
+  if (flags & LEAF_FLAG_RETAIN) names.push("LEAF_FLAG_RETAIN");
   return names.length > 0 ? names.join(" | ") : "0";
 }
 
@@ -198,6 +249,12 @@ export interface DebugLeaf {
    * pinned to an older strucpp release.
    */
   readOnly?: true;
+  /**
+   * Present and `true` for a leaf declared `RETAIN` (or inherited from a
+   * retained function-block instance). Omitted otherwise — a project's map
+   * holds thousands of leaves and the flag is rare.
+   */
+  retain?: true;
 }
 
 export interface DebugMapV2 {
@@ -206,6 +263,26 @@ export interface DebugMapV2 {
   typeTags: Record<string, number>;
   arrays: Array<{ index: number; count: number }>;
   leaves: DebugLeaf[];
+  /**
+   * The retained leaves, in the order the retain blob packs them. Additive, so
+   * `version` stays at 2 — the editor's `debug-parser.ts` rejects anything else
+   * outright, and an older editor simply ignores this field.
+   */
+  retainVars?: Array<{
+    arrayIdx: number;
+    elemIdx: number;
+    path: string;
+    size: number;
+  }>;
+  /**
+   * Identity of the retain LAYOUT, not of the program.
+   *
+   * FNV-1a over `path|typeTag` for each retained leaf in table order, so a body
+   * edit keeps retained values while adding, removing, retyping or reordering a
+   * retained variable invalidates them. Keying on the program MD5 instead would
+   * discard retained state on every unrelated edit.
+   */
+  retainLayoutHash?: string;
 }
 
 export interface DebugTableResult {
@@ -326,6 +403,14 @@ export function generateDebugTable(
   // Buckets of entries — grown in order, flushed at program boundary or size cap.
   const arrays: Entry[][] = [[]];
   const leaves: DebugLeaf[] = [];
+  /** Retained leaves in walk order — the order the blob packs them. */
+  const retainVars: Array<{
+    arrayIdx: number;
+    elemIdx: number;
+    path: string;
+    size: number;
+    tagName: TagName;
+  }> = [];
   const skipped: Array<{ path: string; reason: string }> = [];
 
   const tail = (): Entry[] => arrays[arrays.length - 1]!;
@@ -358,7 +443,11 @@ export function generateDebugTable(
       type: tagName,
       size,
       ...(flags & LEAF_FLAG_READONLY ? { readOnly: true as const } : {}),
+      ...(flags & LEAF_FLAG_RETAIN ? { retain: true as const } : {}),
     });
+    if (flags & LEAF_FLAG_RETAIN) {
+      retainVars.push({ arrayIdx: arrIdx, elemIdx, path, size, tagName });
+    }
   };
 
   // visitTypeRef walks a TypeReference: elementary type → leaf, inline array
@@ -513,11 +602,10 @@ export function generateDebugTable(
             block.blockType === "VAR_IN_OUT"
           ) {
             // A `VAR CONSTANT` inside a function block is read-only for every
-            // instance of it, so the bit is OR-ed in here rather than only at
-            // the program level — otherwise `fb.LIMIT` stays writable while
-            // the program's own `LIMIT` is gated.
-            const memberFlags =
-              flags | (block.isConstant ? LEAF_FLAG_READONLY : 0);
+            // instance of it, and a `VAR RETAIN` member is retained in every
+            // instance, so the block's own qualifiers are folded in here rather
+            // than only at the program level.
+            const memberFlags = applyBlockFlags(flags, block);
             for (const fieldDecl of block.declarations) {
               for (const fieldName of fieldDecl.names) {
                 visitTypeRef(
@@ -685,7 +773,7 @@ export function generateDebugTable(
             key,
             `${varName}.value`,
             decl.type,
-            block.isConstant ? LEAF_FLAG_READONLY : 0,
+            applyBlockFlags(0, block),
           );
         }
       }
@@ -718,7 +806,7 @@ export function generateDebugTable(
             ) {
               continue;
             }
-            const declFlags = block.isConstant ? LEAF_FLAG_READONLY : 0;
+            const declFlags = applyBlockFlags(0, block);
             for (const decl of block.declarations) {
               visitVarDecl(basePath, baseCpp, decl, declFlags);
             }
@@ -736,13 +824,33 @@ export function generateDebugTable(
   if (arrays.length === 0) arrays.push([]);
 
   const configName = projectModel.configurations[0]?.name ?? "CONFIG0";
-  const debugTableCpp = renderCpp(arrays, configGlobal, configName);
+  const debugTableCpp = renderCpp(
+    arrays,
+    configGlobal,
+    configName,
+    retainVars,
+    retainLayoutHashOf(retainVars),
+  );
   const debugMap: DebugMapV2 = {
     version: 2,
     md5,
     typeTags: { ...TAG },
     arrays: arrays.map((a, i) => ({ index: i, count: a.length })),
     leaves,
+    // Omitted entirely when nothing is retained, so a project that uses no
+    // RETAIN carries no retain fields at all and the runtime's `count == 0`
+    // fast path is the only thing it ever sees.
+    ...(retainVars.length > 0
+      ? {
+          retainVars: retainVars.map(({ arrayIdx, elemIdx, path, size }) => ({
+            arrayIdx,
+            elemIdx,
+            path,
+            size,
+          })),
+          retainLayoutHash: retainLayoutHashOf(retainVars),
+        }
+      : {}),
   };
 
   return { debugTableCpp, debugMap, skipped };
@@ -756,6 +864,8 @@ function renderCpp(
   arrays: Entry[][],
   configGlobal: string,
   configName: string,
+  retainVars: Array<{ arrayIdx: number; elemIdx: number; path: string }>,
+  retainLayoutHash: string,
 ): string {
   const lines: string[] = [];
   lines.push("// SPDX-License-Identifier: GPL-3.0-or-later");
@@ -823,6 +933,40 @@ function renderCpp(
   lines.push("");
 
   lines.push(`const uint8_t debug_array_count = ${arrays.length};`);
+  lines.push("");
+
+  // --- Retain table --------------------------------------------------------
+  //
+  // Retained leaves addressed the same way the debugger addresses everything
+  // else: (arr, elem) into the tables above. No offsets, no sizeof — the host
+  // reads and writes each leaf through `handle_read` / `handle_write`, so it
+  // moves the VALUE and never the IECVar wrapper's forcing state, and a nested
+  // function-block member or a configuration global needs no special case.
+  //
+  // Order is the walk order, and it IS the blob's packing order.
+  lines.push("// Retained leaves, in the order the retain blob packs them.");
+  lines.push(
+    `const RetainVar retain_vars[${retainVars.length || 1}] STRUCPP_DEBUG_FLASH = {`,
+  );
+  if (retainVars.length === 0) {
+    lines.push("    { 0, 0 },  // placeholder — nothing is retained");
+  } else {
+    for (const v of retainVars) {
+      lines.push(`    { ${v.arrayIdx}, ${v.elemIdx} },  // ${v.path}`);
+    }
+  }
+  lines.push("};");
+  lines.push("");
+  lines.push(`const uint16_t retain_var_count = ${retainVars.length};`);
+  lines.push("");
+  lines.push(
+    "// Identity of the retain LAYOUT (ordered path|typeTag), not of the",
+  );
+  lines.push(
+    "// program: a body edit keeps retained values, a declaration change",
+  );
+  lines.push("// invalidates them.");
+  lines.push(`const uint32_t retain_layout_hash = 0x${retainLayoutHash};`);
   lines.push("");
   lines.push("} } // namespace strucpp::debug");
   return lines.join("\n") + "\n";

@@ -757,3 +757,170 @@ END_PROGRAM${CFG_RO}`,
     expect(map.version).toBe(2);
   });
 });
+
+describe("retain table", () => {
+  const CFG_R = `
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`;
+
+  const mapOf = (src: string) => {
+    const r = compile(src, { headerFileName: "generated.hpp" });
+    expect(r.errors.map((e) => e.message)).toEqual([]);
+    const byPath = new Map(r.debugMap!.leaves.map((l) => [l.path, l]));
+    return { map: r.debugMap!, byPath, cpp: r.debugTableCpp! };
+  };
+
+  it("lists retained leaves in walk order, and nothing else", () => {
+    const { map, cpp } = mapOf(
+      `PROGRAM Main
+VAR RETAIN boots : DINT; END_VAR
+VAR live : DINT; END_VAR
+  live := boots;
+END_PROGRAM${CFG_R}`,
+    );
+    expect(map.retainVars?.map((v) => v.path)).toEqual(["INSTANCE0.BOOTS"]);
+    expect(cpp).toContain("const uint16_t retain_var_count = 1;");
+    // Addressed by (arr, elem) — no offsetof, no sizeof.
+    expect(cpp).not.toContain("offsetof");
+    expect(cpp).toMatch(/\{ 0, 0 \},\s*\/\/ INSTANCE0\.BOOTS/);
+  });
+
+  it("omits every retain field when nothing is retained", () => {
+    // A project with no RETAIN must carry no retain manifest at all, so the
+    // runtime's `count == 0` fast path is the only thing it ever sees.
+    const { map } = mapOf(
+      `PROGRAM Main
+VAR live : DINT; END_VAR
+  live := 1;
+END_PROGRAM${CFG_R}`,
+    );
+    expect(map.retainVars).toBeUndefined();
+    expect(map.retainLayoutHash).toBeUndefined();
+  });
+
+  it("retains a whole function-block subtree when the instance is RETAIN", () => {
+    const { byPath } = mapOf(
+      `FUNCTION_BLOCK Inner
+VAR_INPUT en : BOOL; END_VAR
+VAR ticks : DINT; END_VAR
+  IF en THEN ticks := ticks + 1; END_IF;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR RETAIN held : Inner; END_VAR
+VAR loose : Inner; END_VAR
+  held(); loose();
+END_PROGRAM${CFG_R}`,
+    );
+    // Inherited two members deep…
+    expect(byPath.get("INSTANCE0.HELD.EN")?.retain).toBe(true);
+    expect(byPath.get("INSTANCE0.HELD.TICKS")?.retain).toBe(true);
+    // …and not leaked to a sibling instance that was not declared RETAIN.
+    expect(byPath.get("INSTANCE0.LOOSE.EN")).not.toHaveProperty("retain");
+    expect(byPath.get("INSTANCE0.LOOSE.TICKS")).not.toHaveProperty("retain");
+  });
+
+  it("retains a function block's own VAR RETAIN in every instance", () => {
+    const { byPath } = mapOf(
+      `FUNCTION_BLOCK Counter
+VAR RETAIN total : DINT; END_VAR
+VAR scratch : DINT; END_VAR
+  total := total + 1; scratch := 0;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR c : Counter; END_VAR
+  c();
+END_PROGRAM${CFG_R}`,
+    );
+    expect(byPath.get("INSTANCE0.C.TOTAL")?.retain).toBe(true);
+    expect(byPath.get("INSTANCE0.C.SCRATCH")).not.toHaveProperty("retain");
+  });
+
+  it("lets NON_RETAIN opt a member out of a retained container", () => {
+    // The case the walk threads flags as a PARAMETER for: the bit is cleared
+    // partway down a subtree, and must not leak into the following sibling.
+    const { byPath } = mapOf(
+      `FUNCTION_BLOCK Inner
+VAR NON_RETAIN scratch : DINT; END_VAR
+VAR kept : DINT; END_VAR
+  scratch := 1; kept := 2;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR RETAIN held : Inner; END_VAR
+VAR RETAIN after : DINT; END_VAR
+  held();
+END_PROGRAM${CFG_R}`,
+    );
+    expect(byPath.get("INSTANCE0.HELD.SCRATCH")).not.toHaveProperty("retain");
+    expect(byPath.get("INSTANCE0.HELD.KEPT")?.retain).toBe(true);
+    // The sibling declared after the opt-out is still retained.
+    expect(byPath.get("INSTANCE0.AFTER")?.retain).toBe(true);
+  });
+
+  it("retains a CONFIGURATION VAR_GLOBAL and not its plain sibling", () => {
+    const { byPath } = mapOf(
+      `PROGRAM Main
+VAR_EXTERNAL g_hours : DINT; g_live : DINT; END_VAR
+  g_live := g_hours;
+END_PROGRAM
+CONFIGURATION Config0
+  VAR_GLOBAL RETAIN g_hours : DINT; END_VAR
+  VAR_GLOBAL g_live : DINT; END_VAR
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`,
+    );
+    expect(byPath.get("G_HOURS")?.retain).toBe(true);
+    expect(byPath.get("G_LIVE")).not.toHaveProperty("retain");
+  });
+
+  it("expands every element of a retained array", () => {
+    const { byPath, map } = mapOf(
+      `PROGRAM Main
+VAR RETAIN log : ARRAY[0..2] OF DINT; END_VAR
+  log[0] := 1;
+END_PROGRAM${CFG_R}`,
+    );
+    for (const i of [0, 1, 2]) {
+      expect(byPath.get(`INSTANCE0.LOG[${i}]`)?.retain).toBe(true);
+    }
+    expect(map.retainVars).toHaveLength(3);
+  });
+
+  describe("layout hash", () => {
+    const hashOf = (vars: string, body: string) =>
+      mapOf(`PROGRAM Main
+${vars}
+  ${body}
+END_PROGRAM${CFG_R}`).map.retainLayoutHash;
+
+    it("is stable across a body-only edit — retained values survive it", () => {
+      const vars = "VAR RETAIN a : DINT; b : DINT; END_VAR";
+      expect(hashOf(vars, "a := 1;")).toBe(hashOf(vars, "a := 2; b := 3;"));
+    });
+
+    it("changes when a retained variable is added", () => {
+      expect(hashOf("VAR RETAIN a : DINT; END_VAR", "a := 1;")).not.toBe(
+        hashOf("VAR RETAIN a : DINT; b : DINT; END_VAR", "a := 1;"),
+      );
+    });
+
+    it("changes when a retained variable is retyped", () => {
+      expect(hashOf("VAR RETAIN a : DINT; END_VAR", "a := 1;")).not.toBe(
+        hashOf("VAR RETAIN a : INT; END_VAR", "a := 1;"),
+      );
+    });
+
+    it("changes when retained variables are reordered", () => {
+      // Order is the blob's packing order, so a swap has to invalidate it.
+      expect(hashOf("VAR RETAIN a : DINT; b : INT; END_VAR", "a := 1;")).not.toBe(
+        hashOf("VAR RETAIN b : INT; a : DINT; END_VAR", "a := 1;"),
+      );
+    });
+  });
+});

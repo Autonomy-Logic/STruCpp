@@ -272,17 +272,31 @@ describe('Phase 2.6 - Variable Modifiers', () => {
             counter : DINT;
           END_VAR
         END_PROGRAM
+
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+            PROGRAM instance0 WITH task0 : Main;
+          END_RESOURCE
+        END_CONFIGURATION
       `;
-      const result = compile(source);
+      // Rewritten for the leaf-addressed retain table. The per-program
+      // `RetainVarInfo __retain_vars[]` this asserted is gone: it described
+      // members by `offsetof` and `sizeof(IECVar<T>)`, which persisted the
+      // debugger's forcing state and could not name a variable inside a nested
+      // function block or a configuration global at all. Retained leaves are
+      // listed once, project-wide, in generated_debug.cpp.
+      //
+      // The source gained a CONFIGURATION because retained storage exists in an
+      // INSTANCE: the leaf walk goes configurations -> resources -> tasks ->
+      // instances, so an uninstantiated program has nothing to retain.
+      const result = compile(source, { headerFileName: 'generated.hpp' });
       expect(result.success).toBe(true);
-      // Check for retain table declaration in header
-      expect(result.headerCode).toContain('__retain_vars');
-      expect(result.headerCode).toContain('getRetainVars');
-      expect(result.headerCode).toContain('getRetainCount');
-      // Check for retain table definition in source
-      expect(result.cppCode).toContain('RetainVarInfo');
-      expect(result.cppCode).toContain('COUNTER');
-      expect(result.cppCode).toContain('offsetof');
+      expect(result.debugTableCpp).toContain('const uint16_t retain_var_count = 1;');
+      expect(result.debugTableCpp).toContain('INSTANCE0.COUNTER');
+      expect(result.debugTableCpp).toContain('retain_layout_hash');
+      expect(result.headerCode).not.toContain('__retain_vars');
+      expect(result.debugTableCpp).not.toContain('offsetof');
     });
 
     it('should generate retain table with multiple variables', () => {
@@ -293,12 +307,19 @@ describe('Phase 2.6 - Variable Modifiers', () => {
             last_state : BOOL;
           END_VAR
         END_PROGRAM
+
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+            PROGRAM instance0 WITH task0 : Main;
+          END_RESOURCE
+        END_CONFIGURATION
       `;
-      const result = compile(source);
+      const result = compile(source, { headerFileName: 'generated.hpp' });
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('__retain_vars[2]');
-      expect(result.cppCode).toContain('TOTAL_COUNT');
-      expect(result.cppCode).toContain('LAST_STATE');
+      expect(result.debugTableCpp).toContain('const uint16_t retain_var_count = 2;');
+      expect(result.debugTableCpp).toContain('INSTANCE0.TOTAL_COUNT');
+      expect(result.debugTableCpp).toContain('INSTANCE0.LAST_STATE');
     });
 
     it('should not generate retain table when no RETAIN variables', () => {
@@ -309,10 +330,12 @@ describe('Phase 2.6 - Variable Modifiers', () => {
           END_VAR
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { headerFileName: 'generated.hpp' });
       expect(result.success).toBe(true);
+      // The table is still emitted (with a placeholder) so the runtime links
+      // unconditionally; the COUNT is what says nothing is retained.
+      expect(result.debugTableCpp).toContain('const uint16_t retain_var_count = 0;');
       expect(result.headerCode).not.toContain('__retain_vars');
-      expect(result.headerCode).not.toContain('getRetainVars');
     });
   });
 });
