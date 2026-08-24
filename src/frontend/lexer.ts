@@ -266,6 +266,23 @@ export const VAR_GLOBAL = createToken({
 export const VAR_TEMP = createToken({ name: "VAR_TEMP", pattern: /VAR_TEMP/i });
 export const CONSTANT = createToken({ name: "CONSTANT", pattern: /CONSTANT/i });
 export const RETAIN = createToken({ name: "RETAIN", pattern: /RETAIN/i });
+// NON_RETAIN is IEC's explicit spelling of the DEFAULT — a variable that does
+// not survive a power cycle. Lexed so a CODESYS import parses rather than
+// failing on the next line: without a token, `NON_RETAIN` matched Identifier
+// and the parser then demanded a colon, reporting a syntax error one line
+// below the qualifier that caused it.
+export const NON_RETAIN = createToken({
+  name: "NON_RETAIN",
+  pattern: /NON_RETAIN/i,
+});
+// PERSISTENT folds into RETAIN. CODESYS distinguishes them (PERSISTENT also
+// survives a download), and this toolchain does not yet — so it is accepted
+// and treated as RETAIN rather than rejected, which is what lets a converted
+// project compile. Revisit if download-surviving retention is implemented.
+export const PERSISTENT = createToken({
+  name: "PERSISTENT",
+  pattern: /PERSISTENT/i,
+});
 export const AT = createToken({ name: "AT", pattern: /AT/i });
 
 // Type declarations
@@ -656,6 +673,8 @@ const keywordTokens = [
   VAR_TEMP,
   CONSTANT,
   RETAIN,
+  NON_RETAIN,
+  PERSISTENT,
   AT,
   TYPE,
   END_TYPE,
@@ -794,6 +813,8 @@ export const allTokens = [
   VAR,
   CONSTANT,
   RETAIN,
+  NON_RETAIN,
+  PERSISTENT,
   TYPE,
   STRUCT,
   ARRAY,

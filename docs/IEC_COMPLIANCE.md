@@ -64,8 +64,9 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | VAR_EXTERNAL | Supported | References either a CONFIGURATION or a file-level VAR_GLOBAL |
 | VAR_GLOBAL | Supported | Global variables (CONFIGURATION-scoped or file-level) |
 | CONSTANT | Supported | Compile-time constants |
-| RETAIN | Supported | Tracked in retain variable table |
-| NON_RETAIN | Supported | |
+| RETAIN | Supported | Allowed on `VAR`, `VAR_INPUT`, `VAR_OUTPUT` and `VAR_GLOBAL`, per IEC 61131-3. Rejected on `VAR_IN_OUT` / `VAR_TEMP` / `VAR_EXTERNAL`, and inside a `FUNCTION` or `METHOD` (no instance, nothing to retain) |
+| PERSISTENT | Partial | Accepted and treated as `RETAIN`. CODESYS also keeps a PERSISTENT value across a program download; that is not implemented, so the weaker shared guarantee is what is claimed |
+| NON_RETAIN | Supported | Accepted and treated as the default (a plain `VAR` is already non-retained). Rejected when combined with `RETAIN` or `CONSTANT` |
 | AT %IX0.0 | Supported | Located variables (I/Q/M areas, X/B/W/D/L sizes) |
 | Multiple names | Supported | `a, b, c : INT := 0;` |
 | Initialization | Supported | `:= expression` |
