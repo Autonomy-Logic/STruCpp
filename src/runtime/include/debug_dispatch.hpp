@@ -58,6 +58,13 @@ namespace strucpp { namespace debug {
 constexpr uint8_t STATUS_OK              = 0x7E;
 constexpr uint8_t STATUS_OUT_OF_BOUNDS   = 0x81;
 constexpr uint8_t STATUS_DATA_TOO_LARGE  = 0x82;
+// 0x83..0x85 are taken by the licensing FCs (MB_DEBUG_LIC_*); this is the
+// next free code. Returned when a write or force targets a leaf carrying
+// LEAF_FLAG_READONLY — an IEC CONSTANT. The refusal lives HERE, at the
+// bottom of the stack, so it holds for every caller: the editor's debugger,
+// an OPC-UA client, a plugin, or an older editor build that never learned to
+// hide the control.
+constexpr uint8_t STATUS_READ_ONLY       = 0x86;
 
 // ---------------------------------------------------------------------------
 // Templated per-type helpers. One instantiation per IEC elementary type;
@@ -323,6 +330,13 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     const uint8_t* entry_addr = reinterpret_cast<const uint8_t*>(table_ptr) + elem * sizeof(Entry);
     uintptr_t ptr_val = pgm_read_word(entry_addr);
     uint8_t tag_val   = pgm_read_byte(entry_addr + sizeof(void*));
+    // `flags` sits immediately after `tag` — both uint8_t, no padding between
+    // them — so it is the byte after the tag. MUST be read here: the AVR paths
+    // assemble `out` field by field rather than copying the struct, and a
+    // missed flags read silently returns 0, which reads as "writable" and
+    // defeats the CONSTANT gate on exactly the targets with the least memory
+    // to spare for a second lookup.
+    out.flags = pgm_read_byte(entry_addr + sizeof(void*) + 1);
     out.ptr = reinterpret_cast<void*>(ptr_val);
     out.tag = tag_val;
 #elif defined(__AVR__)
@@ -335,6 +349,7 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     const uint8_t* entry_addr = reinterpret_cast<const uint8_t*>(table) + elem * sizeof(Entry);
     uintptr_t ptr_val = pgm_read_word(entry_addr);
     uint8_t tag_val   = pgm_read_byte(entry_addr + sizeof(void*));
+    out.flags = pgm_read_byte(entry_addr + sizeof(void*) + 1);
     out.ptr = reinterpret_cast<void*>(ptr_val);
     out.tag = tag_val;
 #else
@@ -354,6 +369,11 @@ inline uint8_t handle_set(uint8_t arr, uint16_t elem, bool forcing,
                           const uint8_t* bytes, uint16_t len) noexcept {
     Entry e = read_entry(arr, elem);
     if (!e.ptr || e.tag >= TAG__COUNT) return STATUS_OUT_OF_BOUNDS;
+
+    // A CONSTANT cannot be forced. Refused for BOTH directions: unforcing a
+    // leaf that could never be forced is a no-op, and returning OK for it
+    // would tell the caller a force had been cleared that never existed.
+    if (e.flags & LEAF_FLAG_READONLY) return STATUS_READ_ONLY;
 
     if (forcing) {
         uint8_t expected = type_ops[e.tag].size;
@@ -388,6 +408,10 @@ inline uint8_t handle_write(uint8_t arr, uint16_t elem,
                             const uint8_t* bytes, uint16_t len) noexcept {
     Entry e = read_entry(arr, elem);
     if (!e.ptr || e.tag >= TAG__COUNT) return STATUS_OUT_OF_BOUNDS;
+    // Same gate as handle_set. This is also the path the retain restore walk
+    // uses, so a CONSTANT can never be clobbered by a stale retained value
+    // either — constants come from the declaration, never from storage.
+    if (e.flags & LEAF_FLAG_READONLY) return STATUS_READ_ONLY;
     uint8_t expected = type_ops[e.tag].size;
     if (expected == 0) return STATUS_DATA_TOO_LARGE;  // string stub
     if (len < expected) return STATUS_DATA_TOO_LARGE;
