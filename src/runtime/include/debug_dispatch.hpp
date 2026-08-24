@@ -58,13 +58,14 @@ namespace strucpp { namespace debug {
 constexpr uint8_t STATUS_OK              = 0x7E;
 constexpr uint8_t STATUS_OUT_OF_BOUNDS   = 0x81;
 constexpr uint8_t STATUS_DATA_TOO_LARGE  = 0x82;
-// 0x83..0x85 are taken by the licensing FCs (MB_DEBUG_LIC_*); this is the
-// next free code. Returned when a write or force targets a leaf carrying
-// LEAF_FLAG_READONLY — an IEC CONSTANT. The refusal lives HERE, at the
-// bottom of the stack, so it holds for every caller: the editor's debugger,
-// an OPC-UA client, a plugin, or an older editor build that never learned to
-// hide the control.
-constexpr uint8_t STATUS_READ_ONLY       = 0x86;
+// 0x83..0x85 are taken by the licensing FCs (MB_DEBUG_LIC_*), and 0x86 by
+// PLC_SET_STATE's REFUSED_BY_SWITCH (see the editor's ModbusDebugResponse
+// enum) — this is the next actually-free code. Returned when a write or
+// force targets a leaf carrying LEAF_FLAG_READONLY — an IEC CONSTANT. The
+// refusal lives HERE, at the bottom of the stack, so it holds for every
+// caller: the editor's debugger, an OPC-UA client, a plugin, or an older
+// editor build that never learned to hide the control.
+constexpr uint8_t STATUS_READ_ONLY       = 0x87;
 
 // ---------------------------------------------------------------------------
 // Templated per-type helpers. One instantiation per IEC elementary type;
