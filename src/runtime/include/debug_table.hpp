@@ -103,6 +103,18 @@ enum TypeTag : uint8_t {
 // ---------------------------------------------------------------------------
 constexpr uint8_t LEAF_FLAG_READONLY = 1 << 0;
 
+// RETAIN marks a leaf whose value must survive a power cycle. Set for a
+// variable declared under `VAR RETAIN` (or PERSISTENT), and inherited by every
+// leaf beneath a retained function-block instance unless that member spells
+// NON_RETAIN.
+//
+// The retain walk does not read this bit — `retainVars[]` already lists exactly
+// the retained leaves, which is cheaper than scanning the whole table. It is
+// emitted because it costs nothing (the byte exists either way) and it makes a
+// generated table self-describing: a reviewer or a diagnostic dump can see
+// which leaves are retained without cross-referencing a second array.
+constexpr uint8_t LEAF_FLAG_RETAIN = 1 << 1;
+
 // ---------------------------------------------------------------------------
 // Debug entry: one per leaf variable.  Layout is ABI; see notes in
 // debug_dispatch.hpp's runtime dispatch for the per-platform size:
@@ -146,5 +158,31 @@ struct Entry {
 extern const Entry* const debug_arrays[]       STRUCPP_DEBUG_FLASH;
 extern const uint16_t     debug_array_counts[] STRUCPP_DEBUG_FLASH;
 extern const uint8_t      debug_array_count;
+
+// ---------------------------------------------------------------------------
+// Retain table.
+//
+// A retained leaf is addressed the same way the debugger addresses everything
+// else: by (arr, elem) into the tables above. No offsets and no sizeof, which
+// is what keeps the retain path correct where an offset-based descriptor was
+// not — the host moves the VALUE through `handle_read` / `handle_write` rather
+// than a memory region, so the IECVar wrapper's forcing state is never
+// persisted, and a nested function-block member or a configuration global
+// needs no special case.
+//
+// Order is the codegen's leaf-walk order, and it IS the order the retain blob
+// packs values in. Never reorder without changing the layout hash.
+// ---------------------------------------------------------------------------
+struct RetainVar {
+    uint8_t  arr;
+    uint16_t elem;
+};
+
+extern const RetainVar retain_vars[]      STRUCPP_DEBUG_FLASH;
+extern const uint16_t  retain_var_count;
+
+// Identity of the retain LAYOUT (ordered path|typeTag), not of the program: a
+// body edit keeps retained values, a declaration change invalidates them.
+extern const uint32_t  retain_layout_hash;
 
 } } // namespace strucpp::debug
