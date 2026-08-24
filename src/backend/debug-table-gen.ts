@@ -63,6 +63,33 @@ export const TAG = {
 
 export type TagName = keyof typeof TAG;
 
+// ---------------------------------------------------------------------------
+// Per-leaf flag bits — MUST match LEAF_FLAG_* in
+// runtime/include/debug_table.hpp. ABI: append only, never renumber.
+//
+// Carried down the leaf walk as an explicit parameter rather than a mutable
+// `currentFlags`, because a bit can be *cleared* partway down a subtree —
+// today nothing does, but the retain work adds exactly that (a NON_RETAIN
+// member inside a RETAIN function-block instance), and a shared mutable
+// would leak the cleared value into the following sibling.
+// ---------------------------------------------------------------------------
+export const LEAF_FLAG_READONLY = 1 << 0;
+
+/**
+ * Render an entry's flags byte as C++.
+ *
+ * Emits the named constant rather than a literal so `generated_debug.cpp`
+ * reads as intent — a reviewer scanning the table sees which leaves are
+ * gated without decoding a bitmask — and so a stale generated file fails to
+ * compile against a header that renamed the flag instead of silently setting
+ * the wrong bit.
+ */
+function flagsLiteral(flags: number): string {
+  const names: string[] = [];
+  if (flags & LEAF_FLAG_READONLY) names.push("LEAF_FLAG_READONLY");
+  return names.length > 0 ? names.join(" | ") : "0";
+}
+
 const TAG_NAME_BY_VALUE: Record<number, TagName> = Object.fromEntries(
   Object.entries(TAG).map(([k, v]) => [v, k as TagName]),
 ) as Record<number, TagName>;
@@ -155,6 +182,22 @@ export interface DebugLeaf {
   type: string;
   /** Byte size of the leaf (matches type_ops[].size in the runtime). */
   size: number;
+  /**
+   * Present and `true` only for a leaf the debugger must not modify — an IEC
+   * CONSTANT. Omitted otherwise, rather than written as `false`, because a
+   * project's map holds thousands of leaves and the flag is rare.
+   *
+   * Advisory: it exists so the editor can hide the force control instead of
+   * offering an action that will be refused. The refusal itself is enforced
+   * in the runtime (`LEAF_FLAG_READONLY`), which is what makes an older
+   * editor build — or an OPC-UA client that never reads this map — safe.
+   *
+   * Deliberately additive: `version` stays at 2 so an editor built against
+   * the previous manifest keeps loading these maps unchanged. `debug-parser.ts`
+   * rejects anything but 2 outright, so bumping it would break every editor
+   * pinned to an older strucpp release.
+   */
+  readOnly?: true;
 }
 
 export interface DebugMapV2 {
@@ -206,6 +249,8 @@ interface Entry {
   path: string;
   type: TagName;
   size: number;
+  /** Bitwise OR of LEAF_FLAG_*, emitted into the entry's `flags` byte. */
+  flags: number;
 }
 
 export function generateDebugTable(
@@ -289,7 +334,12 @@ export function generateDebugTable(
     if (tail().length >= maxEntries) arrays.push([]);
   };
 
-  const addLeaf = (path: string, cppExpr: string, iecName: string) => {
+  const addLeaf = (
+    path: string,
+    cppExpr: string,
+    iecName: string,
+    flags: number,
+  ) => {
     const tagName = IEC_NAME_TO_TAG[iecName.toUpperCase()];
     if (tagName === undefined) {
       skipped.push({ path, reason: `unknown elementary type: ${iecName}` });
@@ -300,8 +350,15 @@ export function generateDebugTable(
     const bucket = tail();
     const arrIdx = arrays.length - 1;
     const elemIdx = bucket.length;
-    bucket.push({ cppExpr, tagName, path, type: tagName, size });
-    leaves.push({ arrayIdx: arrIdx, elemIdx, path, type: tagName, size });
+    bucket.push({ cppExpr, tagName, path, type: tagName, size, flags });
+    leaves.push({
+      arrayIdx: arrIdx,
+      elemIdx,
+      path,
+      type: tagName,
+      size,
+      ...(flags & LEAF_FLAG_READONLY ? { readOnly: true as const } : {}),
+    });
   };
 
   // visitTypeRef walks a TypeReference: elementary type → leaf, inline array
@@ -311,6 +368,7 @@ export function generateDebugTable(
     path: string,
     cppExpr: string,
     typeRef: TypeReference,
+    flags: number,
   ): void => {
     // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
@@ -320,6 +378,7 @@ export function generateDebugTable(
         typeRef.arrayDimensions,
         0,
         typeRef.elementTypeName,
+        flags,
       );
       return;
     }
@@ -328,7 +387,7 @@ export function generateDebugTable(
 
     // Named elementary type (or alias thereof).
     if (IEC_NAME_TO_TAG[name] !== undefined) {
-      addLeaf(path, cppExpr, name);
+      addLeaf(path, cppExpr, name, flags);
       return;
     }
 
@@ -338,7 +397,7 @@ export function generateDebugTable(
     if (ts) {
       const def = ts.declaration.definition;
       if (def.kind === "StructDefinition") {
-        visitStructFields(path, cppExpr, def);
+        visitStructFields(path, cppExpr, def, flags);
         return;
       }
       if (def.kind === "ArrayDefinition") {
@@ -359,6 +418,7 @@ export function generateDebugTable(
           dims as Array<{ start: number; end: number }>,
           0,
           def.elementType.name,
+          flags,
         );
         return;
       }
@@ -367,7 +427,7 @@ export function generateDebugTable(
         // matches the base. Default INT if no baseType.
         const baseName = def.baseType?.name?.toUpperCase() ?? "INT";
         if (IEC_NAME_TO_TAG[baseName] !== undefined) {
-          addLeaf(path, cppExpr, baseName);
+          addLeaf(path, cppExpr, baseName, flags);
           return;
         }
         skipped.push({ path, reason: `enum base type ${baseName} unknown` });
@@ -376,7 +436,7 @@ export function generateDebugTable(
       if (def.kind === "SubrangeDefinition") {
         const baseName = def.baseType.name.toUpperCase();
         if (IEC_NAME_TO_TAG[baseName] !== undefined) {
-          addLeaf(path, cppExpr, baseName);
+          addLeaf(path, cppExpr, baseName, flags);
           return;
         }
         skipped.push({ path, reason: `subrange base ${baseName} unknown` });
@@ -397,7 +457,7 @@ export function generateDebugTable(
           });
           return;
         }
-        visitTypeRef(path, cppExpr, def);
+        visitTypeRef(path, cppExpr, def, flags);
         return;
       }
       skipped.push({
@@ -441,6 +501,7 @@ export function generateDebugTable(
             `${path}.${v.name.toUpperCase()}`,
             `${cppExpr}.${memberCppName(v.name, v.declaration.type, name)}`,
             v.declaration.type,
+            flags,
           );
         }
       } else {
@@ -451,12 +512,19 @@ export function generateDebugTable(
             block.blockType === "VAR_OUTPUT" ||
             block.blockType === "VAR_IN_OUT"
           ) {
+            // A `VAR CONSTANT` inside a function block is read-only for every
+            // instance of it, so the bit is OR-ed in here rather than only at
+            // the program level — otherwise `fb.LIMIT` stays writable while
+            // the program's own `LIMIT` is gated.
+            const memberFlags =
+              flags | (block.isConstant ? LEAF_FLAG_READONLY : 0);
             for (const fieldDecl of block.declarations) {
               for (const fieldName of fieldDecl.names) {
                 visitTypeRef(
                   `${path}.${fieldName.toUpperCase()}`,
                   `${cppExpr}.${memberCppName(fieldName, fieldDecl.type, name)}`,
                   fieldDecl.type,
+                  memberFlags,
                 );
               }
             }
@@ -473,7 +541,12 @@ export function generateDebugTable(
     path: string,
     cppExpr: string,
     def: StructDefinition,
+    flags: number,
   ): void => {
+    // `flags` passes straight through: IEC puts CONSTANT on a var *block*, and
+    // a STRUCT declares fields without blocks, so a struct field can never
+    // introduce or clear the bit — it only inherits whatever the declaration
+    // that named the struct carried.
     for (const fieldDecl of def.fields) {
       for (const fieldName of fieldDecl.names) {
         visitTypeRef(
@@ -482,6 +555,7 @@ export function generateDebugTable(
           // field-name-matches-its-type collision can apply.
           `${cppExpr}.${memberCppName(fieldName, fieldDecl.type)}`,
           fieldDecl.type,
+          flags,
         );
       }
     }
@@ -504,17 +578,23 @@ export function generateDebugTable(
     dims: Array<{ start: number; end: number }>,
     dimIdx: number,
     elementTypeName: string,
+    flags: number,
     indices: number[] = [],
   ): void => {
     if (dimIdx >= dims.length) {
       // Innermost element — visit as a TypeReference with the element type
       // name. Manufacture a minimal TypeReference for recursion.
-      visitTypeRef(path, formatArrayElementAccess(cppExpr, indices), {
-        kind: "TypeReference",
-        name: elementTypeName,
-        isReference: false,
-        referenceKind: "none",
-      } as TypeReference);
+      visitTypeRef(
+        path,
+        formatArrayElementAccess(cppExpr, indices),
+        {
+          kind: "TypeReference",
+          name: elementTypeName,
+          isReference: false,
+          referenceKind: "none",
+        } as TypeReference,
+        flags,
+      );
       return;
     }
     const { start, end } = dims[dimIdx]!;
@@ -525,6 +605,7 @@ export function generateDebugTable(
         dims,
         dimIdx + 1,
         elementTypeName,
+        flags,
         [...indices, i],
       );
     }
@@ -563,6 +644,7 @@ export function generateDebugTable(
     path: string,
     cppExpr: string,
     decl: VarDeclaration,
+    flags: number,
     ownerTypeName?: string,
   ): void => {
     for (const varName of decl.names) {
@@ -570,6 +652,7 @@ export function generateDebugTable(
         `${path}.${varName.toUpperCase()}`,
         `${cppExpr}.${memberCppName(varName, decl.type, ownerTypeName)}`,
         decl.type,
+        flags,
       );
     }
   };
@@ -598,7 +681,12 @@ export function generateDebugTable(
           const key = varName.toUpperCase();
           if (seenGlobals.has(key)) continue;
           seenGlobals.add(key);
-          visitTypeRef(key, `${varName}.value`, decl.type);
+          visitTypeRef(
+            key,
+            `${varName}.value`,
+            decl.type,
+            block.isConstant ? LEAF_FLAG_READONLY : 0,
+          );
         }
       }
     }
@@ -630,8 +718,9 @@ export function generateDebugTable(
             ) {
               continue;
             }
+            const declFlags = block.isConstant ? LEAF_FLAG_READONLY : 0;
             for (const decl of block.declarations) {
-              visitVarDecl(basePath, baseCpp, decl);
+              visitVarDecl(basePath, baseCpp, decl, declFlags);
             }
           }
         }
@@ -706,7 +795,11 @@ function renderCpp(
     } else {
       for (const e of bucket) {
         lines.push(
-          `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, 0 },  // ${e.path}`,
+          // The `(void*)` cast is load-bearing AND lossy: a CONSTANT member is
+          // declared `const`, and a C-style cast strips that silently where
+          // `static_cast` would refuse. The flags byte is what carries the
+          // qualifier through to the runtime so the write paths can honour it.
+          `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, ${flagsLiteral(e.flags)} },  // ${e.path}`,
         );
       }
     }

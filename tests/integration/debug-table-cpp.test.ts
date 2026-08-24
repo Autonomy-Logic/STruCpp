@@ -309,3 +309,107 @@ END_PROGRAM${CFG}`,
     ).toBe("");
   });
 });
+
+/**
+ * The read-only gate has to hold at RUNTIME, not just compile.
+ *
+ * A CONSTANT member is declared `const`, but the debug table reaches it
+ * through a C-style `(void*)` cast that silently strips the qualifier — so
+ * nothing in the type system stops `handle_write` from writing straight into
+ * a const object. The only thing that does is the LEAF_FLAG_READONLY bit and
+ * the two checks that read it, and a syntax-only check cannot tell whether
+ * those actually fire. This builds a real binary and asks it.
+ */
+describeIfGpp("CONSTANT leaves refuse writes at runtime", () => {
+  let tempDir: string;
+
+  beforeAll(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-ro-gate-"));
+  });
+
+  afterAll(() => {
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses write, force and unforce while still allowing reads", () => {
+    const result = compile(
+      `PROGRAM Main
+VAR CONSTANT LIMIT : DINT := 10; END_VAR
+VAR live : DINT := 0; END_VAR
+  live := live + 1;
+END_PROGRAM${CFG}`,
+      { headerFileName: "generated.hpp" },
+    );
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+
+    const dir = path.join(tempDir, "gate");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "generated.hpp"), result.headerCode);
+    fs.writeFileSync(path.join(dir, "generated.cpp"), result.cppCode);
+    fs.writeFileSync(
+      path.join(dir, "generated_debug.cpp"),
+      result.debugTableCpp!,
+    );
+
+    // LIMIT and LIVE are the only two leaves; look them up by path rather
+    // than assuming an order.
+    const idx = (p: string) => {
+      const leaf = result.debugMap!.leaves.find((l) => l.path === p);
+      expect(leaf, `no leaf for ${p}`).toBeTruthy();
+      return `${leaf!.arrayIdx}, ${leaf!.elemIdx}`;
+    };
+
+    fs.writeFileSync(
+      path.join(dir, "main.cpp"),
+      `#include "generated.hpp"
+#include "debug_dispatch.hpp"
+#include <cstdio>
+#include <cstring>
+strucpp::Configuration_CONFIG0 g_config;
+using namespace strucpp::debug;
+int fails = 0;
+static void expect_eq(const char* what, int got, int want) {
+  if (got != want) { printf("FAIL %s: got 0x%02X want 0x%02X\\n", what, got, want); ++fails; }
+}
+int main() {
+  unsigned char v[8] = {99, 0, 0, 0, 0, 0, 0, 0};
+  unsigned char buf[8] = {0};
+
+  // The writable leaf proves the gate is selective, not blanket.
+  expect_eq("write live",     handle_write(${idx("INSTANCE0.LIVE")}, v, 4), STATUS_OK);
+  expect_eq("force live",     handle_set(${idx("INSTANCE0.LIVE")}, true, v, 4), STATUS_OK);
+
+  // The constant refuses all three mutating operations. Unforce is refused
+  // too: it could never have been forced, so reporting OK would claim a
+  // force had been cleared that never existed.
+  expect_eq("write const",    handle_write(${idx("INSTANCE0.LIMIT")}, v, 4), STATUS_READ_ONLY);
+  expect_eq("force const",    handle_set(${idx("INSTANCE0.LIMIT")}, true, v, 4), STATUS_READ_ONLY);
+  expect_eq("unforce const",  handle_set(${idx("INSTANCE0.LIMIT")}, false, v, 4), STATUS_READ_ONLY);
+
+  // Reading a constant stays useful — watching one is the whole point.
+  unsigned short n = handle_read(${idx("INSTANCE0.LIMIT")}, buf);
+  expect_eq("read len", (int)n, 4);
+  int got = 0; memcpy(&got, buf, 4);
+  expect_eq("read value", got, 10);
+
+  // And the storage itself is untouched by the refused attempts.
+  expect_eq("storage intact", (int)(long long)g_config.INSTANCE0.LIMIT, 10);
+
+  printf(fails ? "FAILURES=%d\\n" : "ALL_OK\\n", fails);
+  return fails ? 1 : 0;
+}
+`,
+    );
+
+    const bin = path.join(dir, "gate");
+    execSync(
+      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" ` +
+        `-o "${bin}" "${path.join(dir, "main.cpp")}" ` +
+        `"${path.join(dir, "generated.cpp")}" "${path.join(dir, "generated_debug.cpp")}"`,
+      { encoding: "utf-8" },
+    );
+    expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("ALL_OK");
+  });
+});

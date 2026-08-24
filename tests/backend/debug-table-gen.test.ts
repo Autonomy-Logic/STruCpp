@@ -643,3 +643,117 @@ END_PROGRAM${CFG}`;
     expect(addresses(src)).toContain("g_config.INSTANCE0.COLOR_");
   });
 });
+
+describe("CONSTANT leaves are marked read-only", () => {
+  const CFG_RO = `
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`;
+
+  /** path → leaf, for asserting on the flag without depending on ordering. */
+  const leaves = (src: string) => {
+    const r = compile(src, { headerFileName: "generated.hpp" });
+    expect(r.errors.map((e) => e.message)).toEqual([]);
+    const byPath = new Map<string, { readOnly?: true }>();
+    for (const l of r.debugMap!.leaves) byPath.set(l.path, l);
+    return { byPath, cpp: r.debugTableCpp!, map: r.debugMap! };
+  };
+
+  it("flags a program's VAR CONSTANT and leaves plain VAR writable", () => {
+    const { byPath, cpp } = leaves(
+      `PROGRAM Main
+VAR CONSTANT LIMIT : DINT := 10; END_VAR
+VAR live : DINT; END_VAR
+  live := LIMIT;
+END_PROGRAM${CFG_RO}`,
+    );
+    expect(byPath.get("INSTANCE0.LIMIT")?.readOnly).toBe(true);
+    // Omitted rather than false — the map carries thousands of leaves and the
+    // flag is rare, so absence is the encoding for "writable".
+    expect(byPath.get("INSTANCE0.LIVE")).not.toHaveProperty("readOnly");
+    // The emitted table names the constant, not a bare bitmask.
+    expect(cpp).toContain("TAG_DINT, LEAF_FLAG_READONLY },  // INSTANCE0.LIMIT");
+    expect(cpp).toContain("TAG_DINT, 0 },  // INSTANCE0.LIVE");
+  });
+
+  it("flags a VAR CONSTANT declared inside a FUNCTION_BLOCK, per instance", () => {
+    // Regression guard: the bit used to be applied only at the program level,
+    // which left `g.SCALE` writable while the program's own constants were
+    // gated — the same qualifier meaning two different things by depth.
+    const { byPath } = leaves(
+      `FUNCTION_BLOCK Gauge
+VAR CONSTANT SCALE : REAL := 2.5; END_VAR
+VAR reading : REAL; END_VAR
+  reading := SCALE;
+END_FUNCTION_BLOCK
+PROGRAM Main
+VAR g : Gauge; END_VAR
+  g();
+END_PROGRAM${CFG_RO}`,
+    );
+    expect(byPath.get("INSTANCE0.G.SCALE")?.readOnly).toBe(true);
+    expect(byPath.get("INSTANCE0.G.READING")).not.toHaveProperty("readOnly");
+  });
+
+  it("propagates the flag into every field of a CONSTANT structure", () => {
+    const { byPath } = leaves(
+      `TYPE Pair : STRUCT a : DINT; b : DINT; END_STRUCT; END_TYPE
+PROGRAM Main
+VAR CONSTANT LIMITS : Pair := (a := 1, b := 2); END_VAR
+VAR live : Pair; END_VAR
+  live.a := LIMITS.a;
+END_PROGRAM${CFG_RO}`,
+    );
+    expect(byPath.get("INSTANCE0.LIMITS.A")?.readOnly).toBe(true);
+    expect(byPath.get("INSTANCE0.LIMITS.B")?.readOnly).toBe(true);
+    expect(byPath.get("INSTANCE0.LIVE.A")).not.toHaveProperty("readOnly");
+  });
+
+  it("propagates the flag into every element of a CONSTANT array", () => {
+    const { byPath } = leaves(
+      `PROGRAM Main
+VAR CONSTANT TABLE : ARRAY[0..2] OF DINT := [1, 2, 3]; END_VAR
+VAR live : DINT; END_VAR
+  live := TABLE[0];
+END_PROGRAM${CFG_RO}`,
+    );
+    for (const i of [0, 1, 2]) {
+      expect(byPath.get(`INSTANCE0.TABLE[${i}]`)?.readOnly).toBe(true);
+    }
+  });
+
+  it("flags a CONFIGURATION VAR_GLOBAL CONSTANT and not its plain sibling", () => {
+    const { byPath } = leaves(
+      `PROGRAM Main
+VAR_EXTERNAL G_MAX : DINT; G_LIVE : DINT; END_VAR
+  G_LIVE := G_MAX;
+END_PROGRAM
+CONFIGURATION Config0
+  VAR_GLOBAL CONSTANT G_MAX : DINT := 500; END_VAR
+  VAR_GLOBAL G_LIVE : DINT; END_VAR
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`,
+    );
+    expect(byPath.get("G_MAX")?.readOnly).toBe(true);
+    expect(byPath.get("G_LIVE")).not.toHaveProperty("readOnly");
+  });
+
+  it("keeps the manifest at version 2", () => {
+    // Additive on purpose. `debug-parser.ts` in the editor rejects anything
+    // but 2 outright, so bumping would break every editor pinned to an older
+    // strucpp release the moment it read a new map.
+    const { map } = leaves(
+      `PROGRAM Main
+VAR CONSTANT LIMIT : DINT := 10; END_VAR
+  ;
+END_PROGRAM${CFG_RO}`,
+    );
+    expect(map.version).toBe(2);
+  });
+});

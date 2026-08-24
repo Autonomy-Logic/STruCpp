@@ -90,15 +90,33 @@ enum TypeTag : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
+// Per-leaf flag bits, carried in `Entry.flags`.  ABI — append only, never
+// renumber.  Mirrored by LEAF_FLAG_* in backend/debug-table-gen.ts, which
+// carries the same bits down its leaf walk.
+//
+// READONLY marks a leaf the debugger must not modify.  Set for IEC CONSTANT
+// variables: codegen declares them `const`, but the table's `(void*)` cast
+// strips that qualifier, so without this bit `handle_set` / `handle_write`
+// write straight through to a genuinely const object — undefined behaviour,
+// and a flat contradiction of what CONSTANT means.  Reads are unaffected:
+// watching a constant is useful, changing it is not.
+// ---------------------------------------------------------------------------
+constexpr uint8_t LEAF_FLAG_READONLY = 1 << 0;
+
+// ---------------------------------------------------------------------------
 // Debug entry: one per leaf variable.  Layout is ABI; see notes in
 // debug_dispatch.hpp's runtime dispatch for the per-platform size:
-// 4 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (pad absorbs
+// 4 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (flags absorbs
 // alignment).
+//
+// `flags` occupies the byte that used to be `_pad`, so sizeof(Entry) is
+// unchanged on every target — the read-only gate costs no flash and no RAM,
+// which is why it is a whole byte rather than a bit stolen from `tag`.
 // ---------------------------------------------------------------------------
 struct Entry {
     void* ptr;
     uint8_t tag;
-    uint8_t _pad;
+    uint8_t flags;
 };
 
 // ---------------------------------------------------------------------------
