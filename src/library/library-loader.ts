@@ -9,6 +9,7 @@
 
 import type {
   LibraryManifest,
+  LibraryTypeEntry,
   LibraryVarType,
   StlibArchive,
 } from "./library-manifest.js";
@@ -17,6 +18,7 @@ import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
   IECType,
+  StructDefinition,
   StructType,
   TypeReference,
   VarDeclaration,
@@ -60,9 +62,48 @@ function makeTypeRef(v: LibraryVarType): TypeReference {
  *  VarDeclaration carries the real TypeReference so AST-walking consumers
  *  (debug-table-gen) can recurse uniformly across user-defined and
  *  library-defined function blocks. */
+/**
+ * The AST definition a library type is registered under.
+ *
+ * A struct that exported its fields gets a real `StructDefinition`, so anything
+ * walking the type — the debug table above all — can descend into its members.
+ * Everything else keeps the historical self-referential `TypeReference`, which
+ * the walk reads as "opaque library type": an alias points at its base, and a
+ * struct without exported fields genuinely has nothing to descend into.
+ */
+function buildLibraryTypeDefinition(
+  t: LibraryTypeEntry,
+): StructDefinition | TypeReference {
+  if (t.kind === "struct" && t.fields && t.fields.length > 0) {
+    return {
+      kind: "StructDefinition",
+      sourceSpan: createDefaultSourceSpan(),
+      fields: t.fields.map((f) => ({
+        kind: "VarDeclaration" as const,
+        sourceSpan: createDefaultSourceSpan(),
+        names: [f.name],
+        type: {
+          kind: "TypeReference" as const,
+          sourceSpan: createDefaultSourceSpan(),
+          name: f.type,
+          isReference: false,
+          referenceKind: "none" as const,
+        },
+      })),
+    };
+  }
+  return {
+    kind: "TypeReference",
+    sourceSpan: createDefaultSourceSpan(),
+    name: t.baseType ?? t.name,
+    isReference: false,
+    referenceKind: "none",
+  };
+}
+
 function makeVarSymbol(
   v: LibraryVarType,
-  direction: "input" | "output" | "inout",
+  direction: "input" | "output" | "inout" | "local",
 ): VariableSymbol {
   const varType: ElementaryType = ELEMENTARY_TYPES[v.type.toUpperCase()] ?? {
     typeKind: "elementary",
@@ -85,7 +126,13 @@ function makeVarSymbol(
     isInOut: direction === "inout",
     isExternal: false,
     isGlobal: false,
-    isRetain: false,
+    // A `VAR RETAIN` inside the library is retained in every instance of the
+    // block, whatever the instance's own qualifier — so the manifest's flag
+    // travels onto the symbol rather than being re-derived at the use site.
+    isRetain: v.retain === true,
+    // Only present when the library's codegen mangled the member; the walk
+    // prefers it over re-deriving the rule against the wrong unit.
+    ...(v.cppName !== undefined ? { cppName: v.cppName } : {}),
   };
 }
 
@@ -342,13 +389,17 @@ export function registerLibrarySymbols(
           kind: "TypeDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           name: t.name,
-          definition: {
-            kind: "TypeReference",
-            sourceSpan: createDefaultSourceSpan(),
-            name: t.baseType ?? t.name,
-            isReference: false,
-            referenceKind: "none",
-          },
+          // A struct with exported fields gets a REAL StructDefinition, not the
+          // self-referential alias the other kinds fall back to.
+          //
+          // Everything that walks a type reads `declaration.definition`: the
+          // debug table recurses into a struct's fields through it, and an
+          // alias that points at itself is what it treats as "opaque library
+          // type, do not descend". That was fine while library structs were
+          // only ever type-checked, and wrong the moment a RETAINed library
+          // block held one — the struct's fields simply never reached the
+          // retain blob, so the instance restored around a hole.
+          definition: buildLibraryTypeDefinition(t),
         },
         resolvedType,
       });
@@ -363,11 +414,10 @@ export function registerLibrarySymbols(
   // type-checks against, and what the debugger shows: library FBs stay black
   // boxes, because their locals are implementation details.
   //
-  // `leaves` is the exception, and only retain uses it. It carries every
-  // persistent leaf inside the block, already flattened and already mangled by
-  // the library that compiled it, because a consumer can do neither for itself
-  // — see `LibraryFBLeaf`. It does not widen what the debugger displays; it is
-  // what lets a retained instance keep the state it actually runs on.
+  // `locals` is the exception, and only retain uses it. It carries the block's
+  // own VAR members so a RETAINed instance keeps the state it actually runs
+  // on; it does not widen what the debugger displays, which stays the
+  // interface.
   for (const fb of manifest.functionBlocks) {
     try {
       symbolTables.globalScope.define({
@@ -387,11 +437,11 @@ export function registerLibrarySymbols(
         inputs: fb.inputs.map((i) => makeVarSymbol(i, "input")),
         outputs: fb.outputs.map((o) => makeVarSymbol(o, "output")),
         inouts: fb.inouts.map((io) => makeVarSymbol(io, "inout")),
-        locals: [],
+        // Present from archives that export them; an older archive leaves
+        // this empty and a RETAINed instance of its blocks covers the visible
+        // surface only, with a warning naming the block.
+        locals: (fb.locals ?? []).map((l) => makeVarSymbol(l, "local")),
         libraryName: manifest.name,
-        // Present from archives built with retain support; undefined for
-        // older ones, which the leaf walk reports rather than papers over.
-        ...(fb.leaves ? { libraryLeaves: fb.leaves } : {}),
       });
     } catch (e) {
       if (!(e instanceof DuplicateSymbolError)) throw e;

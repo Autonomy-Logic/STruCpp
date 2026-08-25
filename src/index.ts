@@ -807,32 +807,19 @@ export function compile(
     debugTableCpp = dbg.debugTableCpp;
     debugMap = dbg.debugMap;
 
-    // A RETAIN the walk could not follow all the way down is a hard error, not
-    // a warning. Building it would produce firmware that restores a function
-    // block into a state it could never have run into — a fault that only
-    // appears after a power cycle and has nothing in the build to point at.
-    // Refusing here costs the user a rebuild of their library; not refusing
-    // costs them a machine that misbehaves once a week.
+    // A RETAIN the walk could not follow all the way down is a WARNING, not an
+    // error. The program still builds and its visible surface is still
+    // retained; refusing would strand anyone using a third-party .stlib they
+    // have no way to rebuild. But the retain is partial, and a partial retain
+    // nobody is told about is a fault discovered after a power cycle with
+    // nothing in the build to point at — so it is said, every build.
     for (const item of dbg.incomplete) {
-      pipeline.errors.push({
-        message: `${item.path}: ${item.reason}`,
+      pipeline.warnings.push({
+        message: item.reason,
         line: 0,
         column: 0,
-        severity: "error",
+        severity: "warning",
       });
-    }
-    if (pipeline.errors.length > 0) {
-      return {
-        success: false,
-        cppFiles: codeResult.cppFiles,
-        cppCode: codeResult.cppCode,
-        headerCode: codeResult.headerCode,
-        lineMap: codeResult.lineMap,
-        headerLineMap: codeResult.headerLineMap,
-        errors: pipeline.errors,
-        warnings: pipeline.warnings,
-        ast: pipeline.ast,
-      };
     }
   }
 

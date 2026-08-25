@@ -14,14 +14,19 @@ import type {
 } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
+import type { MemberManglingContext } from "../backend/member-mangling.js";
 import {
-  applyBlockFlags,
-  LEAF_FLAG_READONLY,
-  LEAF_FLAG_RETAIN,
-} from "../backend/debug-leaf-types.js";
-import { createLeafWalker } from "../backend/leaf-walker.js";
-import type { LibraryFBLeaf, LibraryVarType } from "./library-manifest.js";
-import type { Expression, TypeReference } from "../frontend/ast.js";
+  mangledMemberName,
+  userDefinedTypeNames,
+} from "../backend/member-mangling.js";
+import type { LibraryVarType } from "./library-manifest.js";
+import type {
+  Expression,
+  FunctionBlockDeclaration,
+  TypeReference,
+  VarBlock,
+  VarDeclaration,
+} from "../frontend/ast.js";
 
 /**
  * Serialize a VAR_INPUT initial-value expression back into an ST string for the
@@ -82,6 +87,37 @@ function serializeVarType(
   if (typeRef.referenceKind && typeRef.referenceKind !== "none") {
     entry.referenceKind = typeRef.referenceKind;
   }
+  return entry;
+}
+
+/**
+ * Serialize one `VAR` member of a function block for the manifest.
+ *
+ * Same shape as the interface entries, plus three things only the declaring
+ * library can answer:
+ *
+ *   • `cppName` when codegen mangled the member. Both mangling rules are
+ *     decided against this compilation unit — whether the member's type is
+ *     user-defined HERE, and which interface methods the block implements —
+ *     so a consumer cannot always re-derive them. Emitted only when it
+ *     differs, which across the bundled archives is never; the field exists so
+ *     the case that does occur is carried rather than guessed at.
+ *
+ *   • `readOnly` / `retain` from the declaring block's qualifiers. A
+ *     `VAR RETAIN` inside a function block is retained in every instance of
+ *     it, however the instance itself was declared.
+ */
+function serializeLocal(
+  name: string,
+  decl: VarDeclaration,
+  block: VarBlock,
+  ctx: MemberManglingContext,
+): LibraryVarType {
+  const entry = serializeVarType(name, decl.type);
+  const cppName = mangledMemberName(name, decl.type.name, ctx);
+  if (cppName !== name) entry.cppName = cppName;
+  if (block.isConstant) entry.readOnly = true;
+  if (block.isRetain) entry.retain = true;
   return entry;
 }
 
@@ -291,74 +327,37 @@ export function compileLibrary(
   // Extract manifest entries from the AST
   const ast = result.ast!;
 
-  /** FB types whose flattening hit something the walk could not address. */
-  const incompleteFBs = new Set<string>();
-
-  /**
-   * Flatten one function block's persistent state into manifest leaves.
-   *
-   * Runs the SAME walk the debug table runs (`leaf-walker.ts`), against the
-   * library's own AST and symbol tables — which is the entire point. Mangling
-   * and type visibility are properties of the declaring unit: only here is it
-   * known that a local's type is user-defined, or that the block implements an
-   * interface whose method name collides with a member. A consumer re-deriving
-   * any of this names members the class does not declare, and
-   * `generated_debug.cpp` then fails to compile.
-   *
-   * Paths and C++ expressions come back RELATIVE to the instance ("" root), so
-   * a consumer concatenates and nothing more.
-   */
-  const flattenFB = (fbName: string): LibraryFBLeaf[] | undefined => {
-    const symbolTables = result.symbolTables;
-    if (!symbolTables) return undefined;
-    const leaves: LibraryFBLeaf[] = [];
-    // Set for the duration of one top-level declaration's walk, so every leaf
-    // below a VAR is marked local however deep it sits.
-    let inLocalBlock = false;
-    const walker = createLeafWalker(ast, symbolTables, {
-      leaf: (path, cppExpr, iecName, flags) => {
-        leaves.push({
-          // Drop the leading "." both roots carry from the walk.
-          path: path.slice(1),
-          cpp: cppExpr,
-          type: iecName.toUpperCase(),
-          ...(inLocalBlock ? { local: true as const } : {}),
-          ...(flags & LEAF_FLAG_READONLY ? { readOnly: true as const } : {}),
-          ...(flags & LEAF_FLAG_RETAIN ? { retain: true as const } : {}),
-        });
-      },
-      // A library may legitimately contain state the debugger cannot address
-      // (an opaque dependency type, a variable-length array). Recording it
-      // here would claim the leaf list is complete when it is not, so those
-      // blocks simply do not offer leaves — and the consumer's RETAIN gate
-      // reports it against the instance, where the user can act on it.
-      skip: () => {
-        incompleteFBs.add(fbName.toUpperCase());
-      },
-      incomplete: () => {
-        incompleteFBs.add(fbName.toUpperCase());
-      },
-    });
-    const fb = ast.functionBlocks.find((f) => f.name === fbName);
-    if (!fb) return undefined;
-    for (const block of fb.varBlocks) {
-      if (
-        block.blockType !== "VAR" &&
-        block.blockType !== "VAR_INPUT" &&
-        block.blockType !== "VAR_OUTPUT" &&
-        block.blockType !== "VAR_IN_OUT"
-      ) {
-        continue;
-      }
-      const memberFlags = applyBlockFlags(0, block);
-      inLocalBlock = block.blockType === "VAR";
-      for (const decl of block.declarations) {
-        walker.visitVarDecl("", "", decl, memberFlags, fb.name);
-      }
-    }
-    return incompleteFBs.has(fbName.toUpperCase()) ? undefined : leaves;
-  };
   const headerFileName = `${options.name}.hpp`;
+
+  // Mangling inputs, computed once against THIS compilation unit — the only
+  // place that knows which of its type names are user-defined and which
+  // interface methods each block implements. See serializeLocal().
+  const userTypes = userDefinedTypeNames(ast);
+  const ifaceMethods = new Map<string, Set<string>>();
+  {
+    const byInterface = new Map<string, Set<string>>();
+    for (const iface of ast.interfaces) {
+      byInterface.set(
+        iface.name.toUpperCase(),
+        new Set(iface.methods.map((m) => m.name.toUpperCase())),
+      );
+    }
+    for (const fb of ast.functionBlocks) {
+      if (!fb.implements || fb.implements.length === 0) continue;
+      const methods = new Set<string>();
+      for (const name of fb.implements) {
+        for (const m of byInterface.get(name.toUpperCase()) ?? [])
+          methods.add(m);
+      }
+      if (methods.size > 0) ifaceMethods.set(fb.name.toUpperCase(), methods);
+    }
+  }
+  const manglingCtx = (
+    fb: FunctionBlockDeclaration,
+  ): MemberManglingContext => ({
+    isUserDefinedType: (n) => userTypes.has(n.toUpperCase()),
+    interfaceMethods: ifaceMethods.get(fb.name.toUpperCase()),
+  });
 
   // Slice emitted code into per-symbol chunks via the boundary
   // markers; the cleaned (marker-stripped) text replaces the original
@@ -437,14 +436,19 @@ export function compileLibrary(
                     d.names.map((n) => serializeVarType(n, d.type)),
                   ),
                 ),
-              // Every persistent leaf of one instance, interface and locals
-              // alike. Omitted when the walk could not reach all of it, so
-              // "present" always means "complete" — a consumer never has to
-              // wonder whether a short list is the whole story.
-              ...((): { leaves?: LibraryFBLeaf[] } => {
-                const leaves = flattenFB(fb.name);
-                return leaves ? { leaves } : {};
-              })(),
+              // The block's own VAR members, declared the same way the
+              // interface arrays above are. A RETAINed instance retains these
+              // too; without them a retained TON keeps Q and ET and loses the
+              // state that makes them mean anything.
+              locals: fb.varBlocks
+                .filter((b) => b.blockType === "VAR")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) =>
+                      serializeLocal(n, d, b, manglingCtx(fb)),
+                    ),
+                  ),
+                ),
             },
             catByName,
           ),
