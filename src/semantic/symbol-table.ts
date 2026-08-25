@@ -15,6 +15,7 @@ import type {
   VarDeclaration,
   IECType,
 } from "../frontend/ast.js";
+import type { LibraryFBLeaf } from "../library/library-manifest.js";
 import { ELEMENTARY_TYPES } from "./type-utils.js";
 
 // =============================================================================
@@ -96,6 +97,29 @@ export interface FunctionBlockSymbol extends BaseSymbol {
   outputs: VariableSymbol[];
   inouts: VariableSymbol[];
   locals: VariableSymbol[];
+  /**
+   * Name of the library this function block came from, set only by
+   * `registerLibrarySymbols`.
+   *
+   * The explicit marker that tells a library FB from a user-defined one. The
+   * leaf walk used to infer it from "are the flat arrays populated", which is
+   * a proxy that fails quietly in both directions — a user FB read as a
+   * library one loses its whole subtree, and vice versa names members that do
+   * not exist.
+   */
+  libraryName?: string;
+  /**
+   * For a function block registered from a .stlib manifest: every persistent
+   * leaf of one instance, already flattened and already mangled by the library
+   * that compiled it.
+   *
+   * Undefined for user-defined FBs (their declarations are right here in
+   * `declaration.varBlocks`) and for archives built before NODE-94. The leaf
+   * walk needs it because a consuming compilation cannot name a
+   * library-internal member or see through a library-internal type — see
+   * `LibraryFBLeaf` for the full argument.
+   */
+  libraryLeaves?: readonly LibraryFBLeaf[];
 }
 
 /**

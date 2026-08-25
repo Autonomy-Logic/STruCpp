@@ -860,6 +860,157 @@ END_PROGRAM${CFG_R}`,
     expect(byPath.get("INSTANCE0.AFTER")?.retain).toBe(true);
   });
 
+  // The gap this closes: a retained library FB used to keep its interface and
+  // silently drop everything the block actually runs on. A TON restored with Q
+  // and ET but without START_TIME comes back in a state it could never have
+  // reached by running.
+  it("retains every internal leaf of a library FB instance", () => {
+    const r = compile(
+      `PROGRAM Main
+VAR RETAIN t : TON; END_VAR
+VAR go : BOOL; END_VAR
+  t(IN := go, PT := T#5s);
+END_PROGRAM${CFG_R}`,
+      { libraries: discoverStlibs("libs") },
+    );
+    expect(r.errors.map((e) => e.message)).toEqual([]);
+    const retained = (r.debugMap!.retainVars ?? []).map((v) => v.path);
+    // The interface…
+    expect(retained).toContain("INSTANCE0.T.IN");
+    expect(retained).toContain("INSTANCE0.T.PT");
+    expect(retained).toContain("INSTANCE0.T.Q");
+    expect(retained).toContain("INSTANCE0.T.ET");
+    // …and the state that makes the interface meaningful.
+    expect(retained).toContain("INSTANCE0.T.STATE");
+    expect(retained).toContain("INSTANCE0.T.PREV_IN");
+    expect(retained).toContain("INSTANCE0.T.CURRENT_TIME");
+    expect(retained).toContain("INSTANCE0.T.START_TIME");
+    // The un-retained sibling stays out of the blob.
+    expect(retained).not.toContain("INSTANCE0.GO");
+  });
+
+  it("recurses into an FB nested inside a retained library FB", () => {
+    // CTU holds `VAR cu_t : R_TRIG`. Its edge-detect state is two levels down
+    // and invisible to the consuming compilation — only the archive knows it
+    // is there.
+    const r = compile(
+      `PROGRAM Main
+VAR RETAIN c : CTU; END_VAR
+VAR pulse : BOOL; END_VAR
+  c(CU := pulse, PV := 10);
+END_PROGRAM${CFG_R}`,
+      { libraries: discoverStlibs("libs") },
+    );
+    expect(r.errors.map((e) => e.message)).toEqual([]);
+    const retained = (r.debugMap!.retainVars ?? []).map((v) => v.path);
+    expect(retained).toContain("INSTANCE0.C.CV");
+    expect(retained).toContain("INSTANCE0.C.CU_T.CLK");
+    expect(retained).toContain("INSTANCE0.C.CU_T.Q");
+    expect(retained).toContain("INSTANCE0.C.CU_T.M");
+  });
+
+  it("keeps library FB locals out of the table when the instance is not retained", () => {
+    // The black-box contract still holds everywhere retain is not involved —
+    // otherwise every project instantiating a few hundred OSCAT blocks pays
+    // for internals nobody addresses.
+    const r = compile(
+      `PROGRAM Main
+VAR t : TON; END_VAR
+VAR go : BOOL; END_VAR
+  t(IN := go, PT := T#5s);
+END_PROGRAM${CFG_R}`,
+      { libraries: discoverStlibs("libs") },
+    );
+    const paths = r.debugMap!.leaves.map((l) => l.path);
+    expect(paths).toContain("INSTANCE0.T.Q");
+    expect(paths).not.toContain("INSTANCE0.T.START_TIME");
+    expect(paths).not.toContain("INSTANCE0.T.STATE");
+  });
+
+  it("lets NON_RETAIN opt a library FB instance out again", () => {
+    const r = compile(
+      `PROGRAM Main
+VAR NON_RETAIN t : TON; END_VAR
+VAR RETAIN boots : DINT; END_VAR
+  t(IN := FALSE, PT := T#5s);
+END_PROGRAM${CFG_R}`,
+      { libraries: discoverStlibs("libs") },
+    );
+    const retained = (r.debugMap!.retainVars ?? []).map((v) => v.path);
+    expect(retained).toEqual(["INSTANCE0.BOOTS"]);
+  });
+
+  it("refuses a RETAIN that reaches into a library built without leaves", () => {
+    // The honest failure. Before this, the same program compiled and produced
+    // a block that restored half its state — the fault only visible after a
+    // power cycle, with nothing in the build to point at.
+    const archives = discoverStlibs("libs").map((a) => ({
+      ...a,
+      manifest: {
+        ...a.manifest,
+        functionBlocks: a.manifest.functionBlocks.map(
+          ({ leaves: _leaves, ...rest }) => rest,
+        ),
+      },
+    }));
+    const r = compile(
+      `PROGRAM Main
+VAR RETAIN t : TON; END_VAR
+  t(IN := FALSE, PT := T#5s);
+END_PROGRAM${CFG_R}`,
+      { libraries: archives },
+    );
+    expect(r.success).toBe(false);
+    expect(r.errors.map((e) => e.message).join("\n")).toMatch(
+      /INSTANCE0\.T:.*built before retain support/,
+    );
+  });
+
+  it("still compiles that program when the instance is not retained", () => {
+    const archives = discoverStlibs("libs").map((a) => ({
+      ...a,
+      manifest: {
+        ...a.manifest,
+        functionBlocks: a.manifest.functionBlocks.map(
+          ({ leaves: _leaves, ...rest }) => rest,
+        ),
+      },
+    }));
+    const r = compile(
+      `PROGRAM Main
+VAR t : TON; END_VAR
+  t(IN := FALSE, PT := T#5s);
+END_PROGRAM${CFG_R}`,
+      { libraries: archives },
+    );
+    expect(r.success).toBe(true);
+    expect(r.debugMap!.leaves.map((l) => l.path)).toContain("INSTANCE0.T.Q");
+  });
+
+  it("reports the blob size the target has to be able to hold", () => {
+    // 14-byte header + DINT(4) + BOOL(1). The editor gates a build on this;
+    // getting it wrong there means firmware that silently drops retain.
+    const { map } = mapOf(
+      `PROGRAM Main
+VAR RETAIN boots : DINT; END_VAR
+VAR RETAIN armed : BOOL; END_VAR
+VAR live : DINT; END_VAR
+  live := boots;
+END_PROGRAM${CFG_R}`,
+    );
+    expect(map.retainBlobSize).toBe(14 + 4 + 1);
+  });
+
+  it("omits the blob size when nothing is retained", () => {
+    const { map } = mapOf(
+      `PROGRAM Main
+VAR live : DINT; END_VAR
+  live := 1;
+END_PROGRAM${CFG_R}`,
+    );
+    expect(map.retainBlobSize).toBeUndefined();
+  });
+
   it("retains a CONFIGURATION VAR_GLOBAL and not its plain sibling", () => {
     const { byPath } = mapOf(
       `PROGRAM Main

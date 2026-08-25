@@ -81,6 +81,68 @@ export interface LibraryVarType {
 }
 
 /**
+ * One elementary leaf of a library function block's persistent state, flattened.
+ *
+ * WHY THE LIBRARY HAS TO SHIP THESE RATHER THAN THE CONSUMER DERIVING THEM
+ * ----------------------------------------------------------------------
+ * A consuming compilation cannot work out the C++ member name of anything
+ * inside a library FB, and cannot see far enough to find every leaf:
+ *
+ *   • Mangling is decided against the DECLARING unit. `mangledMemberName()`
+ *     adds a trailing underscore when a member's name matches its own type's
+ *     name *and that type is user-defined*, or when it collides with a method
+ *     of an interface the owning FB implements. Both predicates are answered
+ *     from the library's own AST and symbol tables. A library-internal type
+ *     never reaches the manifest, so the consumer resolves it as "not
+ *     user-defined" and names an unmangled member the class does not declare —
+ *     `generated_debug.cpp` then fails to compile and takes the firmware build
+ *     with it.
+ *
+ *   • Depth is invisible. A local may be a library-internal STRUCT, or another
+ *     FB instance, neither of which is exported. Walking only what the manifest
+ *     exports would silently stop at the first such member, which is how you
+ *     get a retained instance that restores half its state.
+ *
+ * So the library compiler runs the same leaf walk the debug table runs, against
+ * the sources it is compiling, and writes the answer down. Paths and C++
+ * expressions here are RELATIVE to the instance, and the consumer only
+ * concatenates.
+ */
+export interface LibraryFBLeaf {
+  /** Dotted ST path below the instance, upper-cased, array elements spelled
+   *  `NAME[i]` — exactly the debug table's own path grammar, so a consumer
+   *  builds a full path with `${instancePath}.${leaf.path}` and nothing else. */
+  path: string;
+  /** C++ member expression below the instance, already mangled, starting with
+   *  a `.` (e.g. `.STATE.COUNT_`, `.BUF[3]`). Appended verbatim to the
+   *  instance expression. */
+  cpp: string;
+  /** Elementary IEC type name of the leaf (`BOOL`, `TIME`, …). */
+  type: string;
+  /**
+   * The leaf lives under a VAR block — a local, not part of the block's public
+   * interface.
+   *
+   * Set from the TOP-LEVEL declaring block and inherited by the whole subtree,
+   * so every leaf of a `VAR cu_t : R_TRIG;` is local even though `Q` is an
+   * output of R_TRIG itself.
+   *
+   * What it gates: the debugger keeps treating library blocks as black boxes
+   * and addresses only the interface, which is the long-standing contract and
+   * keeps the debug table from ballooning on a project that instantiates a few
+   * hundred OSCAT blocks. RETAIN is the one case that overrides it, because
+   * there correctness demands the whole instance.
+   */
+  local?: true;
+  /** The declaring VAR block was CONSTANT. */
+  readOnly?: true;
+  /** The declaring VAR block was RETAIN — the library author marked this member
+   *  retained, so it is retained in every instance regardless of how the
+   *  instance itself is declared. */
+  retain?: true;
+}
+
+/**
  * Library function block entry in a manifest.
  */
 export interface LibraryFBEntry {
@@ -92,6 +154,17 @@ export interface LibraryFBEntry {
   outputs: LibraryVarType[];
   /** In-out variables */
   inouts: LibraryVarType[];
+  /** Every persistent leaf of one instance — interface AND locals, flattened
+   *  through structs, arrays and nested FB instances. See {@link LibraryFBLeaf}
+   *  for why this cannot be reconstructed by the consumer.
+   *
+   *  Optional because archives compiled before NODE-94 do not carry it. A
+   *  consumer that needs complete state (only the retain path does) must treat
+   *  its absence as an ERROR and say so, never fall back to the interface
+   *  quietly: retaining a TON's Q and ET while dropping the internal start
+   *  timestamp produces a block that restores into a state it could never have
+   *  reached by running. */
+  leaves?: LibraryFBLeaf[];
   /** Block-level help text shown in editor hover dialogs. Authored in
    *  the library's `library.json` and merged into the manifest at build
    *  time (see scripts/generate-*.mjs). Optional so existing archives

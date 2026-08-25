@@ -14,7 +14,13 @@ import type {
 } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
-import type { LibraryVarType } from "./library-manifest.js";
+import {
+  applyBlockFlags,
+  LEAF_FLAG_READONLY,
+  LEAF_FLAG_RETAIN,
+} from "../backend/debug-leaf-types.js";
+import { createLeafWalker } from "../backend/leaf-walker.js";
+import type { LibraryFBLeaf, LibraryVarType } from "./library-manifest.js";
 import type { Expression, TypeReference } from "../frontend/ast.js";
 
 /**
@@ -284,6 +290,74 @@ export function compileLibrary(
 
   // Extract manifest entries from the AST
   const ast = result.ast!;
+
+  /** FB types whose flattening hit something the walk could not address. */
+  const incompleteFBs = new Set<string>();
+
+  /**
+   * Flatten one function block's persistent state into manifest leaves.
+   *
+   * Runs the SAME walk the debug table runs (`leaf-walker.ts`), against the
+   * library's own AST and symbol tables — which is the entire point. Mangling
+   * and type visibility are properties of the declaring unit: only here is it
+   * known that a local's type is user-defined, or that the block implements an
+   * interface whose method name collides with a member. A consumer re-deriving
+   * any of this names members the class does not declare, and
+   * `generated_debug.cpp` then fails to compile.
+   *
+   * Paths and C++ expressions come back RELATIVE to the instance ("" root), so
+   * a consumer concatenates and nothing more.
+   */
+  const flattenFB = (fbName: string): LibraryFBLeaf[] | undefined => {
+    const symbolTables = result.symbolTables;
+    if (!symbolTables) return undefined;
+    const leaves: LibraryFBLeaf[] = [];
+    // Set for the duration of one top-level declaration's walk, so every leaf
+    // below a VAR is marked local however deep it sits.
+    let inLocalBlock = false;
+    const walker = createLeafWalker(ast, symbolTables, {
+      leaf: (path, cppExpr, iecName, flags) => {
+        leaves.push({
+          // Drop the leading "." both roots carry from the walk.
+          path: path.slice(1),
+          cpp: cppExpr,
+          type: iecName.toUpperCase(),
+          ...(inLocalBlock ? { local: true as const } : {}),
+          ...(flags & LEAF_FLAG_READONLY ? { readOnly: true as const } : {}),
+          ...(flags & LEAF_FLAG_RETAIN ? { retain: true as const } : {}),
+        });
+      },
+      // A library may legitimately contain state the debugger cannot address
+      // (an opaque dependency type, a variable-length array). Recording it
+      // here would claim the leaf list is complete when it is not, so those
+      // blocks simply do not offer leaves — and the consumer's RETAIN gate
+      // reports it against the instance, where the user can act on it.
+      skip: () => {
+        incompleteFBs.add(fbName.toUpperCase());
+      },
+      incomplete: () => {
+        incompleteFBs.add(fbName.toUpperCase());
+      },
+    });
+    const fb = ast.functionBlocks.find((f) => f.name === fbName);
+    if (!fb) return undefined;
+    for (const block of fb.varBlocks) {
+      if (
+        block.blockType !== "VAR" &&
+        block.blockType !== "VAR_INPUT" &&
+        block.blockType !== "VAR_OUTPUT" &&
+        block.blockType !== "VAR_IN_OUT"
+      ) {
+        continue;
+      }
+      const memberFlags = applyBlockFlags(0, block);
+      inLocalBlock = block.blockType === "VAR";
+      for (const decl of block.declarations) {
+        walker.visitVarDecl("", "", decl, memberFlags, fb.name);
+      }
+    }
+    return incompleteFBs.has(fbName.toUpperCase()) ? undefined : leaves;
+  };
   const headerFileName = `${options.name}.hpp`;
 
   // Slice emitted code into per-symbol chunks via the boundary
@@ -363,6 +437,14 @@ export function compileLibrary(
                     d.names.map((n) => serializeVarType(n, d.type)),
                   ),
                 ),
+              // Every persistent leaf of one instance, interface and locals
+              // alike. Omitted when the walk could not reach all of it, so
+              // "present" always means "complete" — a consumer never has to
+              // wonder whether a short list is the whole story.
+              ...((): { leaves?: LibraryFBLeaf[] } => {
+                const leaves = flattenFB(fb.name);
+                return leaves ? { leaves } : {};
+              })(),
             },
             catByName,
           ),

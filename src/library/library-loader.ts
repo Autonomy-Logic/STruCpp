@@ -357,10 +357,17 @@ export function registerLibrarySymbols(
     }
   }
 
-  // Register function blocks. The library only ships its public interface
-  // (inputs/outputs/inouts) — locals are implementation details and stay
-  // inside the compiled archive. The debugger treats library FBs as
-  // black boxes for the same reason: only the user-facing API is exposed.
+  // Register function blocks.
+  //
+  // The interface (inputs/outputs/inouts) is what a consuming compilation
+  // type-checks against, and what the debugger shows: library FBs stay black
+  // boxes, because their locals are implementation details.
+  //
+  // `leaves` is the exception, and only retain uses it. It carries every
+  // persistent leaf inside the block, already flattened and already mangled by
+  // the library that compiled it, because a consumer can do neither for itself
+  // — see `LibraryFBLeaf`. It does not widen what the debugger displays; it is
+  // what lets a retained instance keep the state it actually runs on.
   for (const fb of manifest.functionBlocks) {
     try {
       symbolTables.globalScope.define({
@@ -381,6 +388,10 @@ export function registerLibrarySymbols(
         outputs: fb.outputs.map((o) => makeVarSymbol(o, "output")),
         inouts: fb.inouts.map((io) => makeVarSymbol(io, "inout")),
         locals: [],
+        libraryName: manifest.name,
+        // Present from archives built with retain support; undefined for
+        // older ones, which the leaf walk reports rather than papers over.
+        ...(fb.leaves ? { libraryLeaves: fb.leaves } : {}),
       });
     } catch (e) {
       if (!(e instanceof DuplicateSymbolError)) throw e;
