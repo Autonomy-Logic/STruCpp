@@ -269,7 +269,12 @@ inline LoadResult unpack(const uint8_t* blob,
     if (blob[2] != FORMAT_VERSION) return LoadResult::BadFormat;
 
     const uint16_t payload = get_u16(blob + 8);
-    if (len < static_cast<size_t>(HEADER_SIZE) + payload) return LoadResult::Truncated;
+    // `len - HEADER_SIZE`, not `HEADER_SIZE + payload`: `len` is already known
+    // >= HEADER_SIZE above, so the subtraction can't underflow, but the addition
+    // can overflow on a 16-bit size_t (avr-gcc) when `payload` is corrupted
+    // close to 65535 — which would wrap this check to true and let the crc32
+    // call below read tens of KB past `blob`.
+    if (len - HEADER_SIZE < payload) return LoadResult::Truncated;
 
     uint32_t crc = crc32(blob, 10);
     crc          = crc32(blob + HEADER_SIZE, payload, crc);

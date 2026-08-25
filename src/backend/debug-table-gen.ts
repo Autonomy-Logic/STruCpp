@@ -78,15 +78,6 @@ export const LEAF_FLAG_READONLY = 1 << 0;
 export const LEAF_FLAG_RETAIN = 1 << 1;
 
 /**
- * Render an entry's flags byte as C++.
- *
- * Emits the named constant rather than a literal so `generated_debug.cpp`
- * reads as intent — a reviewer scanning the table sees which leaves are
- * gated without decoding a bitmask — and so a stale generated file fails to
- * compile against a header that renamed the flag instead of silently setting
- * the wrong bit.
- */
-/**
  * Apply one var block's qualifiers to the flags inherited from its container.
  *
  * RETAIN is inherited: declaring `VAR RETAIN inst : FB;` retains every leaf
@@ -107,6 +98,13 @@ function applyBlockFlags(
 }
 
 /**
+ * Mirrors `strucpp::retain::HEADER_SIZE` in runtime/include/iec_retain.hpp.
+ * Changing one without the other makes the editor's capacity gate disagree
+ * with the firmware's own arithmetic.
+ */
+const RETAIN_HEADER_SIZE = 14;
+
+/**
  * FNV-1a (32-bit) over the retain layout — the ordered `path|typeTag` of every
  * retained leaf.
  *
@@ -119,13 +117,6 @@ function applyBlockFlags(
  * against accident, not against an attacker, and it has to be computable in a
  * few lines on an AVR as well as here.
  */
-/**
- * Mirrors `strucpp::retain::HEADER_SIZE` in runtime/include/iec_retain.hpp.
- * Changing one without the other makes the editor's capacity gate disagree
- * with the firmware's own arithmetic.
- */
-const RETAIN_HEADER_SIZE = 14;
-
 function retainLayoutHashOf(
   vars: Array<{ path: string; tagName: TagName }>,
 ): string {
@@ -141,6 +132,15 @@ function retainLayoutHashOf(
   return hash.toString(16).padStart(8, "0");
 }
 
+/**
+ * Render an entry's flags byte as C++.
+ *
+ * Emits the named constant rather than a literal so `generated_debug.cpp`
+ * reads as intent — a reviewer scanning the table sees which leaves are
+ * gated without decoding a bitmask — and so a stale generated file fails to
+ * compile against a header that renamed the flag instead of silently setting
+ * the wrong bit.
+ */
 function flagsLiteral(flags: number): string {
   const names: string[] = [];
   if (flags & LEAF_FLAG_READONLY) names.push("LEAF_FLAG_READONLY");
@@ -918,12 +918,13 @@ export function generateDebugTable(
   if (arrays.length === 0) arrays.push([]);
 
   const configName = projectModel.configurations[0]?.name ?? "CONFIG0";
+  const retainLayoutHash = retainLayoutHashOf(retainVars);
   const debugTableCpp = renderCpp(
     arrays,
     configGlobal,
     configName,
     retainVars,
-    retainLayoutHashOf(retainVars),
+    retainLayoutHash,
   );
   const debugMap: DebugMapV2 = {
     version: 2,
@@ -942,7 +943,7 @@ export function generateDebugTable(
             path,
             size,
           })),
-          retainLayoutHash: retainLayoutHashOf(retainVars),
+          retainLayoutHash,
           // 14 == strucpp::retain::HEADER_SIZE (iec_retain.hpp). Emitted so a
           // build can be refused when the target cannot hold the blob.
           retainBlobSize:

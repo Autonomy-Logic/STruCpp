@@ -1079,16 +1079,16 @@ END_PROGRAM${CFG_R}`).map.retainLayoutHash;
     });
   });
 
-describe("retain through a user-installed library", () => {
-  // Nothing here is bundled with STruC++. This is the path a user takes when
-  // they add a custom .stlib in the library manager, and it exercises the three
-  // things a consuming compilation supposedly cannot resolve on its own:
-  //
-  //   1. a member whose name matches its own user-defined type's name, which
-  //      the library's codegen mangles to a trailing underscore;
-  //   2. a local of a library-INTERNAL struct type;
-  //   3. a local that is another function-block instance.
-  const LIB_SOURCE = `
+  describe("retain through a user-installed library", () => {
+    // Nothing here is bundled with STruC++. This is the path a user takes when
+    // they add a custom .stlib in the library manager, and it exercises the three
+    // things a consuming compilation supposedly cannot resolve on its own:
+    //
+    //   1. a member whose name matches its own user-defined type's name, which
+    //      the library's codegen mangles to a trailing underscore;
+    //   2. a local of a library-INTERNAL struct type;
+    //   3. a local that is another function-block instance.
+    const LIB_SOURCE = `
 TYPE Tally : STRUCT
   hits : DINT;
   misses : DINT;
@@ -1121,73 +1121,73 @@ END_VAR
 END_FUNCTION_BLOCK
 `;
 
-  const archive = () => {
-    const built = compileLibrary([{ source: LIB_SOURCE, fileName: "gauge.st" }], {
-      name: "user-gauge",
-      version: "1.0.0",
-      namespace: "usergauge",
+    const archive = () => {
+      const built = compileLibrary([{ source: LIB_SOURCE, fileName: "gauge.st" }], {
+        name: "user-gauge",
+        version: "1.0.0",
+        namespace: "usergauge",
+      });
+      expect(built.errors).toEqual([]);
+      expect(built.success).toBe(true);
+      return built;
+    };
+
+    it("records the mangled member name only where mangling happened", () => {
+      const gauge = archive().manifest.functionBlocks.find((f) => f.name.toUpperCase() === "GAUGE")!;
+      const byName = new Map(gauge.locals!.map((l) => [l.name.toUpperCase(), l]));
+      // `Tally : Tally` collides with its own type name — codegen emits TALLY_.
+      expect(byName.get("TALLY")!.cppName).toBe("TALLY_");
+      // Nothing else needed it, so nothing else carries the field.
+      expect(byName.get("INNER")!.cppName).toBeUndefined();
+      expect(byName.get("SCRATCH")!.cppName).toBeUndefined();
+      // The library's own VAR RETAIN is marked, so it survives in every instance.
+      expect(byName.get("LIFETIME")!.retain).toBe(true);
     });
-    expect(built.errors).toEqual([]);
-    expect(built.success).toBe(true);
-    return built;
-  };
 
-  it("records the mangled member name only where mangling happened", () => {
-    const gauge = archive().manifest.functionBlocks.find((f) => f.name.toUpperCase() === "GAUGE")!;
-    const byName = new Map(gauge.locals!.map((l) => [l.name.toUpperCase(), l]));
-    // `Tally : Tally` collides with its own type name — codegen emits TALLY_.
-    expect(byName.get("TALLY")!.cppName).toBe("TALLY_");
-    // Nothing else needed it, so nothing else carries the field.
-    expect(byName.get("INNER")!.cppName).toBeUndefined();
-    expect(byName.get("SCRATCH")!.cppName).toBeUndefined();
-    // The library's own VAR RETAIN is marked, so it survives in every instance.
-    expect(byName.get("LIFETIME")!.retain).toBe(true);
-  });
-
-  it("retains every internal leaf of an instance of a user library block", () => {
-    const built = archive();
-    const r = compile(
-      `PROGRAM Main
+    it("retains every internal leaf of an instance of a user library block", () => {
+      const built = archive();
+      const r = compile(
+        `PROGRAM Main
 VAR RETAIN g : Gauge; END_VAR
 VAR go : BOOL; END_VAR
   g(bump := go);
 END_PROGRAM${CFG_R}`,
-      { libraries: [{ manifest: built.manifest, chunks: built.chunks }] as never },
-    );
-    expect(r.errors.map((e) => e.message)).toEqual([]);
-    const retained = (r.debugMap!.retainVars ?? []).map((v) => v.path);
-    // Interface…
-    expect(retained).toContain("INSTANCE0.G.BUMP");
-    expect(retained).toContain("INSTANCE0.G.TOTAL");
-    // …the mangled member, recursed into its internal struct…
-    expect(retained).toContain("INSTANCE0.G.TALLY.HITS");
-    expect(retained).toContain("INSTANCE0.G.TALLY.MISSES");
-    // …the nested FB instance, interface and its own local…
-    expect(retained).toContain("INSTANCE0.G.INNER.S");
-    expect(retained).toContain("INSTANCE0.G.INNER.Q");
-    expect(retained).toContain("INSTANCE0.G.INNER.HELD");
-    // …and the plain locals.
-    expect(retained).toContain("INSTANCE0.G.SCRATCH");
-    expect(retained).toContain("INSTANCE0.G.LIFETIME");
-  });
+        { libraries: [{ manifest: built.manifest, chunks: built.chunks }] as never },
+      );
+      expect(r.errors.map((e) => e.message)).toEqual([]);
+      const retained = (r.debugMap!.retainVars ?? []).map((v) => v.path);
+      // Interface…
+      expect(retained).toContain("INSTANCE0.G.BUMP");
+      expect(retained).toContain("INSTANCE0.G.TOTAL");
+      // …the mangled member, recursed into its internal struct…
+      expect(retained).toContain("INSTANCE0.G.TALLY.HITS");
+      expect(retained).toContain("INSTANCE0.G.TALLY.MISSES");
+      // …the nested FB instance, interface and its own local…
+      expect(retained).toContain("INSTANCE0.G.INNER.S");
+      expect(retained).toContain("INSTANCE0.G.INNER.Q");
+      expect(retained).toContain("INSTANCE0.G.INNER.HELD");
+      // …and the plain locals.
+      expect(retained).toContain("INSTANCE0.G.SCRATCH");
+      expect(retained).toContain("INSTANCE0.G.LIFETIME");
+    });
 
-  it("retains the library's own VAR RETAIN even when the instance is not retained", () => {
-    const built = archive();
-    const r = compile(
-      `PROGRAM Main
+    it("retains the library's own VAR RETAIN even when the instance is not retained", () => {
+      const built = archive();
+      const r = compile(
+        `PROGRAM Main
 VAR g : Gauge; END_VAR
 VAR go : BOOL; END_VAR
   g(bump := go);
 END_PROGRAM${CFG_R}`,
-      { libraries: [{ manifest: built.manifest, chunks: built.chunks }] as never },
-    );
-    expect(r.errors.map((e) => e.message)).toEqual([]);
-    const retained = (r.debugMap!.retainVars ?? []).map((v) => v.path);
-    expect(retained).toEqual(["INSTANCE0.G.LIFETIME"]);
-    // The rest of the block stays a black box, as it does for any library.
-    const paths = r.debugMap!.leaves.map((l) => l.path);
-    expect(paths).not.toContain("INSTANCE0.G.SCRATCH");
-    expect(paths).not.toContain("INSTANCE0.G.INNER.HELD");
+        { libraries: [{ manifest: built.manifest, chunks: built.chunks }] as never },
+      );
+      expect(r.errors.map((e) => e.message)).toEqual([]);
+      const retained = (r.debugMap!.retainVars ?? []).map((v) => v.path);
+      expect(retained).toEqual(["INSTANCE0.G.LIFETIME"]);
+      // The rest of the block stays a black box, as it does for any library.
+      const paths = r.debugMap!.leaves.map((l) => l.path);
+      expect(paths).not.toContain("INSTANCE0.G.SCRATCH");
+      expect(paths).not.toContain("INSTANCE0.G.INNER.HELD");
+    });
   });
-});
 });
