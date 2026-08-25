@@ -22,7 +22,62 @@ import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
 import { compile } from "../../src/index.js";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import { hasGpp } from "./test-helpers.js";
+/**
+ * Harness for the retained-library-FB round trip. Kept out of the test body so
+ * the C++ is readable as C++ rather than as an escaped template literal.
+ */
+const MAIN_CPP_LIBFB_RETAIN = `#include "generated.hpp"
+#include "debug_dispatch.hpp"
+#include "iec_retain.hpp"
+#include <cstdio>
+strucpp::Configuration_CONFIG0 g_config;
+using namespace strucpp;
+static int fails = 0;
+static void chk(const char* what, bool ok) { if (!ok) { printf("FAIL %s\\n", what); ++fails; } }
+static uint16_t rd(uint8_t a, uint16_t e, uint8_t* d) { return debug::handle_read(a, e, d); }
+static uint8_t  wr(uint8_t a, uint16_t e, const uint8_t* b, uint16_t n) { return debug::handle_write(a, e, b, n); }
+static uint16_t sz(uint8_t a, uint16_t e) { return debug::handle_size(a, e); }
+
+int main() {
+  // A timer mid-count: the interface says "running", and START_TIME is the
+  // only thing that says since when.
+  g_config.INSTANCE0.T.IN = true;
+  g_config.INSTANCE0.T.PT = 5000;
+  g_config.INSTANCE0.T.Q  = false;
+  g_config.INSTANCE0.T.ET = 1234;
+  g_config.INSTANCE0.T.STATE = 1;
+  g_config.INSTANCE0.T.PREV_IN = true;
+  g_config.INSTANCE0.T.START_TIME = 987654;
+  g_config.INSTANCE0.LOOSE.START_TIME = 555;
+
+  unsigned char blob[1024] = {0};
+  size_t n = retain::pack(blob, sizeof(blob), rd, sz);
+  chk("packed", n == retain::blob_size(sz));
+
+  // Power cycle.
+  g_config.INSTANCE0.T.IN = false;
+  g_config.INSTANCE0.T.PT = 0;
+  g_config.INSTANCE0.T.ET = 0;
+  g_config.INSTANCE0.T.STATE = 0;
+  g_config.INSTANCE0.T.PREV_IN = false;
+  g_config.INSTANCE0.T.START_TIME = 0;
+  g_config.INSTANCE0.LOOSE.START_TIME = 0;
+
+  chk("unpack ok", retain::unpack(blob, n, wr, sz) == retain::LoadResult::Ok);
+  chk("interface ET", (long long)g_config.INSTANCE0.T.ET == 1234);
+  chk("internal STATE", (int)g_config.INSTANCE0.T.STATE == 1);
+  chk("internal PREV_IN", (bool)g_config.INSTANCE0.T.PREV_IN == true);
+  chk("internal START_TIME", (long long)g_config.INSTANCE0.T.START_TIME == 987654);
+  // The whole point: the un-retained instance stays cold.
+  chk("non-retained instance untouched", (long long)g_config.INSTANCE0.LOOSE.START_TIME == 0);
+
+  printf(fails ? "FAILURES=%d\\n" : "ALL_OK\\n", fails);
+  return fails ? 1 : 0;
+}
+`;
+
 
 const RUNTIME_INCLUDE = path.resolve(__dirname, "../../src/runtime/include");
 
@@ -544,6 +599,61 @@ int main() {
       `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" -o "${bin}" ` +
         `"${path.join(dir, "main.cpp")}" "${path.join(dir, "generated.cpp")}" ` +
         `"${path.join(dir, "generated_debug.cpp")}"`,
+      { encoding: "utf-8" },
+    );
+    expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("ALL_OK");
+  });
+
+  // The gap this closes, proved against the real generated C++ rather than the
+  // manifest: a retained TON used to come back with Q and ET but without
+  // START_TIME, i.e. in a state the block could never have run into.
+  it("restores a retained library FB's internal state, not just its interface", () => {
+    const result = compile(
+      `PROGRAM Main
+VAR RETAIN t : TON; END_VAR
+VAR loose : TON; END_VAR
+  t(IN := TRUE, PT := T#5s);
+  loose(IN := TRUE, PT := T#5s);
+END_PROGRAM
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`,
+      { headerFileName: "generated.hpp", libraries: discoverStlibs("libs") },
+    );
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+
+    // Every internal leaf is in the blob…
+    const retained = (result.debugMap!.retainVars ?? []).map((v) => v.path);
+    expect(retained).toContain("INSTANCE0.T.START_TIME");
+    // …and the un-retained sibling contributes nothing.
+    expect(retained.filter((p) => p.startsWith("INSTANCE0.LOOSE."))).toEqual([]);
+
+    const dir = path.join(tempDir, "libfb-retain");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "generated.hpp"), result.headerCode);
+    fs.writeFileSync(
+      path.join(dir, "generated_debug.cpp"),
+      result.debugTableCpp!,
+    );
+    fs.writeFileSync(path.join(dir, "main.cpp"), MAIN_CPP_LIBFB_RETAIN);
+
+    // Per-file, not the concatenated `cppCode`: a compilation that pulls in a
+    // library emits the library's POUs as their own translation units, and
+    // linking both forms duplicates every symbol in them.
+    const sources = (result.cppFiles ?? []).map((f) => {
+      const fp = path.join(dir, f.name);
+      fs.writeFileSync(fp, f.content);
+      return `"${fp}"`;
+    });
+
+    const bin = path.join(dir, "libfb-retain");
+    execSync(
+      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" -o "${bin}" ` +
+        `"${path.join(dir, "main.cpp")}" ` +
+        `"${path.join(dir, "generated_debug.cpp")}" ${sources.join(" ")}`,
       { encoding: "utf-8" },
     );
     expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("ALL_OK");
