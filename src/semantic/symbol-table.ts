@@ -15,7 +15,6 @@ import type {
   VarDeclaration,
   IECType,
 } from "../frontend/ast.js";
-import type { LibraryFBLeaf } from "../library/library-manifest.js";
 import { ELEMENTARY_TYPES } from "./type-utils.js";
 
 // =============================================================================
@@ -66,6 +65,16 @@ export interface VariableSymbol extends BaseSymbol {
    *  AST initial value). Presence marks the input as OPTIONAL. User-defined
    *  POUs instead carry their default on `declaration.initialValue`. */
   initialValue?: string | undefined;
+  /**
+   * The C++ member name, when the declaring unit mangled it and that unit was
+   * a LIBRARY (see `LibraryVarType.cppName`).
+   *
+   * Only set for symbols reconstructed from a manifest. A consuming
+   * compilation cannot always re-derive the mangling — both rules are answered
+   * against the declaring unit — and naming a member the class does not
+   * declare fails the build of `generated_debug.cpp`.
+   */
+  cppName?: string | undefined;
 }
 
 /**
@@ -108,18 +117,6 @@ export interface FunctionBlockSymbol extends BaseSymbol {
    * not exist.
    */
   libraryName?: string;
-  /**
-   * For a function block registered from a .stlib manifest: every persistent
-   * leaf of one instance, already flattened and already mangled by the library
-   * that compiled it.
-   *
-   * Undefined for user-defined FBs (their declarations are right here in
-   * `declaration.varBlocks`) and for archives built before NODE-94. The leaf
-   * walk needs it because a consuming compilation cannot name a
-   * library-internal member or see through a library-internal type — see
-   * `LibraryFBLeaf` for the full argument.
-   */
-  libraryLeaves?: readonly LibraryFBLeaf[];
 }
 
 /**
