@@ -86,6 +86,26 @@ export interface LibraryVarType {
 export interface LibraryFBEntry {
   /** Function block name */
   name: string;
+  /**
+   * Body language, when the block is NOT compiled by STruC++.
+   *
+   * Absent on every ordinary ST/IL block — those are compiled here and their
+   * C++ rides in `chunks`. Present on a block whose body is C/C++ or Python:
+   * STruC++ recovered this interface from the file's ST header but never
+   * parsed the body, emitted no chunk for it, and carried the authored file
+   * verbatim in `sources`. A consumer seeing this field must lower the source
+   * itself (through whatever native bridge it implements) instead of linking
+   * a chunk; see `native-sources.ts` for why the body is transported rather
+   * than compiled.
+   */
+  implementation?: "cpp" | "python";
+  /**
+   * File in `sources` holding this block's body. Set alongside
+   * `implementation` so a consumer can find the source without inferring the
+   * file name from the block name — the two need not match, and a
+   * case-insensitive guess would be wrong on a case-sensitive filesystem.
+   */
+  sourceFile?: string;
   /** Input variables */
   inputs: LibraryVarType[];
   /** Output variables */
@@ -286,7 +306,14 @@ export interface StlibArchive {
    *  (e.g. `iec-std-functions` is built from the std-function registry
    *  and contributes only symbol-table entries, no C++ output). */
   chunks: LibraryChunk[];
-  /** Original ST source files (omitted for closed-source distribution).
+  /** Original source files (ST omitted for closed-source distribution).
+   *
+   *  `--no-source` / `noSource` strips the ST entries, whose symbols are
+   *  already compiled into `chunks` and therefore usable without them. It
+   *  does NOT strip native (C/C++, Python) entries: those have no chunk, so
+   *  their source IS the deliverable and an archive without it is unbuildable
+   *  by any consumer. Closed-source distribution of a native block is not a
+   *  thing this format can express.
    *  `category` mirrors the manifest entry category for the POUs declared
    *  in this file so `--decompile-lib` can recreate the folder hierarchy
    *  on disk without re-parsing the source. Sources that span multiple

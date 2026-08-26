@@ -6,7 +6,7 @@
  *
  * Usage:
  *   strucpp <input.st> [input2.st ...] -o <output.cpp> [options]
- *   strucpp --compile-lib <input.st> [...] -o <dir> --lib-name <name> [options]
+ *   strucpp --compile-lib <input.st|.cpp|.py> [...] -o <dir> --lib-name <name> [options]
  *
  * Options:
  *   -o, --output <file>       Output file path or directory
@@ -298,7 +298,7 @@ STruC++ - IEC 61131-3 Structured Text to C++ Compiler
 
 Usage:
   strucpp <input.st> [input2.st ...] -o <output.cpp> [options]
-  strucpp --compile-lib <input.st|dir> [...] -o <dir> --lib-name <name> [options]
+  strucpp --compile-lib <input.st|.cpp|.py|dir> [...] -o <dir> --lib-name <name> [options]
 
 Options:
   -o, --output <file>       Output file path (default: <input>.cpp)
@@ -322,7 +322,9 @@ Library compilation:
   --lib-name <name>         Library name (required with --compile-lib)
   --lib-version <version>   Library version (default: "1.0.0")
   --lib-namespace <ns>      C++ namespace (default: derived from lib-name)
-  --no-source               Omit ST source from .stlib archive (closed-source)
+  --no-source               Omit ST source from .stlib archive (closed-source).
+                            C/C++ and Python bodies are always kept: they are
+                            not compiled, so their source is the deliverable.
   --decompile-lib <path>    Extract ST sources from a .stlib archive
 
 CODESYS import:
@@ -493,7 +495,7 @@ function compileLibraryMode(options: CLIOptions): void {
         const discovered = discoverSTFiles(inputPath);
         if (discovered.length === 0) {
           console.error(
-            `Error: No .st or .il files found in directory: ${inputPath}`,
+            `Error: No .st, .il, .cpp or .py files found in directory: ${inputPath}`,
           );
           process.exit(1);
         }
