@@ -166,6 +166,30 @@ export function projectNativeHeaderToSt(
     };
   }
 
+  // A native block must be a FUNCTION_BLOCK. There is no such thing as a
+  // C/C++ or Python FUNCTION here: the bridge hands the body a pointer to
+  // per-instance storage and calls `setup` once before `loop` on every scan,
+  // which is function-block shape. A FUNCTION has no instance to hold that
+  // state in, so there is nothing for the consumer to lower it into.
+  //
+  // Rejecting rather than ignoring: the interface would otherwise land in the
+  // AST's function list, which nothing here reads, and the library would build
+  // "successfully" with the block missing from the manifest entirely. A
+  // published `.stlib` is immutable in the field, so that silence would only
+  // surface later as an undefined type in someone else's project.
+  //
+  // ST functions are unaffected — they compile through the normal path and
+  // keep their manifest entries and chunks. This is only about native files.
+  if (kind === "FUNCTION") {
+    return {
+      fileName: source.fileName,
+      message:
+        `${source.fileName}: a ${source.language === "cpp" ? "C/C++" : "Python"} library block must be a ` +
+        `FUNCTION_BLOCK, not a FUNCTION ("${name}"). A FUNCTION has no instance state for the consumer's ` +
+        "native bridge to hold. Declare it as a FUNCTION_BLOCK.",
+    };
+  }
+
   const headerEnd = lastEndVarIndex(body);
   if (headerEnd === -1) {
     return {
@@ -178,7 +202,7 @@ export function projectNativeHeaderToSt(
 
   const header = body.slice(declaration.index, headerEnd);
   return {
-    st: `${header}\nEND_${kind}\n`,
+    st: `${header}\nEND_FUNCTION_BLOCK\n`,
     name,
     ...(documentation.length > 0 ? { documentation } : {}),
   };

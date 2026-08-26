@@ -22,7 +22,6 @@ import {
 } from "./native-sources.js";
 import type {
   LibraryFBEntry,
-  LibraryFunctionEntry,
   LibraryManifest,
   LibraryVarType,
 } from "./library-manifest.js";
@@ -276,10 +275,11 @@ function compileNativeEntries(
   },
 ): {
   functionBlocks: LibraryFBEntry[];
-  functions: LibraryFunctionEntry[];
   errors: Array<{ message: string; file?: string; line?: number }>;
 } {
-  const empty = { functionBlocks: [], functions: [], errors: [] };
+  // Native blocks are always FUNCTION_BLOCKs — `projectNativeHeaderToSt`
+  // rejects FUNCTION and PROGRAM — so there is no function list to return.
+  const empty = { functionBlocks: [], errors: [] };
   if (native.length === 0) return empty;
 
   const projected: string[] = [];
@@ -346,9 +346,56 @@ function compileNativeEntries(
     functionBlocks: result.ast.functionBlocks.map((fb) =>
       tagNative(buildFBEntry(fb)),
     ),
-    functions: [],
     errors: [],
   };
+}
+
+/**
+ * Every exported name in a manifest that is claimed by more than one symbol.
+ *
+ * A library exports one thing per name. STruC++'s own duplicate detection only
+ * fires within a single kind and a single translation unit — two
+ * `FUNCTION_BLOCK Foo` in one compile is caught, but `FUNCTION Foo` beside
+ * `FUNCTION_BLOCK Foo` is not, and native headers compile in a separate unit
+ * so nothing there is compared against the ST at all.
+ *
+ * The result is a manifest with two entries under one name, no error, and a
+ * consumer picking whichever it happens to read last. Nothing downstream
+ * currently validates against these entries, so today it goes unnoticed — but
+ * a published `.stlib` is immutable, and the next reader that does validate
+ * inherits the ambiguity. Cheaper to refuse to emit it.
+ */
+function findDuplicateExports(manifest: LibraryManifest): string[] {
+  const kindsByName = new Map<string, string[]>();
+  const claim = (name: string, kind: string): void => {
+    const key = name.toUpperCase();
+    const kinds = kindsByName.get(key);
+    if (kinds) kinds.push(kind);
+    else kindsByName.set(key, [kind]);
+  };
+
+  for (const fn of manifest.functions) claim(fn.name, "function");
+  for (const fb of manifest.functionBlocks) {
+    claim(
+      fb.name,
+      fb.implementation
+        ? `${fb.implementation} function block`
+        : "function block",
+    );
+  }
+  for (const type of manifest.types) claim(type.name, "type");
+  for (const global of manifest.globals ?? [])
+    claim(global.name, "global variable");
+
+  const messages: string[] = [];
+  for (const [name, kinds] of kindsByName) {
+    if (kinds.length < 2) continue;
+    messages.push(
+      `"${name}" is exported ${kinds.length} times by this library (as ${kinds.join(", ")}). ` +
+        "A library exports one symbol per name — rename or remove one of them.",
+    );
+  }
+  return messages;
 }
 
 export function compileLibrary(
@@ -404,15 +451,25 @@ export function compileLibrary(
   // unit would fail, which is what used to make an all-native library
   // unbuildable.
   if (stSources.length === 0) {
+    const nativeOnlyManifest: LibraryManifest = {
+      ...emptyManifest(options),
+      functionBlocks: nativeEntries.functionBlocks,
+      headers: [`${options.name}.hpp`],
+      sourceFiles: sources.map((s) => s.fileName),
+    };
+    const duplicates = findDuplicateExports(nativeOnlyManifest);
+    if (duplicates.length > 0) {
+      return {
+        success: false,
+        manifest: emptyManifest(options),
+        headerCode: "",
+        cppCode: "",
+        errors: duplicates.map((message) => ({ message })),
+      };
+    }
     return {
       success: true,
-      manifest: {
-        ...emptyManifest(options),
-        functionBlocks: nativeEntries.functionBlocks,
-        functions: nativeEntries.functions,
-        headers: [`${options.name}.hpp`],
-        sourceFiles: sources.map((s) => s.fileName),
-      },
+      manifest: nativeOnlyManifest,
       headerCode: "",
       cppCode: "",
       chunks: [],
@@ -486,93 +543,109 @@ export function compileLibrary(
     options.dependencies ?? [],
   );
 
-  return {
-    success: true,
-    manifest: {
-      name: options.name,
-      version: options.version,
-      namespace: options.namespace,
-      functions: ast.functions.map((fn) =>
-        tagDocumentation(
+  const builtManifest: LibraryManifest = {
+    name: options.name,
+    version: options.version,
+    namespace: options.namespace,
+    functions: ast.functions.map((fn) =>
+      tagDocumentation(
+        tagCategory(
+          {
+            name: fn.name,
+            returnType: fn.returnType.name,
+            parameters: fn.varBlocks.flatMap((block) =>
+              block.declarations.flatMap((decl) => {
+                const initialValue =
+                  decl.initialValue !== undefined
+                    ? serializeInitialValue(decl.initialValue)
+                    : undefined;
+                return decl.names.map((name) => ({
+                  name,
+                  type: decl.type.name,
+                  direction:
+                    block.blockType === "VAR_OUTPUT"
+                      ? "output"
+                      : block.blockType === "VAR_IN_OUT"
+                        ? "inout"
+                        : "input",
+                  // Present ⇒ optional input (default supplied); absent ⇒
+                  // mandatory. Preserved from user ST and CODESYS-imported ST.
+                  ...(initialValue !== undefined ? { initialValue } : {}),
+                }));
+              }),
+            ),
+          },
+          catByName,
+        ),
+        docByName,
+      ),
+    ),
+    functionBlocks: [
+      ...ast.functionBlocks.map((fb) =>
+        tagDocumentation(tagCategory(buildFBEntry(fb), catByName), docByName),
+      ),
+      ...nativeEntries.functionBlocks,
+    ],
+    types: ast.types.map((t) => {
+      const kind: "struct" | "enum" | "alias" =
+        t.definition.kind === "StructDefinition"
+          ? "struct"
+          : t.definition.kind === "EnumDefinition"
+            ? "enum"
+            : "alias";
+      const entry: {
+        name: string;
+        kind: typeof kind;
+        fields?: Array<{ name: string; type: string }>;
+      } = { name: t.name, kind };
+      // Export struct member fields so consumers can type `x.field` access
+      // on a dependency struct.
+      if (t.definition.kind === "StructDefinition") {
+        entry.fields = t.definition.fields.flatMap((decl) =>
+          decl.names.map((name) => ({ name, type: decl.type.name })),
+        );
+      }
+      return tagDocumentation(tagCategory(entry, catByName), docByName);
+    }),
+    // Exported VAR_GLOBAL variables — their storage is emitted as inlineGlobal
+    // chunks; this list lets consumers' analyzers resolve the symbols. Every
+    // importing program merges all libraries' globals into one global scope.
+    globals: ast.globalVarBlocks.flatMap((block) =>
+      block.declarations.flatMap((decl) =>
+        decl.names.map((name) =>
           tagCategory(
             {
-              name: fn.name,
-              returnType: fn.returnType.name,
-              parameters: fn.varBlocks.flatMap((block) =>
-                block.declarations.flatMap((decl) => {
-                  const initialValue =
-                    decl.initialValue !== undefined
-                      ? serializeInitialValue(decl.initialValue)
-                      : undefined;
-                  return decl.names.map((name) => ({
-                    name,
-                    type: decl.type.name,
-                    direction:
-                      block.blockType === "VAR_OUTPUT"
-                        ? "output"
-                        : block.blockType === "VAR_IN_OUT"
-                          ? "inout"
-                          : "input",
-                    // Present ⇒ optional input (default supplied); absent ⇒
-                    // mandatory. Preserved from user ST and CODESYS-imported ST.
-                    ...(initialValue !== undefined ? { initialValue } : {}),
-                  }));
-                }),
-              ),
+              name,
+              type: decl.type.name,
+              ...(block.isConstant ? { constant: true } : {}),
             },
             catByName,
           ),
-          docByName,
         ),
       ),
-      functionBlocks: [
-        ...ast.functionBlocks.map((fb) =>
-          tagDocumentation(tagCategory(buildFBEntry(fb), catByName), docByName),
-        ),
-        ...nativeEntries.functionBlocks,
-      ],
-      types: ast.types.map((t) => {
-        const kind: "struct" | "enum" | "alias" =
-          t.definition.kind === "StructDefinition"
-            ? "struct"
-            : t.definition.kind === "EnumDefinition"
-              ? "enum"
-              : "alias";
-        const entry: {
-          name: string;
-          kind: typeof kind;
-          fields?: Array<{ name: string; type: string }>;
-        } = { name: t.name, kind };
-        // Export struct member fields so consumers can type `x.field` access
-        // on a dependency struct.
-        if (t.definition.kind === "StructDefinition") {
-          entry.fields = t.definition.fields.flatMap((decl) =>
-            decl.names.map((name) => ({ name, type: decl.type.name })),
-          );
-        }
-        return tagDocumentation(tagCategory(entry, catByName), docByName);
-      }),
-      // Exported VAR_GLOBAL variables — their storage is emitted as inlineGlobal
-      // chunks; this list lets consumers' analyzers resolve the symbols. Every
-      // importing program merges all libraries' globals into one global scope.
-      globals: ast.globalVarBlocks.flatMap((block) =>
-        block.declarations.flatMap((decl) =>
-          decl.names.map((name) =>
-            tagCategory(
-              {
-                name,
-                type: decl.type.name,
-                ...(block.isConstant ? { constant: true } : {}),
-              },
-              catByName,
-            ),
-          ),
-        ),
-      ),
-      headers: [headerFileName],
-      isBuiltin: false,
-      sourceFiles: sources.map((s) => s.fileName),
-    },
+    ),
+    headers: [headerFileName],
+    isBuiltin: false,
+    sourceFiles: sources.map((s) => s.fileName),
+  };
+
+  // Guard AFTER both lists are assembled: the ST symbols and the native ones
+  // come from separate compiles, so this is the first point where a collision
+  // between them is visible.
+  const duplicates = findDuplicateExports(builtManifest);
+  if (duplicates.length > 0) {
+    return {
+      success: false,
+      manifest: emptyManifest(options),
+      headerCode: "",
+      cppCode: "",
+      errors: duplicates.map((message) => ({ message })),
+    };
+  }
+
+  return {
+    success: true,
+    manifest: builtManifest,
     headerCode: cleanHeader,
     cppCode: cleanCpp,
     chunks,
