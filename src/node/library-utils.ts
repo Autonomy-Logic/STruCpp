@@ -9,11 +9,20 @@
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { LIBRARY_SOURCE_EXTENSIONS } from "../library/native-sources.js";
+
 /**
- * Recursively discover all `.st` and `.il` files in a directory.
+ * Recursively discover every library source file in a directory: the ST/IL
+ * files STruC++ compiles, plus the C/C++ and Python files it transports for
+ * the consumer to lower (see `library/native-sources.ts`).
+ *
+ * A native file is picked up on the same footing as an ST one — the author
+ * drops `Block.py` in the folder next to `Other.st` and both end up in the
+ * archive. Sorting the result keeps `sourceFiles` and diagnostics stable
+ * across filesystems that enumerate in different orders.
  *
  * @param dir - Directory to scan
- * @returns Array of absolute paths to `.st` and `.il` files
+ * @returns Sorted absolute paths of every recognised library source
  */
 export function discoverSTFiles(dir: string): string[] {
   const resolvedDir = resolve(dir);
@@ -21,17 +30,20 @@ export function discoverSTFiles(dir: string): string[] {
     withFileTypes: true,
     recursive: true,
   });
-  const stFiles: string[] = [];
+  const found: string[] = [];
   for (const entry of entries) {
     const lower = entry.name.toLowerCase();
-    if (entry.isFile() && (lower.endsWith(".st") || lower.endsWith(".il"))) {
+    if (
+      entry.isFile() &&
+      LIBRARY_SOURCE_EXTENSIONS.some((ext) => lower.endsWith(ext))
+    ) {
       // entry.parentPath is available in Node 20+; fallback to entry.path
       const parentPath =
         (entry as { parentPath?: string }).parentPath ??
         (entry as { path?: string }).path ??
         resolvedDir;
-      stFiles.push(join(parentPath, entry.name));
+      found.push(join(parentPath, entry.name));
     }
   }
-  return stFiles.sort();
+  return found.sort();
 }

@@ -14,7 +14,17 @@ import type {
 } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
-import type { LibraryVarType } from "./library-manifest.js";
+import {
+  nativeLanguageFor,
+  type NativeSource,
+  partitionLibrarySources,
+  projectNativeHeaderToSt,
+} from "./native-sources.js";
+import type {
+  LibraryFBEntry,
+  LibraryManifest,
+  LibraryVarType,
+} from "./library-manifest.js";
 import type { Expression, TypeReference } from "../frontend/ast.js";
 
 /**
@@ -194,6 +204,200 @@ function tagDocumentation<T extends { name: string; documentation?: string }>(
  * @param options - Library metadata
  * @returns The compiled library with manifest and C++ code
  */
+/** Manifest for a library that produced no symbols — used on the error paths. */
+function emptyManifest(options: {
+  name: string;
+  version: string;
+  namespace: string;
+}): LibraryManifest {
+  return {
+    name: options.name,
+    version: options.version,
+    namespace: options.namespace,
+    functions: [],
+    functionBlocks: [],
+    types: [],
+    headers: [],
+    isBuiltin: false,
+  };
+}
+
+/**
+ * Build a manifest entry for one function block from its AST node.
+ *
+ * Shared by the ST pass and the native-header pass so both describe an
+ * interface identically — the native path differs only in what it adds
+ * afterwards (`implementation`, `sourceFile`).
+ */
+function buildFBEntry(fb: {
+  name: string;
+  varBlocks: Array<{
+    blockType: string;
+    declarations: Array<{ names: string[]; type: TypeReference }>;
+  }>;
+}): LibraryFBEntry {
+  const varsOfBlock = (blockType: string): LibraryVarType[] =>
+    fb.varBlocks
+      .filter((b) => b.blockType === blockType)
+      .flatMap((b) =>
+        b.declarations.flatMap((d) =>
+          d.names.map((n) => serializeVarType(n, d.type)),
+        ),
+      );
+
+  return {
+    name: fb.name,
+    inputs: varsOfBlock("VAR_INPUT"),
+    outputs: varsOfBlock("VAR_OUTPUT"),
+    inouts: varsOfBlock("VAR_IN_OUT"),
+  };
+}
+
+/**
+ * Recover manifest entries for native (C/C++, Python) library sources.
+ *
+ * Each file is projected down to its ST header and run through the ordinary
+ * front end, so the interface is parsed and type-checked by exactly the code
+ * that handles an ST block — there is no second declaration parser to drift.
+ * The native body never reaches the parser, and no chunk is produced: the body
+ * is transported in `sources` and lowered by the consumer. See
+ * `native-sources.ts`.
+ *
+ * All headers are projected into ONE synthetic translation unit so a native
+ * block may reference a type another native block declares, matching how ST
+ * sources in the same library already see each other.
+ */
+function compileNativeEntries(
+  native: readonly NativeSource[],
+  options: {
+    dependencies?: StlibArchive[];
+    globalConstants?: Record<string, number>;
+  },
+): {
+  functionBlocks: LibraryFBEntry[];
+  errors: Array<{ message: string; file?: string; line?: number }>;
+} {
+  // Native blocks are always FUNCTION_BLOCKs — `projectNativeHeaderToSt`
+  // rejects FUNCTION and PROGRAM — so there is no function list to return.
+  const empty = { functionBlocks: [], errors: [] };
+  if (native.length === 0) return empty;
+
+  const projected: string[] = [];
+  const languageByName = new Map<string, NativeSource>();
+  const docByFile = new Map<string, string>();
+  const errors: Array<{ message: string; file?: string; line?: number }> = [];
+
+  for (const source of native) {
+    const outcome = projectNativeHeaderToSt(source);
+    if ("message" in outcome) {
+      errors.push({ message: outcome.message, file: outcome.fileName });
+      continue;
+    }
+    projected.push(outcome.st);
+    // Upper-cased: the front end normalises identifiers, so that is the key
+    // the AST will come back with.
+    languageByName.set(outcome.name.toUpperCase(), source);
+    if (outcome.documentation !== undefined) {
+      docByFile.set(source.fileName, outcome.documentation);
+    }
+  }
+
+  if (errors.length > 0) return { ...empty, errors };
+  if (projected.length === 0) return empty;
+
+  const compileOpts: Partial<import("../types.js").CompileOptions> = {};
+  if (options.dependencies) compileOpts.libraries = options.dependencies;
+  if (options.globalConstants)
+    compileOpts.globalConstants = options.globalConstants;
+
+  // Codegen output is discarded — this pass exists only for the AST. Running
+  // the full `compile` (rather than parsing alone) means a native block with a
+  // bad declaration fails here, with the same diagnostics an ST block gets.
+  const result = compile(projected.join("\n"), compileOpts);
+  if (!result.success || !result.ast) {
+    return {
+      ...empty,
+      errors: result.errors.map((e) => {
+        const entry: { message: string; file?: string; line?: number } = {
+          message: `native block header: ${e.message}`,
+          line: e.line,
+        };
+        return entry;
+      }),
+    };
+  }
+
+  const tagNative = <T extends { name: string }>(entry: T): T => {
+    const source = languageByName.get(entry.name.toUpperCase());
+    if (!source) return entry;
+    const documentation = docByFile.get(source.fileName);
+    return {
+      ...entry,
+      implementation: source.language,
+      sourceFile: source.fileName,
+      ...(source.category !== undefined ? { category: source.category } : {}),
+      ...(documentation !== undefined && documentation.length > 0
+        ? { documentation }
+        : {}),
+    };
+  };
+
+  return {
+    functionBlocks: result.ast.functionBlocks.map((fb) =>
+      tagNative(buildFBEntry(fb)),
+    ),
+    errors: [],
+  };
+}
+
+/**
+ * Every exported name in a manifest that is claimed by more than one symbol.
+ *
+ * A library exports one thing per name. STruC++'s own duplicate detection only
+ * fires within a single kind and a single translation unit — two
+ * `FUNCTION_BLOCK Foo` in one compile is caught, but `FUNCTION Foo` beside
+ * `FUNCTION_BLOCK Foo` is not, and native headers compile in a separate unit
+ * so nothing there is compared against the ST at all.
+ *
+ * The result is a manifest with two entries under one name, no error, and a
+ * consumer picking whichever it happens to read last. Nothing downstream
+ * currently validates against these entries, so today it goes unnoticed — but
+ * a published `.stlib` is immutable, and the next reader that does validate
+ * inherits the ambiguity. Cheaper to refuse to emit it.
+ */
+function findDuplicateExports(manifest: LibraryManifest): string[] {
+  const kindsByName = new Map<string, string[]>();
+  const claim = (name: string, kind: string): void => {
+    const key = name.toUpperCase();
+    const kinds = kindsByName.get(key);
+    if (kinds) kinds.push(kind);
+    else kindsByName.set(key, [kind]);
+  };
+
+  for (const fn of manifest.functions) claim(fn.name, "function");
+  for (const fb of manifest.functionBlocks) {
+    claim(
+      fb.name,
+      fb.implementation
+        ? `${fb.implementation} function block`
+        : "function block",
+    );
+  }
+  for (const type of manifest.types) claim(type.name, "type");
+  for (const global of manifest.globals ?? [])
+    claim(global.name, "global variable");
+
+  const messages: string[] = [];
+  for (const [name, kinds] of kindsByName) {
+    if (kinds.length < 2) continue;
+    messages.push(
+      `"${name}" is exported ${kinds.length} times by this library (as ${kinds.join(", ")}). ` +
+        "A library exports one symbol per name — rename or remove one of them.",
+    );
+  }
+  return messages;
+}
+
 export function compileLibrary(
   sources: Array<{
     source: string;
@@ -213,28 +417,69 @@ export function compileLibrary(
 ): LibraryCompileResult {
   const catByName = buildCategoryByPouName(sources);
   const docByName = buildDocByPouName(sources);
+
+  // Native (C/C++, Python) sources are transported, not compiled: their ST
+  // header yields a manifest entry and their body rides in `sources`. Only
+  // the ST/IL inputs go to the compiler below, so a library may legitimately
+  // consist entirely of native blocks and hand the compiler nothing.
+  const { st: stSources, native: nativeSources } =
+    partitionLibrarySources(sources);
+  const nativeEntries = compileNativeEntries(nativeSources, options);
+  if (nativeEntries.errors.length > 0) {
+    return {
+      success: false,
+      manifest: emptyManifest(options),
+      headerCode: "",
+      cppCode: "",
+      errors: nativeEntries.errors,
+    };
+  }
+
   if (sources.length === 0) {
     return {
       success: false,
-      manifest: {
-        name: options.name,
-        version: options.version,
-        namespace: options.namespace,
-        functions: [],
-        functionBlocks: [],
-        types: [],
-        headers: [],
-        isBuiltin: false,
-      },
+      manifest: emptyManifest(options),
       headerCode: "",
       cppCode: "",
       errors: [{ message: "No source files provided" }],
     };
   }
 
-  // Compile all sources together
-  const primarySource = sources[0]!;
-  const additionalSources = sources.slice(1);
+  // Every input was a native block. There is nothing for the compiler to do,
+  // so it is not called: the manifest is the native entries, and the bodies
+  // ride in `sources`. Asking the compiler to compile an empty translation
+  // unit would fail, which is what used to make an all-native library
+  // unbuildable.
+  if (stSources.length === 0) {
+    const nativeOnlyManifest: LibraryManifest = {
+      ...emptyManifest(options),
+      functionBlocks: nativeEntries.functionBlocks,
+      headers: [`${options.name}.hpp`],
+      sourceFiles: sources.map((s) => s.fileName),
+    };
+    const duplicates = findDuplicateExports(nativeOnlyManifest);
+    if (duplicates.length > 0) {
+      return {
+        success: false,
+        manifest: emptyManifest(options),
+        headerCode: "",
+        cppCode: "",
+        errors: duplicates.map((message) => ({ message })),
+      };
+    }
+    return {
+      success: true,
+      manifest: nativeOnlyManifest,
+      headerCode: "",
+      cppCode: "",
+      chunks: [],
+      errors: [],
+    };
+  }
+
+  // Compile the ST sources together
+  const primarySource = stSources[0]!;
+  const additionalSources = stSources.slice(1);
 
   const compileOpts: Partial<import("../types.js").CompileOptions> = {
     additionalSources,
@@ -298,119 +543,109 @@ export function compileLibrary(
     options.dependencies ?? [],
   );
 
+  const builtManifest: LibraryManifest = {
+    name: options.name,
+    version: options.version,
+    namespace: options.namespace,
+    functions: ast.functions.map((fn) =>
+      tagDocumentation(
+        tagCategory(
+          {
+            name: fn.name,
+            returnType: fn.returnType.name,
+            parameters: fn.varBlocks.flatMap((block) =>
+              block.declarations.flatMap((decl) => {
+                const initialValue =
+                  decl.initialValue !== undefined
+                    ? serializeInitialValue(decl.initialValue)
+                    : undefined;
+                return decl.names.map((name) => ({
+                  name,
+                  type: decl.type.name,
+                  direction:
+                    block.blockType === "VAR_OUTPUT"
+                      ? "output"
+                      : block.blockType === "VAR_IN_OUT"
+                        ? "inout"
+                        : "input",
+                  // Present ⇒ optional input (default supplied); absent ⇒
+                  // mandatory. Preserved from user ST and CODESYS-imported ST.
+                  ...(initialValue !== undefined ? { initialValue } : {}),
+                }));
+              }),
+            ),
+          },
+          catByName,
+        ),
+        docByName,
+      ),
+    ),
+    functionBlocks: [
+      ...ast.functionBlocks.map((fb) =>
+        tagDocumentation(tagCategory(buildFBEntry(fb), catByName), docByName),
+      ),
+      ...nativeEntries.functionBlocks,
+    ],
+    types: ast.types.map((t) => {
+      const kind: "struct" | "enum" | "alias" =
+        t.definition.kind === "StructDefinition"
+          ? "struct"
+          : t.definition.kind === "EnumDefinition"
+            ? "enum"
+            : "alias";
+      const entry: {
+        name: string;
+        kind: typeof kind;
+        fields?: Array<{ name: string; type: string }>;
+      } = { name: t.name, kind };
+      // Export struct member fields so consumers can type `x.field` access
+      // on a dependency struct.
+      if (t.definition.kind === "StructDefinition") {
+        entry.fields = t.definition.fields.flatMap((decl) =>
+          decl.names.map((name) => ({ name, type: decl.type.name })),
+        );
+      }
+      return tagDocumentation(tagCategory(entry, catByName), docByName);
+    }),
+    // Exported VAR_GLOBAL variables — their storage is emitted as inlineGlobal
+    // chunks; this list lets consumers' analyzers resolve the symbols. Every
+    // importing program merges all libraries' globals into one global scope.
+    globals: ast.globalVarBlocks.flatMap((block) =>
+      block.declarations.flatMap((decl) =>
+        decl.names.map((name) =>
+          tagCategory(
+            {
+              name,
+              type: decl.type.name,
+              ...(block.isConstant ? { constant: true } : {}),
+            },
+            catByName,
+          ),
+        ),
+      ),
+    ),
+    headers: [headerFileName],
+    isBuiltin: false,
+    sourceFiles: sources.map((s) => s.fileName),
+  };
+
+  // Guard AFTER both lists are assembled: the ST symbols and the native ones
+  // come from separate compiles, so this is the first point where a collision
+  // between them is visible.
+  const duplicates = findDuplicateExports(builtManifest);
+  if (duplicates.length > 0) {
+    return {
+      success: false,
+      manifest: emptyManifest(options),
+      headerCode: "",
+      cppCode: "",
+      errors: duplicates.map((message) => ({ message })),
+    };
+  }
+
   return {
     success: true,
-    manifest: {
-      name: options.name,
-      version: options.version,
-      namespace: options.namespace,
-      functions: ast.functions.map((fn) =>
-        tagDocumentation(
-          tagCategory(
-            {
-              name: fn.name,
-              returnType: fn.returnType.name,
-              parameters: fn.varBlocks.flatMap((block) =>
-                block.declarations.flatMap((decl) => {
-                  const initialValue =
-                    decl.initialValue !== undefined
-                      ? serializeInitialValue(decl.initialValue)
-                      : undefined;
-                  return decl.names.map((name) => ({
-                    name,
-                    type: decl.type.name,
-                    direction:
-                      block.blockType === "VAR_OUTPUT"
-                        ? "output"
-                        : block.blockType === "VAR_IN_OUT"
-                          ? "inout"
-                          : "input",
-                    // Present ⇒ optional input (default supplied); absent ⇒
-                    // mandatory. Preserved from user ST and CODESYS-imported ST.
-                    ...(initialValue !== undefined ? { initialValue } : {}),
-                  }));
-                }),
-              ),
-            },
-            catByName,
-          ),
-          docByName,
-        ),
-      ),
-      functionBlocks: ast.functionBlocks.map((fb) =>
-        tagDocumentation(
-          tagCategory(
-            {
-              name: fb.name,
-              inputs: fb.varBlocks
-                .filter((b) => b.blockType === "VAR_INPUT")
-                .flatMap((b) =>
-                  b.declarations.flatMap((d) =>
-                    d.names.map((n) => serializeVarType(n, d.type)),
-                  ),
-                ),
-              outputs: fb.varBlocks
-                .filter((b) => b.blockType === "VAR_OUTPUT")
-                .flatMap((b) =>
-                  b.declarations.flatMap((d) =>
-                    d.names.map((n) => serializeVarType(n, d.type)),
-                  ),
-                ),
-              inouts: fb.varBlocks
-                .filter((b) => b.blockType === "VAR_IN_OUT")
-                .flatMap((b) =>
-                  b.declarations.flatMap((d) =>
-                    d.names.map((n) => serializeVarType(n, d.type)),
-                  ),
-                ),
-            },
-            catByName,
-          ),
-          docByName,
-        ),
-      ),
-      types: ast.types.map((t) => {
-        const kind: "struct" | "enum" | "alias" =
-          t.definition.kind === "StructDefinition"
-            ? "struct"
-            : t.definition.kind === "EnumDefinition"
-              ? "enum"
-              : "alias";
-        const entry: {
-          name: string;
-          kind: typeof kind;
-          fields?: Array<{ name: string; type: string }>;
-        } = { name: t.name, kind };
-        // Export struct member fields so consumers can type `x.field` access
-        // on a dependency struct.
-        if (t.definition.kind === "StructDefinition") {
-          entry.fields = t.definition.fields.flatMap((decl) =>
-            decl.names.map((name) => ({ name, type: decl.type.name })),
-          );
-        }
-        return tagDocumentation(tagCategory(entry, catByName), docByName);
-      }),
-      // Exported VAR_GLOBAL variables — their storage is emitted as inlineGlobal
-      // chunks; this list lets consumers' analyzers resolve the symbols. Every
-      // importing program merges all libraries' globals into one global scope.
-      globals: ast.globalVarBlocks.flatMap((block) =>
-        block.declarations.flatMap((decl) =>
-          decl.names.map((name) =>
-            tagCategory(
-              {
-                name,
-                type: decl.type.name,
-                ...(block.isConstant ? { constant: true } : {}),
-              },
-              catByName,
-            ),
-          ),
-        ),
-      ),
-      headers: [headerFileName],
-      isBuiltin: false,
-      sourceFiles: sources.map((s) => s.fileName),
-    },
+    manifest: builtManifest,
     headerCode: cleanHeader,
     cppCode: cleanCpp,
     chunks,
@@ -484,8 +719,18 @@ export function compileStlib(
       version: d.manifest.version,
     })),
   };
-  if (!options.noSource) {
-    archive.sources = sources.map((s) => {
+  // `noSource` is closed-source distribution: drop the ST, whose symbols are
+  // already compiled into `chunks` and usable without it.
+  //
+  // Native (C/C++, Python) bodies are exempt, and must be. They have no chunk
+  // — nothing compiled them — so the source IS the deliverable, and stripping
+  // it would produce an archive no consumer can build against. A native block
+  // simply cannot be shipped closed-source in this format.
+  const persisted = options.noSource
+    ? sources.filter((s) => nativeLanguageFor(s.fileName) !== null)
+    : sources;
+  if (persisted.length > 0) {
+    archive.sources = persisted.map((s) => {
       const entry: { fileName: string; source: string; category?: string } = {
         fileName: s.fileName,
         source: s.source,
