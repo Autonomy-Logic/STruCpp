@@ -95,6 +95,17 @@ interface LocatedVarDescriptor {
   bitIndex: number;
   typeName: string;
   programName: string;
+  /**
+   * IEC index of the array element this descriptor binds, for a located
+   * ARRAY. Absent for a scalar.
+   *
+   * A located array is emitted as one descriptor PER ELEMENT, laid out over
+   * consecutive addresses -- `AT %MW60 : ARRAY [0..66] OF WORD` becomes 67
+   * descriptors at %MW60..%MW126. The descriptor table is flat and carries no
+   * notion of an aggregate, so the element index is what tells the pointer
+   * initialiser to bind `arr[i]` rather than `arr` (openplc-editor#565).
+   */
+  elementIndex?: number;
 }
 
 /**
@@ -2688,7 +2699,14 @@ export class CodeGenerator {
         // (not a real program) keeps it out of every program's located_range.
         if (gvar.address) {
           this.collectLocatedVarFromModel(
-            { name: gvar.name, typeName: gvar.typeName, address: gvar.address },
+            {
+              name: gvar.name,
+              typeName: gvar.typeName,
+              address: gvar.address,
+              // Carried through so a located ARRAY global expands to one
+              // descriptor per element rather than binding only its first.
+              arrayDimensions: gvar.arrayDimensions,
+            },
             "@config",
           );
         }
@@ -5690,6 +5708,72 @@ export class CodeGenerator {
   }
 
   /**
+   * Push the descriptor(s) one located declaration produces.
+   *
+   * A scalar produces one. An ARRAY produces one PER ELEMENT, walking the
+   * address forward by one slot each time, so `AT %MW60 : ARRAY [0..66] OF
+   * WORD` fills %MW60..%MW126 (openplc-editor#565). The runtime table is flat
+   * and knows nothing about aggregates -- the expansion happens here so that
+   * every consumer of `locatedVars[]` (the descriptor array, the count, the
+   * per-program range, the located-globals list) gets the element-level view
+   * without any of them having to understand arrays.
+   *
+   * Bit addresses advance across the byte boundary (%IX0.7 -> %IX1.0), which
+   * is why the step is computed on the linearised index rather than on
+   * `byteIndex` alone.
+   *
+   * `dims` is `undefined` for a non-array. The semantic analyzer has already
+   * rejected the array shapes that cannot be laid out linearly (multi-
+   * dimensional, non-constant bounds), so anything reaching here with bounds
+   * is a single dimension with a known extent.
+   */
+  private pushLocatedDescriptors(
+    varName: string,
+    address: string,
+    typeName: string,
+    programName: string,
+    dims: Array<{ start: number; end: number }> | undefined,
+  ): void {
+    const parsed = parseLocatedAddress(address);
+    if (!parsed) return;
+
+    const dim = dims?.length === 1 ? dims[0] : undefined;
+    if (!dim) {
+      this.locatedVars.push({
+        varName,
+        address,
+        area: parsed.area,
+        size: parsed.size,
+        byteIndex: parsed.byteIndex,
+        bitIndex: parsed.bitIndex,
+        typeName,
+        programName,
+      });
+      return;
+    }
+
+    const isBit = parsed.size === "Bit";
+    const baseSlot = isBit
+      ? parsed.byteIndex * 8 + parsed.bitIndex
+      : parsed.byteIndex;
+
+    for (let iecIndex = dim.start; iecIndex <= dim.end; iecIndex++) {
+      const slot = baseSlot + (iecIndex - dim.start);
+      this.locatedVars.push({
+        varName,
+        address,
+        area: parsed.area,
+        size: parsed.size,
+        byteIndex: isBit ? Math.floor(slot / 8) : slot,
+        bitIndex: isBit ? slot % 8 : 0,
+        typeName,
+        programName,
+        elementIndex: iecIndex,
+      });
+    }
+  }
+
+  /**
    * Collect a located variable for descriptor array generation.
    */
   private collectLocatedVar(
@@ -5699,43 +5783,41 @@ export class CodeGenerator {
   ): void {
     if (!decl.address) return;
 
-    const parsed = parseLocatedAddress(decl.address);
-    if (!parsed) return;
-
-    this.locatedVars.push({
+    this.pushLocatedDescriptors(
       varName,
-      address: decl.address,
-      area: parsed.area,
-      size: parsed.size,
-      byteIndex: parsed.byteIndex,
-      bitIndex: parsed.bitIndex,
-      typeName: decl.type.name,
+      decl.address,
+      decl.type.name,
       programName,
-    });
+      // Inline `ARRAY [a..b] OF T`: the AST builder resolves the bounds onto
+      // the TypeReference. A named ARRAY type carries none here and is
+      // handled by the model path, which resolves the alias first.
+      decl.type.arrayDimensions,
+    );
   }
 
   /**
    * Collect a located variable from project model for descriptor array generation.
    */
   private collectLocatedVarFromModel(
-    decl: { name: string; typeName: string; address?: string },
+    decl: {
+      name: string;
+      typeName: string;
+      address?: string;
+      // Explicit `| undefined` (not just `?`): exactOptionalPropertyTypes is
+      // on, and callers forward an optional field straight through.
+      arrayDimensions?: Array<{ start: number; end: number }> | undefined;
+    },
     programName: string,
   ): void {
     if (!decl.address) return;
 
-    const parsed = parseLocatedAddress(decl.address);
-    if (!parsed) return;
-
-    this.locatedVars.push({
-      varName: decl.name,
-      address: decl.address,
-      area: parsed.area,
-      size: parsed.size,
-      byteIndex: parsed.byteIndex,
-      bitIndex: parsed.bitIndex,
-      typeName: decl.typeName,
+    this.pushLocatedDescriptors(
+      decl.name,
+      decl.address,
+      decl.typeName,
       programName,
-    });
+      decl.arrayDimensions,
+    );
   }
 
   /**
@@ -5775,15 +5857,21 @@ export class CodeGenerator {
     this.emitHeader(" */");
     this.emitHeader("");
 
-    // Forward declarations for program instances
+    // Forward declarations for program instances.
+    //
+    // One line per DECLARATION, not per descriptor: a located array expands to
+    // one descriptor per element, and repeating the same "AT %MW60" line 67
+    // times would bury the rest of the header in noise.
+    const listed = new Set<string>();
     for (const locVar of this.locatedVars) {
       const scope =
         locVar.programName === "@config"
           ? "configuration"
           : `Program_${locVar.programName}`;
-      this.emitHeader(
-        `// Forward: ${locVar.varName} AT ${locVar.address} in ${scope}`,
-      );
+      const line = `// Forward: ${locVar.varName} AT ${locVar.address} in ${scope}`;
+      if (listed.has(line)) continue;
+      listed.add(line);
+      this.emitHeader(line);
     }
     if (isEmpty) {
       this.emitHeader("// (no located variables — placeholder entry only)");
@@ -5844,7 +5932,7 @@ export class CodeGenerator {
         const comma = i < this.locatedVars.length - 1 ? "," : "";
         this.emit(
           `    { LocatedArea::${locVar.area}, LocatedSize::${locVar.size}, ` +
-            `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
+            `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${this.describeLocatedDescriptor(locVar)}`,
         );
       }
     }
@@ -5904,7 +5992,9 @@ export class CodeGenerator {
       for (let i = 0; i < globals.length; i++) {
         const g = globals[i]!;
         const comma = i < globals.length - 1 ? "," : "";
-        this.emit(`    nullptr${comma}  // ${g.varName} AT ${g.address}`);
+        this.emit(
+          `    nullptr${comma}  // ${this.describeLocatedDescriptor(g)}`,
+        );
       }
     }
     this.emit("};");
@@ -5965,17 +6055,17 @@ export class CodeGenerator {
     if (progVars.length === 0) return;
 
     this.emit(`${indent}// Initialize located variable pointers`);
-    for (const locVar of progVars) {
-      // Find the index of this variable in the global array
-      const index = this.locatedVars.findIndex(
-        (v) =>
-          v.varName === locVar.varName && v.programName === locVar.programName,
+    // Walk the global array by position rather than looking each entry back
+    // up by name. A located ARRAY contributes one descriptor per element, all
+    // sharing a varName, so a name lookup (`findIndex`) resolves every one of
+    // them to the FIRST slot: element 0 would be bound N times and elements
+    // 1..N-1 left null (openplc-editor#565). The index is right here anyway.
+    for (let index = 0; index < this.locatedVars.length; index++) {
+      const locVar = this.locatedVars[index]!;
+      if (locVar.programName !== programName) continue;
+      this.emit(
+        `${indent}locatedVars[${index}].pointer = ${this.locatedStorageExpr(locVar, memberAccess)};`,
       );
-      if (index >= 0) {
-        this.emit(
-          `${indent}locatedVars[${index}].pointer = ${locVar.varName}${memberAccess}.raw_ptr();`,
-        );
-      }
     }
 
     // Configuration VAR_GLOBALs additionally record their storage pointer in
@@ -5990,11 +6080,54 @@ export class CodeGenerator {
       for (let g = 0; g < progVars.length; g++) {
         const locVar = progVars[g]!;
         this.emit(
-          `${indent}locatedGlobals[${g}] = ${locVar.varName}${memberAccess}.raw_ptr();`,
+          `${indent}locatedGlobals[${g}] = ${this.locatedStorageExpr(locVar, memberAccess)};`,
         );
       }
       this.emit("#endif");
     }
+  }
+
+  /**
+   * The C++ expression yielding the storage a descriptor binds to.
+   *
+   * Scalar: `name[.value].raw_ptr()`. Array element: `name[.value][i].raw_ptr()`,
+   * where `i` is the IEC index — `IEC_ARRAY_1D::operator[]` maps the declared
+   * index range onto its internal storage, so the declared index is what goes
+   * in, not a zero-based offset.
+   */
+  private locatedStorageExpr(
+    locVar: LocatedVarDescriptor,
+    memberAccess: string,
+  ): string {
+    const element =
+      locVar.elementIndex === undefined ? "" : `[${locVar.elementIndex}]`;
+    return `${locVar.varName}${memberAccess}${element}.raw_ptr()`;
+  }
+
+  /**
+   * How a descriptor labels itself in the generated table's trailing comment.
+   *
+   * For an array element this is the address the element actually occupies,
+   * not the array's declared base — 67 rows all reading `AT %MW60` would tell
+   * a reader nothing about which slot each row binds.
+   */
+  private describeLocatedDescriptor(locVar: LocatedVarDescriptor): string {
+    if (locVar.elementIndex === undefined) {
+      return `${locVar.varName} AT ${locVar.address}`;
+    }
+    const areaChar = { Input: "I", Output: "Q", Memory: "M" }[locVar.area];
+    const sizeChar = {
+      Bit: "X",
+      Byte: "B",
+      Word: "W",
+      DWord: "D",
+      LWord: "L",
+    }[locVar.size];
+    const offset =
+      locVar.size === "Bit"
+        ? `${locVar.byteIndex}.${locVar.bitIndex}`
+        : `${locVar.byteIndex}`;
+    return `${locVar.varName}[${locVar.elementIndex}] AT %${areaChar}${sizeChar}${offset}`;
   }
 
   /**
