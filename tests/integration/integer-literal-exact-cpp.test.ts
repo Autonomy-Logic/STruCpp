@@ -12,6 +12,13 @@
  * -Werror is deliberate: `18446744073709551615` without the `ULL` suffix is a
  * GCC extension that warns rather than fails, and a warning is exactly the
  * failure mode this test exists to catch.
+ *
+ * `-pedantic-errors`, not a named `-Werror=`: GCC emits this diagnostic
+ * ("integer constant is so large that it is unsigned") unconditionally, with
+ * no `-W` name of its own to target — `-Werror=implicitly-unsigned-literal`
+ * is a Clang-only spelling that GCC rejects outright as an unknown option,
+ * aborting the compile before it reaches the check. `-pedantic-errors` is
+ * the portable way to turn this specific warning into a hard error on both.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
@@ -50,7 +57,7 @@ describeIfGpp("64-bit integer literals — generated C++", () => {
       testName,
       // An unsuffixed `18446744073709551615` is a GCC *extension* that warns
       // rather than fails, so the warning has to be the failure here.
-      extraFlags: ["-Werror=implicitly-unsigned-literal", "-Werror=overflow"],
+      extraFlags: ["-pedantic-errors", "-Werror=overflow"],
       mainCode: `#include <iostream>\n\nint main() {\n    using namespace strucpp;\n${mainBody}\n    return 0;\n}\n`,
     });
   }
