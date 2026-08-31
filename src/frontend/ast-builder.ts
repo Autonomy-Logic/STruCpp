@@ -760,7 +760,9 @@ export class ASTBuilder {
     else if (children.VAR_INST) blockType = "VAR_INST";
 
     const isConstant = !!children.CONSTANT;
-    const isRetain = !!children.RETAIN;
+    // PERSISTENT is RETAIN here — see the note on `VarBlock.isRetain`.
+    const isRetain = !!children.RETAIN || !!children.PERSISTENT;
+    const isNonRetain = !!children.NON_RETAIN;
 
     const declarations: VarDeclaration[] = [];
     for (const declNode of getAllNodes(children.varDeclaration)) {
@@ -773,6 +775,7 @@ export class ASTBuilder {
       blockType,
       isConstant,
       isRetain,
+      isNonRetain,
       declarations,
     };
   }
@@ -1351,7 +1354,9 @@ export class ASTBuilder {
     else if (children.VAR_TEMP) blockType = "VAR_TEMP";
 
     const isConstant = !!children.CONSTANT;
-    const isRetain = !!children.RETAIN;
+    // PERSISTENT is RETAIN here — see the note on `VarBlock.isRetain`.
+    const isRetain = !!children.RETAIN || !!children.PERSISTENT;
+    const isNonRetain = !!children.NON_RETAIN;
 
     const declarations: VarDeclaration[] = [];
     for (const declNode of getAllNodes(children.varDeclaration)) {
@@ -1364,6 +1369,7 @@ export class ASTBuilder {
       blockType,
       isConstant,
       isRetain,
+      isNonRetain,
       declarations,
     };
   }

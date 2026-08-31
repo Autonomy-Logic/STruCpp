@@ -65,6 +65,16 @@ export interface VariableSymbol extends BaseSymbol {
    *  AST initial value). Presence marks the input as OPTIONAL. User-defined
    *  POUs instead carry their default on `declaration.initialValue`. */
   initialValue?: string | undefined;
+  /**
+   * The C++ member name, when the declaring unit mangled it and that unit was
+   * a LIBRARY (see `LibraryVarType.cppName`).
+   *
+   * Only set for symbols reconstructed from a manifest. A consuming
+   * compilation cannot always re-derive the mangling — both rules are answered
+   * against the declaring unit — and naming a member the class does not
+   * declare fails the build of `generated_debug.cpp`.
+   */
+  cppName?: string | undefined;
 }
 
 /**
@@ -96,6 +106,17 @@ export interface FunctionBlockSymbol extends BaseSymbol {
   outputs: VariableSymbol[];
   inouts: VariableSymbol[];
   locals: VariableSymbol[];
+  /**
+   * Name of the library this function block came from, set only by
+   * `registerLibrarySymbols`.
+   *
+   * The explicit marker that tells a library FB from a user-defined one. The
+   * leaf walk used to infer it from "are the flat arrays populated", which is
+   * a proxy that fails quietly in both directions — a user FB read as a
+   * library one loses its whole subtree, and vice versa names members that do
+   * not exist.
+   */
+  libraryName?: string;
 }
 
 /**

@@ -14,6 +14,11 @@ import type {
 } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
+import type { MemberManglingContext } from "../backend/member-mangling.js";
+import {
+  mangledMemberName,
+  userDefinedTypeNames,
+} from "../backend/member-mangling.js";
 import {
   nativeLanguageFor,
   type NativeSource,
@@ -25,7 +30,13 @@ import type {
   LibraryManifest,
   LibraryVarType,
 } from "./library-manifest.js";
-import type { Expression, TypeReference } from "../frontend/ast.js";
+import type {
+  Expression,
+  FunctionBlockDeclaration,
+  TypeReference,
+  VarBlock,
+  VarDeclaration,
+} from "../frontend/ast.js";
 
 /**
  * Serialize a VAR_INPUT initial-value expression back into an ST string for the
@@ -86,6 +97,37 @@ function serializeVarType(
   if (typeRef.referenceKind && typeRef.referenceKind !== "none") {
     entry.referenceKind = typeRef.referenceKind;
   }
+  return entry;
+}
+
+/**
+ * Serialize one `VAR` member of a function block for the manifest.
+ *
+ * Same shape as the interface entries, plus three things only the declaring
+ * library can answer:
+ *
+ *   • `cppName` when codegen mangled the member. Both mangling rules are
+ *     decided against this compilation unit — whether the member's type is
+ *     user-defined HERE, and which interface methods the block implements —
+ *     so a consumer cannot always re-derive them. Emitted only when it
+ *     differs, which across the bundled archives is never; the field exists so
+ *     the case that does occur is carried rather than guessed at.
+ *
+ *   • `readOnly` / `retain` from the declaring block's qualifiers. A
+ *     `VAR RETAIN` inside a function block is retained in every instance of
+ *     it, however the instance itself was declared.
+ */
+function serializeLocal(
+  name: string,
+  decl: VarDeclaration,
+  block: VarBlock,
+  ctx: MemberManglingContext,
+): LibraryVarType {
+  const entry = serializeVarType(name, decl.type);
+  const cppName = mangledMemberName(name, decl.type.name, ctx);
+  if (cppName !== name) entry.cppName = cppName;
+  if (block.isConstant) entry.readOnly = true;
+  if (block.isRetain) entry.retain = true;
   return entry;
 }
 
@@ -529,7 +571,38 @@ export function compileLibrary(
 
   // Extract manifest entries from the AST
   const ast = result.ast!;
+
   const headerFileName = `${options.name}.hpp`;
+
+  // Mangling inputs, computed once against THIS compilation unit — the only
+  // place that knows which of its type names are user-defined and which
+  // interface methods each block implements. See serializeLocal().
+  const userTypes = userDefinedTypeNames(ast);
+  const ifaceMethods = new Map<string, Set<string>>();
+  {
+    const byInterface = new Map<string, Set<string>>();
+    for (const iface of ast.interfaces) {
+      byInterface.set(
+        iface.name.toUpperCase(),
+        new Set(iface.methods.map((m) => m.name.toUpperCase())),
+      );
+    }
+    for (const fb of ast.functionBlocks) {
+      if (!fb.implements || fb.implements.length === 0) continue;
+      const methods = new Set<string>();
+      for (const name of fb.implements) {
+        for (const m of byInterface.get(name.toUpperCase()) ?? [])
+          methods.add(m);
+      }
+      if (methods.size > 0) ifaceMethods.set(fb.name.toUpperCase(), methods);
+    }
+  }
+  const manglingCtx = (
+    fb: FunctionBlockDeclaration,
+  ): MemberManglingContext => ({
+    isUserDefinedType: (n) => userTypes.has(n.toUpperCase()),
+    interfaceMethods: ifaceMethods.get(fb.name.toUpperCase()),
+  });
 
   // Slice emitted code into per-symbol chunks via the boundary
   // markers; the cleaned (marker-stripped) text replaces the original
@@ -582,7 +655,28 @@ export function compileLibrary(
     ),
     functionBlocks: [
       ...ast.functionBlocks.map((fb) =>
-        tagDocumentation(tagCategory(buildFBEntry(fb), catByName), docByName),
+        tagDocumentation(
+          tagCategory(
+            {
+              ...buildFBEntry(fb),
+              // The block's own VAR members, declared the same way the
+              // interface arrays above are. A RETAINed instance retains these
+              // too; without them a retained TON keeps Q and ET and loses the
+              // state that makes them mean anything.
+              locals: fb.varBlocks
+                .filter((b) => b.blockType === "VAR")
+                .flatMap((b) =>
+                  b.declarations.flatMap((d) =>
+                    d.names.map((n) =>
+                      serializeLocal(n, d, b, manglingCtx(fb)),
+                    ),
+                  ),
+                ),
+            },
+            catByName,
+          ),
+          docByName,
+        ),
       ),
       ...nativeEntries.functionBlocks,
     ],

@@ -375,6 +375,7 @@ export class SemanticAnalyzer {
           scope,
           "function",
           funcDecl.name,
+          false,
         );
       } catch (err) {
         if (err instanceof Error) {
@@ -408,6 +409,7 @@ export class SemanticAnalyzer {
           scope,
           "functionBlock",
           fbDecl.name,
+          true,
         );
 
         // Create method scopes (parent = FB scope for correct lookup chain)
@@ -422,6 +424,7 @@ export class SemanticAnalyzer {
               methodScope,
               "functionBlock",
               fbDecl.name,
+              false,
             );
             // Register method return variable (MethodName := value)
             if (method.returnType) {
@@ -506,6 +509,7 @@ export class SemanticAnalyzer {
           scope,
           "program",
           progDecl.name,
+          true,
         );
       } catch (err) {
         if (err instanceof Error) {
@@ -570,10 +574,19 @@ export class SemanticAnalyzer {
     scope: ReturnType<typeof this.symbolTables.createProgramScope>,
     scopeType: "program" | "function" | "functionBlock",
     scopeName: string,
+    /**
+     * Whether declarations here belong to something with instance storage.
+     *
+     * False for a FUNCTION and for a METHOD: neither has an instance, their
+     * locals are stack temporaries, and RETAIN over a stack slot is
+     * meaningless. `scopeType` cannot answer this — a method reports
+     * "functionBlock" so its located variables are rejected the same way an
+     * FB's are, and overloading it would change that unrelated rule.
+     */
+    hasInstanceState: boolean,
   ): void {
     for (const block of varBlocks) {
-      // Validate variable modifiers (CONSTANT, RETAIN)
-      this.validateVarModifiers(block);
+      this.validateVarModifiers(block, hasInstanceState);
 
       for (const decl of block.declarations) {
         for (const name of decl.names) {
@@ -1364,10 +1377,24 @@ export class SemanticAnalyzer {
    * - Block type restrictions for CONSTANT
    * - Block type restrictions for RETAIN
    */
-  private validateVarModifiers(block: VarBlock): void {
+  /**
+   * Validate variable block modifiers (CONSTANT, RETAIN, NON_RETAIN,
+   * PERSISTENT).
+   *
+   * PERSISTENT has already folded into `isRetain` by the time it gets here (see
+   * `VarBlock.isRetain`), so there is nothing PERSISTENT-specific to check.
+   * NON_RETAIN is the default spelled out, so it is accepted wherever a plain
+   * `VAR` would be — including on `VAR_TEMP`, where it is redundant but true,
+   * and rejecting a correct statement would fail a CODESYS import for no gain.
+   */
+  private validateVarModifiers(
+    block: VarBlock,
+    hasInstanceState: boolean,
+  ): void {
     const blockType = block.blockType;
 
-    // RETAIN + CONSTANT is invalid
+    // ---- Contradictions, checked first: once two qualifiers disagree there is
+    // no single intent left to validate the rest against. ------------------
     if (block.isRetain && block.isConstant) {
       this.addError(
         "Variable cannot be both RETAIN and CONSTANT",
@@ -1375,12 +1402,32 @@ export class SemanticAnalyzer {
         block.sourceSpan.startCol,
         block.sourceSpan.file,
       );
-      return; // Skip further validation for this block
+      return;
     }
 
-    // CONSTANT validation
+    if (block.isNonRetain && block.isRetain) {
+      this.addError(
+        "Variable cannot be both RETAIN and NON_RETAIN",
+        block.sourceSpan.startLine,
+        block.sourceSpan.startCol,
+        block.sourceSpan.file,
+      );
+      return;
+    }
+
+    if (block.isNonRetain && block.isConstant) {
+      this.addError(
+        "Variable cannot be both CONSTANT and NON_RETAIN",
+        block.sourceSpan.startLine,
+        block.sourceSpan.startCol,
+        block.sourceSpan.file,
+      );
+      return;
+    }
+
+    // ---- CONSTANT ---------------------------------------------------------
     if (block.isConstant) {
-      // CONSTANT requires initializer (except VAR_INPUT CONSTANT — caller provides value)
+      // CONSTANT requires initializer (except VAR_INPUT — caller provides value)
       if (blockType !== "VAR_INPUT") {
         for (const decl of block.declarations) {
           if (!decl.initialValue) {
@@ -1395,7 +1442,6 @@ export class SemanticAnalyzer {
         }
       }
 
-      // Block type restrictions for CONSTANT
       if (blockType === "VAR_OUTPUT") {
         this.addError(
           "VAR_OUTPUT cannot be CONSTANT",
@@ -1413,15 +1459,41 @@ export class SemanticAnalyzer {
       }
     }
 
-    // RETAIN validation - block type restrictions
+    // ---- RETAIN -----------------------------------------------------------
     if (block.isRetain) {
-      const invalidRetainTypes = [
-        "VAR_INPUT",
-        "VAR_OUTPUT",
-        "VAR_IN_OUT",
-        "VAR_TEMP",
-        "VAR_EXTERNAL",
-      ];
+      // No instance, no state to retain. A FUNCTION is re-entered from scratch
+      // on every call and a METHOD's locals live on the stack, so RETAIN there
+      // is not a restriction we are imposing — it has nothing to describe.
+      // Previously accepted in silence, which is the worst outcome: the user
+      // believes a value survives a power cycle and it never did.
+      if (!hasInstanceState) {
+        this.addError(
+          // Deliberately unnamed: the only scope name in reach here is the
+          // owning FB's, and a method-level RETAIN reported against the FB
+          // name reads as a lie — RETAIN on the FB's own VAR is legal. The
+          // source span points at the offending block.
+          "RETAIN is not allowed in a FUNCTION or METHOD: there is no instance, so the variables have nothing to retain",
+          block.sourceSpan.startLine,
+          block.sourceSpan.startCol,
+          block.sourceSpan.file,
+        );
+        return;
+      }
+
+      // VAR_INPUT and VAR_OUTPUT are deliberately absent: IEC 61131-3 permits
+      // RETAIN on VAR, VAR_INPUT, VAR_OUTPUT and VAR_GLOBAL, and CODESYS
+      // accepts all four. Refusing the first two rejected function blocks that
+      // are valid everywhere else.
+      //
+      // The three below have no retainable storage of their own:
+      //   VAR_IN_OUT   — a reference; the retention belongs to whatever it
+      //                  points at.
+      //   VAR_TEMP     — transient by definition, re-initialised every
+      //                  invocation.
+      //   VAR_EXTERNAL — a view onto a VAR_GLOBAL; that declaration is where
+      //                  RETAIN belongs, and putting it here would suggest two
+      //                  independent answers for one storage location.
+      const invalidRetainTypes = ["VAR_IN_OUT", "VAR_TEMP", "VAR_EXTERNAL"];
 
       if (invalidRetainTypes.includes(blockType)) {
         this.addError(

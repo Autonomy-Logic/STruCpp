@@ -227,7 +227,26 @@ export interface VarBlock extends ASTNode {
   kind: "VarBlock";
   blockType: VarBlockType;
   isConstant: boolean;
+  /**
+   * True for `RETAIN` and for `PERSISTENT`.
+   *
+   * PERSISTENT is folded in rather than tracked separately: CODESYS
+   * distinguishes them (PERSISTENT also survives a program download) and this
+   * toolchain does not implement that yet, so the honest mapping is the weaker
+   * guarantee both share. Splitting them would mean claiming a guarantee
+   * nothing delivers.
+   */
   isRetain: boolean;
+  /**
+   * True when the block spelled `NON_RETAIN` explicitly.
+   *
+   * Semantically the default — a plain `VAR` is already non-retained — so
+   * nothing downstream branches on it. It is recorded so the qualifier is not
+   * silently dropped by anything that reproduces source from the AST (the LSP
+   * formatter, `--decompile-lib`), and so `NON_RETAIN` combined with `RETAIN`
+   * can be reported as the contradiction it is.
+   */
+  isNonRetain: boolean;
   declarations: VarDeclaration[];
 }
 

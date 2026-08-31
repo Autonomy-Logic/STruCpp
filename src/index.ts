@@ -806,6 +806,21 @@ export function compile(
     );
     debugTableCpp = dbg.debugTableCpp;
     debugMap = dbg.debugMap;
+
+    // A RETAIN the walk could not follow all the way down is a WARNING, not an
+    // error. The program still builds and its visible surface is still
+    // retained; refusing would strand anyone using a third-party .stlib they
+    // have no way to rebuild. But the retain is partial, and a partial retain
+    // nobody is told about is a fault discovered after a power cycle with
+    // nothing in the build to point at — so it is said, every build.
+    for (const item of dbg.incomplete) {
+      pipeline.warnings.push({
+        message: item.reason,
+        line: 0,
+        column: 0,
+        severity: "warning",
+      });
+    }
   }
 
   return {
