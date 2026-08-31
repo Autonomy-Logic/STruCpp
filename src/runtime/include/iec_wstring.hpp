@@ -354,6 +354,9 @@ public:
 
     static constexpr size_t npos = static_cast<size_t>(-1);
 
+    /** Offset of the cached length — see `IECString::length_field_offset()`. */
+    static constexpr size_t length_field_offset() noexcept { return offsetof(IECWString, length_); }
+
 private:
     char16_t data_[MaxLen + 1];
     uint16_t length_;
@@ -400,11 +403,13 @@ public:
     void force(const value_type& v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;  // Update raw value so external readers (raw_ptr) see forced value
     }
 
     void force(const char16_t* str) noexcept {
         forced_ = true;
         forced_value_ = str;
+        value_ = str;  // Update raw value so external readers (raw_ptr) see forced value
     }
 
     void unforce() noexcept {
@@ -449,6 +454,31 @@ public:
         return (forced_ ? forced_value_ : value_)[index];
     }
 
+
+    /**
+     * Pointer to the underlying character storage — the counterpart of
+     * `IECVar::raw_ptr()`. NUL-terminated, `capacity() + 1` code units long.
+     *
+     * A caller writing through this owns the terminator and must call
+     * `sync_length()` afterwards: the length is cached, not derived on read.
+     */
+    char16_t* raw_ptr() noexcept { return value_.data(); }
+
+    /** Const form of `raw_ptr()`. */
+    const char16_t* raw_ptr() const noexcept { return value_.data(); }
+
+    /**
+     * Recompute the cached length from the NUL terminator, after something
+     * outside this class has written through `raw_ptr()`.
+     */
+    void sync_length() noexcept { value_ = IECWString<MaxLen>(value_.data()); }
+
+    /** Byte offsets of the force state — see `IECString::length_field_offset()`. */
+    static constexpr size_t forced_field_offset() noexcept { return offsetof(IECWStringVar, forced_); }
+    static constexpr size_t forced_value_field_offset() noexcept {
+        return offsetof(IECWStringVar, forced_value_);
+    }
+
 private:
     value_type value_;
     bool forced_;
@@ -460,6 +490,76 @@ using WSTRING_VAR = IECWStringVar<254>;
 // Non-template alias for codegen: IEC_WSTRING = IECWStringVar<254>
 // For parameterized WSTRING(N), codegen emits IECWStringVar<N> directly
 using IEC_WSTRING = IECWStringVar<254>;
+
+// ---------------------------------------------------------------------------
+// Type-erased access, for the debugger only. The counterpart of the block in
+// `iec_string.hpp`, and there for the same reason: the debug dispatch table has
+// one row per TypeTag, so its ops meet a `WSTRING(8)` as `void*` plus the
+// capacity recorded beside the pointer. Code units are `char16_t`, so every
+// offset here is in bytes and already 2-aligned.
+// ---------------------------------------------------------------------------
+
+/** Offset of `IECWString<cap>::length_`: `char16_t[cap + 1]` is already aligned. */
+constexpr size_t iec_wstring_len_offset(size_t cap) noexcept { return (cap + 1) * sizeof(char16_t); }
+
+/** `sizeof(IECWString<cap>)`. */
+constexpr size_t iec_wstring_bytes(size_t cap) noexcept {
+    return iec_wstring_len_offset(cap) + sizeof(uint16_t);
+}
+
+/** Offset of `IECWStringVar<cap>::forced_`, which follows `value_`. */
+constexpr size_t iec_wstringvar_forced_offset(size_t cap) noexcept { return iec_wstring_bytes(cap); }
+
+/** Offset of `IECWStringVar<cap>::forced_value_`: after `forced_`, realigned. */
+constexpr size_t iec_wstringvar_forced_value_offset(size_t cap) noexcept {
+    return iec_wstring_bytes(cap) + sizeof(uint16_t);
+}
+
+static_assert(IECWString<1>::length_field_offset() == iec_wstring_len_offset(1), "IECWString<1> layout");
+static_assert(IECWString<8>::length_field_offset() == iec_wstring_len_offset(8), "IECWString<8> layout");
+static_assert(IECWString<254>::length_field_offset() == iec_wstring_len_offset(254), "IECWString<254> layout");
+static_assert(sizeof(IECWString<8>) == iec_wstring_bytes(8), "IECWString<8> size");
+static_assert(sizeof(IECWString<254>) == iec_wstring_bytes(254), "IECWString<254> size");
+static_assert(IECWStringVar<8>::forced_field_offset() == iec_wstringvar_forced_offset(8),
+              "IECWStringVar<8> force flag");
+static_assert(IECWStringVar<254>::forced_field_offset() == iec_wstringvar_forced_offset(254),
+              "IECWStringVar<254> force flag");
+static_assert(IECWStringVar<8>::forced_value_field_offset() == iec_wstringvar_forced_value_offset(8),
+              "IECWStringVar<8> forced value");
+static_assert(IECWStringVar<254>::forced_value_field_offset() == iec_wstringvar_forced_value_offset(254),
+              "IECWStringVar<254> forced value");
+
+/** The parts of an `IECWStringVar<cap>` the debugger touches. */
+struct IECWStringView {
+    char16_t* data;
+    uint16_t* length;
+    bool*     forced;
+    char16_t* forced_data;
+    uint16_t* forced_length;
+    uint16_t  capacity;
+};
+
+inline IECWStringView iec_wstring_view(void* p, size_t cap) noexcept {
+    auto* base = static_cast<unsigned char*>(p);
+    unsigned char* forcedValue = base + iec_wstringvar_forced_value_offset(cap);
+    return IECWStringView{
+        reinterpret_cast<char16_t*>(base),
+        reinterpret_cast<uint16_t*>(base + iec_wstring_len_offset(cap)),
+        reinterpret_cast<bool*>(base + iec_wstringvar_forced_offset(cap)),
+        reinterpret_cast<char16_t*>(forcedValue),
+        reinterpret_cast<uint16_t*>(forcedValue + iec_wstring_len_offset(cap)),
+        static_cast<uint16_t>(cap),
+    };
+}
+
+/** Store `len` code units into one `IECWString<cap>` slot, truncating to fit. */
+inline void iec_wstring_store(char16_t* data, uint16_t* length, size_t cap, const char16_t* src,
+                              size_t len) noexcept {
+    if (len > cap) len = cap;
+    for (size_t i = 0; i < len; ++i) data[i] = src[i];
+    data[len] = u'\0';
+    *length = static_cast<uint16_t>(len);
+}
 
 template<size_t MaxLen>
 inline size_t WLEN(const IECWString<MaxLen>& s) noexcept {
@@ -495,8 +595,9 @@ WCONCAT(const IECWString<MaxLen1>& s1, const IECWString<MaxLen2>& s2) noexcept {
 template<size_t MaxLen>
 inline IECWString<MaxLen> WINSERT(const IECWString<MaxLen>& s1, const IECWString<MaxLen>& s2, size_t pos) noexcept {
     IECWString<MaxLen> result(s1);
-    if (pos == 0) pos = 1;
-    result.insert(pos - 1, s2.c_str());
+    // As the STRING form: INSERT places IN2 after the P-th character, while
+    // DELETE begins at it and keeps `pos - 1`.
+    result.insert(pos, s2.c_str());
     return result;
 }
 

@@ -694,7 +694,7 @@ function getChildren(node: ASTNode): ASTNode[] {
       break;
     }
 
-    // Leaf nodes: ExitStatement, ReturnStatement, ProgramInstance,
+    // Leaf nodes: ExitStatement, ContinueStatement, ReturnStatement, ProgramInstance,
     // TypeReference, LiteralExpression, ExternalCodePragma,
     // MockFBStatement, MockVerifyCalledStatement
   }

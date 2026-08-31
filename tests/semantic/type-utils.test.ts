@@ -453,6 +453,37 @@ describe("type-utils", () => {
       expect(entry?.conflictingTypes).toContain("State2");
     });
 
+    it("treats one enum described twice as one enum, not a conflict", () => {
+      // A library compiling against a dependency archive that re-exports its
+      // own types sees each of them from both sides. Counting that as a clash
+      // made every member of such an enum ambiguous with itself, which broke
+      // the bundled SoftMotion library on `SMC_NO_ERROR`.
+      const map = buildEnumMemberMap([
+        { name: "SMC_ERROR", members: ["SMC_NO_ERROR", "SMC_DI_AXIS_ERROR"] },
+        { name: "SMC_ERROR", members: ["SMC_NO_ERROR", "SMC_DI_AXIS_ERROR"] },
+      ]);
+      const entry = map.get("SMC_NO_ERROR");
+      expect(entry?.typeName).toBe("SMC_ERROR");
+      expect(entry?.conflictingTypes).toEqual(["SMC_ERROR"]);
+    });
+
+    it("compares those names case-insensitively too", () => {
+      const map = buildEnumMemberMap([
+        { name: "State", members: ["IDLE"] },
+        { name: "STATE", members: ["IDLE"] },
+      ]);
+      expect(map.get("IDLE")?.typeName).toBe("State");
+    });
+
+    it("still marks a genuine clash between two enums", () => {
+      const map = buildEnumMemberMap([
+        { name: "State1", members: ["IDLE"] },
+        { name: "State1", members: ["IDLE"] },
+        { name: "State2", members: ["IDLE"] },
+      ]);
+      expect(map.get("IDLE")?.typeName).toBeNull();
+    });
+
     it("should handle case-insensitive member names", () => {
       const map = buildEnumMemberMap([
         { name: "E1", members: ["Foo"] },

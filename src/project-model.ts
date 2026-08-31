@@ -88,6 +88,8 @@ export interface ProjectVarDeclaration {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type for inline arrays (e.g. "DINT"). */
   elementTypeName?: string;
+  /** Declared length of an inline array's ELEMENT — `ARRAY [0..3] OF STRING(23)`. */
+  elementMaxLength?: number;
   /** Pointer/reference qualifier carried through from the AST TypeReference. */
   referenceKind?: string;
 }
@@ -107,6 +109,8 @@ export interface VarExternalDeclaration {
   maxLength?: number | string;
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  /** Declared length of an inline array's ELEMENT — `ARRAY [0..3] OF STRING(23)`. */
+  elementMaxLength?: number;
   referenceKind?: string;
   /** Location of the declaration, so a "no matching VAR_GLOBAL" diagnostic can
    *  point at the offending line instead of being emitted file-less. */
@@ -267,6 +271,9 @@ export function toProjectVarDeclaration(
       : {}),
     ...(decl.type.elementTypeName !== undefined
       ? { elementTypeName: decl.type.elementTypeName }
+      : {}),
+    ...(decl.type.elementMaxLength !== undefined
+      ? { elementMaxLength: decl.type.elementMaxLength }
       : {}),
     ...(decl.type.referenceKind !== undefined &&
     decl.type.referenceKind !== "none"
@@ -922,6 +929,9 @@ export class ProjectModelBuilder {
         : {}),
       ...(decl.type.elementTypeName !== undefined
         ? { elementTypeName: decl.type.elementTypeName }
+        : {}),
+      ...(decl.type.elementMaxLength !== undefined
+        ? { elementMaxLength: decl.type.elementMaxLength }
         : {}),
       ...(decl.type.referenceKind !== undefined &&
       decl.type.referenceKind !== "none"
