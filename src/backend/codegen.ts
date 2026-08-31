@@ -317,12 +317,6 @@ export class CodeGenerator {
    *  gated here (fail-loud) until locked field/element/call codegen lands. */
   private compositeExternals: Set<string> = new Set();
 
-  /** Track retain variables per program for table generation */
-  private programRetainVars: Map<
-    string,
-    Array<{ name: string; typeName: string }>
-  > = new Map();
-
   /** Store AST for looking up program bodies when using project model */
   protected ast?: CompilationUnit;
 
@@ -2361,9 +2355,6 @@ export class CodeGenerator {
       }
     }
 
-    // Collect retain variables for table generation
-    const retainVars: Array<{ name: string; typeName: string }> = [];
-
     // Generate local variable members and collect located variables
     if (prog.varDeclarations.length > 0) {
       this.emitHeader("    // Local variables");
@@ -2408,16 +2399,6 @@ export class CodeGenerator {
 
         if (stLine !== undefined) {
           this.recordHeaderLineMapping(stLine, memberLine);
-        }
-
-        // Collect retain variables (cppType — same metadata-aware lookup
-        // as the member emission above, so inline arrays don't end up as
-        // IEC___INLINE_ARRAY_<T> in the retain table either).
-        if (decl.isRetain) {
-          retainVars.push({
-            name: decl.name,
-            typeName: cppType,
-          });
         }
       }
     }
@@ -2497,23 +2478,14 @@ export class CodeGenerator {
       this.emitHeader("#endif");
     }
 
-    // Generate retain variable support if there are retain variables
-    if (retainVars.length > 0) {
-      this.emitHeader("");
-      this.emitHeader("    // Retain variable support");
-      this.emitHeader(
-        `    static const RetainVarInfo __retain_vars[${retainVars.length}];`,
-      );
-      this.emitHeader(
-        `    const RetainVarInfo* getRetainVars() const override { return __retain_vars; }`,
-      );
-      this.emitHeader(
-        `    size_t getRetainCount() const override { return ${retainVars.length}; }`,
-      );
-
-      // Store retain vars for implementation file generation
-      this.programRetainVars.set(prog.name, retainVars);
-    }
+    // No per-program retain members are emitted. Retained leaves are listed
+    // once, project-wide, in `generated_debug.cpp`'s `retain_vars[]` — see
+    // backend/debug-table-gen.ts and runtime/include/iec_retain.hpp.
+    //
+    // `getRetainVars` / `getRetainCount` stay as no-op base methods on
+    // ProgramBase and are deliberately NOT overridden: the v4 runtime's ABI
+    // mirror pins their vtable positions, and renumbering would mis-dispatch
+    // run() for any program built against a different version.
 
     this.emitHeader("};");
     this.emitHeader("");
@@ -2634,27 +2606,6 @@ export class CodeGenerator {
     if (astProg) {
       this.recordLineMapping(astProg.sourceSpan.endLine, closingBraceLine);
     }
-
-    // Generate retain variable table if there are retain variables
-    this.generateRetainTable(`Program_${prog.name}`, prog.name);
-  }
-
-  /**
-   * Generate retain variable table for a class.
-   */
-  private generateRetainTable(className: string, progName: string): void {
-    const retainVars = this.programRetainVars.get(progName);
-    if (!retainVars || retainVars.length === 0) return;
-
-    this.emit(`// Retain variable table for ${className}`);
-    this.emit(`const RetainVarInfo ${className}::__retain_vars[] = {`);
-    for (const v of retainVars) {
-      this.emit(
-        `    {"${v.name}", offsetof(${className}, ${v.name}), sizeof(${v.typeName})},`,
-      );
-    }
-    this.emit("};");
-    this.emit("");
   }
 
   /**

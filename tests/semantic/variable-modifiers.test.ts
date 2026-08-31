@@ -158,7 +158,12 @@ describe('Phase 2.6 - Variable Modifiers', () => {
       expect(result.errors.length).toBeGreaterThan(0);
     });
 
-    it('should error when VAR_INPUT is RETAIN', () => {
+    // Inverted from an earlier assertion that VAR_INPUT RETAIN was an error.
+    // IEC 61131-3 permits RETAIN on VAR, VAR_INPUT, VAR_OUTPUT and VAR_GLOBAL,
+    // and CODESYS accepts all four — the old rule rejected function blocks that
+    // are valid everywhere else. Kept as a test so the restriction cannot
+    // quietly return.
+    it('should ACCEPT RETAIN on VAR_INPUT, as IEC 61131-3 does', () => {
       const source = `
         FUNCTION_BLOCK TestFB
           VAR_INPUT RETAIN
@@ -167,13 +172,12 @@ describe('Phase 2.6 - Variable Modifiers', () => {
         END_FUNCTION_BLOCK
       `;
       const result = compile(source);
-      expect(result.success).toBe(false);
-      expect(result.errors.some(e =>
-        e.message.includes('VAR_INPUT') && e.message.includes('RETAIN')
-      )).toBe(true);
+      expect(
+        result.errors.filter((e) => e.message.includes('RETAIN')),
+      ).toEqual([]);
     });
 
-    it('should error when VAR_OUTPUT is RETAIN', () => {
+    it('should ACCEPT RETAIN on VAR_OUTPUT, as IEC 61131-3 does', () => {
       const source = `
         FUNCTION_BLOCK TestFB
           VAR_OUTPUT RETAIN
@@ -182,10 +186,9 @@ describe('Phase 2.6 - Variable Modifiers', () => {
         END_FUNCTION_BLOCK
       `;
       const result = compile(source);
-      expect(result.success).toBe(false);
-      expect(result.errors.some(e =>
-        e.message.includes('VAR_OUTPUT') && e.message.includes('RETAIN')
-      )).toBe(true);
+      expect(
+        result.errors.filter((e) => e.message.includes('RETAIN')),
+      ).toEqual([]);
     });
 
     it('should error when VAR_IN_OUT is RETAIN', () => {
@@ -269,17 +272,31 @@ describe('Phase 2.6 - Variable Modifiers', () => {
             counter : DINT;
           END_VAR
         END_PROGRAM
+
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+            PROGRAM instance0 WITH task0 : Main;
+          END_RESOURCE
+        END_CONFIGURATION
       `;
-      const result = compile(source);
+      // Rewritten for the leaf-addressed retain table. The per-program
+      // `RetainVarInfo __retain_vars[]` this asserted is gone: it described
+      // members by `offsetof` and `sizeof(IECVar<T>)`, which persisted the
+      // debugger's forcing state and could not name a variable inside a nested
+      // function block or a configuration global at all. Retained leaves are
+      // listed once, project-wide, in generated_debug.cpp.
+      //
+      // The source gained a CONFIGURATION because retained storage exists in an
+      // INSTANCE: the leaf walk goes configurations -> resources -> tasks ->
+      // instances, so an uninstantiated program has nothing to retain.
+      const result = compile(source, { headerFileName: 'generated.hpp' });
       expect(result.success).toBe(true);
-      // Check for retain table declaration in header
-      expect(result.headerCode).toContain('__retain_vars');
-      expect(result.headerCode).toContain('getRetainVars');
-      expect(result.headerCode).toContain('getRetainCount');
-      // Check for retain table definition in source
-      expect(result.cppCode).toContain('RetainVarInfo');
-      expect(result.cppCode).toContain('COUNTER');
-      expect(result.cppCode).toContain('offsetof');
+      expect(result.debugTableCpp).toContain('const uint16_t retain_var_count = 1;');
+      expect(result.debugTableCpp).toContain('INSTANCE0.COUNTER');
+      expect(result.debugTableCpp).toContain('retain_layout_hash');
+      expect(result.headerCode).not.toContain('__retain_vars');
+      expect(result.debugTableCpp).not.toContain('offsetof');
     });
 
     it('should generate retain table with multiple variables', () => {
@@ -290,12 +307,19 @@ describe('Phase 2.6 - Variable Modifiers', () => {
             last_state : BOOL;
           END_VAR
         END_PROGRAM
+
+        CONFIGURATION Config0
+          RESOURCE Res0 ON PLC
+            TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+            PROGRAM instance0 WITH task0 : Main;
+          END_RESOURCE
+        END_CONFIGURATION
       `;
-      const result = compile(source);
+      const result = compile(source, { headerFileName: 'generated.hpp' });
       expect(result.success).toBe(true);
-      expect(result.headerCode).toContain('__retain_vars[2]');
-      expect(result.cppCode).toContain('TOTAL_COUNT');
-      expect(result.cppCode).toContain('LAST_STATE');
+      expect(result.debugTableCpp).toContain('const uint16_t retain_var_count = 2;');
+      expect(result.debugTableCpp).toContain('INSTANCE0.TOTAL_COUNT');
+      expect(result.debugTableCpp).toContain('INSTANCE0.LAST_STATE');
     });
 
     it('should not generate retain table when no RETAIN variables', () => {
@@ -306,10 +330,192 @@ describe('Phase 2.6 - Variable Modifiers', () => {
           END_VAR
         END_PROGRAM
       `;
-      const result = compile(source);
+      const result = compile(source, { headerFileName: 'generated.hpp' });
       expect(result.success).toBe(true);
+      // The table is still emitted (with a placeholder) so the runtime links
+      // unconditionally; the COUNT is what says nothing is retained.
+      expect(result.debugTableCpp).toContain('const uint16_t retain_var_count = 0;');
       expect(result.headerCode).not.toContain('__retain_vars');
-      expect(result.headerCode).not.toContain('getRetainVars');
+    });
+  });
+});
+
+/**
+ * NON_RETAIN, PERSISTENT, and the RETAIN scope rules.
+ *
+ * NON_RETAIN previously had no token at all: it lexed as an Identifier, so
+ * `VAR NON_RETAIN x : DINT;` failed with "Expected Colon" on the line BELOW the
+ * qualifier — any CODESYS project carrying it died on import, pointing at the
+ * wrong place. PERSISTENT was the same.
+ *
+ * RETAIN was also refused on VAR_INPUT / VAR_OUTPUT, which IEC 61131-3 permits
+ * and CODESYS accepts, and silently ACCEPTED inside a FUNCTION, where there is
+ * no instance and nothing to retain.
+ */
+describe('RETAIN / NON_RETAIN / PERSISTENT', () => {
+  const CFG = `
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`;
+
+  const errorsFor = (source: string): string[] =>
+    compile(source).errors.map((e) => e.message);
+
+  describe('accepted forms', () => {
+    it('lexes NON_RETAIN as a qualifier, not as a variable name', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR NON_RETAIN
+            scratch : DINT;
+          END_VAR
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+      const block = result.ast?.programs[0].varBlocks[0];
+      expect(block?.isNonRetain).toBe(true);
+      expect(block?.isRetain).toBe(false);
+      // One declaration named SCRATCH — not a variable called NON_RETAIN.
+      expect(block?.declarations).toHaveLength(1);
+      expect(block?.declarations[0].names).toEqual(['SCRATCH']);
+    });
+
+    it('treats PERSISTENT as RETAIN', () => {
+      const block = parse(`
+        PROGRAM Main
+          VAR PERSISTENT
+            boots : DINT;
+          END_VAR
+        END_PROGRAM
+      `).ast?.programs[0].varBlocks[0];
+      expect(block?.isRetain).toBe(true);
+    });
+
+    it('accepts the RETAIN PERSISTENT combination CODESYS writes', () => {
+      const result = parse(`
+        PROGRAM Main
+          VAR RETAIN PERSISTENT
+            hours : DINT;
+          END_VAR
+        END_PROGRAM
+      `);
+      expect(result.errors).toHaveLength(0);
+      expect(result.ast?.programs[0].varBlocks[0].isRetain).toBe(true);
+    });
+
+    it.each(['VAR_INPUT', 'VAR_OUTPUT'])(
+      'allows RETAIN on %s, as IEC 61131-3 does',
+      (blockType) => {
+        const source = `
+FUNCTION_BLOCK Motor
+  ${blockType} RETAIN held : DINT; END_VAR
+  VAR other : DINT; END_VAR
+  other := 1;
+END_FUNCTION_BLOCK
+PROGRAM Main
+  VAR m : Motor; END_VAR
+  m();
+END_PROGRAM${CFG}`;
+        expect(errorsFor(source)).toEqual([]);
+      },
+    );
+
+    it('allows NON_RETAIN on VAR_TEMP — redundant, but true', () => {
+      const source = `
+FUNCTION_BLOCK FB
+  VAR_TEMP NON_RETAIN tmp : DINT; END_VAR
+  tmp := 1;
+END_FUNCTION_BLOCK
+PROGRAM Main
+  VAR f : FB; END_VAR
+  f();
+END_PROGRAM${CFG}`;
+      expect(errorsFor(source)).toEqual([]);
+    });
+  });
+
+  describe('rejected forms', () => {
+    it('rejects RETAIN inside a FUNCTION — no instance, nothing to retain', () => {
+      const errors = errorsFor(`
+FUNCTION AddOne : DINT
+  VAR_INPUT a : DINT; END_VAR
+  VAR RETAIN bad : DINT; END_VAR
+  AddOne := a + 1;
+END_FUNCTION`);
+      expect(errors.some((m) => /RETAIN is not allowed in a FUNCTION or METHOD/.test(m))).toBe(true);
+    });
+
+    it('rejects RETAIN inside a METHOD, whose locals are stack slots', () => {
+      const errors = errorsFor(`
+FUNCTION_BLOCK FB
+  VAR x : DINT; END_VAR
+  METHOD M : DINT
+    VAR RETAIN bad : DINT; END_VAR
+    M := 1;
+  END_METHOD
+END_FUNCTION_BLOCK
+PROGRAM Main
+  VAR f : FB; END_VAR
+  f.x := 1;
+END_PROGRAM${CFG}`);
+      const message = errors.find((m) => /RETAIN is not allowed/.test(m));
+      expect(message).toBeDefined();
+      // Must NOT blame the function block: RETAIN on the FB's own VAR is legal,
+      // and naming it here would read as a contradiction.
+      expect(message).not.toContain("'FB'");
+    });
+
+    it.each(['VAR_IN_OUT', 'VAR_TEMP'])(
+      'rejects RETAIN on %s — no storage of its own to retain',
+      (blockType) => {
+        const errors = errorsFor(`
+FUNCTION_BLOCK FB
+  ${blockType} RETAIN bad : DINT; END_VAR
+  VAR other : DINT; END_VAR
+  other := 1;
+END_FUNCTION_BLOCK
+PROGRAM Main
+  VAR f : FB; END_VAR
+  f();
+END_PROGRAM${CFG}`);
+        expect(errors.some((m) => m.includes(`${blockType} cannot be RETAIN`))).toBe(true);
+      },
+    );
+
+    it('rejects RETAIN on VAR_EXTERNAL — the VAR_GLOBAL owns the retention', () => {
+      // Program scope on purpose. The POU var-block AST builder does not map
+      // VAR_EXTERNAL, so a function block's external arrives as blockType
+      // "VAR" and slips past this rule — pre-existing (the previous rule
+      // listed VAR_EXTERNAL and was equally ineffective there), tracked
+      // separately.
+      const errors = errorsFor(`
+PROGRAM Main
+  VAR_EXTERNAL RETAIN g : DINT; END_VAR
+  g := 1;
+END_PROGRAM
+CONFIGURATION Config0
+  VAR_GLOBAL g : DINT; END_VAR
+  RESOURCE Res0 ON PLC
+    TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+    PROGRAM instance0 WITH task0 : Main;
+  END_RESOURCE
+END_CONFIGURATION`);
+      expect(errors.some((m) => m.includes('VAR_EXTERNAL cannot be RETAIN'))).toBe(true);
+    });
+
+    it.each([
+      ['RETAIN NON_RETAIN', 'both RETAIN and NON_RETAIN'],
+      ['RETAIN CONSTANT', 'both RETAIN and CONSTANT'],
+      ['CONSTANT NON_RETAIN', 'both CONSTANT and NON_RETAIN'],
+    ])('rejects the contradiction "%s"', (qualifiers, expected) => {
+      const errors = errorsFor(`
+PROGRAM Main
+  VAR ${qualifiers} bad : DINT := 1; END_VAR
+  ;
+END_PROGRAM${CFG}`);
+      expect(errors.some((m) => m.includes(expected))).toBe(true);
     });
   });
 });

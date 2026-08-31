@@ -73,7 +73,10 @@ namespace strucpp {
 // Base Classes for Runtime
 // =============================================================================
 
-// Forward declaration for retain support
+// Forward-declared for the two RESERVED vtable slots below. The type no longer
+// exists as a definition anywhere — retained leaves are listed project-wide in
+// generated_debug.cpp's `retain_vars[]` (see iec_retain.hpp) — but the
+// declaration has to stay so the slots keep their signatures and positions.
 struct RetainVarInfo;
 
 /**
@@ -86,18 +89,18 @@ struct ProgramBase {
     /** Execute one cycle of the program */
     virtual void run() = 0;
 
-    /**
-     * Get the array of retain variable descriptors.
-     * Override in generated code if the program has RETAIN variables.
-     * @return Pointer to static array, or nullptr if no retain variables
-     */
+    // RESERVED vtable slots 2 and 3, formerly the per-program retain
+    // descriptor table. Retained leaves now live in one project-wide
+    // `retain_vars[]` addressed by debug-table (arr, elem) — see
+    // iec_retain.hpp for why offsets could not work — so generated code no
+    // longer overrides these and nothing calls them.
+    //
+    // They are KEPT, not deleted. The OpenPLC v4 runtime mirrors this vtable
+    // by position (core/src/lib/strucpp_abi.hpp) to dispatch run() across a
+    // .so boundary; removing a slot would shift every slot after it and
+    // mis-dispatch run() for any program built against a different version.
+    // Same reasoning as the dead sync_in / sync_out slots below.
     virtual const RetainVarInfo* getRetainVars() const { return nullptr; }
-
-    /**
-     * Get the number of retain variables.
-     * Override in generated code if the program has RETAIN variables.
-     * @return Count of retain variables
-     */
     virtual size_t getRetainCount() const { return 0; }
 
     // -------------------------------------------------------------------------
