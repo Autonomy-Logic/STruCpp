@@ -61,6 +61,7 @@ import type {
   CaseElement,
   CaseLabel,
   ExitStatement,
+  ContinueStatement,
   ReturnStatement,
   ExternalCodePragma,
   BinaryOperator,
@@ -1061,11 +1062,18 @@ export class ASTBuilder {
     // Get element type from nested dataType
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
+    let elementMaxLength: number | undefined;
     if (elementTypeNode) {
       const elemChildren = elementTypeNode.children as CstChildren;
       const elemNameToken = getFirstToken(elemChildren.Identifier);
       if (elemNameToken) {
         elementTypeName = elemNameToken.image;
+      }
+      // The element's own declared length — `STRING(23)` in
+      // `ARRAY [0..3] OF STRING(23)`. The array's bounds are a different node.
+      const elemLenToken = getFirstToken(elemChildren.IntegerLiteral);
+      if (elemLenToken) {
+        elementMaxLength = parseInt(elemLenToken.image, 10);
       }
     }
 
@@ -1094,6 +1102,9 @@ export class ASTBuilder {
     if (arrayDimensions.length > 0) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
+      if (elementMaxLength !== undefined) {
+        result.elementMaxLength = elementMaxLength;
+      }
     }
     return result;
   }
@@ -1519,7 +1530,16 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
 
     const nameToken = getFirstToken(children.Identifier);
-    const name = nameToken?.image ?? "INT";
+    // `__SYSTEM.AnyType` arrives as two identifiers around a Dot; everything
+    // else is a single one. The Dot is what tells them apart — the second
+    // identifier slot is otherwise a STRING's length constant.
+    const qualifiedIdents = children.Dot
+      ? getAllTokens(children.Identifier)
+      : [];
+    const name =
+      qualifiedIdents.length > 1
+        ? `${qualifiedIdents[0]!.image}.${qualifiedIdents[1]!.image}`
+        : (nameToken?.image ?? "INT");
     const isRefTo = !!children.REF_TO;
     const isReferenceTo = !!children.REFERENCE_TO;
     const isPointerTo = !!children.POINTER;
@@ -1542,7 +1562,7 @@ export class ASTBuilder {
     } else {
       // Check for identifier-based length (STRING(CONSTANT_NAME))
       // Note: children.Identifier[0] is the type name itself; [1] would be the length constant
-      const allIdents = getAllTokens(children.Identifier);
+      const allIdents = children.Dot ? [] : getAllTokens(children.Identifier);
       if (allIdents.length > 1) {
         maxLength = allIdents[1]!.image;
       }
@@ -1586,11 +1606,18 @@ export class ASTBuilder {
     // Get element type from nested dataType
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
+    let elementMaxLength: number | undefined;
     if (elementTypeNode) {
       const elemChildren = elementTypeNode.children as CstChildren;
       const elemNameToken = getFirstToken(elemChildren.Identifier);
       if (elemNameToken) {
         elementTypeName = elemNameToken.image;
+      }
+      // The element's own declared length — `STRING(23)` in
+      // `ARRAY [0..3] OF STRING(23)`. The array's bounds are a different node.
+      const elemLenToken = getFirstToken(elemChildren.IntegerLiteral);
+      if (elemLenToken) {
+        elementMaxLength = parseInt(elemLenToken.image, 10);
       }
     }
 
@@ -1630,6 +1657,9 @@ export class ASTBuilder {
     if (arrayDimensions) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
+      if (elementMaxLength !== undefined) {
+        result.elementMaxLength = elementMaxLength;
+      }
     }
     return result;
   }
@@ -1671,6 +1701,11 @@ export class ASTBuilder {
     }
     if (children.exitStatement) {
       return this.buildExitStatement(getFirstNode(children.exitStatement)!);
+    }
+    if (children.continueStatement) {
+      return this.buildContinueStatement(
+        getFirstNode(children.continueStatement)!,
+      );
     }
     if (children.returnStatement) {
       return this.buildReturnStatement(getFirstNode(children.returnStatement)!);
@@ -2001,6 +2036,16 @@ export class ASTBuilder {
   buildExitStatement(node: CstNode): ExitStatement {
     return {
       kind: "ExitStatement",
+      sourceSpan: nodeToSourceSpan(node),
+    };
+  }
+
+  /**
+   * Build a ContinueStatement from a CST node.
+   */
+  buildContinueStatement(node: CstNode): ContinueStatement {
+    return {
+      kind: "ContinueStatement",
       sourceSpan: nodeToSourceSpan(node),
     };
   }

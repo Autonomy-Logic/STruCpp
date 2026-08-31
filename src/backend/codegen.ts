@@ -64,14 +64,17 @@ import {
 } from "./codegen-utils.js";
 import { mangledMemberName, needsMemberMangling } from "./member-mangling.js";
 import {
+  TYPE_CLASS_BY_IEC_TYPE,
+  buildEnumMemberMap,
   getTypeBits,
   getTypeCategory,
+  isAnyDescriptorType,
+  isDeclarableGenericType,
   isImplicitlyConvertible,
-  resolveFieldType as resolveFieldTypeUtil,
   resolveArrayElementType as resolveArrayElementTypeUtil,
-  typeName as typeNameUtil,
-  buildEnumMemberMap,
+  resolveFieldType as resolveFieldTypeUtil,
   type EnumMemberEntry,
+  typeName as typeNameUtil,
 } from "../semantic/type-utils.js";
 import {
   generateInitializerValue,
@@ -457,6 +460,60 @@ export class CodeGenerator {
    *  Used to resolve positional arguments in FB invocations. */
   private fbInputParams: Map<string, string[]> = new Map();
 
+  /** Map of UPPER(fbTypeName) → UPPER(paramName) → the generic type it was
+   *  declared with (`ANY`, `ANY_INT`, …).
+   *
+   *  A generic parameter takes an `IEC_ANY` descriptor built at the call site,
+   *  not the argument's value. Covers FBs declared here and FBs from a library
+   *  archive alike. */
+  private fbGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Map of UPPER(fbTypeName) → the VAR_IN_OUT parameters declared
+   *  `ARRAY [*] OF …`.
+   *
+   *  A variable-length parameter is an `ArrayView`, which already addresses the
+   *  caller's array — so unlike every other in-out it needs no copy back, and
+   *  cannot have one: the view and the concrete array are different types. */
+  private fbVlaInoutParams: Map<string, Set<string>> = new Map();
+
+  /** Map of `UPPER(fbType).UPPER(method)` → its VAR_INPUT parameter names in
+   *  declaration order, so a positional argument can be matched to one. */
+  private methodInputOrder: Map<string, string[]> = new Map();
+
+  /** Map of `UPPER(fbType).UPPER(method)` → UPPER(paramName) → the generic
+   *  type it was declared with.
+   *
+   *  METHOD is one of the three scopes CODESYS declares generics in, so a
+   *  method call has to build the same descriptor a function block call does. */
+  private methodGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Enums an imported library declares, with their members.
+   *
+   *  Merged into the bare-enumerator lookup that `generate()` builds, which is
+   *  otherwise the project's own types only — so a member of a library enum
+   *  would emit unqualified and fail to compile. */
+  private libraryEnumDescriptors: Array<{ name: string; members: string[] }> =
+    [];
+
+  /** Map of UPPER(functionName) → UPPER(paramName) → the generic type it was
+   *  declared with.
+   *
+   *  FUNCTION is the third scope CODESYS declares a generic in, and a call to
+   *  one needs the same descriptor an FB or method call builds. */
+  private functionGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Map of UPPER(functionName) → its parameter names in declaration order,
+   *  so a positional argument can be matched to the parameter it fills. */
+  private functionParamOrder: Map<string, string[]> = new Map();
+
+  /** Names of STRING/WSTRING variables handed to a generic parameter by the
+   *  statement being generated.
+   *
+   *  `raw_ptr()` gives the callee the characters but not the cached length, so
+   *  a callee that writes them leaves `length()` stale. Flushed as
+   *  `sync_length()` after the call — see {@link flushStringSyncs}. */
+  private pendingStringSyncs: string[] = [];
+
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
    *  FB inout params are stored as by-value members with copy-in at the call
    *  site; this set drives the matching copy-back after the call so a callee's
@@ -493,6 +550,17 @@ export class CodeGenerator {
     typeName: string,
     maxLength?: number | string,
   ): string {
+    // Every generic family, and the descriptor type itself, is one `IEC_ANY` at
+    // the ABI: the family constrains what the caller may pass, checked at the
+    // call site, not what the parameter is made of.
+    //
+    // Spelled out rather than left to the `IEC_<NAME>` rule below, which is
+    // right for `ANY` and wrong for the rest — `IEC_ANY_INT` does not exist.
+    // `__SYSTEM.AnyType` needs it too: a dot is not a C++ name.
+    if (isDeclarableGenericType(typeName) || isAnyDescriptorType(typeName)) {
+      return "IEC_ANY";
+    }
+
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     // Use IECVar-wrapped types to match concrete Array1D<IEC_T, ...> elements
     const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
@@ -586,6 +654,26 @@ export class CodeGenerator {
   }
 
   /**
+   * The C++ type of a `VAR_EXTERNAL`, which is a POINTER to the canonical
+   * `GlobalVar<V>` rather than a parameter.
+   *
+   * Not `toParamTypeRef`: that widens a `STRING(n)` to the unqualified type,
+   * which a parameter may do and a pointer may not —
+   * `GlobalVar<IECStringVar<23>>*` and `GlobalVar<IEC_STRING>*` are unrelated.
+   *
+   * All three emission sites go through this, so they agree by construction.
+   */
+  private externalTypeRefCpp(ext: {
+    typeName: string;
+    maxLength?: number | string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+    referenceKind?: string;
+  }): string {
+    return this.mapTypeRefToCpp(this.projectVarToTypeRef(ext));
+  }
+
+  /**
    * Convert a project-model record (ProjectVarDeclaration /
    * VarExternalDeclaration) into a TypeReference shape suitable for
    * `mapTypeRefToCpp` / `toParamTypeRef`. Project-model records keep the
@@ -627,6 +715,7 @@ export class CodeGenerator {
     referenceKind?: string;
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
+    elementMaxLength?: number;
   }): string {
     let baseType: string;
 
@@ -636,7 +725,12 @@ export class CodeGenerator {
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
       const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
         ? typeRef.elementTypeName
-        : this.mapVarTypeToCpp(typeRef.elementTypeName);
+        : // The element's own declared length — `ARRAY [0..3] OF STRING(23)`.
+          // Without it every element falls back to the 254-character default.
+          this.mapVarTypeToCpp(
+            typeRef.elementTypeName,
+            typeRef.elementMaxLength,
+          );
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
     } else {
       baseType = this.mapVarTypeToCpp(
@@ -738,6 +832,9 @@ export class CodeGenerator {
           `${fbUpper}.${f.name.toUpperCase()}`,
           f.type,
         );
+        if (isDeclarableGenericType(f.type)) {
+          this.noteGenericParam(fbUpper, f.name, f.type);
+        }
         // Store array metadata for inline array type reconstruction
         if (f.arrayDimensions || f.elementTypeName || f.referenceKind) {
           const ref: {
@@ -762,15 +859,23 @@ export class CodeGenerator {
    * struct types for known-type detection). Private — use registerLibraryArchives().
    */
   private registerLibraryTypes(
-    types: Array<{ name: string; kind: string }>,
+    types: Array<{ name: string; kind: string; members?: string[] }>,
   ): void {
     for (const t of types) {
       const nameUpper = t.name.toUpperCase();
       if (t.kind === "enum") {
-        // Members are not available in the manifest, but we only need to
-        // know the type IS an enum for :: emission in generateVariableExpression
+        // The name alone is enough for `::` emission in
+        // generateVariableExpression; the members, when the archive carries
+        // them, are what lets a bare enumerator be qualified.
+        const members = t.members ?? [];
         if (!this.enumTypeMembers.has(nameUpper)) {
-          this.enumTypeMembers.set(nameUpper, new Set());
+          this.enumTypeMembers.set(
+            nameUpper,
+            new Set(members.map((m) => m.toUpperCase())),
+          );
+        }
+        if (members.length > 0) {
+          this.libraryEnumDescriptors.push({ name: t.name, members });
         }
       }
       this.knownStructTypes.add(nameUpper);
@@ -960,22 +1065,95 @@ export class CodeGenerator {
           for (const decl of block.declarations) {
             for (const name of decl.names) {
               inputNames.push(name.toUpperCase());
+              if (isDeclarableGenericType(decl.type.name)) {
+                this.noteGenericParam(
+                  fb.name.toUpperCase(),
+                  name,
+                  decl.type.name,
+                );
+              }
             }
           }
         } else if (block.blockType === "VAR_IN_OUT") {
           for (const decl of block.declarations) {
+            const isVla = decl.type.name.toUpperCase().startsWith("__VLA_");
             for (const name of decl.names) {
               inoutNames.push(name.toUpperCase());
+              if (isVla) {
+                let vlas = this.fbVlaInoutParams.get(fb.name.toUpperCase());
+                if (!vlas) {
+                  vlas = new Set();
+                  this.fbVlaInoutParams.set(fb.name.toUpperCase(), vlas);
+                }
+                vlas.add(name.toUpperCase());
+              }
             }
           }
         }
       }
+      // Methods carry their own parameter lists, and their own generics.
+      for (const method of fb.methods ?? []) {
+        const key = `${fb.name.toUpperCase()}.${method.name.toUpperCase()}`;
+        const order: string[] = [];
+        for (const block of method.varBlocks ?? []) {
+          if (block.blockType !== "VAR_INPUT") continue;
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              order.push(name.toUpperCase());
+              if (isDeclarableGenericType(decl.type.name)) {
+                let params = this.methodGenericParams.get(key);
+                if (!params) {
+                  params = new Map();
+                  this.methodGenericParams.set(key, params);
+                }
+                params.set(name.toUpperCase(), decl.type.name.toUpperCase());
+              }
+            }
+          }
+        }
+        if (order.length > 0) this.methodInputOrder.set(key, order);
+      }
+
       if (inputNames.length > 0) {
         this.fbInputParams.set(fb.name.toUpperCase(), inputNames);
       }
       if (inoutNames.length > 0) {
         this.fbInoutParams.set(fb.name.toUpperCase(), new Set(inoutNames));
       }
+    }
+
+    // Functions declare generics too — the third scope, alongside FB and
+    // METHOD. Every parameter block feeds the order, because an argument list
+    // fills VAR_INPUT, VAR_IN_OUT and VAR_OUTPUT slots in declaration order.
+    for (const func of ast.functions) {
+      const key = func.name.toUpperCase();
+      const order: string[] = [];
+      for (const block of func.varBlocks) {
+        if (
+          block.blockType !== "VAR_INPUT" &&
+          block.blockType !== "VAR_IN_OUT" &&
+          block.blockType !== "VAR_OUTPUT"
+        ) {
+          continue;
+        }
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            order.push(name.toUpperCase());
+            if (
+              block.blockType === "VAR_INPUT" &&
+              isDeclarableGenericType(decl.type.name)
+            ) {
+              let params = this.functionGenericParams.get(key);
+              if (!params) {
+                params = new Map();
+                this.functionGenericParams.set(key, params);
+              }
+              params.set(name.toUpperCase(), decl.type.name.toUpperCase());
+            }
+          }
+        }
+      }
+      if (order.length > 0) this.functionParamOrder.set(key, order);
     }
 
     // Build set of known interface types, method name map, and per-interface method sets
@@ -1027,7 +1205,12 @@ export class CodeGenerator {
         enumDescriptors.push({ name: td.name, members: memberNames });
       }
     }
-    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
+    // The project's own last, so a name declared on both sides is reported as
+    // ambiguous rather than quietly taking the library's.
+    this.enumMemberToType = buildEnumMemberMap([
+      ...this.libraryEnumDescriptors,
+      ...enumDescriptors,
+    ]);
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
     for (const prog of ast.programs) {
@@ -2385,6 +2568,9 @@ export class CodeGenerator {
           ...(decl.elementTypeName !== undefined
             ? { elementTypeName: decl.elementTypeName }
             : {}),
+          ...(decl.elementMaxLength !== undefined
+            ? { elementMaxLength: decl.elementMaxLength }
+            : {}),
           ...(decl.referenceKind !== undefined
             ? { referenceKind: decl.referenceKind }
             : {}),
@@ -2434,9 +2620,7 @@ export class CodeGenerator {
       // projectVarToTypeRef + toParamTypeRef + mapTypeRefToCpp resolve the
       // C++ type the same way the constructor params do (must agree).
       const extTypes = prog.varExternal.map((ext) =>
-        this.mapTypeRefToCpp(
-          this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-        ),
+        this.externalTypeRefCpp(ext),
       );
       this.emitHeader("    // External variables (pointers to shared globals)");
       for (let i = 0; i < prog.varExternal.length; i++) {
@@ -2465,9 +2649,7 @@ export class CodeGenerator {
       // configuration owns the storage + mutex; the program just points at it).
       const params = prog.varExternal
         .map((ext) => {
-          const cppType = this.mapTypeRefToCpp(
-            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-          );
+          const cppType = this.externalTypeRefCpp(ext);
           return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
@@ -2535,9 +2717,7 @@ export class CodeGenerator {
       // the linker rejects the definition.
       const params = prog.varExternal
         .map((ext) => {
-          const cppType = this.mapTypeRefToCpp(
-            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-          );
+          const cppType = this.externalTypeRefCpp(ext);
           return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
@@ -3057,6 +3237,24 @@ export class CodeGenerator {
         this.generateRepeatStatement(stmt, indent);
         isCompound = true;
         break;
+      case "ContinueStatement": {
+        // A plain `continue` is correct here, where EXIT needs a goto: `break`
+        // inside the switch an ST CASE compiles to would break the SWITCH, but
+        // `continue` is never captured by a switch and always reaches the
+        // innermost enclosing loop — which is exactly ST's rule.
+        //
+        // It lands in the right place for each loop form too: a FOR still runs
+        // its increment, and a WHILE or REPEAT re-tests its condition.
+        if (this.loopExitLabelStack.length > 0) {
+          this.emit(`${indent}continue;`);
+        } else {
+          // CONTINUE outside a loop is invalid IEC ST, and a bare `continue`
+          // would not compile. Emit nothing rather than crash codegen, matching
+          // the defensive branch on EXIT below.
+          this.emit(`${indent}; // CONTINUE outside a loop`);
+        }
+        break;
+      }
       case "ExitStatement": {
         const top = this.loopExitLabelStack[this.loopExitLabelStack.length - 1];
         if (top) {
@@ -3090,8 +3288,32 @@ export class CodeGenerator {
         );
       }
     }
+    this.flushStringSyncs(indent);
     if (!isCompound) {
       this.recordLineMapping(stmt.sourceSpan.startLine, cppStartLine);
+    }
+  }
+
+  /**
+   * Emit `sync_length()` for each STRING or WSTRING variable this statement
+   * handed to a generic parameter.
+   *
+   * The descriptor's `PVALUE` is `raw_ptr()`, the character buffer. Unlike
+   * CODESYS, where a STRING is a plain NUL-terminated array, the length is
+   * cached beside the characters and must be recomputed after the call.
+   *
+   * Emitted after the statement, since an expression has nowhere to put one.
+   * Duplicates are dropped: two parameters may name the same variable.
+   */
+  private flushStringSyncs(indent: string): void {
+    if (this.pendingStringSyncs.length === 0) return;
+    const pending = this.pendingStringSyncs;
+    this.pendingStringSyncs = [];
+    const seen = new Set<string>();
+    for (const name of pending) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      this.emit(`${indent}${name}.sync_length();`);
     }
   }
 
@@ -4100,11 +4322,49 @@ export class CodeGenerator {
    * Generate C++ for a method call expression (chained method calls).
    * e.g., fb.method1(args).method2(args) → fb.method1(args).method2(args)
    */
+  /**
+   * Arguments for a method call, with a descriptor built for any parameter
+   * declared generic.
+   *
+   * Shared because a method call reaches codegen in two shapes: a
+   * `MethodCallExpression`, and a `FunctionCallExpression` whose name carries
+   * the dot (`inst.Method`) — which is the one `x := inst.Method(y)` uses.
+   */
+  private generateCallArguments(
+    ownerType: string | undefined,
+    methodName: string,
+    args: ReadonlyArray<{ name?: string; value: Expression }>,
+  ): string[] {
+    const key = ownerType
+      ? `${ownerType.toUpperCase()}.${methodName.toUpperCase()}`
+      : undefined;
+    const generics = key ? this.methodGenericParams.get(key) : undefined;
+    const order = key ? this.methodInputOrder.get(key) : undefined;
+
+    let positional = 0;
+    return args.map((arg) => {
+      const paramName = arg.name ?? order?.[positional];
+      if (!arg.name) positional++;
+      if (paramName && generics?.has(paramName.toUpperCase())) {
+        const descriptor = this.generateAnyDescriptor(arg.value);
+        if (descriptor) return descriptor;
+      }
+      return this.generateExpression(arg.value);
+    });
+  }
+
   private generateMethodCallExpression(expr: MethodCallExpression): string {
     const obj = this.generateExpression(expr.object);
-    const args = expr.arguments
-      .map((a) => this.generateExpression(a.value))
-      .join(", ");
+
+    const ownerTypeForArgs =
+      expr.object.kind === "VariableExpression"
+        ? this.currentScopeVarTypes.get(expr.object.name.toUpperCase())
+        : undefined;
+    const args = this.generateCallArguments(
+      ownerTypeForArgs,
+      expr.methodName,
+      expr.arguments,
+    ).join(", ");
     // Try type-specific resolution first (avoids collisions when two FBs share a method name)
     let resolvedName: string;
     if (expr.object.kind === "VariableExpression") {
@@ -4286,6 +4546,9 @@ export class CodeGenerator {
       if (!argType) continue;
       const paramType = paramTypes[i]!;
       if (argType === paramType) continue;
+      // A generic parameter takes a descriptor, which is not the argument's
+      // type and must not be cast to one.
+      if (isDeclarableGenericType(paramType)) continue;
       // Bare literals (no typePrefix) are untyped — always castable to param type
       if (
         this.isBareLiteral(expr) ||
@@ -4500,12 +4763,18 @@ export class CodeGenerator {
       const dotIdx = expr.functionName.indexOf(".");
       const prefix = expr.functionName.substring(0, dotIdx);
       const methodName = expr.functionName.substring(dotIdx + 1);
-      const args = expr.arguments.map((arg) =>
-        this.generateExpression(arg.value),
-      );
 
       // Resolve method name case from declaration
       const varType = this.currentScopeVarTypes.get(prefix.toUpperCase());
+
+      // A generic method parameter takes the same descriptor a generic
+      // function block input does — METHOD is one of the three scopes a
+      // generic may be declared in.
+      const args = this.generateCallArguments(
+        varType,
+        methodName,
+        expr.arguments,
+      );
       const resolvedMethod = varType
         ? this.resolveMethodName(varType, methodName)
         : this.resolveMethodNameGlobal(methodName);
@@ -4624,8 +4893,15 @@ export class CodeGenerator {
     }
 
     // 4. Default: emit as-is (with output argument validation)
+    const generics = this.functionGenericParams.get(nameUpper);
+    const paramOrder = this.functionParamOrder.get(nameUpper);
+    let positionalSlot = 0;
     const args = expr.arguments.map((arg) => {
-      const generated = this.generateExpression(arg.value);
+      const paramName = arg.name ?? paramOrder?.[positionalSlot];
+      if (!arg.name) positionalSlot++;
+      const generated =
+        this.generateGenericArgument(generics, paramName, arg.value) ??
+        this.generateExpression(arg.value);
       if (arg.isOutput && arg.value.kind !== "VariableExpression") {
         this.codegenWarnings.push({
           message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
@@ -4738,14 +5014,17 @@ export class CodeGenerator {
 
     // Build set of parameter slots claimed by named arguments
     // (skip implicit EN/ENO — handled separately by EN/ENO codegen logic)
-    const namedArgs = new Map<string, { expr: string; isOutput: boolean }>();
+    const namedArgs = new Map<
+      string,
+      { value: Expression; isOutput: boolean }
+    >();
     const claimedSlots = new Set<string>();
     for (const arg of expr.arguments) {
       if (arg.name !== undefined) {
         const upperName = arg.name.toUpperCase();
         if (upperName === "EN" || upperName === "ENO") continue;
         namedArgs.set(upperName, {
-          expr: this.generateExpression(arg.value),
+          value: arg.value,
           isOutput: arg.isOutput,
         });
         claimedSlots.add(upperName);
@@ -4786,13 +5065,21 @@ export class CodeGenerator {
       }
     }
 
-    // Collect positional args (preserving source order)
-    const positionalArgs: string[] = [];
+    // Collect positional args (preserving source order). Rendered once the
+    // slot each fills is known, since a generic slot takes a descriptor
+    // instead of the value.
+    const positionalArgs: Expression[] = [];
     for (const arg of expr.arguments) {
       if (arg.name === undefined) {
-        positionalArgs.push(this.generateExpression(arg.value));
+        positionalArgs.push(arg.value);
       }
     }
+    const generics = this.functionGenericParams.get(
+      expr.functionName.toUpperCase(),
+    );
+    const renderArg = (value: Expression, paramName: string): string =>
+      this.generateGenericArgument(generics, paramName, value) ??
+      this.generateExpression(value);
 
     // Assign positional args to unclaimed parameter slots (in declaration order)
     const result: (string | undefined)[] = new Array<string | undefined>(
@@ -4806,7 +5093,7 @@ export class CodeGenerator {
         continue;
       }
       if (positionalIdx < positionalArgs.length) {
-        result[i] = positionalArgs[positionalIdx]!;
+        result[i] = renderArg(positionalArgs[positionalIdx]!, param.name);
         positionalIdx++;
       }
     }
@@ -4816,7 +5103,7 @@ export class CodeGenerator {
       const param = params[i]!;
       const named = namedArgs.get(param.name);
       if (named !== undefined) {
-        result[i] = named.expr;
+        result[i] = renderArg(named.value, param.name);
       }
     }
 
@@ -5352,13 +5639,13 @@ export class CodeGenerator {
       if (arg.name) {
         // Named argument: assign directly
         this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)} = ${this.generateArgumentValue(arg.name, arg.value, fbTypeName)};`,
         );
       } else if (inputParamNames && positionalIndex < inputParamNames.length) {
         // Positional argument: map to VAR_INPUT by position
         const paramName = inputParamNames[positionalIndex];
         this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(paramName!, fbTypeName)} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName!, fbTypeName)} = ${this.generateArgumentValue(paramName!, arg.value, fbTypeName)};`,
         );
         positionalIndex++;
       } else {
@@ -5392,9 +5679,18 @@ export class CodeGenerator {
     const inoutParams = fbTypeName
       ? this.fbInoutParams.get(fbTypeName.toUpperCase())
       : undefined;
+    const vlaInouts = fbTypeName
+      ? this.fbVlaInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
     if (inoutParams && inoutParams.size > 0) {
       for (const arg of filteredArgs) {
         if (arg.isOutput) continue;
+        // A variable-length parameter is a view onto the caller's own array,
+        // so the callee's writes already landed there. Copying back would mean
+        // assigning an ArrayView to the concrete array it points at — which is
+        // not a conversion that exists, and would be a self-assignment if it
+        // were.
+        if (arg.name && vlaInouts?.has(arg.name.toUpperCase())) continue;
         if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
           this.emitCaptureToLvalue(
             arg.value,
@@ -5554,6 +5850,93 @@ export class CodeGenerator {
    * Emit the call line for a POU (FB or program) invocation.
    * Subclasses can override to change the call pattern (e.g., ".run()" for programs).
    */
+  /**
+   * What to assign to one FB input member: the argument itself, or — when the
+   * parameter was declared generic — a descriptor addressing it.
+   */
+  private generateArgumentValue(
+    paramName: string,
+    value: Expression,
+    fbTypeName: string | undefined,
+  ): string {
+    if (this.genericParamType(fbTypeName, paramName)) {
+      const descriptor = this.generateAnyDescriptor(value);
+      if (descriptor) return descriptor;
+    }
+    return this.generateExpression(value);
+  }
+
+  /**
+   * A descriptor for an argument filling a generic parameter, or undefined
+   * when the parameter is not generic.
+   */
+  private generateGenericArgument(
+    generics: Map<string, string> | undefined,
+    paramName: string | undefined,
+    value: Expression,
+  ): string | undefined {
+    if (!generics || !paramName) return undefined;
+    if (!generics.has(paramName.toUpperCase())) return undefined;
+    return this.generateAnyDescriptor(value);
+  }
+
+  /** Record that one FB parameter was declared with a generic type. */
+  private noteGenericParam(
+    fbUpper: string,
+    paramName: string,
+    genericType: string,
+  ): void {
+    let params = this.fbGenericParams.get(fbUpper);
+    if (!params) {
+      params = new Map();
+      this.fbGenericParams.set(fbUpper, params);
+    }
+    params.set(paramName.toUpperCase(), genericType.toUpperCase());
+  }
+
+  /** The generic type a parameter was declared with, or undefined. */
+  private genericParamType(
+    fbTypeName: string | undefined,
+    paramName: string,
+  ): string | undefined {
+    if (!fbTypeName) return undefined;
+    return this.fbGenericParams
+      .get(fbTypeName.toUpperCase())
+      ?.get(paramName.toUpperCase());
+  }
+
+  /**
+   * The `IEC_ANY` descriptor for an argument bound to a generic parameter.
+   *
+   * Three fields, as CODESYS defines them:
+   *
+   *   - `typeclass` from the DECLARED type: the C++ payload cannot tell `BYTE`
+   *     from `USINT`;
+   *   - `pvalue` from `raw_ptr()`, the payload rather than the forcing wrapper,
+   *     and the one `force()` keeps current;
+   *   - `diSize` from `IEC_SIZEOF`, the logical IEC width.
+   *
+   * Undefined when the argument's type is not one a generic accepts; the
+   * analyzer already rejects that.
+   */
+  private generateAnyDescriptor(expr: Expression): string | undefined {
+    const declaredType = this.inferExprType(expr);
+    if (!declaredType) return undefined;
+    const typeClass = TYPE_CLASS_BY_IEC_TYPE[declaredType.toUpperCase()];
+    if (!typeClass) return undefined;
+
+    const value = this.generateExpression(expr);
+    if (typeClass === "TYPE_STRING" || typeClass === "TYPE_WSTRING") {
+      // The characters travel through raw_ptr(); the cached length does not.
+      this.pendingStringSyncs.push(value);
+    }
+    return (
+      `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::${typeClass}, ` +
+      `reinterpret_cast<uint8_t*>(${value}.raw_ptr()), ` +
+      `static_cast<int32_t>(strucpp::IEC_SIZEOF(${value})) }`
+    );
+  }
+
   protected emitPOUCallLine(
     instanceName: string,
     _rawName: string,

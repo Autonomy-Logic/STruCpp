@@ -135,6 +135,15 @@ export interface LibraryTypeEntry {
    *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
    *  for `kind: "struct"`; optional for backward compatibility. */
   fields?: Array<{ name: string; type: string }>;
+  /** Enumerator names, in declaration order, so a consuming compilation can
+   *  resolve a bare member (`MB_HOLDING_REGISTER`) to this type and qualify it
+   *  as `MB_SPACE::MB_HOLDING_REGISTER`. Only set for `kind: "enum"`.
+   *
+   *  Without it the consumer knows the type IS an enum — enough to spell a
+   *  variable `IEC_MB_SPACE` — but not what may be written into one, so every
+   *  enumerator read as an undeclared identifier. Optional, because an archive
+   *  built before this field existed carries none. */
+  members?: string[];
   /** Type-level help text — same lifecycle as `LibraryFBEntry.documentation`,
    *  populated automatically from the structured doc-block slot in CODESYS
    *  imports (typically the type's revision-history comment for OSCAT) and

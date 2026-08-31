@@ -357,11 +357,31 @@ public:
         return *this;
     }
 
+    /**
+     * Byte offset of the payload, which must stay 0.
+     *
+     * `ADR(x)` lowers to `&(x)` — the wrapper's address — and every consumer
+     * reads it as a `T*`: `IEC_Ptr<T>` casts it, a driver writes through it, an
+     * `ANY` descriptor's `pvalue` is `raw_ptr()`. All correct only while
+     * `value_` is the first member, which the static_asserts below pin.
+     */
+    static constexpr std::size_t value_field_offset() noexcept { return offsetof(IECVar, value_); }
+
 private:
     T value_;           ///< The actual value
     bool forced_;       ///< Whether forcing is active
     T forced_value_;    ///< The forced value (when forced_ is true)
 };
+
+// `&(x)` and `x.raw_ptr()` must name the same address — see
+// `value_field_offset()`. Checked for a representative spread of payload types,
+// since alignment differs across them.
+static_assert(IECVar<bool>::value_field_offset() == 0, "IECVar<bool> payload must be first");
+static_assert(IECVar<int16_t>::value_field_offset() == 0, "IECVar<INT> payload must be first");
+static_assert(IECVar<int32_t>::value_field_offset() == 0, "IECVar<DINT> payload must be first");
+static_assert(IECVar<float>::value_field_offset() == 0, "IECVar<REAL> payload must be first");
+static_assert(IECVar<double>::value_field_offset() == 0, "IECVar<LREAL> payload must be first");
+static_assert(IECVar<int64_t>::value_field_offset() == 0, "IECVar<LINT> payload must be first");
 
 // =============================================================================
 // Binary Operators

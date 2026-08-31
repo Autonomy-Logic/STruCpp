@@ -15,7 +15,11 @@ import type {
   VarDeclaration,
   IECType,
 } from "../frontend/ast.js";
-import { ELEMENTARY_TYPES } from "./type-utils.js";
+import {
+  ANY_DESCRIPTOR_TYPE,
+  DECLARABLE_GENERIC_TYPES,
+  ELEMENTARY_TYPES,
+} from "./type-utils.js";
 
 // =============================================================================
 // Symbol Types
@@ -306,6 +310,16 @@ export class SymbolTables {
       "DT",
       "STRING",
       "WSTRING",
+
+      // CODESYS generic types. Declarable only on a VAR_INPUT of a FUNCTION,
+      // FUNCTION_BLOCK or METHOD — `validateGenericTypeUsage` in the analyzer
+      // enforces that, since the symbol table says a name exists and not where
+      // it may be written.
+      ...DECLARABLE_GENERIC_TYPES,
+
+      // The descriptor a generic parameter carries, declarable in its own
+      // right so a block can store one. Concrete, not generic.
+      ANY_DESCRIPTOR_TYPE,
     ];
 
     for (const typeName of builtinTypes) {

@@ -336,6 +336,14 @@ public:
 
     static constexpr size_t npos = static_cast<size_t>(-1);
 
+    /**
+     * Byte offset of the cached length inside this string.
+     *
+     * Exposed only so `iec_string_len_offset()` below can be checked against the
+     * real layout. Nothing else should need it.
+     */
+    static constexpr size_t length_field_offset() noexcept { return offsetof(IECString, length_); }
+
 private:
     char data_[MaxLen + 1];
     uint16_t length_;
@@ -411,11 +419,13 @@ public:
     void force(const value_type& v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;  // Update raw value so external readers (raw_ptr) see forced value
     }
 
     void force(const char* str) noexcept {
         forced_ = true;
         forced_value_ = str;
+        value_ = str;  // Update raw value so external readers (raw_ptr) see forced value
     }
 
     void unforce() noexcept {
@@ -470,6 +480,30 @@ public:
     }
     char operator[](size_t index) const noexcept {
         return (forced_ ? forced_value_ : value_)[index];
+    }
+
+    /**
+     * Pointer to the underlying character storage — the counterpart of
+     * `IECVar::raw_ptr()`. NUL-terminated, `capacity() + 1` bytes long.
+     *
+     * A caller writing through this owns the terminator and must call
+     * `sync_length()` afterwards: the length is cached, not derived on read.
+     */
+    char* raw_ptr() noexcept { return value_.data(); }
+
+    /** Const form of `raw_ptr()`. */
+    const char* raw_ptr() const noexcept { return value_.data(); }
+
+    /**
+     * Recompute the cached length from the NUL terminator, after something
+     * outside this class has written through `raw_ptr()`.
+     */
+    void sync_length() noexcept { value_ = IECString<MaxLen>(value_.data()); }
+
+    /** Byte offsets of the force state — see `IECString::length_field_offset()`. */
+    static constexpr size_t forced_field_offset() noexcept { return offsetof(IECStringVar, forced_); }
+    static constexpr size_t forced_value_field_offset() noexcept {
+        return offsetof(IECStringVar, forced_value_);
     }
 
 private:
@@ -600,6 +634,94 @@ inline bool operator>(const IECStringVar<Len1>& a, const IECString<Len2>& b) noe
 // For parameterized STRING(N), codegen emits IECStringVar<N> directly
 using IEC_STRING = IECStringVar<254>;
 
+// ---------------------------------------------------------------------------
+// Type-erased access, for the debugger only.
+//
+// `STRING(23)` compiles to `IECStringVar<23>`, a different type from
+// `IECStringVar<254>`, but the debug dispatch table has one row per TypeTag, so
+// its ops take `void*` plus the capacity recorded beside the pointer.
+//
+// Casting a `IECStringVar<23>` to `IECStringVar<254>` reads the length from the
+// wrong offset and copies past the end of the object, so the offsets are
+// derived from the capacity and checked against the real layout below.
+//
+// A function-pointer set per capacity in each entry would cost four bytes per
+// debug variable in flash, which is the budget a sized declaration protects.
+// ---------------------------------------------------------------------------
+
+/** Offset of `IECString<cap>::length_`: `char[cap + 1]` rounded to its alignment. */
+constexpr size_t iec_string_len_offset(size_t cap) noexcept {
+    return (cap + 2) & ~static_cast<size_t>(1);
+}
+
+/** `sizeof(IECString<cap>)`. */
+constexpr size_t iec_string_bytes(size_t cap) noexcept {
+    return iec_string_len_offset(cap) + sizeof(uint16_t);
+}
+
+/** Offset of `IECStringVar<cap>::forced_`, which follows `value_`. */
+constexpr size_t iec_stringvar_forced_offset(size_t cap) noexcept { return iec_string_bytes(cap); }
+
+/** Offset of `IECStringVar<cap>::forced_value_`: after `forced_`, realigned. */
+constexpr size_t iec_stringvar_forced_value_offset(size_t cap) noexcept {
+    return iec_string_bytes(cap) + sizeof(uint16_t);
+}
+
+// A change to either class's member order or types fails here at compile time,
+// not as a wild pointer on the wire. Smallest legal capacity, a typical
+// declared one, and the unqualified default.
+static_assert(IECString<1>::length_field_offset() == iec_string_len_offset(1), "IECString<1> layout");
+static_assert(IECString<23>::length_field_offset() == iec_string_len_offset(23), "IECString<23> layout");
+static_assert(IECString<254>::length_field_offset() == iec_string_len_offset(254), "IECString<254> layout");
+static_assert(sizeof(IECString<1>) == iec_string_bytes(1), "IECString<1> size");
+static_assert(sizeof(IECString<23>) == iec_string_bytes(23), "IECString<23> size");
+static_assert(sizeof(IECString<254>) == iec_string_bytes(254), "IECString<254> size");
+static_assert(IECStringVar<23>::forced_field_offset() == iec_stringvar_forced_offset(23),
+              "IECStringVar<23> force flag");
+static_assert(IECStringVar<254>::forced_field_offset() == iec_stringvar_forced_offset(254),
+              "IECStringVar<254> force flag");
+static_assert(IECStringVar<23>::forced_value_field_offset() == iec_stringvar_forced_value_offset(23),
+              "IECStringVar<23> forced value");
+static_assert(IECStringVar<254>::forced_value_field_offset() == iec_stringvar_forced_value_offset(254),
+              "IECStringVar<254> forced value");
+
+/**
+ * The parts of an `IECStringVar<cap>` the debugger touches, located from the
+ * capacity. `value` and `forced_value` each point at an `IECString<cap>`, whose
+ * characters start at offset 0 and whose length sits at
+ * `iec_string_len_offset(cap)`.
+ */
+struct IECStringView {
+    char*     data;          ///< `value_.data_`, NUL-terminated, `capacity + 1` bytes
+    uint16_t* length;        ///< `value_.length_`
+    bool*     forced;        ///< `forced_`
+    char*     forced_data;   ///< `forced_value_.data_`
+    uint16_t* forced_length; ///< `forced_value_.length_`
+    uint16_t  capacity;
+};
+
+inline IECStringView iec_string_view(void* p, size_t cap) noexcept {
+    auto* base = static_cast<unsigned char*>(p);
+    unsigned char* forcedValue = base + iec_stringvar_forced_value_offset(cap);
+    return IECStringView{
+        reinterpret_cast<char*>(base),
+        reinterpret_cast<uint16_t*>(base + iec_string_len_offset(cap)),
+        reinterpret_cast<bool*>(base + iec_stringvar_forced_offset(cap)),
+        reinterpret_cast<char*>(forcedValue),
+        reinterpret_cast<uint16_t*>(forcedValue + iec_string_len_offset(cap)),
+        static_cast<uint16_t>(cap),
+    };
+}
+
+/** Store `len` characters into one `IECString<cap>` slot, truncating to fit. */
+inline void iec_string_store(char* data, uint16_t* length, size_t cap, const char* src,
+                             size_t len) noexcept {
+    if (len > cap) len = cap;
+    if (len > 0 && src) std::memcpy(data, src, len);
+    data[len] = '\0';
+    *length = static_cast<uint16_t>(len);
+}
+
 template<size_t MaxLen>
 inline size_t LEN(const IECString<MaxLen>& s) noexcept {
     return s.length();
@@ -647,8 +769,13 @@ CONCAT(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2, const Args&..
 template<size_t MaxLen>
 inline IECString<MaxLen> INSERT(const IECString<MaxLen>& s1, const IECString<MaxLen>& s2, size_t pos) noexcept {
     IECString<MaxLen> result(s1);
-    if (pos == 0) pos = 1;
-    result.insert(pos - 1, s2.c_str());
+    // INSERT places IN2 AFTER the P-th character: INSERT('ABC','XY',2) is
+    // 'ABXYC'. `pos - 1` would insert before it and answer 'AXYBC'.
+    //
+    // DELETE_STR below keeps its `pos - 1`, and correctly: it begins AT the
+    // P-th character, which is the 0-based index. One counts the gap after a
+    // character, the other the character itself.
+    result.insert(pos, s2.c_str());
     return result;
 }
 

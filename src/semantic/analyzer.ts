@@ -37,15 +37,17 @@ import { Scope, SymbolTables } from "./symbol-table.js";
 import type { FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 import {
-  getBitAccessWidth,
-  resolveFieldType,
-  resolveArrayElementType,
-  buildEnumMemberMap,
-  describeType,
-  resolveArrayShape,
-  resolveArrayShapeByName,
+  TYPE_CATEGORIES,
   arrayDimSize,
   arrayTotalSize,
+  buildEnumMemberMap,
+  describeType,
+  getBitAccessWidth,
+  isDeclarableGenericType,
+  resolveArrayElementType,
+  resolveArrayShape,
+  resolveArrayShapeByName,
+  resolveFieldType,
   type ArrayShape,
   type EnumMemberEntry,
 } from "./type-utils.js";
@@ -341,8 +343,12 @@ export class SemanticAnalyzer {
       }
     }
 
-    // Build reverse lookup map: enum member name → owning enum type
-    this.enumMemberMap = buildEnumMemberMap(
+    // Reverse lookup: enum member name → owning enum type.
+    //
+    // A library's enums count too — a program that imports one may name its
+    // members directly. Listed after the project's, so a clash is reported as
+    // ambiguous rather than resolving silently to the library.
+    const enumDescriptors: Array<{ name: string; members: string[] }> =
       ast.types
         .filter((t) => t.definition.kind === "EnumDefinition")
         .map((t) => ({
@@ -351,8 +357,15 @@ export class SemanticAnalyzer {
             t.definition.kind === "EnumDefinition"
               ? t.definition.members.map((m) => m.name)
               : [],
-        })),
-    );
+        }));
+    for (const sym of this.symbolTables.globalScope.getAllSymbols()) {
+      if (sym.kind !== "type" || sym.resolvedType?.typeKind !== "enum")
+        continue;
+      const enumType = sym.resolvedType as EnumType;
+      if (enumType.values.length === 0) continue;
+      enumDescriptors.push({ name: enumType.name, members: enumType.values });
+    }
+    this.enumMemberMap = buildEnumMemberMap(enumDescriptors);
 
     // Register function declarations
     for (const funcDecl of ast.functions) {
@@ -2067,6 +2080,11 @@ export class SemanticAnalyzer {
       this.checkBitAccess(expr, varTypeMap, ast, expr.subscripts.length > 0);
     }
 
+    // Validate arguments bound to a generic parameter
+    if (expr.kind === "FunctionCallExpression") {
+      this.checkGenericArgs(expr, varTypeMap, ast);
+    }
+
     // Validate standard function argument counts and ADR l-value requirement
     if (
       expr.kind === "FunctionCallExpression" &&
@@ -2114,6 +2132,105 @@ export class SemanticAnalyzer {
    * success around the call site, but they are not part of any function's
    * declared signature. Strip them before counting against the registry.
    */
+  /**
+   * Check arguments passed to a generic parameter.
+   *
+   * Two rules, both CODESYS's:
+   *
+   *   - the argument must be a variable: the parameter is an address, and a
+   *     literal, constant or expression result has none;
+   *   - its type must be one the declared generic accepts, per the hierarchy.
+   *
+   * Concrete parameters are left to C++, which refuses a bad assignment. A
+   * generic accepts every elementary type, so a REAL handed to an ANY_INT still
+   * produces valid C++ — a descriptor stamped TYPE_REAL the block was never
+   * written for — which makes this check the only one guarding it.
+   */
+  private checkGenericArgs(
+    expr: FunctionCallExpression,
+    varTypeMap: Map<string, string>,
+    ast: CompilationUnit,
+  ): void {
+    // The callee is an FB instance; its declared type names the FB.
+    const instanceType = varTypeMap.get(expr.functionName.toUpperCase());
+    if (!instanceType) return;
+
+    const fb = ast.functionBlocks.find(
+      (candidate) =>
+        candidate.name.toUpperCase() === instanceType.toUpperCase(),
+    );
+    if (!fb) return;
+
+    // Which of its VAR_INPUTs are generic, and with which family.
+    const generics = new Map<string, string>();
+    for (const block of fb.varBlocks) {
+      if (block.blockType !== "VAR_INPUT") continue;
+      for (const decl of block.declarations) {
+        if (!isDeclarableGenericType(decl.type.name)) continue;
+        for (const name of decl.names) {
+          generics.set(name.toUpperCase(), decl.type.name.toUpperCase());
+        }
+      }
+    }
+    if (generics.size === 0) return;
+
+    for (const arg of expr.arguments) {
+      if (!arg.name) continue;
+      const generic = generics.get(arg.name.toUpperCase());
+      if (!generic) continue;
+
+      const where = `argument '${arg.name}' of '${fb.name}'`;
+
+      if (arg.value.kind !== "VariableExpression") {
+        this.addError(
+          `Only a variable may be passed to the generic parameter '${arg.name}' of '${fb.name}' — ` +
+            "a literal, a constant or the result of an expression has no address to pass",
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        continue;
+      }
+
+      // The type of the ARGUMENT, not of the variable it starts from.
+      //
+      // `aTemps[i]` and `sMotor.speedRpm` are `VariableExpression`s carrying
+      // `subscripts` / `fieldAccess`, so a lookup keyed on the variable's name
+      // reports the array or the struct and refuses the element, though CODESYS
+      // admits any addressable operand.
+      //
+      // The type checker has already walked the access chain, so prefer its
+      // answer; the map is the fallback for a plain variable. A whole array or
+      // struct falls through to the map and is refused below.
+      const resolved = arg.value.resolvedType;
+      const argType =
+        resolved?.typeKind === "elementary"
+          ? (resolved as ElementaryType).name
+          : varTypeMap.get(arg.value.name.toUpperCase());
+      if (!argType) continue;
+
+      const categories = TYPE_CATEGORIES[argType.toUpperCase()];
+      if (!categories) {
+        this.addError(
+          `Type '${argType}' cannot be passed as ${where}: a generic parameter accepts elementary types only`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        continue;
+      }
+
+      if (!(categories as readonly string[]).includes(generic)) {
+        this.addError(
+          `Type '${argType}' cannot be passed as ${where}, declared '${generic}'`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+      }
+    }
+  }
+
   private checkStdFunctionArgs(expr: FunctionCallExpression): void {
     const nameUpper = expr.functionName.toUpperCase();
     const userArgs = stripEnEno(expr.arguments);
@@ -2829,6 +2946,7 @@ export class SemanticAnalyzer {
   private validateSingleTypeReference(
     typeRef: TypeReference,
     context: string,
+    genericsPermitted = false,
   ): void {
     // Skip empty or VOID type names
     if (!typeRef.name || typeRef.name.toUpperCase() === "VOID") return;
@@ -2843,6 +2961,29 @@ export class SemanticAnalyzer {
         typeRef.sourceSpan.startCol,
         typeRef.sourceSpan.file,
       );
+      return;
+    }
+
+    // A generic names a family rather than a layout, so it can only be a
+    // parameter the caller supplies a concrete argument for. `permitted`
+    // defaults false — a return type, local, output, structure field and global
+    // all reach here through call sites that pass nothing — and VAR_INPUT opts
+    // in.
+    //
+    // An array of a generic is refused everywhere: only elementary types may be
+    // the argument, so there is nothing an ARRAY OF ANY could be passed.
+    if (isDeclarableGenericType(nameToCheck)) {
+      const asArrayElement = typeRef.elementTypeName !== undefined;
+      if (!genericsPermitted || asArrayElement) {
+        this.addError(
+          `Generic type '${nameToCheck.toUpperCase()}'${context ? " in " + context : ""} — ` +
+            "a generic type may only be declared on a VAR_INPUT of a FUNCTION, FUNCTION_BLOCK or METHOD, " +
+            "and not as an array element",
+          typeRef.sourceSpan.startLine,
+          typeRef.sourceSpan.startCol,
+          typeRef.sourceSpan.file,
+        );
+      }
     }
   }
 
@@ -2853,10 +2994,20 @@ export class SemanticAnalyzer {
    */
   private validateTypeReferences(ast: CompilationUnit): void {
     // Helper to validate var blocks
-    const validateVarBlocks = (varBlocks: VarBlock[], context: string) => {
+    const validateVarBlocks = (
+      varBlocks: VarBlock[],
+      context: string,
+      // CODESYS declares generics on FUNCTION, FUNCTION_BLOCK and METHOD, and
+      // nowhere else. A PROGRAM is not in that list, so it does not opt in.
+      genericsAllowedHere = false,
+    ) => {
       for (const block of varBlocks) {
         for (const decl of block.declarations) {
-          this.validateSingleTypeReference(decl.type, context);
+          this.validateSingleTypeReference(
+            decl.type,
+            context,
+            genericsAllowedHere && block.blockType === "VAR_INPUT",
+          );
         }
       }
     };
@@ -2868,7 +3019,7 @@ export class SemanticAnalyzer {
 
     // Functions — var blocks + return type
     for (const func of ast.functions) {
-      validateVarBlocks(func.varBlocks, `FUNCTION '${func.name}'`);
+      validateVarBlocks(func.varBlocks, `FUNCTION '${func.name}'`, true);
       this.validateSingleTypeReference(
         func.returnType,
         `FUNCTION '${func.name}' return type`,
@@ -2877,7 +3028,7 @@ export class SemanticAnalyzer {
 
     // Function blocks — var blocks, methods, properties, EXTENDS, IMPLEMENTS
     for (const fb of ast.functionBlocks) {
-      validateVarBlocks(fb.varBlocks, `FUNCTION_BLOCK '${fb.name}'`);
+      validateVarBlocks(fb.varBlocks, `FUNCTION_BLOCK '${fb.name}'`, true);
 
       // EXTENDS clause
       if (fb.extends) {
@@ -2916,6 +3067,7 @@ export class SemanticAnalyzer {
         validateVarBlocks(
           method.varBlocks,
           `METHOD '${method.name}' of '${fb.name}'`,
+          true,
         );
       }
 
@@ -2949,9 +3101,14 @@ export class SemanticAnalyzer {
             `METHOD '${method.name}' of INTERFACE '${iface.name}' return type`,
           );
         }
+        // An interface method is a METHOD, which is one of the three scopes
+        // CODESYS names. Refusing it here would make a generic method
+        // undeclarable in an interface while the function block implementing
+        // it declared one happily — so the pair could never be written.
         validateVarBlocks(
           method.varBlocks,
           `METHOD '${method.name}' of INTERFACE '${iface.name}'`,
+          true,
         );
       }
     }

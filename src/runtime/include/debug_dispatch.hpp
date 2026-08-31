@@ -64,7 +64,7 @@ constexpr uint8_t STATUS_DATA_TOO_LARGE  = 0x82;
 // type_ops[] below wires them into a runtime-indexable table.
 // ---------------------------------------------------------------------------
 template <typename T>
-inline void force_impl(void* p, const uint8_t* bytes) noexcept {
+inline void force_impl(void* p, const uint8_t* bytes, uint8_t) noexcept {
     T v;
     std::memcpy(&v, bytes, sizeof(T));
     static_cast<IECVar<T>*>(p)->force(v);
@@ -74,13 +74,13 @@ inline void force_impl(void* p, const uint8_t* bytes) noexcept {
 // values, and some AVR GCC versions have optimizer behavior around bool
 // that can surprise. Normalize explicitly.
 template <>
-inline void force_impl<bool>(void* p, const uint8_t* bytes) noexcept {
+inline void force_impl<bool>(void* p, const uint8_t* bytes, uint8_t) noexcept {
     const bool v = bytes[0] != 0;
     static_cast<IECVar<bool>*>(p)->force(v);
 }
 
 template <typename T>
-inline void unforce_impl(void* p) noexcept {
+inline void unforce_impl(void* p, uint8_t) noexcept {
     static_cast<IECVar<T>*>(p)->unforce();
 }
 
@@ -93,7 +93,7 @@ inline void unforce_impl(void* p) noexcept {
 // Used by external clients (OPC-UA, future BACnet, etc.) that want
 // regular write semantics rather than debugger-style forcing.
 template <typename T>
-inline void write_impl(void* p, const uint8_t* bytes) noexcept {
+inline void write_impl(void* p, const uint8_t* bytes, uint8_t) noexcept {
     T v;
     std::memcpy(&v, bytes, sizeof(T));
     static_cast<IECVar<T>*>(p)->set(v);
@@ -102,13 +102,13 @@ inline void write_impl(void* p, const uint8_t* bytes) noexcept {
 // memcpy-into-bool is technically UB for non-{0,1} byte values; normalize
 // explicitly. Same reasoning as force_impl<bool>.
 template <>
-inline void write_impl<bool>(void* p, const uint8_t* bytes) noexcept {
+inline void write_impl<bool>(void* p, const uint8_t* bytes, uint8_t) noexcept {
     const bool v = bytes[0] != 0;
     static_cast<IECVar<bool>*>(p)->set(v);
 }
 
 template <typename T>
-inline void read_impl(const void* p, uint8_t* dest) noexcept {
+inline void read_impl(const void* p, uint8_t* dest, uint8_t) noexcept {
     T v = static_cast<const IECVar<T>*>(p)->get();
     std::memcpy(dest, &v, sizeof(T));
 }
@@ -147,47 +147,67 @@ constexpr uint8_t DEBUG_STRING_CAP   = 126;            // chars / code units
 constexpr uint8_t DEBUG_STRING_WIDTH = 1 + DEBUG_STRING_CAP;          // 127 bytes on the wire
 constexpr uint8_t DEBUG_WSTRING_WIDTH = 1 + DEBUG_STRING_CAP * 2;     // 253 bytes on the wire
 
-// --- STRING (IECStringVar<254>) ---------------------------------------
+// --- STRING (IECStringVar<N>) -----------------------------------------
+//
+// `cap` is the declared capacity from the debug table: `STRING(23)` records 23,
+// an unqualified `STRING` records 0 and means the 254 default. Casting every
+// string to `IECStringVar<254>` would read the length from the wrong offset and
+// copy past the end of a smaller object, so the views below locate each field
+// from the capacity — see the layout block in `iec_string.hpp`.
 
-inline void read_string(const void* p, uint8_t* dest) noexcept {
-    const auto* var = static_cast<const IECStringVar<254>*>(p);
-    const std::size_t actual_len = var->length();
+/** Declared capacity, or the unqualified default when the table records none. */
+constexpr size_t debug_capacity(uint8_t cap) noexcept { return cap == 0 ? size_t{254} : size_t{cap}; }
+
+inline void read_string(const void* p, uint8_t* dest, uint8_t cap) noexcept {
+    // `force()` writes the forced value into `value_` as well, so reading the
+    // value slot already sees a forced variable's value.
+    const auto view = iec_string_view(const_cast<void*>(p), debug_capacity(cap));
+    const size_t actual_len = *view.length;
     const uint8_t wire_len = static_cast<uint8_t>(
         actual_len < DEBUG_STRING_CAP ? actual_len : DEBUG_STRING_CAP);
     dest[0] = wire_len;
     if (wire_len > 0) {
-        std::memcpy(dest + 1, var->c_str(), wire_len);
+        std::memcpy(dest + 1, view.data, wire_len);
     }
     if (wire_len < DEBUG_STRING_CAP) {
         std::memset(dest + 1 + wire_len, 0, DEBUG_STRING_CAP - wire_len);
     }
 }
 
-inline void write_string(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECStringVar<254>*>(p);
+inline void write_string(void* p, const uint8_t* bytes, uint8_t cap) noexcept {
+    const auto view = iec_string_view(p, debug_capacity(cap));
+    // A no-op while forced, matching `IECStringVar::set`'s own guard: a debugger
+    // force stays authoritative until it is explicitly lifted.
+    if (*view.forced) return;
     const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
-    var->set(IECString<254>(reinterpret_cast<const char*>(bytes + 1), wire_len));
+    iec_string_store(view.data, view.length, view.capacity,
+                     reinterpret_cast<const char*>(bytes + 1), wire_len);
 }
 
-inline void force_string(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECStringVar<254>*>(p);
+inline void force_string(void* p, const uint8_t* bytes, uint8_t cap) noexcept {
+    const auto view = iec_string_view(p, debug_capacity(cap));
     const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
-    var->force(IECString<254>(reinterpret_cast<const char*>(bytes + 1), wire_len));
+    const char* src = reinterpret_cast<const char*>(bytes + 1);
+    iec_string_store(view.forced_data, view.forced_length, view.capacity, src, wire_len);
+    // The raw value follows the force, so `raw_ptr()` readers — drivers, and a
+    // generic parameter bound to this variable — see the forced value too.
+    iec_string_store(view.data, view.length, view.capacity, src, wire_len);
+    *view.forced = true;
 }
 
-inline void unforce_string(void* p) noexcept {
-    static_cast<IECStringVar<254>*>(p)->unforce();
+inline void unforce_string(void* p, uint8_t cap) noexcept {
+    *iec_string_view(p, debug_capacity(cap)).forced = false;
 }
 
-// --- WSTRING (IECWStringVar<254>) -------------------------------------
+// --- WSTRING (IECWStringVar<N>) ---------------------------------------
 
-inline void read_wstring(const void* p, uint8_t* dest) noexcept {
-    const auto* var = static_cast<const IECWStringVar<254>*>(p);
-    const std::size_t actual_len = var->length();
+inline void read_wstring(const void* p, uint8_t* dest, uint8_t cap) noexcept {
+    const auto view = iec_wstring_view(const_cast<void*>(p), debug_capacity(cap));
+    const size_t actual_len = *view.length;
     const uint8_t wire_len = static_cast<uint8_t>(
         actual_len < DEBUG_STRING_CAP ? actual_len : DEBUG_STRING_CAP);
     dest[0] = wire_len;
-    const char16_t* src = var->c_str();
+    const char16_t* src = view.data;
     for (uint8_t i = 0; i < wire_len; ++i) {
         // Little-endian 16-bit code unit — explicit byte split so the
         // wire format is host-endianness-independent (AVR is LE in
@@ -202,30 +222,35 @@ inline void read_wstring(const void* p, uint8_t* dest) noexcept {
     }
 }
 
-inline void write_wstring(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECWStringVar<254>*>(p);
+/** Decode the wire's little-endian code units into `buf`, returning the count. */
+inline uint8_t debug_wstring_decode(const uint8_t* bytes, char16_t* buf) noexcept {
     const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
-    char16_t buf[DEBUG_STRING_CAP];
     for (uint8_t i = 0; i < wire_len; ++i) {
         buf[i] = static_cast<char16_t>(bytes[1 + i * 2])
                | static_cast<char16_t>(static_cast<char16_t>(bytes[1 + i * 2 + 1]) << 8);
     }
-    var->set(IECWString<254>(buf, wire_len));
+    return wire_len;
 }
 
-inline void force_wstring(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECWStringVar<254>*>(p);
-    const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
+inline void write_wstring(void* p, const uint8_t* bytes, uint8_t cap) noexcept {
+    const auto view = iec_wstring_view(p, debug_capacity(cap));
+    if (*view.forced) return;
     char16_t buf[DEBUG_STRING_CAP];
-    for (uint8_t i = 0; i < wire_len; ++i) {
-        buf[i] = static_cast<char16_t>(bytes[1 + i * 2])
-               | static_cast<char16_t>(static_cast<char16_t>(bytes[1 + i * 2 + 1]) << 8);
-    }
-    var->force(IECWString<254>(buf, wire_len));
+    const uint8_t wire_len = debug_wstring_decode(bytes, buf);
+    iec_wstring_store(view.data, view.length, view.capacity, buf, wire_len);
 }
 
-inline void unforce_wstring(void* p) noexcept {
-    static_cast<IECWStringVar<254>*>(p)->unforce();
+inline void force_wstring(void* p, const uint8_t* bytes, uint8_t cap) noexcept {
+    const auto view = iec_wstring_view(p, debug_capacity(cap));
+    char16_t buf[DEBUG_STRING_CAP];
+    const uint8_t wire_len = debug_wstring_decode(bytes, buf);
+    iec_wstring_store(view.forced_data, view.forced_length, view.capacity, buf, wire_len);
+    iec_wstring_store(view.data, view.length, view.capacity, buf, wire_len);
+    *view.forced = true;
+}
+
+inline void unforce_wstring(void* p, uint8_t cap) noexcept {
+    *iec_wstring_view(p, debug_capacity(cap)).forced = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,10 +258,14 @@ inline void unforce_wstring(void* p) noexcept {
 // by force/read (for strings: reserved, handled specially).
 // ---------------------------------------------------------------------------
 struct TypeOps {
-    void (*force)  (void*, const uint8_t*);
-    void (*unforce)(void*);
-    void (*read)   (const void*, uint8_t*);
-    void (*write)  (void*, const uint8_t*);
+    // Every op takes the declared capacity the debug table records beside the
+    // pointer. Scalars ignore it; a STRING(23) needs it, since
+    // `IECStringVar<23>` and `IECStringVar<254>` are different types and this
+    // table has one row per TypeTag. 0 means unqualified, the 254 default.
+    void (*force)  (void*, const uint8_t*, uint8_t);
+    void (*unforce)(void*, uint8_t);
+    void (*read)   (const void*, uint8_t*, uint8_t);
+    void (*write)  (void*, const uint8_t*, uint8_t);
     uint8_t size;
 };
 
@@ -360,9 +389,9 @@ inline uint8_t handle_set(uint8_t arr, uint16_t elem, bool forcing,
         // size == 0 is the string stub — Phase 4a rejects for now
         if (expected == 0) return STATUS_DATA_TOO_LARGE;
         if (len < expected) return STATUS_DATA_TOO_LARGE;
-        type_ops[e.tag].force(e.ptr, bytes);
+        type_ops[e.tag].force(e.ptr, bytes, e.cap);
     } else {
-        type_ops[e.tag].unforce(e.ptr);
+        type_ops[e.tag].unforce(e.ptr, e.cap);
     }
     return STATUS_OK;
 }
@@ -374,7 +403,7 @@ inline uint16_t handle_read(uint8_t arr, uint16_t elem, uint8_t* dest) noexcept 
     if (!e.ptr || e.tag >= TAG__COUNT) return 0;
     uint8_t n = type_ops[e.tag].size;
     if (n == 0) return 0;  // string stub
-    type_ops[e.tag].read(e.ptr, dest);
+    type_ops[e.tag].read(e.ptr, dest, e.cap);
     return n;
 }
 
@@ -391,7 +420,7 @@ inline uint8_t handle_write(uint8_t arr, uint16_t elem,
     uint8_t expected = type_ops[e.tag].size;
     if (expected == 0) return STATUS_DATA_TOO_LARGE;  // string stub
     if (len < expected) return STATUS_DATA_TOO_LARGE;
-    type_ops[e.tag].write(e.ptr, bytes);
+    type_ops[e.tag].write(e.ptr, bytes, e.cap);
     return STATUS_OK;
 }
 

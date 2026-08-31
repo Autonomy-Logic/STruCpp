@@ -91,6 +91,85 @@ export type TypeCategory =
   | "ANY_DATE";
 
 /**
+ * The generic type names that may be written in a declaration — CODESYS's
+ * seven, and only those.
+ *
+ * `ANY_ELEMENTARY`, `ANY_MAGNITUDE` and `ANY_DERIVED` are in `TypeCategory`
+ * because the hierarchy classifies by them, but neither CODESYS nor this
+ * compiler lets you declare a parameter of one.
+ *
+ * A CODESYS-compatible extension, not a conformance feature — the same footing
+ * as `__XWORD`, `ADR` and `SIZEOF`.
+ */
+export const DECLARABLE_GENERIC_TYPES: readonly TypeCategory[] = [
+  "ANY",
+  "ANY_BIT",
+  "ANY_DATE",
+  "ANY_NUM",
+  "ANY_REAL",
+  "ANY_INT",
+  "ANY_STRING",
+];
+
+/**
+ * `__SYSTEM.TYPE_CLASS` enumerator for each elementary type, by IEC name.
+ *
+ * What codegen stamps into an `IEC_ANY` descriptor's `typeclass`. Keyed on the
+ * IEC name, not the C++ payload: `BYTE_t` and `USINT_t` are both `uint8_t`, as
+ * are `WORD_t`/`UINT_t`, `DWORD_t`/`UDINT_t` and `LWORD_t`/`ULINT_t`.
+ *
+ * `__XWORD` is absent: CODESYS does not list it as acceptable to a generic.
+ */
+export const TYPE_CLASS_BY_IEC_TYPE: Readonly<Record<string, string>> = {
+  BOOL: "TYPE_BOOL",
+  BYTE: "TYPE_BYTE",
+  WORD: "TYPE_WORD",
+  DWORD: "TYPE_DWORD",
+  LWORD: "TYPE_LWORD",
+  SINT: "TYPE_SINT",
+  INT: "TYPE_INT",
+  DINT: "TYPE_DINT",
+  LINT: "TYPE_LINT",
+  USINT: "TYPE_USINT",
+  UINT: "TYPE_UINT",
+  UDINT: "TYPE_UDINT",
+  ULINT: "TYPE_ULINT",
+  REAL: "TYPE_REAL",
+  LREAL: "TYPE_LREAL",
+  STRING: "TYPE_STRING",
+  WSTRING: "TYPE_WSTRING",
+  TIME: "TYPE_TIME",
+  DATE: "TYPE_DATE",
+  DATE_AND_TIME: "TYPE_DATEANDTIME",
+  DT: "TYPE_DATEANDTIME",
+  TIME_OF_DAY: "TYPE_TIMEOFDAY",
+  TOD: "TYPE_TIMEOFDAY",
+};
+
+/**
+ * The descriptor type behind a generic parameter, as CODESYS names it.
+ *
+ * `ANY` cannot be a variable: the descriptor is filled by the caller, and a
+ * local has none. CODESYS offers the structure itself instead, so a block can
+ * keep what it was handed — `saved : __SYSTEM.AnyType;`.
+ *
+ * An ordinary concrete type, declarable anywhere, unlike the generics.
+ */
+export const ANY_DESCRIPTOR_TYPE = "__SYSTEM.ANYTYPE";
+
+/** Whether a written type name is CODESYS's `__SYSTEM.AnyType`. */
+export function isAnyDescriptorType(name: string): boolean {
+  return name.toUpperCase() === ANY_DESCRIPTOR_TYPE;
+}
+
+/** Whether a written type name is one of the declarable generics. */
+export function isDeclarableGenericType(name: string): boolean {
+  return (DECLARABLE_GENERIC_TYPES as readonly string[]).includes(
+    name.toUpperCase(),
+  );
+}
+
+/**
  * Map of type names to their categories.
  */
 export const TYPE_CATEGORIES: Record<string, TypeCategory[]> = {
@@ -747,7 +826,15 @@ export function buildEnumMemberMap(
   enumTypes: Iterable<{ name: string; members: string[] }>,
 ): Map<string, EnumMemberEntry> {
   const map = new Map<string, EnumMemberEntry>();
+  // One enum may be described twice — a library compiling against a dependency
+  // archive that re-exports its own types sees each of them from both sides.
+  // The same type named twice is one type, not a conflict; without this every
+  // member of it reads as ambiguous with itself.
+  const seenTypes = new Set<string>();
   for (const enumType of enumTypes) {
+    const typeKey = enumType.name.toUpperCase();
+    if (seenTypes.has(typeKey)) continue;
+    seenTypes.add(typeKey);
     for (const member of enumType.members) {
       const key = member.toUpperCase();
       const existing = map.get(key);

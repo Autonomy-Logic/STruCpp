@@ -98,7 +98,15 @@ enum TypeTag : uint8_t {
 struct Entry {
     void* ptr;
     uint8_t tag;
-    uint8_t _pad;
+    /**
+     * Declared capacity of a `STRING(n)` / `WSTRING(n)`; 0 for every other type,
+     * and for an unqualified string, where it means the 254 default.
+     *
+     * This byte was padding, so it costs nothing in flash or PROGMEM. The string
+     * ops need it: `IECStringVar<23>` and `IECStringVar<254>` are different
+     * types, while `type_ops[]` has one row per TypeTag. See `debug_dispatch.hpp`.
+     */
+    uint8_t cap;
 };
 
 // ---------------------------------------------------------------------------

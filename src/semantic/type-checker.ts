@@ -938,6 +938,7 @@ export class TypeChecker {
 
       case "ReturnStatement":
       case "ExitStatement":
+      case "ContinueStatement":
       case "ExternalCodePragma":
         // No expressions to validate
         break;
