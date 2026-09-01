@@ -422,6 +422,20 @@ TYPE
 END_TYPE
 
 TYPE
+  AliasArr : PointArray;
+END_TYPE
+
+TYPE
+  Row : ARRAY [0..3] OF Point;
+END_TYPE
+
+TYPE
+  Idx : STRUCT
+    k : INT;
+  END_STRUCT;
+END_TYPE
+
+TYPE
   Holder : STRUCT
     pts : ARRAY [0..3] OF Point;
   END_STRUCT;
@@ -431,10 +445,14 @@ PROGRAM Main
 VAR
   inlineArr : ARRAY [0..9] OF Point;
   named : PointArray;
+  aliased : AliasArr;
+  mat : ARRAY [0..3] OF Row;
   grid : ARRAY [0..3, 0..3] OF Point;
   reals : ARRAY [0..9] OF REAL;
+  indices : ARRAY [0..3] OF INT;
   holder : Holder;
   plain : Point;
+  s : Idx;
   i : INT;
 END_VAR
   PROBE
@@ -474,5 +492,52 @@ END_PROGRAM
   it("offers nothing for an array of an elementary type", () => {
     // Not the keyword fallback: the context is dot-access, REAL has no members.
     expect(completeAfter("reals[i].")).toEqual([]);
+  });
+
+  it("follows a TYPE alias to the array it names", () => {
+    expect(completeAfter("aliased[i].")).toEqual(["X", "Y"]);
+  });
+
+  it("peels one level per bracket group on an array of arrays", () => {
+    expect(completeAfter("mat[i][i].")).toEqual(["X", "Y"]);
+  });
+
+  it("keeps a dot inside the subscript out of the chain", () => {
+    expect(completeAfter("inlineArr[s.k].")).toEqual(["X", "Y"]);
+  });
+
+  it("accepts a subscripted index expression", () => {
+    expect(completeAfter("inlineArr[indices[i]].")).toEqual(["X", "Y"]);
+  });
+});
+
+describe("dot-access past a variable-length array subscript", () => {
+  // `ARRAY [*]` reaches the AST as `__VLA_<rank>D_<Element>`, a different
+  // internal spelling from an inline array's `__INLINE_ARRAY_<Element>`.
+  const SOURCE = `TYPE
+  Point : STRUCT
+    x : REAL;
+    y : REAL;
+  END_STRUCT;
+END_TYPE
+
+FUNCTION_BLOCK Sum
+VAR_IN_OUT
+  vals : ARRAY [*] OF Point;
+END_VAR
+VAR
+  i : INT;
+END_VAR
+  PROBE
+END_FUNCTION_BLOCK
+`;
+
+  it("offers the element type's fields", () => {
+    const source = SOURCE.replace("  PROBE", "  vals[i].");
+    const analysis = analyze(source, { fileName: "v.st" });
+    const lines = source.split("\n");
+    const line = lines.findIndex((l) => l.includes("vals[i].")) + 1;
+    const col = lines[line - 1].indexOf("vals[i].") + "vals[i].".length + 1;
+    expect(upperLabels(getCompletions(analysis, "v.st", line, col, source))).toEqual(["X", "Y"]);
   });
 });

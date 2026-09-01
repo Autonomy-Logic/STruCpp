@@ -259,13 +259,36 @@ interface ChainSegment {
   subscripts: number;
 }
 
-/** Split "a.b[0].c" into its links, counting the subscripts on each. */
+/**
+ * Split "a.b[0].c" into its links, counting the subscripts on each. Dots inside
+ * a subscript belong to the index expression (`arr[s.k]`), not to the chain, so
+ * the split only happens at bracket depth 0.
+ */
 function parseChainSegments(prefixExpr: string): ChainSegment[] {
-  return prefixExpr.split(".").map((raw) => {
-    const name = raw.replace(/\[[^\]]*\]/g, "");
-    const subscripts = raw.length === name.length ? 0 : (raw.match(/\[[^\]]*\]/g) ?? []).length;
-    return { name, subscripts };
-  });
+  const segments: ChainSegment[] = [];
+  let name = "";
+  let subscripts = 0;
+  let depth = 0;
+
+  for (const ch of prefixExpr) {
+    if (ch === "[") {
+      if (depth === 0) subscripts++;
+      depth++;
+    } else if (ch === "]") {
+      if (depth > 0) depth--;
+    } else if (depth === 0) {
+      if (ch === ".") {
+        segments.push({ name, subscripts });
+        name = "";
+        subscripts = 0;
+      } else {
+        name += ch;
+      }
+    }
+  }
+  segments.push({ name, subscripts });
+
+  return segments;
 }
 
 /** Peel one array level per subscript. Undefined once a step is not an array. */

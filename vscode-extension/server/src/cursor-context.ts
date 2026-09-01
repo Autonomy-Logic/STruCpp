@@ -60,10 +60,12 @@ export function getCursorContext(
   const prefix = currentLine.substring(0, column - 1);
 
   // Check dot-access: prefix ends with identifier chain + "."
-  // Each link may carry subscripts (`pts[i].`, `grid[i][j].`); the chain
-  // resolver strips them and unwraps one array level each.
+  // A link may carry subscripts (`pts[i].`, `grid[i, j].`, `mat[i][j].`), whose
+  // index may itself be subscripted (`arr[idx[i]].`). The chain resolver unwraps
+  // one array level per bracket group.
+  const subscript = /\[(?:[^[\]]|\[[^[\]]*\])*\]/.source;
   const dotMatch = prefix.match(
-    /([\w]+(?:\[[^\]]*\])*(?:\.[\w]+(?:\[[^\]]*\])*)*)\.\s*$/,
+    new RegExp(`([\\w]+(?:${subscript})*(?:\\.[\\w]+(?:${subscript})*)*)\\.\\s*$`),
   );
   if (dotMatch) {
     return {
