@@ -259,6 +259,9 @@ export function resolveSymbolAtPosition(
 
     case "VarDeclaration": {
       const vd = node as VarDeclaration;
+      // Field names are never defined as symbols; a lookup would answer
+      // with whatever global shares the name.
+      if (isStructField(ast, vd)) return { node, scope };
       // VarDeclaration can declare multiple names; resolve the first one
       // (exact name matching would need column-level checking in the names list)
       if (vd.names.length > 0) {
@@ -305,6 +308,16 @@ export function lookupSymbolByName(
   if (globalSym) return globalSym;
 
   return null;
+}
+
+/** True when the declaration is a STRUCT field rather than a POU local or a global. */
+function isStructField(ast: CompilationUnit, vd: VarDeclaration): boolean {
+  for (const type of ast.types) {
+    const definition = type.definition;
+    if (definition.kind !== "StructDefinition") continue;
+    if (definition.fields.includes(vd)) return true;
+  }
+  return false;
 }
 
 export function getScopeForContext(

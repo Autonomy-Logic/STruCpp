@@ -231,3 +231,87 @@ END_PROGRAM
     expect(text).not.toContain("__INLINE_ARRAY");
   });
 });
+
+describe("getHover on STRUCT field declarations", () => {
+  // A field name is a declaration, never a reference. It is not defined as a
+  // symbol, so resolution must not fall through to the global scope and answer
+  // with whatever happens to share the name.
+  const SOURCE = `FUNCTION_BLOCK Motor
+VAR_INPUT
+  Speed : INT;
+END_VAR
+END_FUNCTION_BLOCK
+
+FUNCTION Distance : REAL
+VAR_INPUT
+  a : REAL;
+END_VAR
+Distance := a;
+END_FUNCTION
+
+TYPE
+  SensorData : STRUCT
+    Temperature : REAL;
+    Motor : REAL;
+    Distance : REAL;
+  END_STRUCT;
+END_TYPE
+`;
+
+  const hoverOn = (field: string) => {
+    const analysis = analyze(SOURCE, { fileName: "s.st" });
+    const lines = SOURCE.split("\n");
+    const line = lines.findIndex((l) => l.includes(`    ${field} : REAL;`));
+    const col = lines[line].indexOf(field) + 1;
+    return getHover(analysis, "s.st", line + 1, col);
+  };
+
+  it("answers nothing for an ordinary field", () => {
+    expect(hoverOn("Temperature")).toBeNull();
+  });
+
+  it("answers nothing for a field named after a function block", () => {
+    expect(hoverOn("Motor")).toBeNull();
+  });
+
+  it("answers nothing for a field named after a function", () => {
+    expect(hoverOn("Distance")).toBeNull();
+  });
+});
+
+describe("getHover on declarations outside a STRUCT", () => {
+  it("still resolves a POU local named after a function block", () => {
+    const source = `FUNCTION_BLOCK Motor
+VAR_INPUT
+  Speed : INT;
+END_VAR
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR
+  Motor : INT;
+END_VAR
+Motor := 1;
+END_PROGRAM
+`;
+    const analysis = analyze(source, { fileName: "p.st" });
+    const lines = source.split("\n");
+    const line = lines.findIndex((l) => l.includes("  Motor : INT;"));
+    const hover = getHover(analysis, "p.st", line + 1, lines[line].indexOf("Motor") + 1);
+    expect(hover).not.toBeNull();
+    const value = (hover!.contents as { value: string }).value.toUpperCase();
+    expect(value).toContain("INT");
+    expect(value).not.toContain("FUNCTION_BLOCK");
+  });
+
+  it("still resolves a global variable declaration", () => {
+    const source = `VAR_GLOBAL
+  Pressure : REAL;
+END_VAR
+`;
+    const analysis = analyze(source, { fileName: "g.st" });
+    const hover = getHover(analysis, "g.st", 2, 3);
+    expect(hover).not.toBeNull();
+    expect((hover!.contents as { value: string }).value.toUpperCase()).toContain("REAL");
+  });
+});
