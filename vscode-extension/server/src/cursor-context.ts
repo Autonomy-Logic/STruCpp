@@ -60,7 +60,11 @@ export function getCursorContext(
   const prefix = currentLine.substring(0, column - 1);
 
   // Check dot-access: prefix ends with identifier chain + "."
-  const dotMatch = prefix.match(/([\w]+(?:\.[\w]+)*)\.\s*$/);
+  // Each link may carry subscripts (`pts[i].`, `grid[i][j].`); the chain
+  // resolver strips them and unwraps one array level each.
+  const dotMatch = prefix.match(
+    /([\w]+(?:\[[^\]]*\])*(?:\.[\w]+(?:\[[^\]]*\])*)*)\.\s*$/,
+  );
   if (dotMatch) {
     return {
       kind: "dot-access",

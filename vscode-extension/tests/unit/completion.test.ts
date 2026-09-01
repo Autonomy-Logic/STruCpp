@@ -408,3 +408,71 @@ END_PROGRAM
     expect(labelled(items, "plain[")).toEqual([]);
   });
 });
+
+describe("dot-access past an array subscript", () => {
+  const SOURCE = `TYPE
+  Point : STRUCT
+    x : REAL;
+    y : REAL;
+  END_STRUCT;
+END_TYPE
+
+TYPE
+  PointArray : ARRAY [0..9] OF Point;
+END_TYPE
+
+TYPE
+  Holder : STRUCT
+    pts : ARRAY [0..3] OF Point;
+  END_STRUCT;
+END_TYPE
+
+PROGRAM Main
+VAR
+  inlineArr : ARRAY [0..9] OF Point;
+  named : PointArray;
+  grid : ARRAY [0..3, 0..3] OF Point;
+  reals : ARRAY [0..9] OF REAL;
+  holder : Holder;
+  plain : Point;
+  i : INT;
+END_VAR
+  PROBE
+END_PROGRAM
+`;
+
+  /** Complete immediately after `expr`, which must end in a dot. */
+  const completeAfter = (expr: string): string[] => {
+    const source = SOURCE.replace("  PROBE", `  ${expr}`);
+    const analysis = analyze(source, { fileName: "a.st" });
+    const lines = source.split("\n");
+    const line = lines.findIndex((l) => l.includes(expr)) + 1;
+    const col = lines[line - 1].indexOf(expr) + expr.length + 1;
+    return upperLabels(getCompletions(analysis, "a.st", line, col, source));
+  };
+
+  it("offers the element type's fields for an inline array", () => {
+    expect(completeAfter("inlineArr[i].")).toEqual(["X", "Y"]);
+  });
+
+  it("offers the element type's fields for a named array type", () => {
+    expect(completeAfter("named[i].")).toEqual(["X", "Y"]);
+  });
+
+  it("offers the element type's fields for a multi-dimensional array", () => {
+    expect(completeAfter("grid[i, i].")).toEqual(["X", "Y"]);
+  });
+
+  it("offers the element type's fields for an array reached through a field", () => {
+    expect(completeAfter("holder.pts[i].")).toEqual(["X", "Y"]);
+  });
+
+  it("matches the non-array baseline", () => {
+    expect(completeAfter("inlineArr[i].")).toEqual(completeAfter("plain."));
+  });
+
+  it("offers nothing for an array of an elementary type", () => {
+    // Not the keyword fallback: the context is dot-access, REAL has no members.
+    expect(completeAfter("reals[i].")).toEqual([]);
+  });
+});
