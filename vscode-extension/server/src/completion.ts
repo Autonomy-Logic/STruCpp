@@ -21,8 +21,9 @@ import type {
   FunctionBlockType,
   SymbolTables,
   Scope,
+  CompilationUnit,
 } from "strucpp";
-import { ELEMENTARY_TYPES, typeName } from "strucpp";
+import { ELEMENTARY_TYPES, resolveArrayElementType, typeName } from "strucpp";
 import { getCursorContext } from "./cursor-context.js";
 import { getScopeForContext } from "./resolve-symbol.js";
 import { isTestFile, extractTestVarDeclarations } from "../../shared/test-utils.js";
@@ -217,30 +218,31 @@ function getDotAccessCompletions(
   const scope = getScopeForContext(symbolTables, pouScope);
   if (!scope) return [];
 
-  // Parse the chain: "a.b.c" → resolve segment by segment
-  const segments = prefixExpr.split(".");
-  const resolvedType = resolveChainType(segments, scope, symbolTables);
+  // Parse the chain: "a.b[0].c" → resolve segment by segment
+  const segments = parseChainSegments(prefixExpr);
+  const resolvedType = resolveChainType(segments, scope, symbolTables, analysis.ast);
   if (resolvedType) return getMembersForType(resolvedType, symbolTables);
 
   // For test files, try resolving via locally declared variable types
   if (testSource) {
     const testVars = extractTestVarDeclarations(stripCommentsAndStrings(testSource));
-    const varType = testVars.get(segments[0].toUpperCase());
+    const varType = testVars.get(segments[0].name.toUpperCase());
     if (varType) {
       // Walk remaining segments through type chain
-      let currentTypeName = varType;
-      for (let i = 1; i < segments.length; i++) {
-        const nextType = resolveMemberType(currentTypeName, segments[i], symbolTables);
-        if (!nextType) return [];
-        currentTypeName = nextType;
+      let currentTypeName = unwrapSubscripts(varType, segments[0].subscripts, analysis.ast);
+      for (let i = 1; i < segments.length && currentTypeName !== undefined; i++) {
+        const nextType = resolveMemberType(currentTypeName, segments[i].name, symbolTables);
+        if (nextType === undefined) return [];
+        currentTypeName = unwrapSubscripts(nextType, segments[i].subscripts, analysis.ast);
       }
+      if (currentTypeName === undefined) return [];
       const typeInfo = resolveTypeName(currentTypeName, symbolTables);
       if (typeInfo) return getMembersForType(typeInfo, symbolTables);
     }
   }
 
   // Fallback: first segment may be a type name (e.g., EnumType.MEMBER)
-  const typeInfo = resolveTypeName(segments[0], symbolTables);
+  const typeInfo = resolveTypeName(segments[0].name, symbolTables);
   if (typeInfo) return getMembersForType(typeInfo, symbolTables);
 
   return [];
@@ -251,30 +253,88 @@ interface ResolvedTypeInfo {
   name: string;
 }
 
+/** One link of a dotted chain: an identifier plus however many subscripts follow it. */
+interface ChainSegment {
+  name: string;
+  subscripts: number;
+}
+
+/**
+ * Split "a.b[0].c" into its links, counting the subscripts on each. Dots inside
+ * a subscript belong to the index expression (`arr[s.k]`), not to the chain, so
+ * the split only happens at bracket depth 0.
+ */
+function parseChainSegments(prefixExpr: string): ChainSegment[] {
+  const segments: ChainSegment[] = [];
+  let name = "";
+  let subscripts = 0;
+  let depth = 0;
+
+  for (const ch of prefixExpr) {
+    if (ch === "[") {
+      if (depth === 0) subscripts++;
+      depth++;
+    } else if (ch === "]") {
+      if (depth > 0) depth--;
+    } else if (depth === 0) {
+      if (ch === ".") {
+        segments.push({ name, subscripts });
+        name = "";
+        subscripts = 0;
+      } else {
+        name += ch;
+      }
+    }
+  }
+  segments.push({ name, subscripts });
+
+  return segments;
+}
+
+/** Peel one array level per subscript. Undefined once a step is not an array. */
+function unwrapSubscripts(
+  typeName: string,
+  subscripts: number,
+  ast?: CompilationUnit,
+): string | undefined {
+  if (subscripts === 0) return typeName;
+  if (!ast) return undefined;
+  let current: string | undefined = typeName;
+  for (let i = 0; i < subscripts && current !== undefined; i++) {
+    current = resolveArrayElementType(current, ast);
+  }
+  return current;
+}
+
 /**
  * Resolve a dotted identifier chain to its final type.
  * e.g., "player.position" → resolves player (Sprite FB) → position (Point struct)
  */
 function resolveChainType(
-  segments: string[],
+  segments: ChainSegment[],
   scope: Scope,
   symbolTables: SymbolTables,
+  ast?: CompilationUnit,
 ): ResolvedTypeInfo | undefined {
   if (segments.length === 0) return undefined;
 
   // Resolve first segment via scope lookup
-  const firstSym = scope.lookup(segments[0]);
+  const firstSym = scope.lookup(segments[0].name);
   if (!firstSym || firstSym.kind !== "variable") return undefined;
 
-  let currentTypeName = getVariableTypeName(firstSym as VariableSymbol);
-  if (!currentTypeName) return undefined;
+  const declaredType = getVariableTypeName(firstSym as VariableSymbol);
+  if (declaredType === undefined) return undefined;
+  let currentTypeName = unwrapSubscripts(declaredType, segments[0].subscripts, ast);
+  if (currentTypeName === undefined) return undefined;
 
   // Walk remaining segments
   for (let i = 1; i < segments.length; i++) {
-    const memberName = segments[i];
+    const memberName = segments[i].name;
     const nextType = resolveMemberType(currentTypeName, memberName, symbolTables);
-    if (!nextType) return undefined;
-    currentTypeName = nextType;
+    if (nextType === undefined) return undefined;
+    const unwrapped = unwrapSubscripts(nextType, segments[i].subscripts, ast);
+    if (unwrapped === undefined) return undefined;
+    currentTypeName = unwrapped;
   }
 
   // Determine what kind of type this is
