@@ -537,14 +537,20 @@ export function resolveFieldType(
   return undefined;
 }
 
+/** `__VLA_<rank>D_<ElementType>`, the AST builder's name for an `ARRAY [*]`. */
+const VLA_NAME = /^__VLA_\d+D_(.+)$/;
+
 /**
  * Resolve the element type of an array type.
- * Handles __INLINE_ARRAY_* internal types and user-defined array TYPE definitions.
+ * Handles __INLINE_ARRAY_* and __VLA_*D_* internal types, user-defined array
+ * TYPE definitions, and aliases that eventually name one.
  */
 export function resolveArrayElementType(
   typeName: string,
   ast: CompilationUnit,
+  depth = 0,
 ): string | undefined {
+  if (depth >= MAX_TYPE_ALIAS_DEPTH) return undefined;
   const typeUpper = typeName.toUpperCase();
 
   // Handle __INLINE_ARRAY_<ElementType> internal types
@@ -552,14 +558,20 @@ export function resolveArrayElementType(
     return typeUpper.substring("__INLINE_ARRAY_".length);
   }
 
+  const vla = VLA_NAME.exec(typeUpper);
+  if (vla) return vla[1];
+
   // Check user-defined array type definitions
   for (const td of ast.types) {
-    if (
-      td.name.toUpperCase() === typeUpper &&
-      td.definition.kind === "ArrayDefinition"
-    ) {
+    if (td.name.toUpperCase() !== typeUpper) continue;
+    if (td.definition.kind === "ArrayDefinition") {
       return td.definition.elementType.name.toUpperCase();
     }
+    if (td.definition.kind === "TypeReference") {
+      // Alias — keep walking toward the underlying array, if any.
+      return resolveArrayElementType(td.definition.name, ast, depth + 1);
+    }
+    return undefined;
   }
 
   return undefined;
