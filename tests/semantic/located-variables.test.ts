@@ -826,6 +826,40 @@ describe('Phase 2.3 - Located Variables', () => {
       expect(compile(source).success).toBe(true);
     });
 
+    it('emits per-element descriptors for a named ARRAY type, like an inline one', () => {
+      // A named type carries no bounds on its TypeReference, so codegen used to
+      // see a scalar where semantics had seen ten slots: one descriptor, and a
+      // pointer initialiser calling .raw_ptr() on the array itself, which does
+      // not compile. The CONFIGURATION is what makes codegen emit the located
+      // path at all -- without it the assertion above passes while the bug
+      // sits untouched.
+      const source = `
+        TYPE Buf : ARRAY [0..9] OF WORD; END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL HR : Buf; END_VAR
+          HR[0] := 1;
+        END_PROGRAM
+
+        CONFIGURATION Config0
+          VAR_GLOBAL HR AT %MW60 : Buf; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+            PROGRAM instance0 WITH task0 : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain('locatedVarsCount = 10');
+      expect(result.cppCode).toContain('LocatedSize::Word, 60, 0');
+      expect(result.cppCode).toContain('LocatedSize::Word, 69, 0');
+      // Each element binds its own storage; never `.raw_ptr()` on the array.
+      const inits = result.cppCode.match(/locatedVars\[\d+\]\.pointer = [^;]+;/g) ?? [];
+      expect(inits).toHaveLength(10);
+      expect(new Set(inits).size).toBe(10);
+      expect(result.cppCode).not.toMatch(/pointer = HR\.value\.raw_ptr\(\)/);
+    });
+
     it('validates the ELEMENT type against the address size, not the array', () => {
       const source = `
         PROGRAM Main

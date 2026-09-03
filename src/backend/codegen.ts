@@ -69,6 +69,7 @@ import {
   isImplicitlyConvertible,
   resolveFieldType as resolveFieldTypeUtil,
   resolveArrayElementType as resolveArrayElementTypeUtil,
+  resolveArrayShapeByName,
   typeName as typeNameUtil,
   buildEnumMemberMap,
   type EnumMemberEntry,
@@ -5727,6 +5728,35 @@ export class CodeGenerator {
    * dimensional, non-constant bounds), so anything reaching here with bounds
    * is a single dimension with a known extent.
    */
+  /**
+   * The dimensions a located declaration actually has, resolving a NAMED
+   * ARRAY type the way the semantic analyzer already does.
+   *
+   * The AST builder writes bounds onto the TypeReference only for an INLINE
+   * `ARRAY [a..b] OF T`. A named type (`TYPE Buf : ARRAY [0..9] OF WORD`) has
+   * none, so reading `decl.type.arrayDimensions` alone made codegen see a
+   * scalar where the analyzer had seen ten slots: one descriptor was emitted
+   * and the pointer initialiser called `.raw_ptr()` on the array itself, which
+   * does not compile. Resolving by name here keeps the two passes agreeing.
+   *
+   * Answers `undefined` for anything that is not a single fixed dimension --
+   * multi-dimensional and variable-length shapes are rejected in semantics and
+   * never reach codegen, so this is a fallback rather than a second opinion.
+   */
+  private resolveLocatedDims(
+    typeName: string,
+    dims: Array<{ start: number; end: number }> | undefined,
+  ): Array<{ start: number; end: number }> | undefined {
+    if (dims && dims.length > 0) return dims;
+    if (!this.ast) return undefined;
+
+    const shape = resolveArrayShapeByName(typeName, this.ast);
+    if (!shape || shape.dims.length !== 1) return undefined;
+
+    const dim = shape.dims[0];
+    return dim ? [dim] : undefined;
+  }
+
   private pushLocatedDescriptors(
     varName: string,
     address: string,
@@ -5737,7 +5767,8 @@ export class CodeGenerator {
     const parsed = parseLocatedAddress(address);
     if (!parsed) return;
 
-    const dim = dims?.length === 1 ? dims[0] : undefined;
+    const resolved = this.resolveLocatedDims(typeName, dims);
+    const dim = resolved?.length === 1 ? resolved[0] : undefined;
     if (!dim) {
       this.locatedVars.push({
         varName,
