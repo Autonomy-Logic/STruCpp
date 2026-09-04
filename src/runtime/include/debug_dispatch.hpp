@@ -365,6 +365,47 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
 // Per-entry operations. These are what ModbusSlave / Runtime v4 call.
 // ---------------------------------------------------------------------------
 
+/**
+ * Validate a value payload against a leaf's type. Returns STATUS_OK, or the
+ * STATUS_* refusal to hand straight back to the caller.
+ *
+ * Shared by handle_set() and handle_write() deliberately: they had the same
+ * rule inline and it was wrong in both, so a single definition is what keeps
+ * them from drifting apart again.
+ *
+ * Scalars are fixed-width, so `len` must cover the type's size.
+ *
+ * Strings are LENGTH-PREFIXED on the wire: `bytes[0]` is the character
+ * (STRING) or code-unit (WSTRING) count, and force_string / write_string read
+ * exactly that many. `type_ops[tag].size` is the PADDED field width the READ
+ * path emits (DEBUG_STRING_WIDTH / DEBUG_WSTRING_WIDTH), so requiring it here
+ * refused every compact payload a caller actually sends -- which is what broke
+ * STRING forcing and soft-writes on every target (DOPE-614).
+ *
+ * Validating the prefix instead is safe in both directions. Too short is still
+ * refused, so a prefix that overruns its own payload cannot make the read walk
+ * off the end. And `len` stays a lower bound, so a caller that pads to the full
+ * width keeps working unchanged.
+ */
+inline uint8_t validate_payload(uint8_t tag, const uint8_t* bytes, uint16_t len) noexcept {
+    const uint8_t expected = type_ops[tag].size;
+    if (expected == 0) return STATUS_DATA_TOO_LARGE;
+    if (!bytes) return STATUS_DATA_TOO_LARGE;
+
+    if (tag == TAG_STRING || tag == TAG_WSTRING) {
+        const uint8_t count = bytes[0];
+        if (count > DEBUG_STRING_CAP) return STATUS_DATA_TOO_LARGE;
+        const uint16_t need = static_cast<uint16_t>(
+            1u + (tag == TAG_WSTRING ? static_cast<uint16_t>(count) * 2u
+                                     : static_cast<uint16_t>(count)));
+        if (len < need) return STATUS_DATA_TOO_LARGE;
+        return STATUS_OK;
+    }
+
+    if (len < expected) return STATUS_DATA_TOO_LARGE;
+    return STATUS_OK;
+}
+
 /** Set (force or unforce) a variable. Returns STATUS_* code. */
 inline uint8_t handle_set(uint8_t arr, uint16_t elem, bool forcing,
                           const uint8_t* bytes, uint16_t len) noexcept {
@@ -377,10 +418,8 @@ inline uint8_t handle_set(uint8_t arr, uint16_t elem, bool forcing,
     if (e.flags & LEAF_FLAG_READONLY) return STATUS_READ_ONLY;
 
     if (forcing) {
-        uint8_t expected = type_ops[e.tag].size;
-        // size == 0 is the string stub — Phase 4a rejects for now
-        if (expected == 0) return STATUS_DATA_TOO_LARGE;
-        if (len < expected) return STATUS_DATA_TOO_LARGE;
+        const uint8_t bad = validate_payload(e.tag, bytes, len);
+        if (bad != STATUS_OK) return bad;
         type_ops[e.tag].force(e.ptr, bytes);
     } else {
         type_ops[e.tag].unforce(e.ptr);
@@ -413,9 +452,8 @@ inline uint8_t handle_write(uint8_t arr, uint16_t elem,
     // uses, so a CONSTANT can never be clobbered by a stale retained value
     // either — constants come from the declaration, never from storage.
     if (e.flags & LEAF_FLAG_READONLY) return STATUS_READ_ONLY;
-    uint8_t expected = type_ops[e.tag].size;
-    if (expected == 0) return STATUS_DATA_TOO_LARGE;  // string stub
-    if (len < expected) return STATUS_DATA_TOO_LARGE;
+    const uint8_t bad = validate_payload(e.tag, bytes, len);
+    if (bad != STATUS_OK) return bad;
     type_ops[e.tag].write(e.ptr, bytes);
     return STATUS_OK;
 }
