@@ -369,10 +369,35 @@ public:
     IECWStringVar() noexcept : value_{}, forced_{false}, forced_value_{} {}
     IECWStringVar(const value_type& v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
     IECWStringVar(const char16_t* str) noexcept : value_{str}, forced_{false}, forced_value_{} {}
-    IECWStringVar(const IECWStringVar&) = default;
-    IECWStringVar(IECWStringVar&&) = default;
-    IECWStringVar& operator=(const IECWStringVar&) = default;
-    IECWStringVar& operator=(IECWStringVar&&) = default;
+    /* Forcing semantics, matching IECVar (see iec_var.hpp).
+     *
+     * These cannot be `= default`. A memberwise copy carries `forced_` and
+     * `forced_value_` across, which breaks forcing two ways: assigning FROM a
+     * forced source leaks the flag onto the destination (whose next `set()` is
+     * then silently dropped), and assigning from an unforced source clears a
+     * force the debugger is holding. Generated code assigns every scan, so
+     * either one destroys a force within one cycle -- and STRING forcing is a
+     * first-class debug operation (force_string / unforce_string).
+     *
+     * Construction takes a detached snapshot of the effective value and starts
+     * unforced; assignment routes through set() so the destination keeps its
+     * own forcing state. */
+    IECWStringVar(const IECWStringVar& other) noexcept
+        : value_{other.forced_ ? other.forced_value_ : other.value_},
+          forced_{false},
+          forced_value_{} {}
+    IECWStringVar(IECWStringVar&& other) noexcept
+        : value_{other.forced_ ? other.forced_value_ : other.value_},
+          forced_{false},
+          forced_value_{} {}
+    IECWStringVar& operator=(const IECWStringVar& other) noexcept {
+        set(other.forced_ ? other.forced_value_ : other.value_);
+        return *this;
+    }
+    IECWStringVar& operator=(IECWStringVar&& other) noexcept {
+        set(other.forced_ ? other.forced_value_ : other.value_);
+        return *this;
+    }
 
     // Cross-size assignment (IEC 61131-3: WSTRING types are interoperable, truncation on overflow)
     template<size_t OtherLen>

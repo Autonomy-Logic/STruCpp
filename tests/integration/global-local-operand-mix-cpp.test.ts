@@ -99,6 +99,70 @@ const AFFECTED: ReadonlyArray<{
   { fn: "ATAN2", type: "REAL" },
 ];
 
+/**
+ * Build a program from explicit declarations and body, for the shapes the
+ * `program()` template above cannot express.
+ */
+function rawProgram(globals: string, locals: string, body: string): string {
+  return `
+CONFIGURATION C
+  VAR_GLOBAL
+${globals}
+  END_VAR
+  RESOURCE R ON PLC
+    TASK T(INTERVAL := T#100ms, PRIORITY := 1);
+    PROGRAM Inst WITH T : MAIN;
+  END_RESOURCE
+END_CONFIGURATION
+
+PROGRAM MAIN
+  VAR_EXTERNAL
+${globals.replace(/ AT %\w+/g, "").replace(/ :=[^;]*/g, "")}
+  END_VAR
+  VAR
+${locals}
+  END_VAR
+${body}
+END_PROGRAM
+`;
+}
+
+/**
+ * Call shapes that also failed to deduce but are not a plain two-operand call.
+ * MUX and the variadic arity were both missing from the first pass of this
+ * matrix — and MUX was wrongly listed as unaffected in the PR and the ticket.
+ */
+const AFFECTED_SHAPES: ReadonlyArray<{
+  name: string;
+  globals: string;
+  locals: string;
+  body: string;
+}> = [
+  {
+    // MUX selects among its inputs, so a global anywhere in the list is enough.
+    name: "MUX with a global among its inputs",
+    globals: "    g : INT := 7;",
+    locals: "    l : INT := 3;\n    o : INT;",
+    body: "  o := MUX(g, l, g, l);",
+  },
+  {
+    // The extensible form recurses through the same single-parameter template,
+    // so it broke wherever the binary form did.
+    name: "the 3-operand variadic ADD",
+    globals: "    g : INT := 7;",
+    locals: "    l : INT := 3;\n    o : INT;",
+    body: "  o := ADD(g, l, l);",
+  },
+  {
+    // The common real-world shape: read an input word, add a local offset.
+    // A located global is still a GlobalVar, so it broke identically.
+    name: "a located global (AT %IW0) and a local",
+    globals: "    g AT %IW0 : INT := 0;",
+    locals: "    l : INT := 3;\n    o : INT;",
+    body: "  o := ADD(g, l);",
+  },
+];
+
 describeIfGpp("DOPE-613 — mixing a global and a local on a block input", () => {
   let tempDir: string;
   let pchPath: string;
@@ -138,6 +202,18 @@ describeIfGpp("DOPE-613 — mixing a global and a local on a block input", () =>
         const res = buildsWithGpp(
           program(fn, type, "global+local", resultType),
           `mixed_${fn}_${type}`,
+        );
+        expect(res.error ?? "").not.toContain("no matching function");
+        expect(res.success).toBe(true);
+      },
+    );
+
+    it.each(AFFECTED_SHAPES)(
+      "$name compiles",
+      ({ name, globals, locals, body }) => {
+        const res = buildsWithGpp(
+          rawProgram(globals, locals, body),
+          `shape_${name.replace(/[^a-zA-Z0-9]+/g, "_")}`,
         );
         expect(res.error ?? "").not.toContain("no matching function");
         expect(res.success).toBe(true);
@@ -251,6 +327,154 @@ describeIfGpp("DOPE-613 — mixing a global and a local on a block input", () =>
         "snapshot_is_detached",
       );
       expect(out).toBe("7");
+    });
+  });
+
+  describe("STRING and WSTRING globals keep their forcing semantics", () => {
+    /**
+     * `read()` returning `V` means a STRING global now hands back
+     * `IECStringVar<254>`, and that wrapper's special members used to be
+     * `= default` — memberwise, so they copied `forced_` and `forced_value_`.
+     * `IECVar` deliberately does not do that (iec_var.hpp): a fresh copy starts
+     * unforced and assignment routes through `set()`, precisely so generated
+     * code assigning every scan cannot destroy a force the debugger is holding.
+     *
+     * Two ways it broke, both of which these tests pin:
+     *   - assigning from an UNFORCED global cleared a force on the destination
+     *   - assigning from a FORCED global leaked the flag onto the destination,
+     *     whose next write was then silently dropped
+     *
+     * Neither was caught by the first pass of this file, because the matrix had
+     * no string type in it at all.
+     */
+    /**
+     * Two quoting schemes, deliberately separate. IEC 61131-3 spells a STRING
+     * literal with single quotes and a WSTRING literal with double quotes,
+     * while C++ wants `"..."` and `u"..."`. Sharing one quoter silently
+     * produced `gs : STRING := "AB"` — a WSTRING literal on a STRING, which
+     * the front end accepted and then emitted as `u"AB"`.
+     */
+    function runString(
+      type: "STRING" | "WSTRING",
+      st: (s: string) => string,
+      cpp: (s: string) => string,
+      testName: string,
+    ): string[] {
+      const source = rawProgram(
+        `    gs : ${type} := ${st("AB")};`,
+        `    o : ${type};`,
+        "  o := gs;",
+      );
+      const result = compile(source, { headerFileName: "generated.hpp" });
+      expect(result.errors.map((e) => e.message)).toEqual([]);
+      const out = compileAndRunStandalone({
+        tempDir,
+        pchPath,
+        headerCode: result.headerCode,
+        cppCode: result.cppCode,
+        testName,
+        // Values are compared in C++ rather than printed. A WSTRING is
+        // char16_t-based, so streaming it to stdout prints the pointer, not
+        // the text -- and comparing in C++ is the stronger assertion anyway.
+        mainCode: `#include <iostream>
+
+int main() {
+    using namespace strucpp;
+    {   // an engineer forces the LOCAL; the scan copies the global over it
+        Program_MAIN p(&GS);
+        p.O.force(${cpp("FF")});
+        p.run();
+        std::cout << "A " << (int)(p.O.get() == ${cpp("FF")})
+                  << " " << (int)p.O.is_forced() << std::endl;
+    }
+    {   // an engineer forces the GLOBAL; the flag must not ride onto the local
+        Program_MAIN p(&GS);
+        GS.value.force(${cpp("ZZ")});
+        p.run();
+        std::cout << "B " << (int)(p.O.get() == ${cpp("ZZ")})
+                  << " " << (int)p.O.is_forced() << std::endl;
+        p.O.set(${cpp("QQ")});
+        std::cout << "C " << (int)(p.O.get() == ${cpp("QQ")}) << std::endl;
+        GS.value.unforce();
+    }
+    return 0;
+}
+`,
+      });
+      return out.split("\n").map((s) => s.trim());
+    }
+
+    it("a force on a STRING local survives the scan copying a global over it", () => {
+      const lines = runString(
+        "STRING",
+        (s) => `'${s}'`,
+        (s) => `"${s}"`,
+        "string_forcing",
+      );
+      // A: the local still reads 'FF' and still reads as forced.
+      expect(lines[0]).toBe("A 1 1");
+      // B: the local takes the global's value but NOT its force flag.
+      expect(lines[1]).toBe("B 1 0");
+      // C: so the next write to the local is not dropped.
+      expect(lines[2]).toBe("C 1");
+    });
+
+    it("a force on a WSTRING local behaves the same", () => {
+      // iec_wstring.hpp had the identical `= default` shape.
+      const lines = runString(
+        "WSTRING",
+        (s) => `"${s}"`,
+        (s) => `u"${s}"`,
+        "wstring_forcing",
+      );
+      expect(lines[0]).toBe("A 1 1");
+      expect(lines[1]).toBe("B 1 0");
+      expect(lines[2]).toBe("C 1");
+    });
+  });
+
+  describe("infix arithmetic on scalar globals", () => {
+    /**
+     * Pinning a real behaviour change this fix carries, so it cannot drift
+     * again unnoticed.
+     *
+     * A scalar global now presents as `IECVar<T>`, so infix arithmetic on
+     * globals binds the `IECVar` operator overloads instead of promoting to
+     * `int`. Those truncate to the IEC width at each step. For SINT globals of
+     * 100 each, `(ga + gb) / 2` was 100 before and is -28 now.
+     *
+     * That is the correct answer, not a regression: two SINT LOCALS already
+     * gave -28, and IEC 61131-3 says an operation on SINT yields SINT. The
+     * point of this test is that globals and locals now agree, and that
+     * whichever way it goes is a deliberate choice rather than an accident.
+     */
+    it("wraps at the IEC width, and agrees with the same expression on locals", () => {
+      const source = rawProgram(
+        "    ga : SINT := 100;\n    gb : SINT := 100;",
+        "    la : SINT := 100;\n    lb : SINT := 100;\n    og : SINT;\n    ol : SINT;",
+        "  og := (ga + gb) / 2;\n  ol := (la + lb) / 2;",
+      );
+      const result = compile(source, { headerFileName: "generated.hpp" });
+      expect(result.errors.map((e) => e.message)).toEqual([]);
+      const out = compileAndRunStandalone({
+        tempDir,
+        pchPath,
+        headerCode: result.headerCode,
+        cppCode: result.cppCode,
+        testName: "sint_infix_globals",
+        mainCode: `#include <iostream>
+
+int main() {
+    using namespace strucpp;
+    Program_MAIN p(&GA, &GB);
+    p.run();
+    std::cout << (int)p.OG.get() << " " << (int)p.OL.get() << std::endl;
+    return 0;
+}
+`,
+      });
+      // Globals and locals must give the same answer as each other.
+      expect(out).toBe("-28 -28");
     });
   });
 });
