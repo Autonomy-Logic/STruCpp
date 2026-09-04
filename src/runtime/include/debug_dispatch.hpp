@@ -367,25 +367,19 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
 
 /**
  * Validate a value payload against a leaf's type. Returns STATUS_OK, or the
- * STATUS_* refusal to hand straight back to the caller.
+ * STATUS_* refusal to hand straight back to the caller. Shared by handle_set()
+ * and handle_write() so the rule cannot drift between them.
  *
- * Shared by handle_set() and handle_write() deliberately: they had the same
- * rule inline and it was wrong in both, so a single definition is what keeps
- * them from drifting apart again.
+ * Scalars are fixed-width: `len` must cover the type's size.
  *
- * Scalars are fixed-width, so `len` must cover the type's size.
+ * Strings are length-prefixed: `bytes[0]` is the character (STRING) or
+ * code-unit (WSTRING) count, and force_string / write_string read exactly that
+ * many, so `len` must cover `1 + count` -- `1 + 2 * count` for WSTRING -- and
+ * NOT `type_ops[tag].size`, which is the padded width the READ path emits. A
+ * count past DEBUG_STRING_CAP is refused rather than silently truncated.
  *
- * Strings are LENGTH-PREFIXED on the wire: `bytes[0]` is the character
- * (STRING) or code-unit (WSTRING) count, and force_string / write_string read
- * exactly that many. `type_ops[tag].size` is the PADDED field width the READ
- * path emits (DEBUG_STRING_WIDTH / DEBUG_WSTRING_WIDTH), so requiring it here
- * refused every compact payload a caller actually sends -- which is what broke
- * STRING forcing and soft-writes on every target (DOPE-614).
- *
- * Validating the prefix instead is safe in both directions. Too short is still
- * refused, so a prefix that overruns its own payload cannot make the read walk
- * off the end. And `len` stays a lower bound, so a caller that pads to the full
- * width keeps working unchanged.
+ * `len` is a lower bound throughout, so a caller that pads to the full field
+ * width still passes.
  */
 inline uint8_t validate_payload(uint8_t tag, const uint8_t* bytes, uint16_t len) noexcept {
     const uint8_t expected = type_ops[tag].size;
