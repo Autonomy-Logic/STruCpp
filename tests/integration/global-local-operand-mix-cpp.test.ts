@@ -313,6 +313,41 @@ describeIfGpp("DOPE-613 — mixing a global and a local on a block input", () =>
       expect(out).toBe("103");
     });
 
+    it("selects the right MUX input when the selector or the data is a global", () => {
+      // MUX is the claim that was wrong: documented as unaffected, actually
+      // broken. Compiling is not enough for a selector-driven function, so
+      // assert it picks the right input in all three mixed arrangements.
+      const source = rawProgram(
+        "    gsel : INT := 1;\n    gval : INT := 70;",
+        "    l0 : INT := 10;\n    l1 : INT := 20;\n    o1 : INT;\n    o2 : INT;\n    o3 : INT;",
+        [
+          "  o1 := MUX(gsel, l0, l1);", // global selector, local data
+          "  o2 := MUX(1, l0, gval);", // local selector, global data
+          "  o3 := MUX(gsel, gval, l1);", // both mixed
+        ].join("\n"),
+      );
+      const result = compile(source, { headerFileName: "generated.hpp" });
+      expect(result.errors.map((e) => e.message)).toEqual([]);
+      const out = compileAndRunStandalone({
+        tempDir,
+        pchPath,
+        headerCode: result.headerCode,
+        cppCode: result.cppCode,
+        testName: "mux_selects_correctly",
+        mainCode: `#include <iostream>
+
+int main() {
+    using namespace strucpp;
+    Program_MAIN p(&GSEL, &GVAL);
+    p.run();
+    std::cout << (int)p.O1.get() << " " << (int)p.O2.get() << " " << (int)p.O3.get() << std::endl;
+    return 0;
+}
+`,
+      });
+      expect(out).toBe("20 70 20");
+    });
+
     it("does not let the returned snapshot write back to the global", () => {
       // read() now hands back an IECVar rather than a scalar. It must stay a
       // detached copy: mutating it must not reach the canonical, or a block
