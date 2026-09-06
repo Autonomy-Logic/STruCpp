@@ -91,21 +91,55 @@ enum TypeTag : uint8_t {
 };
 
 // ---------------------------------------------------------------------------
+// Per-leaf flag bits, carried in `Entry.flags`.  ABI — append only, never
+// renumber.  Mirrored by LEAF_FLAG_* in backend/debug-table-gen.ts, which
+// carries the same bits down its leaf walk.
+//
+// READONLY marks a leaf the debugger must not modify.  Set for IEC CONSTANT
+// variables: codegen declares them `const`, but the table's `(void*)` cast
+// strips that qualifier, so without this bit `handle_set` / `handle_write`
+// write straight through to a genuinely const object — undefined behaviour,
+// and a flat contradiction of what CONSTANT means.  Reads are unaffected:
+// watching a constant is useful, changing it is not.
+// ---------------------------------------------------------------------------
+constexpr uint8_t LEAF_FLAG_READONLY = 1 << 0;
+
+// RETAIN marks a leaf whose value must survive a power cycle. Set for a
+// variable declared under `VAR RETAIN` (or PERSISTENT), and inherited by every
+// leaf beneath a retained function-block instance unless that member spells
+// NON_RETAIN.
+//
+// The retain walk does not read this bit — `retainVars[]` already lists exactly
+// the retained leaves, which is cheaper than scanning the whole table. It is
+// emitted because it costs nothing (the byte exists either way) and it makes a
+// generated table self-describing: a reviewer or a diagnostic dump can see
+// which leaves are retained without cross-referencing a second array.
+constexpr uint8_t LEAF_FLAG_RETAIN = 1 << 1;
+
+// ---------------------------------------------------------------------------
 // Debug entry: one per leaf variable.  Layout is ABI; see notes in
 // debug_dispatch.hpp's runtime dispatch for the per-platform size:
-// 4 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (pad absorbs
-// alignment).
+// 6 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (the trailing
+// bytes absorb alignment).
+//
+// `flags` took the byte that used to be `_pad`. `cap` follows it, and on AVR
+// that is the one member that costs anything: a 2-byte pointer, three bytes
+// and 2-byte alignment make the entry 6 rather than 4. It is not optional —
+// without it every sized STRING reads as the 254 default and the string ops
+// compute their forced-value offsets past the end of the object.
 // ---------------------------------------------------------------------------
 struct Entry {
     void* ptr;
     uint8_t tag;
+    uint8_t flags;
+
     /**
      * Declared capacity of a `STRING(n)` / `WSTRING(n)`; 0 for every other type,
      * and for an unqualified string, where it means the 254 default.
      *
-     * This byte was padding, so it costs nothing in flash or PROGMEM. The string
-     * ops need it: `IECStringVar<23>` and `IECStringVar<254>` are different
-     * types, while `type_ops[]` has one row per TypeTag. See `debug_dispatch.hpp`.
+     * The string ops need it: `IECStringVar<23>` and `IECStringVar<254>` are
+     * different types, while `type_ops[]` has one row per TypeTag. See
+     * `debug_dispatch.hpp`.
      */
     uint8_t cap;
 };
@@ -116,7 +150,8 @@ struct Entry {
 // compile error rather than an out-of-bounds string access on an ATmega.
 static_assert(offsetof(Entry, ptr) == 0, "Entry::ptr must be first");
 static_assert(offsetof(Entry, tag) == sizeof(void*), "Entry::tag follows ptr");
-static_assert(offsetof(Entry, cap) == sizeof(void*) + 1, "Entry::cap follows tag");
+static_assert(offsetof(Entry, flags) == sizeof(void*) + 1, "Entry::flags follows tag");
+static_assert(offsetof(Entry, cap) == sizeof(void*) + 2, "Entry::cap follows flags");
 
 // ---------------------------------------------------------------------------
 // Per-project tables — DECLARED here, DEFINED by generated_debug.cpp.
@@ -145,5 +180,31 @@ static_assert(offsetof(Entry, cap) == sizeof(void*) + 1, "Entry::cap follows tag
 extern const Entry* const debug_arrays[]       STRUCPP_DEBUG_FLASH;
 extern const uint16_t     debug_array_counts[] STRUCPP_DEBUG_FLASH;
 extern const uint8_t      debug_array_count;
+
+// ---------------------------------------------------------------------------
+// Retain table.
+//
+// A retained leaf is addressed the same way the debugger addresses everything
+// else: by (arr, elem) into the tables above. No offsets and no sizeof, which
+// is what keeps the retain path correct where an offset-based descriptor was
+// not — the host moves the VALUE through `handle_read` / `handle_write` rather
+// than a memory region, so the IECVar wrapper's forcing state is never
+// persisted, and a nested function-block member or a configuration global
+// needs no special case.
+//
+// Order is the codegen's leaf-walk order, and it IS the order the retain blob
+// packs values in. Never reorder without changing the layout hash.
+// ---------------------------------------------------------------------------
+struct RetainVar {
+    uint8_t  arr;
+    uint16_t elem;
+};
+
+extern const RetainVar retain_vars[]      STRUCPP_DEBUG_FLASH;
+extern const uint16_t  retain_var_count;
+
+// Identity of the retain LAYOUT (ordered path|typeTag), not of the program: a
+// body edit keeps retained values, a declaration change invalidates them.
+extern const uint32_t  retain_layout_hash;
 
 } } // namespace strucpp::debug

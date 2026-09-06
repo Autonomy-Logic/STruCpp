@@ -58,6 +58,14 @@ namespace strucpp { namespace debug {
 constexpr uint8_t STATUS_OK              = 0x7E;
 constexpr uint8_t STATUS_OUT_OF_BOUNDS   = 0x81;
 constexpr uint8_t STATUS_DATA_TOO_LARGE  = 0x82;
+// 0x83..0x85 are taken by the licensing FCs (MB_DEBUG_LIC_*), and 0x86 by
+// PLC_SET_STATE's REFUSED_BY_SWITCH (see the editor's ModbusDebugResponse
+// enum) — this is the next actually-free code. Returned when a write or
+// force targets a leaf carrying LEAF_FLAG_READONLY — an IEC CONSTANT. The
+// refusal lives HERE, at the bottom of the stack, so it holds for every
+// caller: the editor's debugger, an OPC-UA client, a plugin, or an older
+// editor build that never learned to hide the control.
+constexpr uint8_t STATUS_READ_ONLY       = 0x87;
 
 // ---------------------------------------------------------------------------
 // Templated per-type helpers. One instantiation per IEC elementary type;
@@ -330,7 +338,7 @@ inline constexpr TypeOps type_ops[TAG__COUNT] = {
 // ≤64 KB (32u4: ELPM with RAMPZ=0 behaves as LPM).
 // ---------------------------------------------------------------------------
 inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
-    Entry out{nullptr, 0, 0};
+    Entry out{nullptr, 0, 0, 0};
     if (arr >= debug_array_count) return out;
 
 #if defined(__AVR__) && defined(RAMPZ)
@@ -352,12 +360,19 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     const uint8_t* entry_addr = reinterpret_cast<const uint8_t*>(table_ptr) + elem * sizeof(Entry);
     uintptr_t ptr_val = pgm_read_word(entry_addr);
     uint8_t tag_val   = pgm_read_byte(entry_addr + sizeof(void*));
+    // `flags` sits immediately after `tag` — both uint8_t, no padding between
+    // them — so it is the byte after the tag. MUST be read here: the AVR paths
+    // assemble `out` field by field rather than copying the struct, and a
+    // missed flags read silently returns 0, which reads as "writable" and
+    // defeats the CONSTANT gate on exactly the targets with the least memory
+    // to spare for a second lookup.
+    out.flags = pgm_read_byte(entry_addr + sizeof(void*) + 1);
     out.ptr = reinterpret_cast<void*>(ptr_val);
     out.tag = tag_val;
-    // `cap` is the third member, one byte past the tag. Without it every
+    // `cap` is the fourth member, one byte past `flags`. Without it every
     // sized STRING reads as the 254 default and the string ops compute their
     // forced-value offsets past the end of the object.
-    out.cap = pgm_read_byte(entry_addr + sizeof(void*) + 1);
+    out.cap = pgm_read_byte(entry_addr + sizeof(void*) + 2);
 #elif defined(__AVR__)
     // AVR without RAMPZ — flash is ≤64 KB on these chips, so every PROGMEM
     // address fits in a 16-bit pointer and near accessors are sufficient.
@@ -368,12 +383,11 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     const uint8_t* entry_addr = reinterpret_cast<const uint8_t*>(table) + elem * sizeof(Entry);
     uintptr_t ptr_val = pgm_read_word(entry_addr);
     uint8_t tag_val   = pgm_read_byte(entry_addr + sizeof(void*));
+    out.flags = pgm_read_byte(entry_addr + sizeof(void*) + 1);
     out.ptr = reinterpret_cast<void*>(ptr_val);
     out.tag = tag_val;
-    // `cap` is the third member, one byte past the tag. Without it every
-    // sized STRING reads as the 254 default and the string ops compute their
-    // forced-value offsets past the end of the object.
-    out.cap = pgm_read_byte(entry_addr + sizeof(void*) + 1);
+    // `cap` is the fourth member, one byte past `flags`. See the note above.
+    out.cap = pgm_read_byte(entry_addr + sizeof(void*) + 2);
 #else
     uint16_t count = debug_array_counts[arr];
     if (elem >= count) return out;
@@ -386,18 +400,55 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
 // Per-entry operations. These are what ModbusSlave / Runtime v4 call.
 // ---------------------------------------------------------------------------
 
+/**
+ * Validate a value payload against a leaf's type. Returns STATUS_OK, or the
+ * STATUS_* refusal to hand straight back to the caller. Shared by handle_set()
+ * and handle_write() so the rule cannot drift between them.
+ *
+ * Scalars are fixed-width: `len` must cover the type's size.
+ *
+ * Strings are length-prefixed: `bytes[0]` is the character (STRING) or
+ * code-unit (WSTRING) count, and force_string / write_string read exactly that
+ * many, so `len` must cover `1 + count` -- `1 + 2 * count` for WSTRING -- and
+ * NOT `type_ops[tag].size`, which is the padded width the READ path emits. A
+ * count past DEBUG_STRING_CAP is refused rather than silently truncated.
+ *
+ * `len` is a lower bound throughout, so a caller that pads to the full field
+ * width still passes.
+ */
+inline uint8_t validate_payload(uint8_t tag, const uint8_t* bytes, uint16_t len) noexcept {
+    const uint8_t expected = type_ops[tag].size;
+    if (expected == 0) return STATUS_DATA_TOO_LARGE;
+    if (!bytes) return STATUS_DATA_TOO_LARGE;
+
+    if (tag == TAG_STRING || tag == TAG_WSTRING) {
+        const uint8_t count = bytes[0];
+        if (count > DEBUG_STRING_CAP) return STATUS_DATA_TOO_LARGE;
+        const uint16_t need = static_cast<uint16_t>(
+            1u + (tag == TAG_WSTRING ? static_cast<uint16_t>(count) * 2u
+                                     : static_cast<uint16_t>(count)));
+        if (len < need) return STATUS_DATA_TOO_LARGE;
+        return STATUS_OK;
+    }
+
+    if (len < expected) return STATUS_DATA_TOO_LARGE;
+    return STATUS_OK;
+}
+
 /** Set (force or unforce) a variable. Returns STATUS_* code. */
 inline uint8_t handle_set(uint8_t arr, uint16_t elem, bool forcing,
                           const uint8_t* bytes, uint16_t len) noexcept {
     Entry e = read_entry(arr, elem);
     if (!e.ptr || e.tag >= TAG__COUNT) return STATUS_OUT_OF_BOUNDS;
 
+    // A CONSTANT cannot be forced. Refused for BOTH directions: unforcing a
+    // leaf that could never be forced is a no-op, and returning OK for it
+    // would tell the caller a force had been cleared that never existed.
+    if (e.flags & LEAF_FLAG_READONLY) return STATUS_READ_ONLY;
+
     if (forcing) {
-        uint8_t expected = type_ops[e.tag].size;
-        // A tag with no width has no ops to dispatch to. STRING and WSTRING
-        // carry real widths (127 / 253), so this no longer excludes them.
-        if (expected == 0) return STATUS_DATA_TOO_LARGE;
-        if (len < expected) return STATUS_DATA_TOO_LARGE;
+        const uint8_t bad = validate_payload(e.tag, bytes, len);
+        if (bad != STATUS_OK) return bad;
         type_ops[e.tag].force(e.ptr, bytes, e.cap);
     } else {
         type_ops[e.tag].unforce(e.ptr, e.cap);
@@ -426,9 +477,12 @@ inline uint8_t handle_write(uint8_t arr, uint16_t elem,
                             const uint8_t* bytes, uint16_t len) noexcept {
     Entry e = read_entry(arr, elem);
     if (!e.ptr || e.tag >= TAG__COUNT) return STATUS_OUT_OF_BOUNDS;
-    uint8_t expected = type_ops[e.tag].size;
-    if (expected == 0) return STATUS_DATA_TOO_LARGE;  // tag with no width
-    if (len < expected) return STATUS_DATA_TOO_LARGE;
+    // Same gate as handle_set. This is also the path the retain restore walk
+    // uses, so a CONSTANT can never be clobbered by a stale retained value
+    // either — constants come from the declaration, never from storage.
+    if (e.flags & LEAF_FLAG_READONLY) return STATUS_READ_ONLY;
+    const uint8_t bad = validate_payload(e.tag, bytes, len);
+    if (bad != STATUS_OK) return bad;
     type_ops[e.tag].write(e.ptr, bytes, e.cap);
     return STATUS_OK;
 }

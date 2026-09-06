@@ -288,10 +288,17 @@ export class STParser extends CstParser {
       ],
       IGNORE_AMBIGUITIES: true,
     });
-    this.OPTION(() => {
+    // MANY, not OPTION: IEC and CODESYS both allow a combination, and
+    // `VAR RETAIN PERSISTENT` is the form a converted CODESYS project actually
+    // carries. Contradictory or repeated qualifiers are a semantic error, not a
+    // grammar one — `validateVarModifiers` reports them with a source span,
+    // which reads far better than a parser "expecting END_VAR".
+    this.MANY2(() => {
       this.OR2([
         { ALT: () => this.CONSUME(tokens.CONSTANT) },
         { ALT: () => this.CONSUME(tokens.RETAIN) },
+        { ALT: () => this.CONSUME(tokens.NON_RETAIN) },
+        { ALT: () => this.CONSUME(tokens.PERSISTENT) },
       ]);
     });
     this.MANY(() => {
@@ -402,10 +409,17 @@ export class STParser extends CstParser {
       { ALT: () => this.CONSUME(tokens.VAR_GLOBAL) },
       { ALT: () => this.CONSUME(tokens.VAR_TEMP) },
     ]);
-    this.OPTION(() => {
+    // MANY, not OPTION: IEC and CODESYS both allow a combination, and
+    // `VAR RETAIN PERSISTENT` is the form a converted CODESYS project actually
+    // carries. Contradictory or repeated qualifiers are a semantic error, not a
+    // grammar one — `validateVarModifiers` reports them with a source span,
+    // which reads far better than a parser "expecting END_VAR".
+    this.MANY2(() => {
       this.OR2([
         { ALT: () => this.CONSUME(tokens.CONSTANT) },
         { ALT: () => this.CONSUME(tokens.RETAIN) },
+        { ALT: () => this.CONSUME(tokens.NON_RETAIN) },
+        { ALT: () => this.CONSUME(tokens.PERSISTENT) },
       ]);
     });
     this.MANY(() => {

@@ -151,3 +151,47 @@ describe("getRenameEdits", () => {
     expect(edits).toBeNull();
   });
 });
+
+describe("rename on a STRUCT field", () => {
+  // The most damaging shape of the same defect: before the field was excluded
+  // from global lookup, renaming it renamed the function block it collided
+  // with, along with every reference to that block.
+  const SOURCE = `FUNCTION_BLOCK Motor
+VAR_INPUT
+  Speed : INT;
+END_VAR
+END_FUNCTION_BLOCK
+
+PROGRAM Main
+VAR
+  drive : Motor;
+END_VAR
+drive(Speed := 1);
+END_PROGRAM
+
+TYPE
+  SensorData : STRUCT
+    Motor : REAL;
+  END_STRUCT;
+END_TYPE
+`;
+
+  const fieldPosition = () => {
+    const lines = SOURCE.split("\n");
+    const line = lines.findIndex((l) => l.includes("    Motor : REAL;"));
+    return { line: line + 1, col: lines[line].indexOf("Motor") + 1 };
+  };
+
+  it("offers no rename for a field named after a function block", () => {
+    const analysis = analyze(SOURCE, { fileName: "s.st" });
+    const pos = fieldPosition();
+    expect(prepareRename(analysis, "s.st", pos.line, pos.col)).toBeNull();
+  });
+
+  it("produces no edits for a field named after a function block", () => {
+    const analysis = analyze(SOURCE, { fileName: "s.st" });
+    const pos = fieldPosition();
+    const edits = getRenameEdits(analysis, "s.st", pos.line, pos.col, "Speed2", "file:///s.st");
+    expect(edits === null || Object.keys(edits).length === 0).toBe(true);
+  });
+});

@@ -100,3 +100,35 @@ describe("resolveSymbolAtPosition", () => {
     expect(resolved!.scope.parentName!.toUpperCase()).toBe("SPRITE");
   });
 });
+
+describe("resolveSymbolAtPosition on a STRUCT field", () => {
+  const SOURCE = `FUNCTION_BLOCK Motor
+VAR_INPUT
+  Speed : INT;
+END_VAR
+END_FUNCTION_BLOCK
+
+TYPE
+  SensorData : STRUCT
+    Motor : REAL;
+  END_STRUCT;
+END_TYPE
+`;
+
+  it("resolves the declaration node without a symbol", () => {
+    const analysis = analyze(SOURCE, { fileName: "s.st" });
+    const lines = SOURCE.split("\n");
+    const line = lines.findIndex((l) => l.includes("    Motor : REAL;"));
+    const resolved = resolveSymbolAtPosition(
+      analysis,
+      "s.st",
+      line + 1,
+      lines[line].indexOf("Motor") + 1,
+    );
+    expect(resolved).toBeDefined();
+    expect(resolved!.node.kind).toBe("VarDeclaration");
+    // The field shares its name with a global function block. A declaration
+    // must not borrow that symbol.
+    expect(resolved!.symbol).toBeUndefined();
+  });
+});

@@ -584,12 +584,13 @@ describeIfGpp('C++ Compilation Tests', () => {
     const result = compile(source);
     expect(result.success).toBe(true);
 
-    // Verify retain table is generated
-    expect(result.headerCode).toContain('__retain_vars');
-    expect(result.headerCode).toContain('getRetainVars');
-    expect(result.headerCode).toContain('getRetainCount');
-    expect(result.cppCode).toContain('RetainVarInfo');
-    // Variable names in retain table are uppercased (COUNTER, LAST_STATE)
+    // The per-program `RetainVarInfo __retain_vars[]` is gone — retained
+    // leaves are listed project-wide in generated_debug.cpp now (see
+    // iec_retain.hpp for why offsets could not work). What this test still
+    // guards is that a program declaring RETAIN produces C++ that COMPILES;
+    // the retain table's own contents and round-trip are covered in
+    // debug-table-gen.test.ts and the retain round-trip test below.
+    expect(result.headerCode).not.toContain('__retain_vars');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'retain_vars');
     expect(cppResult.success).toBe(true);
@@ -614,9 +615,11 @@ describeIfGpp('C++ Compilation Tests', () => {
 
     // Verify const qualifier
     expect(result.headerCode).toContain('const IEC_INT MAX_VALUE');
-    // Verify retain table (only for retained vars)
-    expect(result.headerCode).toContain('__retain_vars[1]');
-    expect(result.cppCode).toContain('ACCUMULATED');
+    // Both members are plain declarations now: CONSTANT is a `const`
+    // qualifier, and RETAIN adds nothing to the class — the retained leaf is
+    // listed in generated_debug.cpp instead.
+    expect(result.headerCode).toContain('IEC_DINT ACCUMULATED;');
+    expect(result.headerCode).not.toContain('__retain_vars');
 
     const cppResult = compileWithGpp(result.headerCode, result.cppCode, 'mixed_modifiers');
     expect(cppResult.success).toBe(true);

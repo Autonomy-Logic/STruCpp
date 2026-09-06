@@ -374,3 +374,37 @@ describe("getTypeDefinition", () => {
     expect(def!.range.start.line).toBe(declLine);
   });
 });
+
+describe("getDefinition on STRUCT field declarations", () => {
+  // The disruptive half of the same defect: a field resolving to a global
+  // symbol does not just show the wrong tooltip, it navigates there.
+  const SOURCE = `FUNCTION_BLOCK Motor
+VAR_INPUT
+  Speed : INT;
+END_VAR
+END_FUNCTION_BLOCK
+
+TYPE
+  SensorData : STRUCT
+    Temperature : REAL;
+    Motor : REAL;
+  END_STRUCT;
+END_TYPE
+`;
+
+  const definitionOn = (field: string) => {
+    const analysis = analyze(SOURCE, { fileName: "s.st" });
+    const lines = SOURCE.split("\n");
+    const line = lines.findIndex((l) => l.includes(`    ${field} : REAL;`));
+    const col = lines[line].indexOf(field) + 1;
+    return getDefinition(analysis, "s.st", line + 1, col, "file:///s.st");
+  };
+
+  it("does not navigate from an ordinary field", () => {
+    expect(definitionOn("Temperature")).toBeNull();
+  });
+
+  it("does not navigate from a field named after a function block", () => {
+    expect(definitionOn("Motor")).toBeNull();
+  });
+});

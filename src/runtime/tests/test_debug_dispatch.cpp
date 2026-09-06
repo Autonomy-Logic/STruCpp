@@ -30,13 +30,14 @@ static IEC_LREAL t_lreal { 0.0 };
 static IECStringVar<23> t_str {};
 
 static const sd::Entry g_arr_0[] = {
-    { (void*)&t_bool,  sd::TAG_BOOL,  0 },
-    { (void*)&t_int,   sd::TAG_INT,   0 },
-    { (void*)&t_dint,  sd::TAG_DINT,  0 },
-    { (void*)&t_lint,  sd::TAG_LINT,  0 },
-    { (void*)&t_real,  sd::TAG_REAL,  0 },
-    { (void*)&t_lreal, sd::TAG_LREAL, 0 },
-    { (void*)&t_str,   sd::TAG_STRING, 23 },
+    //                                 flags, cap
+    { (void*)&t_bool,  sd::TAG_BOOL,   0, 0 },
+    { (void*)&t_int,   sd::TAG_INT,    0, 0 },
+    { (void*)&t_dint,  sd::TAG_DINT,   0, 0 },
+    { (void*)&t_lint,  sd::TAG_LINT,   0, 0 },
+    { (void*)&t_real,  sd::TAG_REAL,   0, 0 },
+    { (void*)&t_lreal, sd::TAG_LREAL,  0, 0 },
+    { (void*)&t_str,   sd::TAG_STRING, 0, 23 },
 };
 
 // Definitions for the `extern` declarations in debug_dispatch.hpp.
@@ -83,15 +84,17 @@ TEST(DebugDispatch, HandleElemCount) {
 // the end of the object. These pin the arithmetic and the propagation.
 // ---------------------------------------------------------------------------
 TEST(DebugDispatch, EntryLayoutMatchesTheByteOffsetsAvrReadsAt) {
-    const sd::Entry e{ (void*)&t_str, sd::TAG_STRING, 23 };
+    const sd::Entry e{ (void*)&t_str, sd::TAG_STRING, 0, 23 };
     const uint8_t* raw = reinterpret_cast<const uint8_t*>(&e);
 
     EXPECT_EQ(offsetof(sd::Entry, ptr), 0u);
     EXPECT_EQ(offsetof(sd::Entry, tag), sizeof(void*));
-    EXPECT_EQ(offsetof(sd::Entry, cap), sizeof(void*) + 1);
+    EXPECT_EQ(offsetof(sd::Entry, flags), sizeof(void*) + 1);
+    EXPECT_EQ(offsetof(sd::Entry, cap), sizeof(void*) + 2);
 
     EXPECT_EQ(raw[sizeof(void*)],     static_cast<uint8_t>(sd::TAG_STRING));
-    EXPECT_EQ(raw[sizeof(void*) + 1], 23u);
+    EXPECT_EQ(raw[sizeof(void*) + 1], 0u);
+    EXPECT_EQ(raw[sizeof(void*) + 2], 23u);
 }
 
 TEST(DebugDispatch, ReadEntryPropagatesCap) {
