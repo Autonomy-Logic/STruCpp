@@ -403,6 +403,12 @@ export function generateDebugTable(
     );
   };
 
+  const functionBlockTypeNames = new Set(
+    ast.functionBlocks.map((fb) => fb.name.toUpperCase()),
+  );
+  const isFunctionBlockTypeName = (name: string): boolean =>
+    functionBlockTypeNames.has(name.toUpperCase());
+
   /**
    * FB type name → upper-cased method names of every interface it implements,
    * mirroring `CodeGenerator.fbInterfaceMethodNames`. Directly implemented
@@ -780,6 +786,23 @@ export function generateDebugTable(
               // rather than only at the program level.
               const memberFlags = applyBlockFlags(flags, block);
               for (const fieldDecl of block.declarations) {
+                // A function block passed as an in-out is a pointer at someone
+                // else's instance, which is in the table under its own name.
+                // Following it would emit `.member` on a pointer, and it is
+                // null until the caller binds it.
+                if (
+                  block.blockType === "VAR_IN_OUT" &&
+                  isFunctionBlockTypeName(fieldDecl.type.name)
+                ) {
+                  for (const fieldName of fieldDecl.names) {
+                    skipped.push({
+                      path: `${path}.${fieldName.toUpperCase()}`,
+                      reason:
+                        "function block in-out: an alias, debugged at its own name",
+                    });
+                  }
+                  continue;
+                }
                 for (const fieldName of fieldDecl.names) {
                   if (!entry.take.has(fieldName.toUpperCase())) continue;
                   visitTypeRef(

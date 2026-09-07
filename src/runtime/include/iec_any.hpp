@@ -136,6 +136,25 @@ struct IEC_ANY {
      *  because every element carries its forced state beside its value — which
      *  is why walking an array needs this and not the width. */
     int32_t DISTRIDE = 0;
+    /** The element's class for an array; the same as TYPECLASS otherwise, so a
+     *  reader takes one field either way. */
+    TYPE_CLASS ELEMCLASS = static_cast<TYPE_CLASS>(0);
+
+    /** Elements, 1 for a scalar and 0 for an unwired pin. */
+    int32_t count() const { return DICOUNT; }
+
+    /** Whether a pin was given anything. */
+    bool wired() const { return PVALUE != nullptr && DICOUNT > 0; }
+
+    /** Address of one element, whatever the caller's spacing. */
+    uint8_t* at(int32_t index) const {
+        return PVALUE + (size_t)index * (size_t)(DISTRIDE ? DISTRIDE : DISIZE);
+    }
+
+    /** One element, read as T. The caller checks ELEMCLASS first; this only
+     *  applies the spacing. */
+    template <typename T>
+    T& element(int32_t index) const { return *reinterpret_cast<T*>(at(index)); }
 };
 
 /*

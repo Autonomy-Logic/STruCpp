@@ -61,7 +61,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | VAR | Supported | Local variables |
 | VAR_INPUT | Supported | Input parameters |
 | VAR_OUTPUT | Supported | Output parameters |
-| VAR_IN_OUT | Supported | Pass-by-reference parameters |
+| VAR_IN_OUT | Supported | In-out parameters — see below |
 | VAR_EXTERNAL | Supported | References either a CONFIGURATION or a file-level VAR_GLOBAL |
 | VAR_GLOBAL | Supported | Global variables (CONFIGURATION-scoped or file-level) |
 | CONSTANT | Supported | Compile-time constants |
@@ -75,6 +75,23 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Array repetition | Supported | `:= [10(0)]`, `:= [3(1), 2(5)]`, `:= [7, 4(2), 9]`. The repeated value may be a structure initializer. Max count 65536 |
 | Structure initialization | Supported | `:= (x := 1.0, y := 2.0)`; nested, in array literals, and for FB instances. Omitted elements keep their own declared default. Only valid as a declaration's initial value, as in the standard — one written inside a statement is rejected |
 | STRUCT element defaults | Supported | Scalar, array-literal and structure-initializer defaults on a STRUCT element all carry their values |
+
+### VAR_IN_OUT rules
+
+| Rule | Notes |
+|------|-------|
+| Assigned at every call | An in-out left unassigned is an error, including on a later call to an instance an earlier call assigned |
+| Argument is a variable | A literal or an expression result is refused. An array element, a struct field or the calling POU's own in-out are accepted — the root of the access chain is what is checked |
+| Argument is writable | Must be a non-`CONSTANT` variable from `VAR`, `VAR_TEMP`, `VAR_OUTPUT`, `VAR_IN_OUT` or `VAR_EXTERNAL` of the calling POU. The caller's own `VAR_INPUT` is refused |
+| No implicit conversion | The argument's type must match the parameter's. Checked for a whole elementary variable; an element or field is left to C++ |
+| Unnamed arguments allowed | They fill the slots the named ones did not claim, in declaration order |
+| Used only in the body and the call | `inst.someInOut` is refused for read and write, as is capturing one with `=>` |
+| Out of reach from a method | A method cannot use the in-outs of the block that owns it; it may declare its own |
+| No qualifier | `CONSTANT`, `RETAIN` and `NON_RETAIN` are refused |
+| No initial value | `:= value` on an in-out declaration is refused |
+| Not a reference type | `REF_TO` / `REFERENCE TO` is refused. Not enforced for an interface imported from a library |
+| Passing mechanism | Function block instances and `ARRAY [*]` are passed by reference; scalars, structures and fixed-bound arrays are copied in and back |
+| Function block instance | On `VAR_INPUT` read-only and not callable; on `VAR_IN_OUT` read, written and callable, held as a pointer with no copy back; on `VAR_EXTERNAL` callable. Its outputs are readable but not writable in all three |
 
 ### Initialization gaps
 

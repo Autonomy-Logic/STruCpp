@@ -125,3 +125,42 @@ describe("the descriptor the call site builds", () => {
     expect(emitted("v : ST;", "v")).toMatch(/reinterpret_cast<uint8_t\*>\(&/);
   });
 });
+
+describe("the element's class", () => {
+  it.each([
+    ["WORD", "TYPE_WORD"],
+    ["UINT", "TYPE_UINT"],
+    ["BOOL", "TYPE_BOOL"],
+    ["BYTE", "TYPE_BYTE"],
+    ["INT", "TYPE_INT"],
+    ["DINT", "TYPE_DINT"],
+    ["REAL", "TYPE_REAL"],
+  ])("an array of %s carries %s", (iecType, cls) => {
+    const line = emitted(`v : ARRAY[0..2] OF ${iecType};`, "v");
+    expect(line).toContain("TYPE_CLASS::TYPE_ARRAY");
+    expect(line).toContain(`strucpp::TYPE_CLASS::${cls} }`);
+  });
+
+  it("separates two element types of the same width", () => {
+    const words = emitted("v : ARRAY[0..2] OF WORD;", "v");
+    const uints = emitted("v : ARRAY[0..2] OF UINT;", "v");
+    expect(words).toContain("TYPE_CLASS::TYPE_WORD }");
+    expect(uints).toContain("TYPE_CLASS::TYPE_UINT }");
+    expect(words).not.toEqual(uints);
+  });
+
+  it("separates a bool from a byte", () => {
+    expect(emitted("v : ARRAY[0..2] OF BOOL;", "v")).toContain("TYPE_CLASS::TYPE_BOOL }");
+    expect(emitted("v : ARRAY[0..2] OF BYTE;", "v")).toContain("TYPE_CLASS::TYPE_BYTE }");
+  });
+
+  it("repeats the class of a scalar, so one field answers either way", () => {
+    expect(emitted("v : WORD;", "v")).toContain("TYPE_CLASS::TYPE_WORD, ");
+    expect(emitted("v : WORD;", "v")).toContain("TYPE_CLASS::TYPE_WORD }");
+  });
+
+  it("names an array of an enumeration and of a structure", () => {
+    expect(emitted("v : ARRAY[0..1] OF EN;", "v")).toContain("TYPE_CLASS::TYPE_ENUM }");
+    expect(emitted("v : ARRAY[0..1] OF ST;", "v")).toContain("TYPE_CLASS::TYPE_USERDEF }");
+  });
+});

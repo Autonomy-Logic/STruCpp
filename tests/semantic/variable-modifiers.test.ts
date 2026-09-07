@@ -519,3 +519,47 @@ END_PROGRAM${CFG}`);
     });
   });
 });
+
+describe('VAR_IN_OUT declaration shape', () => {
+  const errorsFor = (source: string): string[] =>
+    compile(source).errors.map((e) => e.message)
+
+  const CALLER = `
+PROGRAM Main
+  VAR f : FB; n : INT; END_VAR
+  f(v := n);
+END_PROGRAM`
+
+  it('rejects an initial value — the caller supplies the variable', () => {
+    const errors = errorsFor(`
+FUNCTION_BLOCK FB
+  VAR_IN_OUT v : INT := 3; END_VAR
+  v := v + 1;
+END_FUNCTION_BLOCK${CALLER}`)
+    expect(errors.some((m) => /cannot have an initial value/.test(m))).toBe(true)
+  })
+
+  it.each(['REF_TO INT', 'REFERENCE TO INT'])(
+    'rejects %s as an in-out type',
+    (type) => {
+      const errors = errorsFor(`
+FUNCTION_BLOCK FB
+  VAR_IN_OUT r : ${type}; END_VAR
+END_FUNCTION_BLOCK
+PROGRAM Main
+  VAR i : INT; END_VAR
+  i := 1;
+END_PROGRAM`)
+      expect(errors.some((m) => /cannot be a reference type/.test(m))).toBe(true)
+    },
+  )
+
+  it('accepts a plain in-out', () => {
+    const errors = errorsFor(`
+FUNCTION_BLOCK FB
+  VAR_IN_OUT v : INT; END_VAR
+  v := v + 1;
+END_FUNCTION_BLOCK${CALLER}`)
+    expect(errors).toEqual([])
+  })
+})
