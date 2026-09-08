@@ -171,10 +171,18 @@ describe("Codegen - Function Calls", () => {
       // target ever forgets to go through the temporal scaler the
       // assertion below pins it down.
       const targets = [
-        "SINT", "INT", "DINT", "LINT",
-        "USINT", "UDINT", "ULINT",
+        "SINT",
+        "INT",
+        "DINT",
+        "LINT",
+        "USINT",
+        "UDINT",
+        "ULINT",
         "LREAL",
-        "BYTE", "WORD", "DWORD", "LWORD",
+        "BYTE",
+        "WORD",
+        "DWORD",
+        "LWORD",
       ];
       for (const target of targets) {
         const result = compileAndCheck(`
@@ -197,44 +205,91 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toContain("TO_UDINT(TOD_TO_MS(");
     });
 
-    it("wraps DT variable with DT_TO_MS for numeric conversions", () => {
+    it("wraps DT with DT_TO_SECONDS — CODESYS holds DT in seconds", () => {
       const result = compileAndCheck(`
         PROGRAM Main
           VAR d : DT := DT#1970-01-01-00:00:01; l : LINT; END_VAR
           l := TO_LINT(d);
         END_PROGRAM
       `);
-      expect(result.cppCode).toContain("TO_LINT(DT_TO_MS(");
+      // CODESYS: DT_TO_DINT(DT#2019-9-1-12:0:0.0) = 1567339200, i.e. seconds.
+      // This used to emit DT_TO_MS, which both scaled wrong and overflowed a
+      // DWORD every ~49.7 days. See DOPE-618.
+      expect(result.cppCode).toContain("TO_LINT(DT_TO_SECONDS(");
     });
 
-    it("does NOT wrap DATE (days are the natural unit for DATE→numeric)", () => {
+    it("wraps DATE with DATE_TO_SECONDS — CODESYS holds DATE in seconds too", () => {
       const result = compileAndCheck(`
         PROGRAM Main
-          VAR d : DATE := DATE#1970-01-15; u : UINT; END_VAR
-          u := TO_UINT(d);
+          VAR d : DATE := DATE#1970-01-15; u : UDINT; END_VAR
+          u := TO_UDINT(d);
         END_PROGRAM
       `);
-      // DATE's int64_t storage is "days since 1970-01-01" — no scaling.
-      expect(result.cppCode).not.toContain("DATE_TO_MS");
-      expect(result.cppCode).not.toContain("TIME_TO_MS");
+      // We store DATE as whole days, but CODESYS keeps it in DT's memory
+      // format: DATE_TO_DINT(D#1970-1-2) = 86400, not 1. This used to be
+      // unscaled, so every OSCAT DATE helper divided a day count by 86400
+      // and got zero. See DOPE-618.
+      expect(result.cppCode).toContain("TO_UDINT(DATE_TO_SECONDS(");
     });
 
-    it("does NOT wrap on temporal-target conversions (avoid double-scaling)", () => {
-      // Temporal-target conversions stay pass-through at the C++ level
-      // (both sides are `IECVar<int64_t>`).  Wrapping the source with
-      // `TIME_TO_MS` would double-scale; the inverse `TO_TIME(int_ms)`
-      // runtime template also relies on this branch staying out of its
-      // way for `INT_TO_TIME(ms_int)` to keep working.
+    it("has no declarable L variants yet, so their unit rows are unreachable", () => {
+      // TEMPORAL_CONVERSION_UNITS carries LTIME / LTOD / LDT / LDATE rows and
+      // codegen has always branched on those names, but the frontend does not
+      // accept them as types — `VAR v : LDT;` is "Undefined type 'LDT'", and
+      // they appear nowhere in ELEMENTARY_TYPE_NAMES or the type registry. So
+      // that half of the table is correct-in-principle and dead in practice.
+      //
+      // This test pins that, and is meant to FAIL the day the types are added
+      // — at which point the L rows become reachable and need the coverage
+      // that cannot be written today. CODESYS makes all four nanoseconds,
+      // which is already what the table says.
+      for (const type of ["LTIME", "LTOD", "LDT", "LDATE"]) {
+        const result = compile(
+          `PROGRAM Main\n VAR v : ${type}; END_VAR\nEND_PROGRAM`,
+          { headerFileName: "generated.hpp" },
+        );
+        expect(
+          result.errors.some((e) => /Undefined type/i.test(e.message)),
+          `${type} unexpectedly compiles — the L unit rows are now reachable and need real tests`,
+        ).toBe(true);
+      }
+    });
+
+    it("scales a numeric source INTO a temporal target, in codegen", () => {
+      // The reverse direction. This scaling used to live in the runtime
+      // `TO_TIME(integer)` template, which could not tell an integer
+      // millisecond count from a TIME value — every temporal type is the
+      // same C++ type there. It now happens here, where the IEC type is
+      // still known, and the runtime TO_* are pure casts.
+      const cases: Array<[string, string, string]> = [
+        ["TIME", "DINT_TO_TIME", "TIME_FROM_MS("],
+        ["TOD", "DINT_TO_TOD", "TOD_FROM_MS("],
+        ["DT", "DINT_TO_DT", "DT_FROM_SECONDS("],
+        ["DATE", "DINT_TO_DATE", "DATE_FROM_SECONDS("],
+      ];
+      for (const [type, fn, helper] of cases) {
+        const result = compileAndCheck(`
+          PROGRAM Main
+            VAR n : DINT := 5000; v : ${type}; END_VAR
+            v := ${fn}(n);
+          END_PROGRAM
+        `);
+        expect(result.cppCode).toContain(helper);
+      }
+    });
+
+    it("round-trips a DT out to seconds and back, as OSCAT does inline", () => {
+      // DCF77 does DWORD_TO_DT(DT_TO_DWORD(mez) - 7200) in one expression, so
+      // the two directions have to agree on the unit or the round trip lands
+      // somewhere meaningless.
       const result = compileAndCheck(`
         PROGRAM Main
-          VAR ms : DINT := 5000; t : TIME; END_VAR
-          t := DINT_TO_TIME(ms);
+          VAR d : DT := DT#2026-09-02-15:36:55; out : DT; END_VAR
+          out := DWORD_TO_DT(DT_TO_DWORD(d));
         END_PROGRAM
       `);
-      expect(result.cppCode).toContain("TO_TIME(");
-      // No wrap because the target is TIME — `TO_TIME(integer)`
-      // already scales ms → ns on the C++ side.
-      expect(result.cppCode).not.toContain("TIME_TO_MS");
+      expect(result.cppCode).toContain("DT_TO_SECONDS(");
+      expect(result.cppCode).toContain("DT_FROM_SECONDS(");
     });
 
     it("does NOT wrap when the source is plain numeric (existing behaviour preserved)", () => {
@@ -247,7 +302,7 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toContain("TO_UINT(");
       expect(result.cppCode).not.toContain("TIME_TO_MS");
       expect(result.cppCode).not.toContain("TOD_TO_MS");
-      expect(result.cppCode).not.toContain("DT_TO_MS");
+      expect(result.cppCode).not.toContain("DT_TO_SECONDS");
     });
   });
 

@@ -17,12 +17,16 @@ FUNCTION_BLOCK TimeConversions
     (* TOD → integer scales ns→ms (since midnight) *)
     tod_ms       : DINT;
 
-    (* DT → integer scales ns→ms (since 1970-01-01 epoch).  Stored in
-       LINT because ms-since-epoch overflows 32-bit signed past 1970. *)
-    dt_ms        : LINT;
+    (* DT → integer is SECONDS since 1970-01-01, matching CODESYS:
+       DT_TO_DINT(DT#2019-9-1-12:0:0.0) = 1567339200.  Kept in LINT so the
+       assertion reads the value rather than a truncation of it. *)
+    dt_seconds   : LINT;
 
-    (* DATE → integer is identity: days since 1970-01-01.  No scaling. *)
-    date_days    : UINT;
+    (* DATE → integer is SECONDS too — CODESYS keeps DATE in DT's memory
+       format, so DATE_TO_DINT(D#1970-1-2) = 86400, not 1.  UDINT rather
+       than UINT: a day count fits 16 bits, a second count does not, and
+       the old UINT declaration was quietly asserting a 16-bit truncation. *)
+    date_seconds : UDINT;
   END_VAR
   VAR
     duration : TIME := T#1500ms;
@@ -38,6 +42,6 @@ FUNCTION_BLOCK TimeConversions
   unit_seconds := TIME_TO_S(duration);      (* 1.5 *)
 
   tod_ms    := TOD_TO_DINT(midpoint);   (* 21_600_000 — 6h in ms *)
-  dt_ms     := TO_LINT(moment);         (* 1000 — 1s in ms since epoch *)
-  date_days := TO_UINT(day);            (* 14 — 14 days after epoch *)
+  dt_seconds   := TO_LINT(moment);      (* 1 — one second after the epoch *)
+  date_seconds := TO_UDINT(day);        (* 1209600 — 14 days, in seconds *)
 END_FUNCTION_BLOCK
