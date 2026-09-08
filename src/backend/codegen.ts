@@ -195,13 +195,6 @@ export interface CodeGenOptions {
 }
 
 /**
- * Numeric and bit-string targets for the `TO_*` family — i.e. every
- * elementary type whose runtime representation is "just an integer or
- * a float."  Used by `wrapTemporalArgForNumericConversion` to gate
- * the temporal→ms scaling: STRING / WSTRING and temporal targets need
- * different handling and stay out of this set.
- */
-/**
  * How each IEC temporal type is exchanged with an integer, per CODESYS.
  *
  * `toUnit` converts our internal representation to the unit a conversion must
@@ -245,6 +238,20 @@ const TEMPORAL_CONVERSION_UNITS = new Map<string, TemporalUnitInfo>([
   ["LDATE", { toUnit: "DATE_TO_NS", fromUnit: "DATE_FROM_NS" }],
 ]);
 
+/**
+ * Numeric and bit-string targets for the `TO_*` family — i.e. every elementary
+ * type whose runtime representation is "just an integer or a float."
+ *
+ * Gates BOTH directions of the temporal scaling. A temporal source is scaled
+ * only when the target is in here; a numeric source is scaled into a temporal
+ * target only when the SOURCE is in here. STRING / WSTRING need a format
+ * pipeline rather than a scale, and temporal types stay out so that
+ * temporal→temporal conversions are left alone.
+ *
+ * This set and `TEMPORAL_CONVERSION_UNITS` are disjoint, which is what makes
+ * the two directions mutually exclusive: no type is both a temporal type and a
+ * numeric target.
+ */
 const NUMERIC_OR_BIT_CONVERSION_TARGETS = new Set([
   "BOOL",
   "SINT",
@@ -4377,23 +4384,42 @@ export class CodeGenerator {
       : `${unit.fromUnit}(${argExpr})`;
   }
 
-  /** Apply whichever of the two directions above fits this conversion. */
+  /**
+   * Apply whichever of the two directions fits this conversion.
+   *
+   * Branches on which side is temporal rather than on whether the first call
+   * changed the string. A row whose scaling is a legitimate no-op — the `L`
+   * variants are exactly that shape — returns its argument untouched, so a
+   * value comparison cannot distinguish "this direction did not apply" from
+   * "it applied and had nothing to do", and would fall through to the other
+   * direction on a correct answer.
+   *
+   * That fall-through is harmless today because
+   * `NUMERIC_OR_BIT_CONVERSION_TARGETS` and `TEMPORAL_CONVERSION_UNITS` are
+   * disjoint, so the second guard rejects what the first already handled. But
+   * that is a property of two separate tables agreeing, and this reads the
+   * question directly instead of relying on it.
+   */
   private scaleConversionArg(
     argExpr: string,
     fromTypeUpper: string,
     toTypeUpper: string,
   ): string {
-    const scaled = this.wrapTemporalArgForNumericConversion(
-      argExpr,
-      fromTypeUpper,
-      toTypeUpper,
-    );
-    if (scaled !== argExpr) return scaled;
-    return this.wrapNumericArgForTemporalConversion(
-      argExpr,
-      fromTypeUpper,
-      toTypeUpper,
-    );
+    if (TEMPORAL_CONVERSION_UNITS.has(fromTypeUpper)) {
+      return this.wrapTemporalArgForNumericConversion(
+        argExpr,
+        fromTypeUpper,
+        toTypeUpper,
+      );
+    }
+    if (TEMPORAL_CONVERSION_UNITS.has(toTypeUpper)) {
+      return this.wrapNumericArgForTemporalConversion(
+        argExpr,
+        fromTypeUpper,
+        toTypeUpper,
+      );
+    }
+    return argExpr;
   }
 
   /**
@@ -4590,16 +4616,18 @@ export class CodeGenerator {
       const args = expr.arguments.map((arg, idx) => {
         const generated = this.generateExpression(arg.value);
         if (idx !== 0) return generated;
-        // Type-aware scaling for temporal sources.  See the helper for
-        // the full rationale — short version: the C++ runtime aliases
-        // every temporal type to `IECVar<int64_t>` (so a `TIME` and a
-        // `DATE` are literally the same C++ type after compilation),
-        // and the only place that still knows "this expression is a
-        // TIME" is the codegen layer.  We have to wrap the argument
-        // with `TIME_TO_MS` / `TOD_TO_MS` / `DT_TO_MS` here, otherwise
-        // `TO_UINT(time_var)` lowers to a `static_cast<uint16_t>(raw_ns)`
-        // and the user sees the low 16 bits of the nanosecond count
-        // instead of the milliseconds they asked for.
+        // Type-aware unit scaling, in whichever direction applies — a
+        // temporal source going to an integer, or an integer going into a
+        // temporal target. See `TEMPORAL_CONVERSION_UNITS` for the units and
+        // why they are CODESYS's.
+        //
+        // It has to happen here rather than in the runtime because the C++
+        // runtime aliases every temporal type to `IECVar<int64_t>`: a `TIME`
+        // and a `DATE` are literally the same type after compilation, and the
+        // codegen layer is the last place that still knows which one this
+        // expression is. Without it `TO_UINT(time_var)` lowers to a
+        // `static_cast<uint16_t>(raw_ns)` and the user sees the low 16 bits of
+        // a nanosecond count.
         return this.scaleConversionArg(
           generated,
           conversion.fromType.toUpperCase(),

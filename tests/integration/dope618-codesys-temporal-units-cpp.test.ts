@@ -99,7 +99,15 @@ ${prints}
       `  a := DT_TO_DINT(dt);
   b := DATE_TO_DINT(dd);
   c := TOD_TO_DINT(td);`,
-      `    std::cout << (long long)p.A.get() << " " << (long long)p.B.get()
+      `    // The three day constants used to be three private copies. They are
+    // only ever the same number, and the conversion helpers now convert
+    // BETWEEN the types, so a divergence would produce wrong values.
+    static_assert(DT_NS_PER_DAY == IEC_NS_PER_DAY, "DT day constant drifted");
+    static_assert(TOD_NS_PER_DAY == IEC_NS_PER_DAY, "TOD day constant drifted");
+    static_assert(DATE_NS_PER_DAY == IEC_NS_PER_DAY, "DATE day constant drifted");
+    static_assert(DATE_SECONDS_PER_DAY * 1000000000LL == IEC_NS_PER_DAY,
+                  "DATE seconds/ns constants disagree");
+    std::cout << (long long)p.A.get() << " " << (long long)p.B.get()
               << " " << (long long)p.C.get() << std::endl;`,
       "codesys_examples",
     );
@@ -222,6 +230,50 @@ ${prints}
       "dt_subsecond",
     );
     expect(out).toBe("truncated 15:36:55");
+  });
+
+  it("floors a pre-epoch DATE instead of rounding toward zero", () => {
+    // Review follow-up. C++ integer division truncates toward zero, so
+    // DATE_FROM_SECONDS(-1) landed on day 0 (1970-01-01) when the floor is
+    // day -1 (1969-12-31). DATE_OF_DT already spilled that borrow explicitly,
+    // so the runtime answered the same question two ways.
+    //
+    // Reachable from user code: these helpers take arbitrary expressions via
+    // DINT_TO_DATE(x), not just literals, so the input is not bounded by
+    // CODESYS's documented (post-1970) domain.
+    const out = run(
+      `    negSec : DINT := -1;
+    negDay : DINT := -86400;
+    d1 : DATE; d2 : DATE;
+    n1 : DINT; n2 : DINT;`,
+      `  d1 := DINT_TO_DATE(negSec);
+  d2 := DINT_TO_DATE(negDay);
+  n1 := DATE_TO_DINT(d1);
+  n2 := DATE_TO_DINT(d2);`,
+      `    std::cout << (long long)p.N1.get() << " " << (long long)p.N2.get() << std::endl;`,
+      "date_pre_epoch",
+    );
+    // One second before the epoch floors to 1969-12-31, which is -86400
+    // seconds; exactly one day before is unchanged at -86400.
+    expect(out).toBe("-86400 -86400");
+  });
+
+  it("agrees with DATE_OF_DT on where a pre-epoch instant falls", () => {
+    // The specific inconsistency the review found: two helpers, same
+    // question, different answers. Asserted against each other rather than
+    // against a hard-coded number, so they cannot drift apart again.
+    const out = run(
+      `    negSec : DINT := -1;
+    viaInt : DATE;
+    viaDT : DATE;
+    same : BOOL;`,
+      `  viaInt := DINT_TO_DATE(negSec);
+  viaDT := DATE_OF_DT(DWORD_TO_DT(negSec));
+  same := viaInt = viaDT;`,
+      `    std::cout << (p.SAME.get() ? "agree" : "DISAGREE") << std::endl;`,
+      "date_of_dt_agreement",
+    );
+    expect(out).toBe("agree");
   });
 
   it("still scales TIME to milliseconds after the runtime cast was neutered", () => {
