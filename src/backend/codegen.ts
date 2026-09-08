@@ -195,11 +195,62 @@ export interface CodeGenOptions {
 }
 
 /**
- * Numeric and bit-string targets for the `TO_*` family — i.e. every
- * elementary type whose runtime representation is "just an integer or
- * a float."  Used by `wrapTemporalArgForNumericConversion` to gate
- * the temporal→ms scaling: STRING / WSTRING and temporal targets need
- * different handling and stay out of this set.
+ * How each IEC temporal type is exchanged with an integer, per CODESYS.
+ *
+ * `toUnit` converts our internal representation to the unit a conversion must
+ * yield; `fromUnit` converts back. `undefined` means the internal
+ * representation already IS that unit, so no call is emitted.
+ *
+ * Internally every temporal type is nanoseconds since its own zero, except
+ * DATE, which is whole days. CODESYS uses 32-bit seconds for DATE and DT,
+ * 32-bit milliseconds for TOD and TIME, and 64-bit nanoseconds for all four
+ * `L` variants — so the `L` rows are pass-through and the rest scale.
+ *
+ * One table rather than a chain of `if`s because the two directions have to
+ * agree: OSCAT converts out and back inside a single expression, and a unit
+ * that disagreed between them would round-trip to nonsense. See DOPE-618.
+ */
+interface TemporalUnitInfo {
+  /** internal → CODESYS unit, for a temporal source. */
+  toUnit: string | undefined;
+  /** CODESYS unit → internal, for a temporal target. */
+  fromUnit: string | undefined;
+}
+
+const TEMPORAL_CONVERSION_UNITS = new Map<string, TemporalUnitInfo>([
+  // milliseconds
+  ["TIME", { toUnit: "TIME_TO_MS", fromUnit: "TIME_FROM_MS" }],
+  ["TOD", { toUnit: "TOD_TO_MS", fromUnit: "TOD_FROM_MS" }],
+  ["TIME_OF_DAY", { toUnit: "TOD_TO_MS", fromUnit: "TOD_FROM_MS" }],
+  // seconds
+  ["DT", { toUnit: "DT_TO_SECONDS", fromUnit: "DT_FROM_SECONDS" }],
+  ["DATE_AND_TIME", { toUnit: "DT_TO_SECONDS", fromUnit: "DT_FROM_SECONDS" }],
+  ["DATE", { toUnit: "DATE_TO_SECONDS", fromUnit: "DATE_FROM_SECONDS" }],
+  ["D", { toUnit: "DATE_TO_SECONDS", fromUnit: "DATE_FROM_SECONDS" }],
+  // nanoseconds — the 64-bit variants. TIME, TOD and DT are already stored in
+  // nanoseconds, so those need no call at all; DATE is stored in days and
+  // still has to be scaled.
+  ["LTIME", { toUnit: undefined, fromUnit: undefined }],
+  ["LTOD", { toUnit: undefined, fromUnit: undefined }],
+  ["LTIME_OF_DAY", { toUnit: undefined, fromUnit: undefined }],
+  ["LDT", { toUnit: undefined, fromUnit: undefined }],
+  ["LDATE_AND_TIME", { toUnit: undefined, fromUnit: undefined }],
+  ["LDATE", { toUnit: "DATE_TO_NS", fromUnit: "DATE_FROM_NS" }],
+]);
+
+/**
+ * Numeric and bit-string targets for the `TO_*` family — i.e. every elementary
+ * type whose runtime representation is "just an integer or a float."
+ *
+ * Gates BOTH directions of the temporal scaling. A temporal source is scaled
+ * only when the target is in here; a numeric source is scaled into a temporal
+ * target only when the SOURCE is in here. STRING / WSTRING need a format
+ * pipeline rather than a scale, and temporal types stay out so that
+ * temporal→temporal conversions are left alone.
+ *
+ * This set and `TEMPORAL_CONVERSION_UNITS` are disjoint, which is what makes
+ * the two directions mutually exclusive: no type is both a temporal type and a
+ * numeric target.
  */
 const NUMERIC_OR_BIT_CONVERSION_TARGETS = new Set([
   "BOOL",
@@ -4254,71 +4305,119 @@ export class CodeGenerator {
   }
 
   /**
-   * Wrap a temporal-typed argument with the right `*_TO_MS` helper
-   * before it's handed to a numeric / bit-string `TO_*` conversion.
+   * Scale the argument of a `TO_*` conversion when a temporal type is on
+   * either side of it.
    *
    * Why this lives in codegen and not in the runtime:
    *  - `IEC_TIME`, `IEC_LTIME`, `IEC_TOD`, `IEC_LTOD`, `IEC_DT`,
    *    `IEC_LDT`, `IEC_DATE`, `IEC_LDATE` are all
-   *    `using ... = IECVar<int64_t>` aliases in `iec_var.hpp` — they
-   *    collapse to the same C++ type after preprocessing.
+   *    `using ... = IECVar<int64_t>` aliases — they collapse to the same
+   *    C++ type after preprocessing.
    *  - A runtime overload `TO_UINT(IEC_TIME)` therefore CANNOT be
-   *    distinguished from `TO_UINT(IEC_DATE)` by the C++ compiler;
-   *    both bind to the same generic template and the raw `int64_t`
-   *    underlying value gets `static_cast`ed straight to the target
-   *    integer (low 16 / 32 bits of a nanosecond count for TIME).
-   *  - The IEC type label only survives at the language layer.  So
-   *    the scaling has to happen at the call site, before the type
-   *    identity is erased.
+   *    distinguished from `TO_UINT(IEC_DATE)`, and `TO_DT(seconds)`
+   *    cannot be distinguished from `TO_DT(IEC_DT)`.
+   *  - The IEC type label only survives at the language layer, so the
+   *    scaling has to happen here, before the type identity is erased.
    *
-   * Scaling chosen (matches `TO_TIME(integer)`'s established
-   * "integer means milliseconds" convention from OSCAT/CODESYS):
-   *  - TIME / LTIME → `TIME_TO_MS`           (ns since 0   → ms)
-   *  - TOD / TIME_OF_DAY / LTOD / LTIME_OF_DAY → `TOD_TO_MS`
-   *    (ns since midnight  → ms since midnight, [0, 86_400_000))
-   *  - DT / DATE_AND_TIME / LDT / LDATE_AND_TIME → `DT_TO_MS`
-   *    (ns since epoch  → ms since epoch)
-   *  - DATE / LDATE: NOT scaled — DATE is already stored as whole
-   *    days, and "days since 1970-01-01" is the natural integer
-   *    answer for `DATE_TO_INT` / etc.  Callers wanting a different
-   *    unit can compose with `DATE_TO_DAYS` (today, the identity).
+   * The units are CODESYS's, which is what the IEC libraries we ship are
+   * written against. From its documentation: DATE, DT and TOD are held in a
+   * 32-bit DWORD with a 1970-01-01 epoch, at SECONDS resolution for DATE and
+   * DT and MILLISECONDS for TOD; TIME is 32-bit milliseconds; and the 64-bit
+   * LDATE / LDT / LTOD / LTIME are all nanoseconds. Its own examples pin this
+   * down: `DT_TO_DINT(DT#2019-9-1-12:0:0.0)` = 1567339200 (seconds),
+   * `DATE_TO_DINT(D#1970-1-2)` = 86400 (seconds, NOT 1 day — the prose on
+   * that page says "days" and is wrong, the example is right), and
+   * `TOD_TO_DINT(TOD#12:0:0)` = 43200000 (milliseconds).
    *
-   * No wrap on temporal-target conversions (`TO_TIME(TIME)`,
-   * `INT_TO_TIME(ms)`, etc.) — those are either pass-through (same
-   * family) or handled by the existing `TO_TIME(integer)` runtime
-   * template which scales ms→ns going the other way.  No wrap on
-   * non-temporal sources either (the generic numeric path already
-   * does the right thing).
+   * Getting this wrong is not a cosmetic scaling error. Milliseconds since
+   * the epoch overflow a DWORD every ~49.7 days, so the result comes back
+   * aliased rather than merely a factor of 1000 out, and CODESYS's documented
+   * DT range (to 2106) only holds when the unit is seconds. See DOPE-618.
+   */
+  private temporalConversionUnit(
+    typeUpper: string,
+  ): TemporalUnitInfo | undefined {
+    return TEMPORAL_CONVERSION_UNITS.get(typeUpper);
+  }
+
+  /**
+   * Temporal SOURCE, numeric target: internal representation → CODESYS unit.
    */
   private wrapTemporalArgForNumericConversion(
     argExpr: string,
     fromTypeUpper: string,
     toTypeUpper: string,
   ): string {
-    // Only the numeric / bit-string targets — temporal targets stay
-    // pass-through and STRING targets need a separate format pipeline
-    // (out of scope for this helper).
+    // STRING targets need a separate format pipeline, not a scale.
     if (!NUMERIC_OR_BIT_CONVERSION_TARGETS.has(toTypeUpper)) {
       return argExpr;
     }
-    if (fromTypeUpper === "TIME" || fromTypeUpper === "LTIME") {
-      return `TIME_TO_MS(${argExpr})`;
+    const unit = this.temporalConversionUnit(fromTypeUpper);
+    if (!unit) return argExpr;
+    return unit.toUnit === undefined ? argExpr : `${unit.toUnit}(${argExpr})`;
+  }
+
+  /**
+   * Numeric SOURCE, temporal target: CODESYS unit → internal representation.
+   *
+   * The mirror of the above, and it has to move with it: OSCAT round-trips
+   * through both in a single expression — `DWORD_TO_DT(DT_TO_DWORD(mez) -
+   * 7200)` in DCF77, for one — so a fix to one direction alone would leave
+   * those worse off than before.
+   */
+  private wrapNumericArgForTemporalConversion(
+    argExpr: string,
+    fromTypeUpper: string,
+    toTypeUpper: string,
+  ): string {
+    // Only a genuinely numeric source. A temporal source is a
+    // temporal→temporal conversion, which is a semantic question (does
+    // DT_TO_DATE truncate to the day?) rather than a unit one, and is left
+    // alone here.
+    if (!NUMERIC_OR_BIT_CONVERSION_TARGETS.has(fromTypeUpper)) {
+      return argExpr;
     }
-    if (
-      fromTypeUpper === "TOD" ||
-      fromTypeUpper === "TIME_OF_DAY" ||
-      fromTypeUpper === "LTOD" ||
-      fromTypeUpper === "LTIME_OF_DAY"
-    ) {
-      return `TOD_TO_MS(${argExpr})`;
+    const unit = this.temporalConversionUnit(toTypeUpper);
+    if (!unit) return argExpr;
+    return unit.fromUnit === undefined
+      ? argExpr
+      : `${unit.fromUnit}(${argExpr})`;
+  }
+
+  /**
+   * Apply whichever of the two directions fits this conversion.
+   *
+   * Branches on which side is temporal rather than on whether the first call
+   * changed the string. A row whose scaling is a legitimate no-op — the `L`
+   * variants are exactly that shape — returns its argument untouched, so a
+   * value comparison cannot distinguish "this direction did not apply" from
+   * "it applied and had nothing to do", and would fall through to the other
+   * direction on a correct answer.
+   *
+   * That fall-through is harmless today because
+   * `NUMERIC_OR_BIT_CONVERSION_TARGETS` and `TEMPORAL_CONVERSION_UNITS` are
+   * disjoint, so the second guard rejects what the first already handled. But
+   * that is a property of two separate tables agreeing, and this reads the
+   * question directly instead of relying on it.
+   */
+  private scaleConversionArg(
+    argExpr: string,
+    fromTypeUpper: string,
+    toTypeUpper: string,
+  ): string {
+    if (TEMPORAL_CONVERSION_UNITS.has(fromTypeUpper)) {
+      return this.wrapTemporalArgForNumericConversion(
+        argExpr,
+        fromTypeUpper,
+        toTypeUpper,
+      );
     }
-    if (
-      fromTypeUpper === "DT" ||
-      fromTypeUpper === "DATE_AND_TIME" ||
-      fromTypeUpper === "LDT" ||
-      fromTypeUpper === "LDATE_AND_TIME"
-    ) {
-      return `DT_TO_MS(${argExpr})`;
+    if (TEMPORAL_CONVERSION_UNITS.has(toTypeUpper)) {
+      return this.wrapNumericArgForTemporalConversion(
+        argExpr,
+        fromTypeUpper,
+        toTypeUpper,
+      );
     }
     return argExpr;
   }
@@ -4517,17 +4616,19 @@ export class CodeGenerator {
       const args = expr.arguments.map((arg, idx) => {
         const generated = this.generateExpression(arg.value);
         if (idx !== 0) return generated;
-        // Type-aware scaling for temporal sources.  See the helper for
-        // the full rationale — short version: the C++ runtime aliases
-        // every temporal type to `IECVar<int64_t>` (so a `TIME` and a
-        // `DATE` are literally the same C++ type after compilation),
-        // and the only place that still knows "this expression is a
-        // TIME" is the codegen layer.  We have to wrap the argument
-        // with `TIME_TO_MS` / `TOD_TO_MS` / `DT_TO_MS` here, otherwise
-        // `TO_UINT(time_var)` lowers to a `static_cast<uint16_t>(raw_ns)`
-        // and the user sees the low 16 bits of the nanosecond count
-        // instead of the milliseconds they asked for.
-        return this.wrapTemporalArgForNumericConversion(
+        // Type-aware unit scaling, in whichever direction applies — a
+        // temporal source going to an integer, or an integer going into a
+        // temporal target. See `TEMPORAL_CONVERSION_UNITS` for the units and
+        // why they are CODESYS's.
+        //
+        // It has to happen here rather than in the runtime because the C++
+        // runtime aliases every temporal type to `IECVar<int64_t>`: a `TIME`
+        // and a `DATE` are literally the same type after compilation, and the
+        // codegen layer is the last place that still knows which one this
+        // expression is. Without it `TO_UINT(time_var)` lowers to a
+        // `static_cast<uint16_t>(raw_ns)` and the user sees the low 16 bits of
+        // a nanosecond count.
+        return this.scaleConversionArg(
           generated,
           conversion.fromType.toUpperCase(),
           conversion.toType.toUpperCase(),
@@ -4552,7 +4653,7 @@ export class CodeGenerator {
         if (idx === 0 && stdFunc.isConversion && stdFunc.specificReturnType) {
           const fromType = this.inferExprType(arg.value);
           if (fromType) {
-            generated = this.wrapTemporalArgForNumericConversion(
+            generated = this.scaleConversionArg(
               generated,
               fromType.toUpperCase(),
               stdFunc.specificReturnType.toUpperCase(),
