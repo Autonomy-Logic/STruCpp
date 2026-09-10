@@ -102,24 +102,6 @@ function parseAddress(address: string): ParsedAddress | null {
 }
 
 /**
- * Get the expected IEC types for a given address size.
- */
-function getCompatibleTypes(size: "X" | "B" | "W" | "D" | "L"): string[] {
-  switch (size) {
-    case "X":
-      return ["BOOL"];
-    case "B":
-      return ["BYTE", "USINT", "SINT"];
-    case "W":
-      return ["WORD", "INT", "UINT"];
-    case "D":
-      return ["DWORD", "DINT", "UDINT", "REAL"];
-    case "L":
-      return ["LWORD", "LINT", "ULINT", "LREAL"];
-  }
-}
-
-/**
  * Variable-block kinds that may carry a physical location ("AT %...").
  *
  * IEC 61131-3 allows located declarations in VAR and VAR_GLOBAL only — interface
@@ -138,16 +120,120 @@ const LOCATABLE_BLOCK_TYPES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Create a canonical address key for duplicate detection.
+ * The bank a located address lives in: its area and its size class.
  *
- * Exact match is the right test: the image is not flat memory. Each size class
- * has its own array in the runtime (bool_memory[][], int_memory[], dint_memory[],
- * lint_memory[]) and byte_index indexes that array, so %MW0 and %MD0 name
- * unrelated storage rather than overlapping bytes. Two declarations collide only
- * when area, size, byte and bit all match.
+ * Two addresses can only collide within one bank. The image is not flat memory
+ * -- each size class has its own array in the runtime (bool_memory[][],
+ * int_memory[], dint_memory[], lint_memory[]) and the index selects an element
+ * of THAT array -- so %MW0 and %MD0 name unrelated storage rather than
+ * overlapping bytes.
  */
-function addressKey(parsed: ParsedAddress): string {
-  return `${parsed.area}${parsed.size}${parsed.byteIndex}.${parsed.bitIndex}`;
+function bankKey(parsed: ParsedAddress): string {
+  return `${parsed.area}${parsed.size}`;
+}
+
+/**
+ * The first slot a located address names, as a linear index into its bank.
+ *
+ * Bit addresses linearise as `byte*8 + bit` so that consecutive bits are
+ * consecutive slots across a byte boundary (%IX0.7 and %IX1.0 are slots 7 and
+ * 8). Every other size class indexes its array directly.
+ */
+function firstSlot(parsed: ParsedAddress): number {
+  return parsed.size === "X"
+    ? parsed.byteIndex * 8 + parsed.bitIndex
+    : parsed.byteIndex;
+}
+
+/**
+ * Elementary types that may sit at an address of the given size.
+ *
+ * For an array, this is checked against the ELEMENT type: `ARRAY [0..66] OF
+ * WORD AT %MW60` occupies 67 consecutive WORD slots, so what has to fit the
+ * `W` size class is WORD, not the array as a whole.
+ */
+function getCompatibleTypes(size: "X" | "B" | "W" | "D" | "L"): string[] {
+  switch (size) {
+    case "X":
+      return ["BOOL"];
+    case "B":
+      return ["BYTE", "USINT", "SINT"];
+    case "W":
+      return ["WORD", "INT", "UINT"];
+    case "D":
+      return ["DWORD", "DINT", "UDINT", "REAL"];
+    case "L":
+      return ["LWORD", "LINT", "ULINT", "LREAL"];
+  }
+}
+
+/**
+ * What a located declaration actually occupies in the process image.
+ *
+ * A plain variable takes one slot and must itself fit the size class. An array
+ * takes one slot PER ELEMENT, laid out consecutively from the declared address,
+ * and it is the element type that must fit -- `HR AT %MW60 : ARRAY [0..66] OF
+ * WORD` means %MW60 through %MW126, each a WORD (openplc-editor#565).
+ *
+ * Arrays are supported here because nothing in the descriptor table stands in
+ * the way: it is flat, one `{area, size, index, pointer}` row per slot, so an
+ * array is N rows rather than a new mechanism. (The pre-strucpp toolchain
+ * refused these because MatIEC could not express them at all; that constraint
+ * left with MatIEC.)
+ *
+ * Returns a `reason` instead of a shape for the array forms that have no
+ * meaningful linear layout. Each is rejected with its own sentence rather than
+ * falling through to the type-compatibility error, which would otherwise
+ * report the compiler's internal `__INLINE_ARRAY_<T>` spelling at the user.
+ */
+type LocatedShape =
+  | { elementTypeName: string; slotCount: number; reason?: undefined }
+  | { reason: string; elementTypeName?: undefined; slotCount?: undefined };
+
+function resolveLocatedShape(
+  type: TypeReference,
+  ast: CompilationUnit,
+): LocatedShape {
+  // A variable-length array carries no bounds anywhere — the AST builder
+  // records only its rank, in the synthetic `__VLA_<rank>_<T>` name — so
+  // `resolveArrayShape` cannot see it and it would otherwise fall through to
+  // the scalar branch and be reported as an incompatible type named
+  // `__VLA_1D_WORD`. Catch it here so the message says what is actually wrong.
+  if (type.name.toUpperCase().startsWith("__VLA_")) {
+    return {
+      reason: `its length is not known at compile time. A located array needs constant bounds, because each element is bound to a fixed address before the program runs`,
+    };
+  }
+
+  const shape: ArrayShape | undefined = resolveArrayShape(type, ast);
+  if (!shape) {
+    // Not an array: the declaration is the slot, and its own type is what
+    // has to fit the size class.
+    return { elementTypeName: type.name, slotCount: 1 };
+  }
+
+  if (shape.dims.length !== 1) {
+    return {
+      reason: `a ${shape.dims.length}-dimensional array has no single linear run of addresses to occupy. Declare it unlocated, or use a one-dimensional array`,
+    };
+  }
+
+  const dim = shape.dims[0];
+  if (!dim) {
+    // `ARRAY [*]` or a bound that isn't a compile-time constant. The runtime
+    // binds each element to a fixed address, so the count has to be known
+    // when the descriptor table is emitted -- not when the program runs.
+    return {
+      reason: `its length is not known at compile time. A located array needs constant bounds, because each element is bound to a fixed address before the program runs`,
+    };
+  }
+
+  const slotCount = arrayDimSize(dim);
+  if (slotCount === undefined || slotCount <= 0) {
+    return { reason: `its declared bounds are empty` };
+  }
+
+  return { elementTypeName: shape.elementTypeName, slotCount };
 }
 
 // =============================================================================
@@ -1279,7 +1365,11 @@ export class SemanticAnalyzer {
    * - Bit index must be 0-7 for bit addresses
    */
   private validateLocatedVariables(ast: CompilationUnit): void {
-    const addressMap = new Map<string, LocatedVarInfo>();
+    /** Slot ranges already claimed, keyed by bank (`area + size`). */
+    const claimedSlots = new Map<
+      string,
+      Array<{ start: number; end: number; owner: LocatedVarInfo }>
+    >();
     const instanceCounts = this.countProgramInstantiations(ast);
 
     // Configuration globals participate in every rule below, above all in the
@@ -1329,11 +1419,30 @@ export class SemanticAnalyzer {
         }
       }
 
-      // Rule 2: Validate type compatibility with address size
-      const compatibleTypes = getCompatibleTypes(locVar.parsed.size);
-      if (!compatibleTypes.includes(locVar.typeName.toUpperCase())) {
+      // Rule 2: the type must fit the address size, and (for an array) the
+      // array must have a linear run of addresses to occupy at all.
+      const shape = resolveLocatedShape(decl.type, ast);
+      if (shape.reason !== undefined) {
         this.addError(
-          `Type '${locVar.typeName}' is not compatible with address size '${locVar.parsed.size}' in '${locVar.address}'. Expected one of: ${compatibleTypes.join(", ")}`,
+          `Located variable '${locVar.name}' at ${locVar.address} cannot be placed: ${shape.reason}.`,
+          decl.sourceSpan.startLine,
+          decl.sourceSpan.startCol,
+          decl.sourceSpan.file,
+        );
+        continue;
+      }
+
+      const compatibleTypes = getCompatibleTypes(locVar.parsed.size);
+      if (!compatibleTypes.includes(shape.elementTypeName.toUpperCase())) {
+        // For an array the mismatch is in the ELEMENT type, so say so —
+        // "Type 'ARRAY [0..66] OF STRING'" would point at the wrong half of
+        // the declaration.
+        const subject =
+          shape.slotCount > 1
+            ? `Array element type '${shape.elementTypeName}'`
+            : `Type '${shape.elementTypeName}'`;
+        this.addError(
+          `${subject} is not compatible with address size '${locVar.parsed.size}' in '${locVar.address}'. Expected one of: ${compatibleTypes.join(", ")}`,
           decl.sourceSpan.startLine,
           decl.sourceSpan.startCol,
           decl.sourceSpan.file,
@@ -1353,18 +1462,34 @@ export class SemanticAnalyzer {
         );
       }
 
-      // Rule 4: Check for duplicate addresses
-      const key = addressKey(locVar.parsed);
-      const existing = addressMap.get(key);
-      if (existing) {
+      // Rule 4: no two declarations may claim the same slot.
+      //
+      // Overlap, not equality: an array occupies `slotCount` consecutive
+      // slots, so `x AT %MW60 : ARRAY [0..66] OF WORD` collides with a plain
+      // `y AT %MW61 : WORD` even though the two addresses differ. Comparing
+      // addresses for equality (which is all that was needed while every
+      // declaration took exactly one slot) would let the second variable
+      // silently share storage with an element of the first.
+      const bank = bankKey(locVar.parsed);
+      const start = firstSlot(locVar.parsed);
+      const end = start + shape.slotCount - 1;
+
+      const claimsInBank = claimedSlots.get(bank) ?? [];
+      const clash = claimsInBank.find((c) => start <= c.end && c.start <= end);
+      if (clash) {
         this.addError(
-          `Duplicate address ${locVar.address}: variable '${locVar.name}' conflicts with '${existing.name}'`,
+          `Duplicate address ${locVar.address}: variable '${locVar.name}' conflicts with '${clash.owner.name}'${
+            clash.end > clash.start || end > start
+              ? ` (${clash.owner.name} occupies ${clash.owner.address} onwards)`
+              : ""
+          }`,
           decl.sourceSpan.startLine,
           decl.sourceSpan.startCol,
           decl.sourceSpan.file,
         );
       } else {
-        addressMap.set(key, locVar);
+        claimsInBank.push({ start, end, owner: locVar });
+        claimedSlots.set(bank, claimsInBank);
       }
     }
   }
