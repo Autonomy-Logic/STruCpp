@@ -61,6 +61,46 @@ inline int64_t DATE_TO_DAYS(IEC_DATE d) noexcept {
     return iec_unwrap(d);
 }
 
+// DATE is stored as whole days, but CODESYS holds DATE in the same memory
+// format as DT — seconds since 1970-01-01, truncated to a day boundary — and
+// its DATE_TO_* conversions yield that: `DATE_TO_DINT(D#1970-01-02)` is 86400,
+// not 1. LDATE is the 64-bit form and yields nanoseconds. These four convert
+// between our day count and the two units the conversions have to produce.
+/**
+ * Floor division, so a pre-epoch input borrows a day instead of rounding
+ * toward zero.
+ *
+ * `-1 / 86400` is 0 in C++, which would put one second before the epoch on
+ * 1970-01-01 rather than 1969-12-31. `DATE_OF_DT` already spills that borrow
+ * explicitly, and these helpers are fed arbitrary user expressions through
+ * `DINT_TO_DATE(x)` rather than only literals, so the two have to agree.
+ * Pre-1970 DATE is outside CODESYS's documented domain, but nothing rejects
+ * it, and a silent off-by-one-day is worse than an unsupported value.
+ */
+inline constexpr int64_t iec_floor_div(int64_t n, int64_t d) noexcept {
+    const int64_t q = n / d;
+    return (n % d != 0 && ((n < 0) != (d < 0))) ? q - 1 : q;
+}
+
+inline constexpr int64_t DATE_SECONDS_PER_DAY = IEC_SECONDS_PER_DAY;
+inline constexpr int64_t DATE_NS_PER_DAY = IEC_NS_PER_DAY;
+
+inline int64_t DATE_TO_SECONDS(IEC_DATE d) noexcept {
+    return iec_unwrap(d) * DATE_SECONDS_PER_DAY;
+}
+
+inline IEC_DATE DATE_FROM_SECONDS(int64_t s) noexcept {
+    return IEC_DATE(static_cast<DATE_t>(iec_floor_div(s, DATE_SECONDS_PER_DAY)));
+}
+
+inline int64_t DATE_TO_NS(IEC_DATE d) noexcept {
+    return iec_unwrap(d) * DATE_NS_PER_DAY;
+}
+
+inline IEC_DATE DATE_FROM_NS(int64_t ns) noexcept {
+    return IEC_DATE(static_cast<DATE_t>(iec_floor_div(ns, DATE_NS_PER_DAY)));
+}
+
 // ---------------------------------------------------------------------------
 // Arithmetic
 // ---------------------------------------------------------------------------

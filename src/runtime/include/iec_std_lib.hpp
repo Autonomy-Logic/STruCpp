@@ -803,16 +803,16 @@ template<typename T> inline IEC_LWORD TO_LWORD(T v) noexcept { return CONVERT<IE
 // Time/Date conversion functions
 // All time types are int64_t aliases, so IEC_TIME/IEC_DATE/IEC_TOD/IEC_DT
 // are all IECVar<int64_t>. We use a single template for each target type.
-// OSCAT calls TO_TIME with integer values (ms) — we convert ms → ns.
-// For TIME→TIME (same underlying type), the static_cast is identity and
-// the multiply still applies, but this matches CODESYS behavior where
-// integer values passed to TO_TIME are treated as milliseconds.
+// These take the value ALREADY in the internal representation. Unit scaling
+// for an integer argument (CODESYS: ms for TIME and TOD, seconds for DT and
+// DATE, ns for the L variants) is applied by codegen, which is the only layer
+// that still knows the IEC type — every temporal type is the same C++ type
+// here, so `TO_TIME(ms)` and `TO_TIME(aTimeValue)` are indistinguishable at
+// this point and a multiply here would corrupt one of them. See
+// `TEMPORAL_CONVERSION_UNITS` in codegen.ts and DOPE-618.
 
 template<typename T> inline IEC_TIME TO_TIME(T v) noexcept {
-    // If the input is already an IECVar<int64_t> (TIME/DATE/DT/TOD), this
-    // treats the raw nanosecond value as milliseconds — but in practice
-    // OSCAT only calls TO_TIME on integer types, not on TIME values.
-    return IEC_TIME(static_cast<TIME_t>(iec_unwrap(v)) * 1000000);
+    return IEC_TIME(static_cast<TIME_t>(iec_unwrap(v)));
 }
 
 template<typename T> inline IEC_DATE TO_DATE(T v) noexcept {

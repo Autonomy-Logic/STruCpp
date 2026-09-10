@@ -46,7 +46,7 @@ namespace strucpp {
 // iec_dt.hpp without iec_time.hpp, and the `DT_FROM_*` helpers below
 // need the unit factor.  C++ tolerates redeclaration of inline
 // constexpr at namespace scope as long as the value matches.
-inline constexpr int64_t DT_NS_PER_DAY = 24LL * 60LL * 60LL * 1000000000LL;
+inline constexpr int64_t DT_NS_PER_DAY = IEC_NS_PER_DAY;
 
 // ---------------------------------------------------------------------------
 // Construction helpers

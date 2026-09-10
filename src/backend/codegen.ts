@@ -73,6 +73,7 @@ import {
   isImplicitlyConvertible,
   parsePartialAccess,
   resolveArrayElementType as resolveArrayElementTypeUtil,
+  resolveArrayShapeByName,
   resolveFieldType as resolveFieldTypeUtil,
   type EnumMemberEntry,
   type PartialAccess,
@@ -101,6 +102,17 @@ interface LocatedVarDescriptor {
   bitIndex: number;
   typeName: string;
   programName: string;
+  /**
+   * IEC index of the array element this descriptor binds, for a located
+   * ARRAY. Absent for a scalar.
+   *
+   * A located array is emitted as one descriptor PER ELEMENT, laid out over
+   * consecutive addresses -- `AT %MW60 : ARRAY [0..66] OF WORD` becomes 67
+   * descriptors at %MW60..%MW126. The descriptor table is flat and carries no
+   * notion of an aggregate, so the element index is what tells the pointer
+   * initialiser to bind `arr[i]` rather than `arr` (openplc-editor#565).
+   */
+  elementIndex?: number;
 }
 
 /**
@@ -201,11 +213,62 @@ export interface CodeGenOptions {
 }
 
 /**
- * Numeric and bit-string targets for the `TO_*` family — i.e. every
- * elementary type whose runtime representation is "just an integer or
- * a float."  Used by `wrapTemporalArgForNumericConversion` to gate
- * the temporal→ms scaling: STRING / WSTRING and temporal targets need
- * different handling and stay out of this set.
+ * How each IEC temporal type is exchanged with an integer, per CODESYS.
+ *
+ * `toUnit` converts our internal representation to the unit a conversion must
+ * yield; `fromUnit` converts back. `undefined` means the internal
+ * representation already IS that unit, so no call is emitted.
+ *
+ * Internally every temporal type is nanoseconds since its own zero, except
+ * DATE, which is whole days. CODESYS uses 32-bit seconds for DATE and DT,
+ * 32-bit milliseconds for TOD and TIME, and 64-bit nanoseconds for all four
+ * `L` variants — so the `L` rows are pass-through and the rest scale.
+ *
+ * One table rather than a chain of `if`s because the two directions have to
+ * agree: OSCAT converts out and back inside a single expression, and a unit
+ * that disagreed between them would round-trip to nonsense. See DOPE-618.
+ */
+interface TemporalUnitInfo {
+  /** internal → CODESYS unit, for a temporal source. */
+  toUnit: string | undefined;
+  /** CODESYS unit → internal, for a temporal target. */
+  fromUnit: string | undefined;
+}
+
+const TEMPORAL_CONVERSION_UNITS = new Map<string, TemporalUnitInfo>([
+  // milliseconds
+  ["TIME", { toUnit: "TIME_TO_MS", fromUnit: "TIME_FROM_MS" }],
+  ["TOD", { toUnit: "TOD_TO_MS", fromUnit: "TOD_FROM_MS" }],
+  ["TIME_OF_DAY", { toUnit: "TOD_TO_MS", fromUnit: "TOD_FROM_MS" }],
+  // seconds
+  ["DT", { toUnit: "DT_TO_SECONDS", fromUnit: "DT_FROM_SECONDS" }],
+  ["DATE_AND_TIME", { toUnit: "DT_TO_SECONDS", fromUnit: "DT_FROM_SECONDS" }],
+  ["DATE", { toUnit: "DATE_TO_SECONDS", fromUnit: "DATE_FROM_SECONDS" }],
+  ["D", { toUnit: "DATE_TO_SECONDS", fromUnit: "DATE_FROM_SECONDS" }],
+  // nanoseconds — the 64-bit variants. TIME, TOD and DT are already stored in
+  // nanoseconds, so those need no call at all; DATE is stored in days and
+  // still has to be scaled.
+  ["LTIME", { toUnit: undefined, fromUnit: undefined }],
+  ["LTOD", { toUnit: undefined, fromUnit: undefined }],
+  ["LTIME_OF_DAY", { toUnit: undefined, fromUnit: undefined }],
+  ["LDT", { toUnit: undefined, fromUnit: undefined }],
+  ["LDATE_AND_TIME", { toUnit: undefined, fromUnit: undefined }],
+  ["LDATE", { toUnit: "DATE_TO_NS", fromUnit: "DATE_FROM_NS" }],
+]);
+
+/**
+ * Numeric and bit-string targets for the `TO_*` family — i.e. every elementary
+ * type whose runtime representation is "just an integer or a float."
+ *
+ * Gates BOTH directions of the temporal scaling. A temporal source is scaled
+ * only when the target is in here; a numeric source is scaled into a temporal
+ * target only when the SOURCE is in here. STRING / WSTRING need a format
+ * pipeline rather than a scale, and temporal types stay out so that
+ * temporal→temporal conversions are left alone.
+ *
+ * This set and `TEMPORAL_CONVERSION_UNITS` are disjoint, which is what makes
+ * the two directions mutually exclusive: no type is both a temporal type and a
+ * numeric target.
  */
 const NUMERIC_OR_BIT_CONVERSION_TARGETS = new Set([
   "BOOL",
@@ -3010,7 +3073,14 @@ export class CodeGenerator {
         // (not a real program) keeps it out of every program's located_range.
         if (gvar.address) {
           this.collectLocatedVarFromModel(
-            { name: gvar.name, typeName: gvar.typeName, address: gvar.address },
+            {
+              name: gvar.name,
+              typeName: gvar.typeName,
+              address: gvar.address,
+              // Carried through so a located ARRAY global expands to one
+              // descriptor per element rather than binding only its first.
+              arrayDimensions: gvar.arrayDimensions,
+            },
             "@config",
           );
         }
@@ -4689,71 +4759,119 @@ export class CodeGenerator {
   }
 
   /**
-   * Wrap a temporal-typed argument with the right `*_TO_MS` helper
-   * before it's handed to a numeric / bit-string `TO_*` conversion.
+   * Scale the argument of a `TO_*` conversion when a temporal type is on
+   * either side of it.
    *
    * Why this lives in codegen and not in the runtime:
    *  - `IEC_TIME`, `IEC_LTIME`, `IEC_TOD`, `IEC_LTOD`, `IEC_DT`,
    *    `IEC_LDT`, `IEC_DATE`, `IEC_LDATE` are all
-   *    `using ... = IECVar<int64_t>` aliases in `iec_var.hpp` — they
-   *    collapse to the same C++ type after preprocessing.
+   *    `using ... = IECVar<int64_t>` aliases — they collapse to the same
+   *    C++ type after preprocessing.
    *  - A runtime overload `TO_UINT(IEC_TIME)` therefore CANNOT be
-   *    distinguished from `TO_UINT(IEC_DATE)` by the C++ compiler;
-   *    both bind to the same generic template and the raw `int64_t`
-   *    underlying value gets `static_cast`ed straight to the target
-   *    integer (low 16 / 32 bits of a nanosecond count for TIME).
-   *  - The IEC type label only survives at the language layer.  So
-   *    the scaling has to happen at the call site, before the type
-   *    identity is erased.
+   *    distinguished from `TO_UINT(IEC_DATE)`, and `TO_DT(seconds)`
+   *    cannot be distinguished from `TO_DT(IEC_DT)`.
+   *  - The IEC type label only survives at the language layer, so the
+   *    scaling has to happen here, before the type identity is erased.
    *
-   * Scaling chosen (matches `TO_TIME(integer)`'s established
-   * "integer means milliseconds" convention from OSCAT/CODESYS):
-   *  - TIME / LTIME → `TIME_TO_MS`           (ns since 0   → ms)
-   *  - TOD / TIME_OF_DAY / LTOD / LTIME_OF_DAY → `TOD_TO_MS`
-   *    (ns since midnight  → ms since midnight, [0, 86_400_000))
-   *  - DT / DATE_AND_TIME / LDT / LDATE_AND_TIME → `DT_TO_MS`
-   *    (ns since epoch  → ms since epoch)
-   *  - DATE / LDATE: NOT scaled — DATE is already stored as whole
-   *    days, and "days since 1970-01-01" is the natural integer
-   *    answer for `DATE_TO_INT` / etc.  Callers wanting a different
-   *    unit can compose with `DATE_TO_DAYS` (today, the identity).
+   * The units are CODESYS's, which is what the IEC libraries we ship are
+   * written against. From its documentation: DATE, DT and TOD are held in a
+   * 32-bit DWORD with a 1970-01-01 epoch, at SECONDS resolution for DATE and
+   * DT and MILLISECONDS for TOD; TIME is 32-bit milliseconds; and the 64-bit
+   * LDATE / LDT / LTOD / LTIME are all nanoseconds. Its own examples pin this
+   * down: `DT_TO_DINT(DT#2019-9-1-12:0:0.0)` = 1567339200 (seconds),
+   * `DATE_TO_DINT(D#1970-1-2)` = 86400 (seconds, NOT 1 day — the prose on
+   * that page says "days" and is wrong, the example is right), and
+   * `TOD_TO_DINT(TOD#12:0:0)` = 43200000 (milliseconds).
    *
-   * No wrap on temporal-target conversions (`TO_TIME(TIME)`,
-   * `INT_TO_TIME(ms)`, etc.) — those are either pass-through (same
-   * family) or handled by the existing `TO_TIME(integer)` runtime
-   * template which scales ms→ns going the other way.  No wrap on
-   * non-temporal sources either (the generic numeric path already
-   * does the right thing).
+   * Getting this wrong is not a cosmetic scaling error. Milliseconds since
+   * the epoch overflow a DWORD every ~49.7 days, so the result comes back
+   * aliased rather than merely a factor of 1000 out, and CODESYS's documented
+   * DT range (to 2106) only holds when the unit is seconds. See DOPE-618.
+   */
+  private temporalConversionUnit(
+    typeUpper: string,
+  ): TemporalUnitInfo | undefined {
+    return TEMPORAL_CONVERSION_UNITS.get(typeUpper);
+  }
+
+  /**
+   * Temporal SOURCE, numeric target: internal representation → CODESYS unit.
    */
   private wrapTemporalArgForNumericConversion(
     argExpr: string,
     fromTypeUpper: string,
     toTypeUpper: string,
   ): string {
-    // Only the numeric / bit-string targets — temporal targets stay
-    // pass-through and STRING targets need a separate format pipeline
-    // (out of scope for this helper).
+    // STRING targets need a separate format pipeline, not a scale.
     if (!NUMERIC_OR_BIT_CONVERSION_TARGETS.has(toTypeUpper)) {
       return argExpr;
     }
-    if (fromTypeUpper === "TIME" || fromTypeUpper === "LTIME") {
-      return `TIME_TO_MS(${argExpr})`;
+    const unit = this.temporalConversionUnit(fromTypeUpper);
+    if (!unit) return argExpr;
+    return unit.toUnit === undefined ? argExpr : `${unit.toUnit}(${argExpr})`;
+  }
+
+  /**
+   * Numeric SOURCE, temporal target: CODESYS unit → internal representation.
+   *
+   * The mirror of the above, and it has to move with it: OSCAT round-trips
+   * through both in a single expression — `DWORD_TO_DT(DT_TO_DWORD(mez) -
+   * 7200)` in DCF77, for one — so a fix to one direction alone would leave
+   * those worse off than before.
+   */
+  private wrapNumericArgForTemporalConversion(
+    argExpr: string,
+    fromTypeUpper: string,
+    toTypeUpper: string,
+  ): string {
+    // Only a genuinely numeric source. A temporal source is a
+    // temporal→temporal conversion, which is a semantic question (does
+    // DT_TO_DATE truncate to the day?) rather than a unit one, and is left
+    // alone here.
+    if (!NUMERIC_OR_BIT_CONVERSION_TARGETS.has(fromTypeUpper)) {
+      return argExpr;
     }
-    if (
-      fromTypeUpper === "TOD" ||
-      fromTypeUpper === "TIME_OF_DAY" ||
-      fromTypeUpper === "LTOD" ||
-      fromTypeUpper === "LTIME_OF_DAY"
-    ) {
-      return `TOD_TO_MS(${argExpr})`;
+    const unit = this.temporalConversionUnit(toTypeUpper);
+    if (!unit) return argExpr;
+    return unit.fromUnit === undefined
+      ? argExpr
+      : `${unit.fromUnit}(${argExpr})`;
+  }
+
+  /**
+   * Apply whichever of the two directions fits this conversion.
+   *
+   * Branches on which side is temporal rather than on whether the first call
+   * changed the string. A row whose scaling is a legitimate no-op — the `L`
+   * variants are exactly that shape — returns its argument untouched, so a
+   * value comparison cannot distinguish "this direction did not apply" from
+   * "it applied and had nothing to do", and would fall through to the other
+   * direction on a correct answer.
+   *
+   * That fall-through is harmless today because
+   * `NUMERIC_OR_BIT_CONVERSION_TARGETS` and `TEMPORAL_CONVERSION_UNITS` are
+   * disjoint, so the second guard rejects what the first already handled. But
+   * that is a property of two separate tables agreeing, and this reads the
+   * question directly instead of relying on it.
+   */
+  private scaleConversionArg(
+    argExpr: string,
+    fromTypeUpper: string,
+    toTypeUpper: string,
+  ): string {
+    if (TEMPORAL_CONVERSION_UNITS.has(fromTypeUpper)) {
+      return this.wrapTemporalArgForNumericConversion(
+        argExpr,
+        fromTypeUpper,
+        toTypeUpper,
+      );
     }
-    if (
-      fromTypeUpper === "DT" ||
-      fromTypeUpper === "DATE_AND_TIME" ||
-      fromTypeUpper === "LDT" ||
-      fromTypeUpper === "LDATE_AND_TIME"
-    ) {
-      return `DT_TO_MS(${argExpr})`;
+    if (TEMPORAL_CONVERSION_UNITS.has(toTypeUpper)) {
+      return this.wrapNumericArgForTemporalConversion(
+        argExpr,
+        fromTypeUpper,
+        toTypeUpper,
+      );
     }
     return argExpr;
   }
@@ -4958,17 +5076,19 @@ export class CodeGenerator {
       const args = expr.arguments.map((arg, idx) => {
         const generated = this.generateExpression(arg.value);
         if (idx !== 0) return generated;
-        // Type-aware scaling for temporal sources.  See the helper for
-        // the full rationale — short version: the C++ runtime aliases
-        // every temporal type to `IECVar<int64_t>` (so a `TIME` and a
-        // `DATE` are literally the same C++ type after compilation),
-        // and the only place that still knows "this expression is a
-        // TIME" is the codegen layer.  We have to wrap the argument
-        // with `TIME_TO_MS` / `TOD_TO_MS` / `DT_TO_MS` here, otherwise
-        // `TO_UINT(time_var)` lowers to a `static_cast<uint16_t>(raw_ns)`
-        // and the user sees the low 16 bits of the nanosecond count
-        // instead of the milliseconds they asked for.
-        return this.wrapTemporalArgForNumericConversion(
+        // Type-aware unit scaling, in whichever direction applies — a
+        // temporal source going to an integer, or an integer going into a
+        // temporal target. See `TEMPORAL_CONVERSION_UNITS` for the units and
+        // why they are CODESYS's.
+        //
+        // It has to happen here rather than in the runtime because the C++
+        // runtime aliases every temporal type to `IECVar<int64_t>`: a `TIME`
+        // and a `DATE` are literally the same type after compilation, and the
+        // codegen layer is the last place that still knows which one this
+        // expression is. Without it `TO_UINT(time_var)` lowers to a
+        // `static_cast<uint16_t>(raw_ns)` and the user sees the low 16 bits of
+        // a nanosecond count.
+        return this.scaleConversionArg(
           generated,
           conversion.fromType.toUpperCase(),
           conversion.toType.toUpperCase(),
@@ -4993,7 +5113,7 @@ export class CodeGenerator {
         if (idx === 0 && stdFunc.isConversion && stdFunc.specificReturnType) {
           const fromType = this.inferExprType(arg.value);
           if (fromType) {
-            generated = this.wrapTemporalArgForNumericConversion(
+            generated = this.scaleConversionArg(
               generated,
               fromType.toUpperCase(),
               stdFunc.specificReturnType.toUpperCase(),
@@ -6504,6 +6624,102 @@ export class CodeGenerator {
   }
 
   /**
+   * Push the descriptor(s) one located declaration produces.
+   *
+   * A scalar produces one. An ARRAY produces one PER ELEMENT, walking the
+   * address forward by one slot each time, so `AT %MW60 : ARRAY [0..66] OF
+   * WORD` fills %MW60..%MW126 (openplc-editor#565). The runtime table is flat
+   * and knows nothing about aggregates -- the expansion happens here so that
+   * every consumer of `locatedVars[]` (the descriptor array, the count, the
+   * per-program range, the located-globals list) gets the element-level view
+   * without any of them having to understand arrays.
+   *
+   * Bit addresses advance across the byte boundary (%IX0.7 -> %IX1.0), which
+   * is why the step is computed on the linearised index rather than on
+   * `byteIndex` alone.
+   *
+   * `dims` is `undefined` for a non-array. The semantic analyzer has already
+   * rejected the array shapes that cannot be laid out linearly (multi-
+   * dimensional, non-constant bounds), so anything reaching here with bounds
+   * is a single dimension with a known extent.
+   */
+  /**
+   * The dimensions a located declaration actually has, resolving a NAMED
+   * ARRAY type the way the semantic analyzer already does.
+   *
+   * The AST builder writes bounds onto the TypeReference only for an INLINE
+   * `ARRAY [a..b] OF T`. A named type (`TYPE Buf : ARRAY [0..9] OF WORD`) has
+   * none, so reading `decl.type.arrayDimensions` alone made codegen see a
+   * scalar where the analyzer had seen ten slots: one descriptor was emitted
+   * and the pointer initialiser called `.raw_ptr()` on the array itself, which
+   * does not compile. Resolving by name here keeps the two passes agreeing.
+   *
+   * Answers `undefined` for anything that is not a single fixed dimension --
+   * multi-dimensional and variable-length shapes are rejected in semantics and
+   * never reach codegen, so this is a fallback rather than a second opinion.
+   */
+  private resolveLocatedDims(
+    typeName: string,
+    dims: Array<{ start: number; end: number }> | undefined,
+  ): Array<{ start: number; end: number }> | undefined {
+    if (dims && dims.length > 0) return dims;
+    if (!this.ast) return undefined;
+
+    const shape = resolveArrayShapeByName(typeName, this.ast);
+    if (!shape || shape.dims.length !== 1) return undefined;
+
+    const dim = shape.dims[0];
+    return dim ? [dim] : undefined;
+  }
+
+  private pushLocatedDescriptors(
+    varName: string,
+    address: string,
+    typeName: string,
+    programName: string,
+    dims: Array<{ start: number; end: number }> | undefined,
+  ): void {
+    const parsed = parseLocatedAddress(address);
+    if (!parsed) return;
+
+    const resolved = this.resolveLocatedDims(typeName, dims);
+    const dim = resolved?.length === 1 ? resolved[0] : undefined;
+    if (!dim) {
+      this.locatedVars.push({
+        varName,
+        address,
+        area: parsed.area,
+        size: parsed.size,
+        byteIndex: parsed.byteIndex,
+        bitIndex: parsed.bitIndex,
+        typeName,
+        programName,
+      });
+      return;
+    }
+
+    const isBit = parsed.size === "Bit";
+    const baseSlot = isBit
+      ? parsed.byteIndex * 8 + parsed.bitIndex
+      : parsed.byteIndex;
+
+    for (let iecIndex = dim.start; iecIndex <= dim.end; iecIndex++) {
+      const slot = baseSlot + (iecIndex - dim.start);
+      this.locatedVars.push({
+        varName,
+        address,
+        area: parsed.area,
+        size: parsed.size,
+        byteIndex: isBit ? Math.floor(slot / 8) : slot,
+        bitIndex: isBit ? slot % 8 : 0,
+        typeName,
+        programName,
+        elementIndex: iecIndex,
+      });
+    }
+  }
+
+  /**
    * Collect a located variable for descriptor array generation.
    */
   private collectLocatedVar(
@@ -6513,43 +6729,41 @@ export class CodeGenerator {
   ): void {
     if (!decl.address) return;
 
-    const parsed = parseLocatedAddress(decl.address);
-    if (!parsed) return;
-
-    this.locatedVars.push({
+    this.pushLocatedDescriptors(
       varName,
-      address: decl.address,
-      area: parsed.area,
-      size: parsed.size,
-      byteIndex: parsed.byteIndex,
-      bitIndex: parsed.bitIndex,
-      typeName: decl.type.name,
+      decl.address,
+      decl.type.name,
       programName,
-    });
+      // Inline `ARRAY [a..b] OF T`: the AST builder resolves the bounds onto
+      // the TypeReference. A named ARRAY type carries none here and is
+      // handled by the model path, which resolves the alias first.
+      decl.type.arrayDimensions,
+    );
   }
 
   /**
    * Collect a located variable from project model for descriptor array generation.
    */
   private collectLocatedVarFromModel(
-    decl: { name: string; typeName: string; address?: string },
+    decl: {
+      name: string;
+      typeName: string;
+      address?: string;
+      // Explicit `| undefined` (not just `?`): exactOptionalPropertyTypes is
+      // on, and callers forward an optional field straight through.
+      arrayDimensions?: Array<{ start: number; end: number }> | undefined;
+    },
     programName: string,
   ): void {
     if (!decl.address) return;
 
-    const parsed = parseLocatedAddress(decl.address);
-    if (!parsed) return;
-
-    this.locatedVars.push({
-      varName: decl.name,
-      address: decl.address,
-      area: parsed.area,
-      size: parsed.size,
-      byteIndex: parsed.byteIndex,
-      bitIndex: parsed.bitIndex,
-      typeName: decl.typeName,
+    this.pushLocatedDescriptors(
+      decl.name,
+      decl.address,
+      decl.typeName,
       programName,
-    });
+      decl.arrayDimensions,
+    );
   }
 
   /**
@@ -6589,15 +6803,21 @@ export class CodeGenerator {
     this.emitHeader(" */");
     this.emitHeader("");
 
-    // Forward declarations for program instances
+    // Forward declarations for program instances.
+    //
+    // One line per DECLARATION, not per descriptor: a located array expands to
+    // one descriptor per element, and repeating the same "AT %MW60" line 67
+    // times would bury the rest of the header in noise.
+    const listed = new Set<string>();
     for (const locVar of this.locatedVars) {
       const scope =
         locVar.programName === "@config"
           ? "configuration"
           : `Program_${locVar.programName}`;
-      this.emitHeader(
-        `// Forward: ${locVar.varName} AT ${locVar.address} in ${scope}`,
-      );
+      const line = `// Forward: ${locVar.varName} AT ${locVar.address} in ${scope}`;
+      if (listed.has(line)) continue;
+      listed.add(line);
+      this.emitHeader(line);
     }
     if (isEmpty) {
       this.emitHeader("// (no located variables — placeholder entry only)");
@@ -6658,7 +6878,7 @@ export class CodeGenerator {
         const comma = i < this.locatedVars.length - 1 ? "," : "";
         this.emit(
           `    { LocatedArea::${locVar.area}, LocatedSize::${locVar.size}, ` +
-            `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${locVar.varName} AT ${locVar.address}`,
+            `${locVar.byteIndex}, ${locVar.bitIndex}, {0, 0, 0}, nullptr }${comma}  // ${this.describeLocatedDescriptor(locVar)}`,
         );
       }
     }
@@ -6718,7 +6938,9 @@ export class CodeGenerator {
       for (let i = 0; i < globals.length; i++) {
         const g = globals[i]!;
         const comma = i < globals.length - 1 ? "," : "";
-        this.emit(`    nullptr${comma}  // ${g.varName} AT ${g.address}`);
+        this.emit(
+          `    nullptr${comma}  // ${this.describeLocatedDescriptor(g)}`,
+        );
       }
     }
     this.emit("};");
@@ -6779,17 +7001,17 @@ export class CodeGenerator {
     if (progVars.length === 0) return;
 
     this.emit(`${indent}// Initialize located variable pointers`);
-    for (const locVar of progVars) {
-      // Find the index of this variable in the global array
-      const index = this.locatedVars.findIndex(
-        (v) =>
-          v.varName === locVar.varName && v.programName === locVar.programName,
+    // Walk the global array by position rather than looking each entry back
+    // up by name. A located ARRAY contributes one descriptor per element, all
+    // sharing a varName, so a name lookup (`findIndex`) resolves every one of
+    // them to the FIRST slot: element 0 would be bound N times and elements
+    // 1..N-1 left null (openplc-editor#565). The index is right here anyway.
+    for (let index = 0; index < this.locatedVars.length; index++) {
+      const locVar = this.locatedVars[index]!;
+      if (locVar.programName !== programName) continue;
+      this.emit(
+        `${indent}locatedVars[${index}].pointer = ${this.locatedStorageExpr(locVar, memberAccess)};`,
       );
-      if (index >= 0) {
-        this.emit(
-          `${indent}locatedVars[${index}].pointer = ${locVar.varName}${memberAccess}.raw_ptr();`,
-        );
-      }
     }
 
     // Configuration VAR_GLOBALs additionally record their storage pointer in
@@ -6804,11 +7026,54 @@ export class CodeGenerator {
       for (let g = 0; g < progVars.length; g++) {
         const locVar = progVars[g]!;
         this.emit(
-          `${indent}locatedGlobals[${g}] = ${locVar.varName}${memberAccess}.raw_ptr();`,
+          `${indent}locatedGlobals[${g}] = ${this.locatedStorageExpr(locVar, memberAccess)};`,
         );
       }
       this.emit("#endif");
     }
+  }
+
+  /**
+   * The C++ expression yielding the storage a descriptor binds to.
+   *
+   * Scalar: `name[.value].raw_ptr()`. Array element: `name[.value][i].raw_ptr()`,
+   * where `i` is the IEC index — `IEC_ARRAY_1D::operator[]` maps the declared
+   * index range onto its internal storage, so the declared index is what goes
+   * in, not a zero-based offset.
+   */
+  private locatedStorageExpr(
+    locVar: LocatedVarDescriptor,
+    memberAccess: string,
+  ): string {
+    const element =
+      locVar.elementIndex === undefined ? "" : `[${locVar.elementIndex}]`;
+    return `${locVar.varName}${memberAccess}${element}.raw_ptr()`;
+  }
+
+  /**
+   * How a descriptor labels itself in the generated table's trailing comment.
+   *
+   * For an array element this is the address the element actually occupies,
+   * not the array's declared base — 67 rows all reading `AT %MW60` would tell
+   * a reader nothing about which slot each row binds.
+   */
+  private describeLocatedDescriptor(locVar: LocatedVarDescriptor): string {
+    if (locVar.elementIndex === undefined) {
+      return `${locVar.varName} AT ${locVar.address}`;
+    }
+    const areaChar = { Input: "I", Output: "Q", Memory: "M" }[locVar.area];
+    const sizeChar = {
+      Bit: "X",
+      Byte: "B",
+      Word: "W",
+      DWord: "D",
+      LWord: "L",
+    }[locVar.size];
+    const offset =
+      locVar.size === "Bit"
+        ? `${locVar.byteIndex}.${locVar.bitIndex}`
+        : `${locVar.byteIndex}`;
+    return `${locVar.varName}[${locVar.elementIndex}] AT %${areaChar}${sizeChar}${offset}`;
   }
 
   /**

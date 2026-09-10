@@ -124,6 +124,17 @@ using LREAL_t = double;
 // Elementary Types - Time and Date
 // =============================================================================
 
+/**
+ * One day, in the two units the temporal types are exchanged in.
+ *
+ * Defined here because iec_date, iec_dt and iec_tod all include this header
+ * and had a private copy each. They are only ever the same number, and since
+ * the conversion helpers now convert BETWEEN those types, a divergence would
+ * produce wrong values rather than merely duplicated text.
+ */
+inline constexpr int64_t IEC_SECONDS_PER_DAY = 24LL * 60LL * 60LL;
+inline constexpr int64_t IEC_NS_PER_DAY = IEC_SECONDS_PER_DAY * 1000000000LL;
+
 /** IEC TIME - Duration in nanoseconds */
 using TIME_t = int64_t;
 
