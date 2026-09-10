@@ -536,9 +536,17 @@ constexpr size_t iec_wstring_bytes(size_t cap) noexcept {
 /** Offset of `IECWStringVar<cap>::forced_`, which follows `value_`. */
 constexpr size_t iec_wstringvar_forced_offset(size_t cap) noexcept { return iec_wstring_bytes(cap); }
 
-/** Offset of `IECWStringVar<cap>::forced_value_`: after `forced_`, realigned. */
+/**
+ * Offset of `IECWStringVar<cap>::forced_value_`: after `forced_`, realigned.
+ *
+ * The realignment is the class's own, not a fixed 2 -- AVR byte-aligns every
+ * type, so there the bool is followed immediately rather than padded past.
+ * `length_` needs no such rounding: `char16_t[cap + 1]` is a whole number of
+ * 16-bit units either way.
+ */
 constexpr size_t iec_wstringvar_forced_value_offset(size_t cap) noexcept {
-    return iec_wstring_bytes(cap) + sizeof(uint16_t);
+    constexpr size_t align = alignof(IECWString<1>);
+    return (iec_wstring_bytes(cap) + sizeof(bool) + align - 1) & ~(align - 1);
 }
 
 static_assert(IECWString<1>::length_field_offset() == iec_wstring_len_offset(1), "IECWString<1> layout");

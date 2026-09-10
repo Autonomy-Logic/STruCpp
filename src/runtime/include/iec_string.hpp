@@ -678,10 +678,24 @@ using IEC_STRING = IECStringVar<254>;
 // debug variable in flash, which is the budget a sized declaration protects.
 // ---------------------------------------------------------------------------
 
-/** Offset of `IECString<cap>::length_`: `char[cap + 1]` rounded to its alignment. */
-constexpr size_t iec_string_len_offset(size_t cap) noexcept {
-    return (cap + 2) & ~static_cast<size_t>(1);
+/**
+ * Round `bytes` up to the alignment `IECString` itself has.
+ *
+ * Taken from the class rather than written as a number, because it is not the
+ * same everywhere: a target that needs a 16-bit load on an even address gives
+ * it 2, and AVR byte-aligns every type and gives it 1. Assuming 2 put the
+ * length two bytes past where an 8-bit build actually keeps it.
+ *
+ * The alignment does not depend on the capacity, so any instantiation answers
+ * for all of them.
+ */
+constexpr size_t iec_string_align_up(size_t bytes) noexcept {
+    constexpr size_t align = alignof(IECString<1>);
+    return (bytes + align - 1) & ~(align - 1);
 }
+
+/** Offset of `IECString<cap>::length_`: `char[cap + 1]` rounded to its alignment. */
+constexpr size_t iec_string_len_offset(size_t cap) noexcept { return iec_string_align_up(cap + 1); }
 
 /** `sizeof(IECString<cap>)`. */
 constexpr size_t iec_string_bytes(size_t cap) noexcept {
@@ -693,7 +707,7 @@ constexpr size_t iec_stringvar_forced_offset(size_t cap) noexcept { return iec_s
 
 /** Offset of `IECStringVar<cap>::forced_value_`: after `forced_`, realigned. */
 constexpr size_t iec_stringvar_forced_value_offset(size_t cap) noexcept {
-    return iec_string_bytes(cap) + sizeof(uint16_t);
+    return iec_string_align_up(iec_string_bytes(cap) + sizeof(bool));
 }
 
 // A change to either class's member order or types fails here at compile time,
