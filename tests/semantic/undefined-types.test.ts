@@ -408,6 +408,27 @@ describe("Undefined Type Validation - Multi-Source", () => {
     );
   });
 
+  it("should not let an undefined type suppress unrelated diagnostics", () => {
+    const mainST = `
+      PROGRAM Main
+        VAR
+          x : Foo;
+          ok : BOOL;
+        END_VAR
+        ok := neverDeclared;
+      END_PROGRAM
+    `;
+
+    const result = compile(mainST, {});
+
+    expect(result.errors.some((e) => /Undefined type/i.test(e.message))).toBe(
+      true,
+    );
+    expect(
+      result.errors.some((e) => /Undeclared variable/i.test(e.message)),
+    ).toBe(true);
+  });
+
   it("should report an undefined type when the other source is clean", () => {
     const mainST = `
       PROGRAM Main

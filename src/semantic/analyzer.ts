@@ -334,18 +334,21 @@ export class SemanticAnalyzer {
     // Pass 1: Build symbol tables
     this.buildSymbolTables(ast);
 
-    // Before the gate below: a type error in any merged source must not hide an undefined type.
+    // Reported before the gates below so a type error in any merged source cannot hide
+    // an undefined type — and excluded from them, so the reverse cannot happen either.
+    const errorsBeforeTypeReferences = this.errors.length;
     this.validateTypeReferences(ast);
+    const typeReferenceErrors = this.errors.length - errorsBeforeTypeReferences;
 
     // Pass 2: Type checking
-    if (this.errors.length === 0) {
+    if (this.errors.length - typeReferenceErrors === 0) {
       const typeResult = this.typeChecker.check(ast);
       this.errors.push(...typeResult.errors);
       this.warnings.push(...typeResult.warnings);
     }
 
     // Pass 3: Semantic validation
-    if (this.errors.length === 0) {
+    if (this.errors.length - typeReferenceErrors === 0) {
       this.validateSemantics(ast);
     }
 
