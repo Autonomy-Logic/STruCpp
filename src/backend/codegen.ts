@@ -4092,21 +4092,41 @@ export class CodeGenerator {
    * Generate C++ for a variable expression.
    */
   /**
-   * The address of an operand, for a parameter that aliases it.
+   * An operand as an LVALUE naming the storage itself, for anything that
+   * aliases it rather than reading it.
    *
-   * A shared global is read through `with_lock`, which returns a copy — taking
-   * that address would give a pointer to a temporary. The canonical value lives
-   * behind the GlobalVar, so the address is taken there instead.
+   * The read paths for a shared global hand back a COPY — `read()` for a
+   * scalar external, `with_lock(...)` for a composite one. Aliasing that copy
+   * gives a pointer to a temporary that dies at the end of the full
+   * expression, so both are reached at their canonical storage instead.
+   *
+   * Naming the storage also keeps the operand a plain lvalue rather than a
+   * `with_lock` lambda, which matters wherever the caller puts it in an
+   * unevaluated context: a lambda inside `sizeof` / `IEC_SIZEOF` is C++20 and
+   * this compiler targets C++17.
+   *
+   * Anything that is not a shared global is already its own storage, so it
+   * falls through to the ordinary expression.
    */
-  private generateAddressOf(expr: Expression): string {
-    if (expr.kind === "VariableExpression") {
+  private generateAliasLvalue(expr: Expression): string {
+    if (expr.kind === "VariableExpression" && !expr.isDereference) {
       const nameUpper = expr.name.toUpperCase();
-      if (this.compositeExternals.has(nameUpper) && !expr.isDereference) {
+      if (this.compositeExternals.has(nameUpper)) {
         const ptr = this.resolveVariableBaseName(expr.name);
-        return `&${this.renderAccessTail(`${ptr}->value`, expr, nameUpper)}`;
+        return this.renderAccessTail(`${ptr}->value`, expr, nameUpper);
+      }
+      if (this.programExternals.has(nameUpper)) {
+        return this.renderAccessTail(`${expr.name}->value`, expr, nameUpper);
       }
     }
-    return `&${this.generateExpression(expr)}`;
+    return this.generateExpression(expr);
+  }
+
+  /**
+   * The address of an operand, for a parameter that aliases it.
+   */
+  private generateAddressOf(expr: Expression): string {
+    return `&${this.generateAliasLvalue(expr)}`;
   }
 
   private generateVariableExpression(expr: VariableExpression): string {
@@ -6372,7 +6392,10 @@ export class CodeGenerator {
     const declaredType = this.inferExprType(expr);
     if (!declaredType) return undefined;
 
-    const value = this.generateExpression(expr);
+    // An IEC_ANY aliases its operand: it hands the callee a pointer the
+    // callee keeps. So the operand has to name the storage, not a read of it
+    // — see generateAliasLvalue.
+    const value = this.generateAliasLvalue(expr);
     const element = arrayElementTypeName(declaredType);
     if (element) return this.anyDescriptorForArray(value, element);
 
