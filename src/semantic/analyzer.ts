@@ -334,15 +334,21 @@ export class SemanticAnalyzer {
     // Pass 1: Build symbol tables
     this.buildSymbolTables(ast);
 
+    // Reported before the gates below so a type error in any merged source cannot hide
+    // an undefined type — and excluded from them, so the reverse cannot happen either.
+    const errorsBeforeTypeReferences = this.errors.length;
+    this.validateTypeReferences(ast);
+    const typeReferenceErrors = this.errors.length - errorsBeforeTypeReferences;
+
     // Pass 2: Type checking
-    if (this.errors.length === 0) {
+    if (this.errors.length - typeReferenceErrors === 0) {
       const typeResult = this.typeChecker.check(ast);
       this.errors.push(...typeResult.errors);
       this.warnings.push(...typeResult.warnings);
     }
 
     // Pass 3: Semantic validation
-    if (this.errors.length === 0) {
+    if (this.errors.length - typeReferenceErrors === 0) {
       this.validateSemantics(ast);
     }
 
@@ -757,9 +763,6 @@ export class SemanticAnalyzer {
    * Validate IEC 61131-3 semantic rules.
    */
   private validateSemantics(ast: CompilationUnit): void {
-    // Validate type references (must come first — other validations assume types exist)
-    this.validateTypeReferences(ast);
-
     // Validate undeclared variable usage
     this.validateUndeclaredVariables(ast);
 

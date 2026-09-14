@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import { parse } from "../../src/frontend/parser.js";
 import { buildAST } from "../../src/frontend/ast-builder.js";
+import { compile } from "../../src/index.js";
 import { analyze } from "../../src/semantic/analyzer.js";
 
 function analyzeSource(source: string) {
@@ -364,5 +365,84 @@ END_PROGRAM`,
     const err = result.errors.find((e) => /BadType/i.test(e.message));
     expect(err).toBeDefined();
     expect(err!.line).toBe(4);
+  });
+});
+
+// =============================================================================
+// Multi-Source Tests — a type error in one file must not silence another
+// =============================================================================
+
+describe("Undefined Type Validation - Multi-Source", () => {
+  const typesST = `
+    TYPE MyStruct :
+      STRUCT
+        field1 : Foo;
+      END_STRUCT;
+    END_TYPE
+  `;
+
+  it("should report an undefined type while another source fails type checking", () => {
+    // `x : Foo` also makes the IF condition a type error. That error used to run
+    // first and suppress every undefined-type report in the whole project.
+    const mainST = `
+      PROGRAM Main
+        VAR
+          x : Foo;
+        END_VAR
+        IF x THEN
+          ;
+        END_IF;
+      END_PROGRAM
+    `;
+
+    const result = compile(mainST, {
+      additionalSources: [{ source: typesST, fileName: "types.st" }],
+    });
+
+    const undefinedTypeErrors = result.errors.filter((e) =>
+      /Undefined type/i.test(e.message),
+    );
+    expect(undefinedTypeErrors.length).toBeGreaterThan(0);
+    expect(undefinedTypeErrors.some((e) => /STRUCT/i.test(e.message))).toBe(
+      true,
+    );
+  });
+
+  it("should not let an undefined type suppress unrelated diagnostics", () => {
+    const mainST = `
+      PROGRAM Main
+        VAR
+          x : Foo;
+          ok : BOOL;
+        END_VAR
+        ok := neverDeclared;
+      END_PROGRAM
+    `;
+
+    const result = compile(mainST, {});
+
+    expect(result.errors.some((e) => /Undefined type/i.test(e.message))).toBe(
+      true,
+    );
+    expect(
+      result.errors.some((e) => /Undeclared variable/i.test(e.message)),
+    ).toBe(true);
+  });
+
+  it("should report an undefined type when the other source is clean", () => {
+    const mainST = `
+      PROGRAM Main
+      END_PROGRAM
+    `;
+
+    const result = compile(mainST, {
+      additionalSources: [{ source: typesST, fileName: "types.st" }],
+    });
+
+    const undefinedTypeErrors = result.errors.filter((e) =>
+      /Undefined type/i.test(e.message),
+    );
+    expect(undefinedTypeErrors.length).toBeGreaterThan(0);
+    expect(undefinedTypeErrors.some((e) => /Foo/i.test(e.message))).toBe(true);
   });
 });
