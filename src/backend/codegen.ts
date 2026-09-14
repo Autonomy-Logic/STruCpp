@@ -508,6 +508,12 @@ export class CodeGenerator {
   /** Those types, until the classes they name have been emitted. */
   private pendingFbBearingTypes: CompilationUnit["types"] = [];
 
+  /** UPPER(name) of every type a library declares, from its `type` chunks. */
+  private libraryTypeNames: Set<string> = new Set();
+
+  /** UPPER(typeName) of every structure that reaches one of those. */
+  private libraryTypeBearingTypes: Set<string> = new Set();
+
   /** Per-archive reachable-chunk emission state.
    *
    *  Built by `addLibraryChunks` — one entry per library the consumer
@@ -1084,6 +1090,12 @@ export class CodeGenerator {
    */
   addLibraryChunks(archive: StlibArchive, reachable: Set<string>): void {
     this.libraryEmissions.push({ archive, reachable });
+    // A user type naming one of these cannot precede the library section that
+    // declares it — see collectLibraryTypeBearingTypes.
+    for (const chunk of archive.chunks ?? []) {
+      if (chunk.kind === "type")
+        this.libraryTypeNames.add(chunk.name.toUpperCase());
+    }
   }
 
   /**
@@ -1388,6 +1400,10 @@ export class CodeGenerator {
     // Which structures hold a block instance, before the sort consults it.
     this.fbBearingTypeDeps = this.collectFbBearingTypes(ast);
 
+    // And which reach a type a library declares — both decide where the
+    // structure, and the file-scope global of that structure, can be emitted.
+    this.libraryTypeBearingTypes = this.collectLibraryTypeBearingTypes(ast);
+
     // Topologically sort FBs once (used in both header and implementation)
     this.sortedFBs = this.topologicalSortFBs(ast.functionBlocks);
 
@@ -1530,17 +1546,16 @@ export class CodeGenerator {
     // declarations, which is harmless — redundant class declarations are legal.
     this.emitPouForwardDeclarations(ast);
 
-    // Generate user-defined types (Phase 2.2). A structure holding a function
-    // block instance is held back until after that block's class — see
-    // emitFbBearingTypes.
-    this.pendingFbBearingTypes = ast.types.filter((td) =>
-      this.fbBearingTypeDeps.has(td.name.toUpperCase()),
-    );
-    this.emitTypeDeclarations(
-      ast.types.filter(
-        (td) => !this.fbBearingTypeDeps.has(td.name.toUpperCase()),
-      ),
-    );
+    // Generate user-defined types (Phase 2.2). A structure is held back when
+    // it names something the library section has not declared yet: a function
+    // block instance, which waits for that block's class (see
+    // emitFbBearingTypes), or a library-declared type, which only has to
+    // follow the library section and so is released at the first flush.
+    const heldBack = (td: CompilationUnit["types"][number]): boolean =>
+      this.fbBearingTypeDeps.has(td.name.toUpperCase()) ||
+      this.libraryTypeBearingTypes.has(td.name.toUpperCase());
+    this.pendingFbBearingTypes = ast.types.filter(heldBack);
+    this.emitTypeDeclarations(ast.types.filter((td) => !heldBack(td)));
 
     // Generate top-level global variables (GVL files)
     if (ast.globalVarBlocks.length > 0) {
@@ -3028,7 +3043,13 @@ export class CodeGenerator {
    */
   private globalFollowsBlocks(typeName: string): boolean {
     const upper = typeName.toUpperCase();
-    return this.knownFBTypes.has(upper) || this.fbBearingTypeDeps.has(upper);
+    // `GlobalVar<V>` holds V by value, so the storage cannot precede the
+    // structure any more than the structure can precede what it names.
+    return (
+      this.knownFBTypes.has(upper) ||
+      this.fbBearingTypeDeps.has(upper) ||
+      this.libraryTypeBearingTypes.has(upper)
+    );
   }
 
   private emitFileScopeGlobals(phase: "early" | "late"): void {
@@ -5722,6 +5743,87 @@ export class CodeGenerator {
       (td) => !ready.includes(td),
     );
     this.emitTypeDeclarations(ready);
+  }
+
+  /**
+   * Structures that reach a type a LIBRARY declares — an enumeration or a
+   * structure out of a `.stlib`.
+   *
+   * The library chunks are injected after the user's types, so a structure
+   * naming one of them was emitted before the declaration it needs and the
+   * C++ compiler reported the type as undeclared. A global variable list is an
+   * ordinary structure here, so this is what a `TP_QUALITY` or `UIO_RESULT`
+   * member of one used to run into.
+   *
+   * A structure holding a library FUNCTION BLOCK never hit it, because
+   * `collectFbBearingTypes` already defers that one — which is why a list
+   * holding a `NODE` worked while the same list holding a `TP_QUALITY` did
+   * not.
+   *
+   * Unlike the function-block case there is nothing to wait for beyond the
+   * library section itself, so these carry no dependency set and the first
+   * flush releases them.
+   */
+  private collectLibraryTypeBearingTypes(ast: CompilationUnit): Set<string> {
+    if (this.libraryTypeNames.size === 0) return new Set();
+
+    // Every kind of definition can name a library type, not just a structure:
+    // an alias IS a type reference (`TYPE Mode : LibMode;`), a top-level array
+    // names its element, and a subrange or a typed enum names its base. Each
+    // one is emitted as its own declaration, so each one can land ahead of the
+    // library section.
+    const referenced = new Map<string, string[]>();
+    for (const td of ast.types) {
+      const names: string[] = [];
+      const definition = td.definition;
+      switch (definition.kind) {
+        case "StructDefinition":
+          for (const field of definition.fields) {
+            names.push(field.type.name);
+            if (field.type.elementTypeName)
+              names.push(field.type.elementTypeName);
+          }
+          break;
+        case "ArrayDefinition":
+          names.push(definition.elementType.name);
+          if (definition.elementType.elementTypeName) {
+            names.push(definition.elementType.elementTypeName);
+          }
+          break;
+        case "SubrangeDefinition":
+          names.push(definition.baseType.name);
+          break;
+        case "EnumDefinition":
+          if (definition.baseType) names.push(definition.baseType.name);
+          break;
+        default:
+          // A bare `TypeReference` is an alias for the type it names.
+          names.push(definition.name);
+          if (definition.elementTypeName)
+            names.push(definition.elementTypeName);
+          break;
+      }
+      referenced.set(
+        td.name.toUpperCase(),
+        names.map((name) => name.toUpperCase()),
+      );
+    }
+
+    const found = new Set<string>();
+    const visit = (name: string, seen: Set<string>): boolean => {
+      if (found.has(name)) return true;
+      if (seen.has(name)) return false;
+      seen.add(name);
+      for (const candidate of referenced.get(name) ?? []) {
+        if (this.libraryTypeNames.has(candidate) || visit(candidate, seen)) {
+          found.add(name);
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const name of referenced.keys()) visit(name, new Set());
+    return found;
   }
 
   /**
