@@ -290,6 +290,8 @@ function emitTypeReference(
   if (!tr.sourceSpan) return;
   // Skip REF_TO/REFERENCE_TO keyword-prefixed references (the type name position is offset)
   if (tr.isReference) return;
+  // Synthesised inline-array names (`__INLINE_ARRAY_INT`, `__VLA_…`) have no source text to cover.
+  if (tr.name.startsWith("__")) return;
 
   const upperName = tr.name.toUpperCase();
 
@@ -389,13 +391,29 @@ function deltaEncode(tokens: RawToken[]): number[] {
   const data: number[] = [];
   let prevLine = 0;
   let prevCol = 0;
+  // A client given overlapping ranges drops tokens, so clip rather than ship them.
+  let lastLine = -1;
+  let lastEnd = 0;
 
   for (const t of tokens) {
+    let col = t.col;
+    let length = t.length;
+
+    if (t.line === lastLine) {
+      if (col + length <= lastEnd) continue;
+      if (col < lastEnd) {
+        length -= lastEnd - col;
+        col = lastEnd;
+      }
+    }
+
     const deltaLine = t.line - prevLine;
-    const deltaCol = deltaLine === 0 ? t.col - prevCol : t.col;
-    data.push(deltaLine, deltaCol, t.length, t.typeIdx, t.modBits);
+    const deltaCol = deltaLine === 0 ? col - prevCol : col;
+    data.push(deltaLine, deltaCol, length, t.typeIdx, t.modBits);
     prevLine = t.line;
-    prevCol = t.col;
+    prevCol = col;
+    lastLine = t.line;
+    lastEnd = col + length;
   }
 
   return data;
