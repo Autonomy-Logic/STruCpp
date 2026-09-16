@@ -467,6 +467,116 @@ int main() {
     );
     expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("ALL_OK");
   });
+
+  // handle_ptr() serves a value without copying it, so a caller can hand it
+  // straight to a protocol stack (OPC-UA gives open62541 a UA_Variant marked
+  // NODELETE). The properties that matter are that it addresses the SAME value
+  // handle_read() would produce — including through a force — and that a STRING
+  // comes back as its payload rather than the [len][payload] wire form.
+  //
+  // The force case is the one that motivated read_ptr(): force() writes through
+  // to value_, so raw_ptr() agrees the instant a force is applied — but a
+  // located variable is driven by the program straight into value_ every scan,
+  // and then only read_ptr() still resolves to the forced value.
+  it("addresses the same value handle_read copies, force included", () => {
+    const result = compile(
+      `PROGRAM Main
+VAR n : DINT := 7; END_VAR
+VAR s : STRING := 'hello'; END_VAR
+END_PROGRAM${CFG}`,
+      { headerFileName: "generated.hpp" },
+    );
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+
+    const dir = path.join(tempDir, "ptr");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "generated.hpp"), result.headerCode);
+    fs.writeFileSync(path.join(dir, "generated.cpp"), result.cppCode);
+    fs.writeFileSync(
+      path.join(dir, "generated_debug.cpp"),
+      result.debugTableCpp!,
+    );
+
+    const idx = (p: string) => {
+      const leaf = result.debugMap!.leaves.find((l) => l.path === p);
+      expect(leaf, `no leaf for ${p}`).toBeTruthy();
+      return `${leaf!.arrayIdx}, ${leaf!.elemIdx}`;
+    };
+
+    fs.writeFileSync(
+      path.join(dir, "main.cpp"),
+      `#include "generated.hpp"
+#include "debug_dispatch.hpp"
+#include <cstdio>
+#include <cstring>
+strucpp::Configuration_CONFIG0 g_config;
+using namespace strucpp::debug;
+int fails = 0;
+static void chk(const char* what, bool ok) { if (!ok) { printf("FAIL %s\\n", what); ++fails; } }
+int main() {
+  unsigned short len = 0;
+
+  // Scalar: same bytes as handle_read, and the length is the type width.
+  const void* p = handle_ptr(${idx("INSTANCE0.N")}, &len);
+  chk("scalar ptr non-null", p != nullptr);
+  chk("scalar len", len == 4);
+  int via_ptr = 0; memcpy(&via_ptr, p, 4);
+  unsigned char buf[8] = {0};
+  handle_read(${idx("INSTANCE0.N")}, buf);
+  int via_read = 0; memcpy(&via_read, buf, 4);
+  chk("scalar agrees with read", via_ptr == via_read && via_ptr == 7);
+
+  // It addresses live storage, so a write is visible through the SAME pointer
+  // with no second call.
+  int v = 42; handle_write(${idx("INSTANCE0.N")}, (const unsigned char*)&v, 4);
+  memcpy(&via_ptr, p, 4);
+  chk("scalar follows a write", via_ptr == 42);
+
+  // Forced: handle_ptr must resolve the force exactly as handle_read does.
+  int f = 99; handle_set(${idx("INSTANCE0.N")}, true, (const unsigned char*)&f, 4);
+  const void* pf = handle_ptr(${idx("INSTANCE0.N")}, &len);
+  memcpy(&via_ptr, pf, 4);
+  handle_read(${idx("INSTANCE0.N")}, buf);
+  memcpy(&via_read, buf, 4);
+  chk("forced agrees with read", via_ptr == via_read && via_ptr == 99);
+
+  // And a force survives the program writing the located storage directly,
+  // which is what read_ptr() exists for.
+  g_config.INSTANCE0.N = 1234;
+  const void* pf2 = handle_ptr(${idx("INSTANCE0.N")}, &len);
+  memcpy(&via_ptr, pf2, 4);
+  chk("force beats a direct program write", via_ptr == 99);
+
+  handle_set(${idx("INSTANCE0.N")}, false, (const unsigned char*)&f, 4);
+
+  // STRING: the payload, NOT the [len][payload] wire form, and len is chars.
+  const void* sp = handle_ptr(${idx("INSTANCE0.S")}, &len);
+  chk("string ptr non-null", sp != nullptr);
+  chk("string len", len == 5);
+  chk("string payload", memcmp(sp, "hello", 5) == 0);
+  unsigned char sbuf[260] = {0};
+  handle_read(${idx("INSTANCE0.S")}, sbuf);
+  chk("wire form still carries the length byte", sbuf[0] == 5);
+  chk("wire payload matches", memcmp(sbuf + 1, sp, 5) == 0);
+
+  // Out of range is a null, not a crash.
+  chk("oob is null", handle_ptr(200, 0, &len) == nullptr && len == 0);
+
+  printf(fails ? "FAILURES=%d\\n" : "ALL_OK\\n", fails);
+  return fails ? 1 : 0;
+}
+`,
+    );
+
+    const bin2 = path.join(dir, "ptr");
+    execSync(
+      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" ` +
+        `-o "${bin2}" "${path.join(dir, "main.cpp")}" ` +
+        `"${path.join(dir, "generated.cpp")}" "${path.join(dir, "generated_debug.cpp")}"`,
+      { encoding: "utf-8" },
+    );
+    expect(execSync(`"${bin2}"`, { encoding: "utf-8" }).trim()).toBe("ALL_OK");
+  });
 });
 
 /**
