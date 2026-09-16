@@ -35,10 +35,17 @@
  *     arrays, and FB instances all work, and different-field writes from
  *     different tasks all survive because they mutate the one shared object.
  *
- * read() returns the real IEC value type, so generated bodies and constrained
- * std-lib templates (NOT, ADD, …) deduce the operand correctly — the wrapper is
- * never the deduced operand. Forcing is preserved via the canonical's
- * get()/set(); located globals additionally honor the image forced-slot bitmap.
+ * read() returns the real IEC value type — `V` itself, i.e. `IECVar<T>`, NOT the
+ * underlying `T`. That matters for deduction: the constrained std-lib templates
+ * take one shared parameter for both operands (`template<typename T> T ADD(T, T)`),
+ * and locals, literals and composite-global fields all present as `IECVar<T>`.
+ * Returning `T` here would make a scalar global the one operand kind that differs,
+ * and `ADD(aGlobal, aLocal)` would fail to deduce — implicit conversions are not
+ * considered during template argument deduction, so `operator T()` cannot rescue it.
+ * Forcing is preserved: the copy handed back is built through the canonical's
+ * get(), so it carries the effective forced value (with the force flag cleared, as
+ * a detached snapshot should); located globals additionally honor the image
+ * forced-slot bitmap.
  */
 #ifndef STRUCPP_IEC_GLOBAL_HPP
 #define STRUCPP_IEC_GLOBAL_HPP
@@ -71,12 +78,20 @@ class GlobalVar {
 
     /** Scalar read: returns the real IEC value type (forcing-aware),
      *  deduction-friendly. Only instantiated for scalar globals (codegen uses
-     *  with_lock() for structs / arrays / FB instances). */
-    auto read() const {
+     *  with_lock() for structs / arrays / FB instances).
+     *
+     *  The return type is spelled `V` rather than `auto` on purpose: `auto` let
+     *  this silently return the underlying scalar, which is what broke deduction
+     *  for every mixed global/local operand pair (see the header note above).
+     *
+     *  The copy is constructed while `lg` is still in scope, so the snapshot is
+     *  taken atomically exactly as a `value.get()` would have been — same single
+     *  lock acquisition, same hold duration. */
+    V read() const {
 #ifdef STRUCPP_THREADED
         std::lock_guard<std::mutex> lg(mtx_);
 #endif
-        return value.get();
+        return value;
     }
 
     /** Scalar write (forcing-aware via set()). */

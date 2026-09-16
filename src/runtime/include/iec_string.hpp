@@ -351,10 +351,35 @@ public:
     IECStringVar() noexcept : value_{}, forced_{false}, forced_value_{} {}
     IECStringVar(const value_type& v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
     IECStringVar(const char* str) noexcept : value_{str}, forced_{false}, forced_value_{} {}
-    IECStringVar(const IECStringVar&) = default;
-    IECStringVar(IECStringVar&&) = default;
-    IECStringVar& operator=(const IECStringVar&) = default;
-    IECStringVar& operator=(IECStringVar&&) = default;
+    /* Forcing semantics, matching IECVar (see iec_var.hpp).
+     *
+     * These cannot be `= default`. A memberwise copy carries `forced_` and
+     * `forced_value_` across, which breaks forcing two ways: assigning FROM a
+     * forced source leaks the flag onto the destination (whose next `set()` is
+     * then silently dropped), and assigning from an unforced source clears a
+     * force the debugger is holding. Generated code assigns every scan, so
+     * either one destroys a force within one cycle -- and STRING forcing is a
+     * first-class debug operation (force_string / unforce_string).
+     *
+     * Construction takes a detached snapshot of the effective value and starts
+     * unforced; assignment routes through set() so the destination keeps its
+     * own forcing state. */
+    IECStringVar(const IECStringVar& other) noexcept
+        : value_{other.forced_ ? other.forced_value_ : other.value_},
+          forced_{false},
+          forced_value_{} {}
+    IECStringVar(IECStringVar&& other) noexcept
+        : value_{other.forced_ ? other.forced_value_ : other.value_},
+          forced_{false},
+          forced_value_{} {}
+    IECStringVar& operator=(const IECStringVar& other) noexcept {
+        set(other.forced_ ? other.forced_value_ : other.value_);
+        return *this;
+    }
+    IECStringVar& operator=(IECStringVar&& other) noexcept {
+        set(other.forced_ ? other.forced_value_ : other.value_);
+        return *this;
+    }
 
     // Cross-size converting constructor (IEC 61131-3: STRING types are interoperable)
     template<size_t OtherLen, std::enable_if_t<OtherLen != MaxLen, int> = 0>

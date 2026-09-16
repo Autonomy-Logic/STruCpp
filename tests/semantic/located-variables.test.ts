@@ -801,6 +801,197 @@ describe('Phase 2.3 - Located Variables', () => {
     });
   });
 
+  // A located ARRAY occupies one slot PER ELEMENT, laid out consecutively from
+  // the declared address. The pre-strucpp toolchain refused these outright
+  // because MatIEC could not express a located non-elementary type
+  // (openplc-editor#565); the descriptor table here is flat, so an array is
+  // N rows rather than a new mechanism.
+  describe('Semantic: Located Arrays', () => {
+    it('accepts an array of an elementary type compatible with the address size', () => {
+      const source = `
+        PROGRAM Main
+          VAR buffer AT %MW60 : ARRAY [0..66] OF WORD; END_VAR
+        END_PROGRAM
+      `;
+      expect(compile(source).success).toBe(true);
+    });
+
+    it('accepts the same shape spelled as a named ARRAY type', () => {
+      const source = `
+        TYPE Buf : ARRAY [0..9] OF WORD; END_TYPE
+        PROGRAM Main
+          VAR buffer AT %MW0 : Buf; END_VAR
+        END_PROGRAM
+      `;
+      expect(compile(source).success).toBe(true);
+    });
+
+    it('emits per-element descriptors for a named ARRAY type, like an inline one', () => {
+      // A named type carries no bounds on its TypeReference, so codegen used to
+      // see a scalar where semantics had seen ten slots: one descriptor, and a
+      // pointer initialiser calling .raw_ptr() on the array itself, which does
+      // not compile. The CONFIGURATION is what makes codegen emit the located
+      // path at all -- without it the assertion above passes while the bug
+      // sits untouched.
+      const source = `
+        TYPE Buf : ARRAY [0..9] OF WORD; END_TYPE
+        PROGRAM Main
+          VAR_EXTERNAL HR : Buf; END_VAR
+          HR[0] := 1;
+        END_PROGRAM
+
+        CONFIGURATION Config0
+          VAR_GLOBAL HR AT %MW60 : Buf; END_VAR
+          RESOURCE Res0 ON PLC
+            TASK task0(INTERVAL := T#20ms, PRIORITY := 0);
+            PROGRAM instance0 WITH task0 : Main;
+          END_RESOURCE
+        END_CONFIGURATION
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain('locatedVarsCount = 10');
+      expect(result.cppCode).toContain('LocatedSize::Word, 60, 0');
+      expect(result.cppCode).toContain('LocatedSize::Word, 69, 0');
+      // Each element binds its own storage; never `.raw_ptr()` on the array.
+      const inits = result.cppCode.match(/locatedVars\[\d+\]\.pointer = [^;]+;/g) ?? [];
+      expect(inits).toHaveLength(10);
+      expect(new Set(inits).size).toBe(10);
+      expect(result.cppCode).not.toMatch(/pointer = HR\.value\.raw_ptr\(\)/);
+    });
+
+    it('validates the ELEMENT type against the address size, not the array', () => {
+      const source = `
+        PROGRAM Main
+          VAR buffer AT %MW0 : ARRAY [0..3] OF BOOL; END_VAR
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      // The message must name the element type, not the compiler's internal
+      // __INLINE_ARRAY_<T> spelling, which is what leaked before.
+      expect(result.errors.some(e => e.message.includes("Array element type 'BOOL'"))).toBe(true);
+      expect(result.errors.every(e => !e.message.includes('__INLINE_ARRAY'))).toBe(true);
+    });
+
+    it.each([
+      ['multi-dimensional', 'ARRAY [0..3, 0..3] OF WORD', 'no single linear run'],
+      ['variable-length', 'ARRAY [*] OF WORD', 'not known at compile time'],
+    ])('rejects a %s located array with its own message', (_label, type, fragment) => {
+      const source = `
+        PROGRAM Main
+          VAR buffer AT %MW0 : ${type}; END_VAR
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.message.includes(fragment))).toBe(true);
+      expect(result.errors.every(e => !e.message.includes('__INLINE_ARRAY'))).toBe(true);
+    });
+
+    it('detects a collision with a scalar that lands inside the array', () => {
+      // %MW1 is the array's second element. Comparing addresses for equality
+      // — all that was needed while every declaration took one slot — would
+      // let these two silently share storage.
+      const source = `
+        PROGRAM Main
+          VAR
+            buffer AT %MW0 : ARRAY [0..3] OF WORD;
+            other  AT %MW1 : WORD;
+          END_VAR
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(false);
+      expect(result.errors.some(e => e.message.includes('Duplicate address'))).toBe(true);
+    });
+
+    it('allows a scalar immediately after the array ends', () => {
+      const source = `
+        PROGRAM Main
+          VAR
+            buffer AT %MW0 : ARRAY [0..3] OF WORD;
+            other  AT %MW4 : WORD;
+          END_VAR
+        END_PROGRAM
+      `;
+      expect(compile(source).success).toBe(true);
+    });
+
+    it('does not collide with the same index in a different size class', () => {
+      // %MW0 and %MD0 index different runtime arrays — the image is not flat
+      // memory, and an array must not make it look like one.
+      const source = `
+        PROGRAM Main
+          VAR
+            words  AT %MW0 : ARRAY [0..3] OF WORD;
+            dwords AT %MD0 : ARRAY [0..3] OF DINT;
+          END_VAR
+        END_PROGRAM
+      `;
+      expect(compile(source).success).toBe(true);
+    });
+  });
+
+  describe('Code Generation: Located Arrays', () => {
+    const arrayProgram = `
+      PROGRAM Main
+        VAR buffer AT %MW60 : ARRAY [0..66] OF WORD; END_VAR
+      END_PROGRAM
+    `;
+
+    it('emits one descriptor per element, over consecutive addresses', () => {
+      const result = compile(arrayProgram);
+      expect(result.success).toBe(true);
+      expect(result.headerCode).toContain('locatedVarsCount = 67');
+      expect(result.cppCode).toContain('LocatedVar locatedVars[67]');
+      // First and last element land on the ends of the declared run.
+      expect(result.cppCode).toContain('LocatedSize::Word, 60, 0');
+      expect(result.cppCode).toContain('LocatedSize::Word, 126, 0');
+    });
+
+    it('binds every element to its own storage', () => {
+      // The pointer initialiser used to find its descriptor by variable NAME.
+      // With N descriptors sharing one name that resolved every element to
+      // slot 0: element 0 bound N times, elements 1..N-1 left null.
+      const result = compile(arrayProgram);
+      const inits = result.cppCode.match(/locatedVars\[\d+\]\.pointer = [^;]+;/g) ?? [];
+      expect(inits).toHaveLength(67);
+      expect(new Set(inits).size).toBe(67);
+      expect(result.cppCode).toContain('locatedVars[0].pointer = BUFFER[0].raw_ptr();');
+      expect(result.cppCode).toContain('locatedVars[66].pointer = BUFFER[66].raw_ptr();');
+    });
+
+    it('labels each descriptor with the address that element occupies', () => {
+      const result = compile(arrayProgram);
+      expect(result.cppCode).toContain('// BUFFER[0] AT %MW60');
+      expect(result.cppCode).toContain('// BUFFER[66] AT %MW126');
+    });
+
+    it('walks a bit array across the byte boundary', () => {
+      const source = `
+        PROGRAM Main
+          VAR flags AT %QX0.6 : ARRAY [0..3] OF BOOL; END_VAR
+        END_PROGRAM
+      `;
+      const result = compile(source);
+      expect(result.success).toBe(true);
+      // %QX0.6, %QX0.7, %QX1.0, %QX1.1 — the run continues into the next byte.
+      expect(result.cppCode).toContain('LocatedSize::Bit, 0, 6');
+      expect(result.cppCode).toContain('LocatedSize::Bit, 0, 7');
+      expect(result.cppCode).toContain('LocatedSize::Bit, 1, 0');
+      expect(result.cppCode).toContain('LocatedSize::Bit, 1, 1');
+    });
+
+    it('lists a located array once in the forward-declaration comments', () => {
+      // One line per declaration, not per descriptor — 67 identical lines
+      // would bury the rest of the header.
+      const result = compile(arrayProgram);
+      const forwards = result.headerCode.match(/\/\/ Forward: BUFFER AT %MW60/g) ?? [];
+      expect(forwards).toHaveLength(1);
+    });
+  });
+
   // locatedGlobals[] states which locatedVars[] entries are CONFIGURATION
   // VAR_GLOBAL ... AT. Without it a host runtime has to infer the split, and
   // inferring it from array position is what broke every located global as soon
