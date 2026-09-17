@@ -248,6 +248,80 @@ public:
 template<typename EnumType>
 using IEC_ENUM = IEC_ENUM_Var<EnumType>;
 
+// =============================================================================
+// Enumeration traits — which enumeration an operand belongs to
+// =============================================================================
+//
+// IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38 lets SEL, MUX, EQ and NE be applied to
+// inputs of an enumerated data type. Those four and no others: an enumeration
+// has no defined order, so GT/GE/LT/LE, MIN/MAX and LIMIT are NOT in the table
+// and must keep failing to compile. Nor is there a standard conversion to an
+// integer — TO_INT takes ANY_ELEMENTARY (Table 33), and §6.4.3 rule 3 puts an
+// enumeration in ANY_DERIVED, which is a sibling of ANY_ELEMENTARY, not a
+// member of it.
+//
+// An operand reaches a comparison in one of three spellings, so all three have
+// to be recognised: a variable (`IEC_ENUM_Var<E>`), the value a variable
+// converts to (`IEC_ENUM_Value<E>`), and a literal, which codegen emits as the
+// bare scoped enum `E`.
+
+/** The enumeration `T` belongs to, or no `type` member if it is not one. */
+template<typename T, typename = void>
+struct iec_enum_of {};
+
+template<typename E>
+struct iec_enum_of<IEC_ENUM_Var<E>, void> { using type = E; };
+
+template<typename E>
+struct iec_enum_of<IEC_ENUM_Value<E>, void> { using type = E; };
+
+template<typename E>
+struct iec_enum_of<E, std::enable_if_t<std::is_enum<E>::value>> { using type = E; };
+
+template<typename T>
+using iec_enum_of_t = typename iec_enum_of<T>::type;
+
+// Distinct from iec_traits.hpp's `is_iec_enum`, which answers "is this one of
+// the enumeration wrapper classes" and deliberately excludes the bare scoped
+// enum. A comparison OPERAND can be the bare enum — that is what codegen emits
+// for a literal like `GOOD` — so this predicate is the wider one.
+template<typename T, typename = void>
+struct is_iec_enum_operand : std::false_type {};
+
+template<typename T>
+struct is_iec_enum_operand<T, std::void_t<typename iec_enum_of<T>::type>> : std::true_type {};
+
+template<typename T>
+constexpr bool is_iec_enum_operand_v = is_iec_enum_operand<T>::value;
+
+/** Two operands of the SAME enumeration.
+ *
+ *  Same, not merely both enumerations: §6.4.4.2 says "Different enumerated data
+ *  types may use the same identifiers for enumerated values", so comparing
+ *  across two of them would compare names that only look alike. */
+//  Written as a specialised struct rather than one `&&` expression on purpose.
+//  `&&` does not short-circuit at the type level: naming `iec_enum_of_t<A>`
+//  beside the test for whether A IS an enumeration instantiates it either way,
+//  and for a non-enumeration that is a HARD error, not a substitution failure.
+//  It would take every EQ on two plain numbers down with it.
+template<typename A, typename B, typename = void>
+struct is_same_iec_enum : std::false_type {};
+
+template<typename A, typename B>
+struct is_same_iec_enum<A, B,
+    std::enable_if_t<is_iec_enum_operand_v<std::decay_t<A>> &&
+                     is_iec_enum_operand_v<std::decay_t<B>>>>
+    : std::is_same<iec_enum_of_t<std::decay_t<A>>, iec_enum_of_t<std::decay_t<B>>> {};
+
+template<typename A, typename B>
+constexpr bool is_same_iec_enum_v = is_same_iec_enum<A, B>::value;
+
+/** The enumerator itself, whichever of the three spellings arrived. */
+template<typename T>
+constexpr iec_enum_of_t<std::decay_t<T>> iec_enum_value(const T& v) noexcept {
+    return static_cast<iec_enum_of_t<std::decay_t<T>>>(v);
+}
+
 #ifndef __AVR__
 // Stream output for IEC_ENUM_Var — outputs underlying integer value
 template<typename EnumType>

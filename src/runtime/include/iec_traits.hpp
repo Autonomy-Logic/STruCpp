@@ -192,6 +192,80 @@ template<> struct is_any_date<int64_t> : std::true_type {};
 template<> struct is_any_magnitude<int64_t> : std::true_type {};
 template<> struct is_any_elementary<int64_t> : std::true_type {};
 
+// -----------------------------------------------------------------------------
+// The fundamental integer types <cstdint> did NOT alias on this target
+// -----------------------------------------------------------------------------
+//
+// Everything above specialises on the fixed-width aliases, and which C++
+// fundamental type each one names is target-specific. On x86-64 Linux
+// `int32_t` is `int`, so a plain `int` picks up every trait above for free.
+// On xtensa (ESP32), ARM and AVR `int32_t` is `long int`, so a plain `int` has
+// no entry at all and satisfies none of the constraints.
+//
+// That divergence is invisible to a host test suite and fatal on a board: a
+// generated call like `ADD(0, 0)`, whose literals are plain `int`, compiles on
+// the host and fails to resolve on the board with "no matching function for
+// call to ADD(int, int)". Every host test can pass while the firmware will not
+// build.
+//
+// So each fundamental integer type is registered under the traits its WIDTH
+// and SIGNEDNESS earn it — but only where it is not already one of the aliases
+// above, since specialising the same type twice is an error. `iec_distinct`
+// maps an already-covered type to a private placeholder nothing ever has, so
+// the specialisation below is written once and is a no-op on targets that do
+// not need it.
+namespace detail {
+
+/** A type nothing can ever be, one per T so two placeholders never collide. */
+template<typename T> struct iec_covered_elsewhere {};
+
+template<typename T>
+struct is_fixed_width_alias : std::integral_constant<bool,
+    std::is_same<T, bool>::value || std::is_same<T, char>::value ||
+    std::is_same<T, char16_t>::value ||
+    std::is_same<T, int8_t>::value   || std::is_same<T, uint8_t>::value ||
+    std::is_same<T, int16_t>::value  || std::is_same<T, uint16_t>::value ||
+    std::is_same<T, int32_t>::value  || std::is_same<T, uint32_t>::value ||
+    std::is_same<T, int64_t>::value  || std::is_same<T, uint64_t>::value> {};
+
+/** `T` itself when it still needs registering, else an unreachable placeholder. */
+template<typename T>
+using iec_distinct = typename std::conditional<
+    is_fixed_width_alias<T>::value, iec_covered_elsewhere<T>, T>::type;
+
+}  // namespace detail
+
+#define IEC_REGISTER_SIGNED_FUNDAMENTAL(T)                                              \
+    template<> struct is_iec_type<detail::iec_distinct<T>> : std::true_type {};         \
+    template<> struct is_any_sint<detail::iec_distinct<T>> : std::true_type {};         \
+    template<> struct is_any_int<detail::iec_distinct<T>> : std::true_type {};          \
+    template<> struct is_any_num<detail::iec_distinct<T>> : std::true_type {};          \
+    template<> struct is_any_magnitude<detail::iec_distinct<T>> : std::true_type {};    \
+    template<> struct is_any_elementary<detail::iec_distinct<T>> : std::true_type {};
+
+#define IEC_REGISTER_UNSIGNED_FUNDAMENTAL(T)                                            \
+    template<> struct is_iec_type<detail::iec_distinct<T>> : std::true_type {};         \
+    template<> struct is_any_bit<detail::iec_distinct<T>> : std::true_type {};          \
+    template<> struct is_any_uint<detail::iec_distinct<T>> : std::true_type {};         \
+    template<> struct is_any_int<detail::iec_distinct<T>> : std::true_type {};          \
+    template<> struct is_any_num<detail::iec_distinct<T>> : std::true_type {};          \
+    template<> struct is_any_magnitude<detail::iec_distinct<T>> : std::true_type {};    \
+    template<> struct is_any_elementary<detail::iec_distinct<T>> : std::true_type {};
+
+IEC_REGISTER_SIGNED_FUNDAMENTAL(signed char)
+IEC_REGISTER_SIGNED_FUNDAMENTAL(short)
+IEC_REGISTER_SIGNED_FUNDAMENTAL(int)
+IEC_REGISTER_SIGNED_FUNDAMENTAL(long)
+IEC_REGISTER_SIGNED_FUNDAMENTAL(long long)
+IEC_REGISTER_UNSIGNED_FUNDAMENTAL(unsigned char)
+IEC_REGISTER_UNSIGNED_FUNDAMENTAL(unsigned short)
+IEC_REGISTER_UNSIGNED_FUNDAMENTAL(unsigned int)
+IEC_REGISTER_UNSIGNED_FUNDAMENTAL(unsigned long)
+IEC_REGISTER_UNSIGNED_FUNDAMENTAL(unsigned long long)
+
+#undef IEC_REGISTER_SIGNED_FUNDAMENTAL
+#undef IEC_REGISTER_UNSIGNED_FUNDAMENTAL
+
 // Single precision float (REAL_t = float)
 template<> struct is_iec_type<float> : std::true_type {};
 template<> struct is_any_real<float> : std::true_type {};
@@ -327,6 +401,27 @@ template<> struct iec_bit_size<char16_t> : std::integral_constant<size_t, 16> {}
 // IECVar wrapper
 template<typename T>
 struct iec_bit_size<IECVar<T>> : iec_bit_size<T> {};
+
+// The same fundamental integer types registered above, for the shift and
+// rotate functions, which size their operand through this trait. A target
+// where `int32_t` is `long int` would otherwise have no width for a plain
+// `int` and fail to resolve SHL/SHR/ROL/ROR.
+#define IEC_REGISTER_FUNDAMENTAL_WIDTH(T)                       \
+    template<> struct iec_bit_size<detail::iec_distinct<T>>     \
+        : std::integral_constant<size_t, sizeof(T) * 8> {};
+
+IEC_REGISTER_FUNDAMENTAL_WIDTH(signed char)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(short)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(int)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(long)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(long long)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(unsigned char)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(unsigned short)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(unsigned int)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(unsigned long)
+IEC_REGISTER_FUNDAMENTAL_WIDTH(unsigned long long)
+
+#undef IEC_REGISTER_FUNDAMENTAL_WIDTH
 
 template<typename T>
 constexpr size_t iec_bit_size_v = iec_bit_size<T>::value;
