@@ -859,6 +859,133 @@ export class StdFunctionRegistry {
       isConversion: false,
       category: "time",
     });
+
+    // The remaining TIME_TO_* units iec_time.hpp implements. Each returns
+    // int64_t, so each reports LINT. Registered together because a name the
+    // runtime provides but the registry omits is a call that checks clean here
+    // and then fails in the C++ compiler.
+    for (const unit of ["NS", "US", "M", "H", "D"]) {
+      this.register({
+        name: `TIME_TO_${unit}`,
+        cppName: `TIME_TO_${unit}`,
+        returnConstraint: "specific",
+        returnMatchesFirstParam: false,
+        specificReturnType: "LINT",
+        params: [
+          {
+            name: "IN",
+            constraint: "specific",
+            specificType: "TIME",
+            isByRef: false,
+          },
+        ],
+        isVariadic: false,
+        isConversion: false,
+        category: "time",
+      });
+    }
+
+    // The date/time arithmetic the runtime already implements. An ANY_*
+    // parameter is deliberately loose: ADD_DT's second operand is nanoseconds,
+    // written either as a TIME literal or as an integer.
+    const timeFn = (
+      name: string,
+      returns: string,
+      params: Array<[string, string]>,
+    ): void => {
+      this.register({
+        name,
+        cppName: name,
+        returnConstraint: "specific",
+        returnMatchesFirstParam: false,
+        specificReturnType: returns,
+        params: params.map(([pName, pType]) =>
+          pType.startsWith("ANY")
+            ? {
+                name: pName,
+                constraint: pType as TypeConstraint,
+                isByRef: false,
+              }
+            : {
+                name: pName,
+                constraint: "specific" as const,
+                specificType: pType,
+                isByRef: false,
+              },
+        ),
+        isVariadic: false,
+        isConversion: false,
+        category: "time",
+      });
+    };
+
+    timeFn("ADD_TIME", "TIME", [
+      ["IN1", "TIME"],
+      ["IN2", "TIME"],
+    ]);
+    timeFn("SUB_TIME", "TIME", [
+      ["IN1", "TIME"],
+      ["IN2", "TIME"],
+    ]);
+    timeFn("ABS_TIME", "TIME", [["IN", "TIME"]]);
+    timeFn("MUL_TIME", "TIME", [
+      ["IN", "TIME"],
+      ["N", "ANY_NUM"],
+    ]);
+    timeFn("DIV_TIME", "TIME", [
+      ["IN", "TIME"],
+      ["N", "ANY_NUM"],
+    ]);
+    timeFn("DIVTIME", "LINT", [
+      ["IN1", "TIME"],
+      ["IN2", "TIME"],
+    ]);
+
+    timeFn("ADD_DATE", "DATE", [
+      ["IN", "DATE"],
+      ["DAYS", "ANY_INT"],
+    ]);
+    timeFn("SUB_DATE", "DATE", [
+      ["IN", "DATE"],
+      ["DAYS", "ANY_INT"],
+    ]);
+    timeFn("DIFF_DATE", "LINT", [
+      ["IN1", "DATE"],
+      ["IN2", "DATE"],
+    ]);
+
+    timeFn("ADD_DT", "DT", [
+      ["IN", "DT"],
+      ["NS", "ANY_ELEMENTARY"],
+    ]);
+    timeFn("SUB_DT", "DT", [
+      ["IN", "DT"],
+      ["NS", "ANY_ELEMENTARY"],
+    ]);
+    timeFn("DIFF_DT", "LINT", [
+      ["IN1", "DT"],
+      ["IN2", "DT"],
+    ]);
+
+    timeFn("ADD_TOD", "TOD", [
+      ["IN", "TOD"],
+      ["NS", "ANY_ELEMENTARY"],
+    ]);
+    timeFn("SUB_TOD", "TOD", [
+      ["IN", "TOD"],
+      ["NS", "ANY_ELEMENTARY"],
+    ]);
+    timeFn("DIFF_TOD", "LINT", [
+      ["IN1", "TOD"],
+      ["IN2", "TOD"],
+    ]);
+
+    timeFn("CONCAT_DATE_TOD", "DT", [
+      ["IN1", "DATE"],
+      ["IN2", "TOD"],
+    ]);
+    timeFn("DATE_OF_DT", "DATE", [["IN", "DT"]]);
+    timeFn("TOD_OF_DT", "TOD", [["IN", "DT"]]);
   }
 
   // ---------------------------------------------------------------------------

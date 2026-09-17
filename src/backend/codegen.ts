@@ -34,7 +34,7 @@ import type {
   Visibility,
 } from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
-import type { LineMapEntry } from "../types.js";
+import type { LineMapEntry, SourceSpan } from "../types.js";
 import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
 import type {
   ProjectModel,
@@ -64,15 +64,21 @@ import {
 } from "./codegen-utils.js";
 import { mangledMemberName, needsMemberMangling } from "./member-mangling.js";
 import {
+  arrayElementTypeName,
+  buildEnumMemberMap,
   getTypeBits,
   getTypeCategory,
+  isAnyDescriptorType,
+  isDeclarableGenericType,
   isImplicitlyConvertible,
-  resolveFieldType as resolveFieldTypeUtil,
+  parsePartialAccess,
   resolveArrayElementType as resolveArrayElementTypeUtil,
   resolveArrayShapeByName,
-  typeName as typeNameUtil,
-  buildEnumMemberMap,
+  resolveFieldType as resolveFieldTypeUtil,
   type EnumMemberEntry,
+  type PartialAccess,
+  TYPE_CLASS_BY_IEC_TYPE,
+  typeName as typeNameUtil,
 } from "../semantic/type-utils.js";
 import {
   generateInitializerValue,
@@ -496,6 +502,18 @@ export class CodeGenerator {
   /** Topologically sorted function blocks (computed once in generate(), used by header + impl) */
   private sortedFBs: CompilationUnit["functionBlocks"] = [];
 
+  /** UPPER(typeName) → the function block classes a structure must follow. */
+  private fbBearingTypeDeps: Map<string, Set<string>> = new Map();
+
+  /** Those types, until the classes they name have been emitted. */
+  private pendingFbBearingTypes: CompilationUnit["types"] = [];
+
+  /** UPPER(name) of every type a library declares, from its `type` chunks. */
+  private libraryTypeNames: Set<string> = new Set();
+
+  /** UPPER(typeName) of every structure that reaches one of those. */
+  private libraryTypeBearingTypes: Set<string> = new Set();
+
   /** Per-archive reachable-chunk emission state.
    *
    *  Built by `addLibraryChunks` — one entry per library the consumer
@@ -514,11 +532,78 @@ export class CodeGenerator {
    *  Used to resolve positional arguments in FB invocations. */
   private fbInputParams: Map<string, string[]> = new Map();
 
+  /** Map of UPPER(fbTypeName) → UPPER(paramName) → the generic type it was
+   *  declared with (`ANY`, `ANY_INT`, …).
+   *
+   *  A generic parameter takes an `IEC_ANY` descriptor built at the call site,
+   *  not the argument's value. Covers FBs declared here and FBs from a library
+   *  archive alike. */
+  private fbGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Map of UPPER(fbTypeName) → the VAR_IN_OUT parameters declared
+   *  `ARRAY [*] OF …`.
+   *
+   *  A variable-length parameter is an `ArrayView`, which already addresses the
+   *  caller's array — so unlike every other in-out it needs no copy back, and
+   *  cannot have one: the view and the concrete array are different types. */
+  private fbVlaInoutParams: Map<string, Set<string>> = new Map();
+
+  /** Map of UPPER(fbTypeName) → VAR_IN_OUT parameters whose type is a function
+   *  block. Those are pointer members bound to the caller's own instance, so a
+   *  call through one drives the caller's block rather than a copy. */
+  private fbRefInoutParams: Map<string, Set<string>> = new Map();
+
+  /** The FB-typed inout parameters of the POU being generated, so a use of one
+   *  inside the body dereferences the pointer. */
+  private currentRefInouts: Set<string> = new Set();
+
+  /** Map of `UPPER(fbType).UPPER(method)` → its VAR_INPUT parameter names in
+   *  declaration order, so a positional argument can be matched to one. */
+  private methodInputOrder: Map<string, string[]> = new Map();
+
+  /** Map of `UPPER(fbType).UPPER(method)` → UPPER(paramName) → the generic
+   *  type it was declared with.
+   *
+   *  METHOD is one of the three scopes CODESYS declares generics in, so a
+   *  method call has to build the same descriptor a function block call does. */
+  private methodGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Enums an imported library declares, with their members.
+   *
+   *  Merged into the bare-enumerator lookup that `generate()` builds, which is
+   *  otherwise the project's own types only — so a member of a library enum
+   *  would emit unqualified and fail to compile. */
+  private libraryEnumDescriptors: Array<{ name: string; members: string[] }> =
+    [];
+
+  /** Map of UPPER(functionName) → UPPER(paramName) → the generic type it was
+   *  declared with.
+   *
+   *  FUNCTION is the third scope CODESYS declares a generic in, and a call to
+   *  one needs the same descriptor an FB or method call builds. */
+  private functionGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Map of UPPER(functionName) → its parameter names in declaration order,
+   *  so a positional argument can be matched to the parameter it fills. */
+  private functionParamOrder: Map<string, string[]> = new Map();
+
+  /** Names of STRING/WSTRING variables handed to a generic parameter by the
+   *  statement being generated.
+   *
+   *  `raw_ptr()` gives the callee the characters but not the cached length, so
+   *  a callee that writes them leaves `length()` stale. Flushed as
+   *  `sync_length()` after the call — see {@link flushStringSyncs}. */
+  private pendingStringSyncs: string[] = [];
+
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
    *  FB inout params are stored as by-value members with copy-in at the call
    *  site; this set drives the matching copy-back after the call so a callee's
    *  mutations propagate to the caller's variable (true inout semantics). */
   private fbInoutParams: Map<string, Set<string>> = new Map();
+
+  /** Map of UPPER(fbTypeName) → every parameter name in declaration order, so
+   *  an argument given without a name can be matched to the slot it fills. */
+  private fbParamOrder: Map<string, string[]> = new Map();
 
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
 
@@ -550,6 +635,17 @@ export class CodeGenerator {
     typeName: string,
     maxLength?: number | string,
   ): string {
+    // Every generic family, and the descriptor type itself, is one `IEC_ANY` at
+    // the ABI: the family constrains what the caller may pass, checked at the
+    // call site, not what the parameter is made of.
+    //
+    // Spelled out rather than left to the `IEC_<NAME>` rule below, which is
+    // right for `ANY` and wrong for the rest — `IEC_ANY_INT` does not exist.
+    // `__SYSTEM.AnyType` needs it too: a dot is not a C++ name.
+    if (isDeclarableGenericType(typeName) || isAnyDescriptorType(typeName)) {
+      return "IEC_ANY";
+    }
+
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     // Use IECVar-wrapped types to match concrete Array1D<IEC_T, ...> elements
     const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
@@ -643,6 +739,26 @@ export class CodeGenerator {
   }
 
   /**
+   * The C++ type of a `VAR_EXTERNAL`, which is a POINTER to the canonical
+   * `GlobalVar<V>` rather than a parameter.
+   *
+   * Not `toParamTypeRef`: that widens a `STRING(n)` to the unqualified type,
+   * which a parameter may do and a pointer may not —
+   * `GlobalVar<IECStringVar<23>>*` and `GlobalVar<IEC_STRING>*` are unrelated.
+   *
+   * All three emission sites go through this, so they agree by construction.
+   */
+  private externalTypeRefCpp(ext: {
+    typeName: string;
+    maxLength?: number | string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+    referenceKind?: string;
+  }): string {
+    return this.mapTypeRefToCpp(this.projectVarToTypeRef(ext));
+  }
+
+  /**
    * Convert a project-model record (ProjectVarDeclaration /
    * VarExternalDeclaration) into a TypeReference shape suitable for
    * `mapTypeRefToCpp` / `toParamTypeRef`. Project-model records keep the
@@ -684,6 +800,7 @@ export class CodeGenerator {
     referenceKind?: string;
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
+    elementMaxLength?: number;
   }): string {
     let baseType: string;
 
@@ -693,7 +810,12 @@ export class CodeGenerator {
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
       const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
         ? typeRef.elementTypeName
-        : this.mapVarTypeToCpp(typeRef.elementTypeName);
+        : // The element's own declared length — `ARRAY [0..3] OF STRING(23)`.
+          // Without it every element falls back to the 254-character default.
+          this.mapVarTypeToCpp(
+            typeRef.elementTypeName,
+            typeRef.elementMaxLength,
+          );
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
     } else {
       baseType = this.mapVarTypeToCpp(
@@ -790,11 +912,19 @@ export class CodeGenerator {
           new Set(fb.inoutNames.map((n) => n.toUpperCase())),
         );
       }
+      const order = [
+        ...fb.inputNames.map((n) => n.toUpperCase()),
+        ...fb.inoutNames.map((n) => n.toUpperCase()),
+      ];
+      if (order.length > 0) this.fbParamOrder.set(fbUpper, order);
       for (const f of fb.fields) {
         this.libraryFBFieldTypes.set(
           `${fbUpper}.${f.name.toUpperCase()}`,
           f.type,
         );
+        if (isDeclarableGenericType(f.type)) {
+          this.noteGenericParam(fbUpper, f.name, f.type);
+        }
         // Store array metadata for inline array type reconstruction
         if (f.arrayDimensions || f.elementTypeName || f.referenceKind) {
           const ref: {
@@ -819,15 +949,23 @@ export class CodeGenerator {
    * struct types for known-type detection). Private — use registerLibraryArchives().
    */
   private registerLibraryTypes(
-    types: Array<{ name: string; kind: string }>,
+    types: Array<{ name: string; kind: string; members?: string[] }>,
   ): void {
     for (const t of types) {
       const nameUpper = t.name.toUpperCase();
       if (t.kind === "enum") {
-        // Members are not available in the manifest, but we only need to
-        // know the type IS an enum for :: emission in generateVariableExpression
+        // The name alone is enough for `::` emission in
+        // generateVariableExpression; the members, when the archive carries
+        // them, are what lets a bare enumerator be qualified.
+        const members = t.members ?? [];
         if (!this.enumTypeMembers.has(nameUpper)) {
-          this.enumTypeMembers.set(nameUpper, new Set());
+          this.enumTypeMembers.set(
+            nameUpper,
+            new Set(members.map((m) => m.toUpperCase())),
+          );
+        }
+        if (members.length > 0) {
+          this.libraryEnumDescriptors.push({ name: t.name, members });
         }
       }
       this.knownStructTypes.add(nameUpper);
@@ -879,6 +1017,65 @@ export class CodeGenerator {
       if (archive.manifest.types) {
         this.registerLibraryTypes(archive.manifest.types);
       }
+      this.registerLibraryFunctions(archive.manifest.functions);
+    }
+
+    // An FB-typed inout is a pointer, not a copy. Resolved once every archive
+    // is registered, so a type from a later archive still matches.
+    for (const archive of archives) {
+      for (const fb of archive.manifest.functionBlocks) {
+        const fbUpper = fb.name.toUpperCase();
+        for (const io of fb.inouts) {
+          if (!this.knownFBTypes.has(io.type.toUpperCase())) continue;
+          let refs = this.fbRefInoutParams.get(fbUpper);
+          if (!refs) {
+            refs = new Set();
+            this.fbRefInoutParams.set(fbUpper, refs);
+          }
+          refs.add(io.name.toUpperCase());
+        }
+      }
+    }
+  }
+
+  /**
+   * A library function's parameter order and generic slots, from the manifest
+   * rather than the AST. Without the generic slots an argument bound to one is
+   * emitted as the variable itself instead of a descriptor.
+   */
+  private registerLibraryFunctions(
+    functions:
+      | Array<{
+          name: string;
+          parameters?: Array<{
+            name: string;
+            type: string;
+            direction?: string;
+          }>;
+        }>
+      | undefined,
+  ): void {
+    for (const fn of functions ?? []) {
+      const key = fn.name.toUpperCase();
+      const order: string[] = [];
+      for (const param of fn.parameters ?? []) {
+        order.push(param.name.toUpperCase());
+        // A generic is VAR_INPUT only.
+        if (
+          param.direction !== "output" &&
+          isDeclarableGenericType(param.type)
+        ) {
+          let params = this.functionGenericParams.get(key);
+          if (!params) {
+            params = new Map();
+            this.functionGenericParams.set(key, params);
+          }
+          params.set(param.name.toUpperCase(), param.type.toUpperCase());
+        }
+      }
+      if (order.length > 0 && !this.functionParamOrder.has(key)) {
+        this.functionParamOrder.set(key, order);
+      }
     }
   }
 
@@ -893,6 +1090,12 @@ export class CodeGenerator {
    */
   addLibraryChunks(archive: StlibArchive, reachable: Set<string>): void {
     this.libraryEmissions.push({ archive, reachable });
+    // A user type naming one of these cannot precede the library section that
+    // declares it — see collectLibraryTypeBearingTypes.
+    for (const chunk of archive.chunks ?? []) {
+      if (chunk.kind === "type")
+        this.libraryTypeNames.add(chunk.name.toUpperCase());
+    }
   }
 
   /**
@@ -1005,34 +1208,132 @@ export class CodeGenerator {
     this.tempVarCounter = 0;
     this.ast = ast; // Store AST for looking up program bodies
 
-    // Build set of known FB types from AST (library FB types already registered
-    // via registerLibraryFBTypes() before generate() is called)
+    // Every FB name first, so the parameter scan below resolves a type declared
+    // later in the unit. Library FB types are already registered.
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
+    }
+
+    for (const fb of ast.functionBlocks) {
       // Build ordered input parameter names for positional argument resolution
       const inputNames: string[] = [];
       const inoutNames: string[] = [];
+      const paramOrder: string[] = [];
       for (const block of fb.varBlocks) {
+        if (
+          block.blockType === "VAR_INPUT" ||
+          block.blockType === "VAR_IN_OUT" ||
+          block.blockType === "VAR_OUTPUT"
+        ) {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) paramOrder.push(name.toUpperCase());
+          }
+        }
         if (block.blockType === "VAR_INPUT") {
           for (const decl of block.declarations) {
             for (const name of decl.names) {
               inputNames.push(name.toUpperCase());
+              if (isDeclarableGenericType(decl.type.name)) {
+                this.noteGenericParam(
+                  fb.name.toUpperCase(),
+                  name,
+                  decl.type.name,
+                );
+              }
             }
           }
         } else if (block.blockType === "VAR_IN_OUT") {
           for (const decl of block.declarations) {
+            const isVla = decl.type.name.toUpperCase().startsWith("__VLA_");
+            const isFb = this.knownFBTypes.has(decl.type.name.toUpperCase());
             for (const name of decl.names) {
               inoutNames.push(name.toUpperCase());
+              if (isFb) {
+                let refs = this.fbRefInoutParams.get(fb.name.toUpperCase());
+                if (!refs) {
+                  refs = new Set();
+                  this.fbRefInoutParams.set(fb.name.toUpperCase(), refs);
+                }
+                refs.add(name.toUpperCase());
+              }
+              if (isVla) {
+                let vlas = this.fbVlaInoutParams.get(fb.name.toUpperCase());
+                if (!vlas) {
+                  vlas = new Set();
+                  this.fbVlaInoutParams.set(fb.name.toUpperCase(), vlas);
+                }
+                vlas.add(name.toUpperCase());
+              }
             }
           }
         }
       }
+      // Methods carry their own parameter lists, and their own generics.
+      for (const method of fb.methods ?? []) {
+        const key = `${fb.name.toUpperCase()}.${method.name.toUpperCase()}`;
+        const order: string[] = [];
+        for (const block of method.varBlocks ?? []) {
+          if (block.blockType !== "VAR_INPUT") continue;
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              order.push(name.toUpperCase());
+              if (isDeclarableGenericType(decl.type.name)) {
+                let params = this.methodGenericParams.get(key);
+                if (!params) {
+                  params = new Map();
+                  this.methodGenericParams.set(key, params);
+                }
+                params.set(name.toUpperCase(), decl.type.name.toUpperCase());
+              }
+            }
+          }
+        }
+        if (order.length > 0) this.methodInputOrder.set(key, order);
+      }
+
       if (inputNames.length > 0) {
         this.fbInputParams.set(fb.name.toUpperCase(), inputNames);
       }
       if (inoutNames.length > 0) {
         this.fbInoutParams.set(fb.name.toUpperCase(), new Set(inoutNames));
       }
+      if (paramOrder.length > 0) {
+        this.fbParamOrder.set(fb.name.toUpperCase(), paramOrder);
+      }
+    }
+
+    // Functions declare generics too — the third scope, alongside FB and
+    // METHOD. Every parameter block feeds the order, because an argument list
+    // fills VAR_INPUT, VAR_IN_OUT and VAR_OUTPUT slots in declaration order.
+    for (const func of ast.functions) {
+      const key = func.name.toUpperCase();
+      const order: string[] = [];
+      for (const block of func.varBlocks) {
+        if (
+          block.blockType !== "VAR_INPUT" &&
+          block.blockType !== "VAR_IN_OUT" &&
+          block.blockType !== "VAR_OUTPUT"
+        ) {
+          continue;
+        }
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            order.push(name.toUpperCase());
+            if (
+              block.blockType === "VAR_INPUT" &&
+              isDeclarableGenericType(decl.type.name)
+            ) {
+              let params = this.functionGenericParams.get(key);
+              if (!params) {
+                params = new Map();
+                this.functionGenericParams.set(key, params);
+              }
+              params.set(name.toUpperCase(), decl.type.name.toUpperCase());
+            }
+          }
+        }
+      }
+      if (order.length > 0) this.functionParamOrder.set(key, order);
     }
 
     // Build set of known interface types, method name map, and per-interface method sets
@@ -1084,12 +1385,24 @@ export class CodeGenerator {
         enumDescriptors.push({ name: td.name, members: memberNames });
       }
     }
-    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
+    // The project's own last, so a name declared on both sides is reported as
+    // ambiguous rather than quietly taking the library's.
+    this.enumMemberToType = buildEnumMemberMap([
+      ...this.libraryEnumDescriptors,
+      ...enumDescriptors,
+    ]);
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
     for (const prog of ast.programs) {
       this.knownProgramTypes.add(prog.name.toUpperCase());
     }
+
+    // Which structures hold a block instance, before the sort consults it.
+    this.fbBearingTypeDeps = this.collectFbBearingTypes(ast);
+
+    // And which reach a type a library declares — both decide where the
+    // structure, and the file-scope global of that structure, can be emitted.
+    this.libraryTypeBearingTypes = this.collectLibraryTypeBearingTypes(ast);
 
     // Topologically sort FBs once (used in both header and implementation)
     this.sortedFBs = this.topologicalSortFBs(ast.functionBlocks);
@@ -1233,23 +1546,16 @@ export class CodeGenerator {
     // declarations, which is harmless — redundant class declarations are legal.
     this.emitPouForwardDeclarations(ast);
 
-    // Generate user-defined types (Phase 2.2)
-    if (ast.types.length > 0) {
-      const typeRegistry = new TypeRegistry();
-      typeRegistry.registerTypes(ast.types);
-      const typeCodeGen = new TypeCodeGenerator({
-        indent: this.options.indent,
-        lineEnding: this.options.lineEnding,
-        emitChunkMarkers: this.options.emitChunkMarkers ?? false,
-        // Struct fields must mangle by the same rule as everything else that
-        // names them, and only codegen knows the FB / program type names.
-        isUserDefinedType: (t) => this.isUserDefinedType(t),
-      });
-      const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
-      for (const line of typeCode.split(this.options.lineEnding)) {
-        this.emitHeader(line);
-      }
-    }
+    // Generate user-defined types (Phase 2.2). A structure is held back when
+    // it names something the library section has not declared yet: a function
+    // block instance, which waits for that block's class (see
+    // emitFbBearingTypes), or a library-declared type, which only has to
+    // follow the library section and so is released at the first flush.
+    const heldBack = (td: CompilationUnit["types"][number]): boolean =>
+      this.fbBearingTypeDeps.has(td.name.toUpperCase()) ||
+      this.libraryTypeBearingTypes.has(td.name.toUpperCase());
+    this.pendingFbBearingTypes = ast.types.filter(heldBack);
+    this.emitTypeDeclarations(ast.types.filter((td) => !heldBack(td)));
 
     // Generate top-level global variables (GVL files)
     if (ast.globalVarBlocks.length > 0) {
@@ -1328,14 +1634,24 @@ export class CodeGenerator {
     // Configuration VAR_GLOBALs as file-scope singletons — emitted before the
     // FB/program classes so their bodies (and FB constructors that bind a
     // VAR_EXTERNAL pointer to a global) can name them.
-    this.emitFileScopeGlobals();
+    this.emitFileScopeGlobals("early");
 
     // Generate function block class declarations (topologically sorted by dependency)
+    const emittedFBs = new Set<string>();
     for (const fb of this.sortedFBs) {
       this.emitHeaderChunkMarker("begin", "functionBlock", fb.name);
       this.generateFBHeaderDeclaration(fb);
       this.emitHeaderChunkMarker("end", "functionBlock", fb.name);
+      emittedFBs.add(fb.name.toUpperCase());
+      this.emitFbBearingTypes(emittedFBs);
     }
+    // Anything still held back names a block that never arrived; emit it rather
+    // than drop it, and let the compiler report the missing type.
+    this.emitTypeDeclarations(this.pendingFbBearingTypes);
+    this.pendingFbBearingTypes = [];
+
+    // Globals of those types follow them.
+    this.emitFileScopeGlobals("late");
 
     // Generate program class declarations
     if (this.projectModel) {
@@ -1604,11 +1920,20 @@ export class CodeGenerator {
       for (const decl of block.declarations) {
         const cppType = this.mapTypeRefToCpp(decl.type);
         const tag = this.elaboratedTagIfShadowed(decl.type.name, fbMemberNames);
+        // An FB passed as an inout is aliased, not copied: the callee reads and
+        // writes the caller's instance and may call it.
+        const byRef =
+          block.blockType === "VAR_IN_OUT" &&
+          this.knownFBTypes.has(decl.type.name.toUpperCase());
         for (const name of decl.names) {
           const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
-          this.emitHeader(`    ${tag}${cppType} ${memberName};`);
+          this.emitHeader(
+            byRef
+              ? `    ${tag}${cppType}* ${memberName} = nullptr;`
+              : `    ${tag}${cppType} ${memberName};`,
+          );
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
       }
@@ -2186,6 +2511,8 @@ export class CodeGenerator {
     this.currentFBName = fb.name;
     this.currentFBExtends = fb.extends;
     this.currentFBVarBlocks = fb.varBlocks;
+    this.currentRefInouts =
+      this.fbRefInoutParams.get(fb.name.toUpperCase()) ?? new Set();
     this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
 
     // VAR_EXTERNAL: body access (operator(), methods, properties) is rewritten
@@ -2276,6 +2603,7 @@ export class CodeGenerator {
       this.exitScope();
     }
 
+    this.currentRefInouts = new Set();
     this.currentFBName = undefined;
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
@@ -2439,6 +2767,9 @@ export class CodeGenerator {
           ...(decl.elementTypeName !== undefined
             ? { elementTypeName: decl.elementTypeName }
             : {}),
+          ...(decl.elementMaxLength !== undefined
+            ? { elementMaxLength: decl.elementMaxLength }
+            : {}),
           ...(decl.referenceKind !== undefined
             ? { referenceKind: decl.referenceKind }
             : {}),
@@ -2478,9 +2809,7 @@ export class CodeGenerator {
       // projectVarToTypeRef + toParamTypeRef + mapTypeRefToCpp resolve the
       // C++ type the same way the constructor params do (must agree).
       const extTypes = prog.varExternal.map((ext) =>
-        this.mapTypeRefToCpp(
-          this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-        ),
+        this.externalTypeRefCpp(ext),
       );
       this.emitHeader("    // External variables (pointers to shared globals)");
       for (let i = 0; i < prog.varExternal.length; i++) {
@@ -2509,9 +2838,7 @@ export class CodeGenerator {
       // configuration owns the storage + mutex; the program just points at it).
       const params = prog.varExternal
         .map((ext) => {
-          const cppType = this.mapTypeRefToCpp(
-            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-          );
+          const cppType = this.externalTypeRefCpp(ext);
           return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
@@ -2570,9 +2897,7 @@ export class CodeGenerator {
       // the linker rejects the definition.
       const params = prog.varExternal
         .map((ext) => {
-          const cppType = this.mapTypeRefToCpp(
-            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-          );
+          const cppType = this.externalTypeRefCpp(ext);
           return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
@@ -2712,13 +3037,31 @@ export class CodeGenerator {
     }
   }
 
-  private emitFileScopeGlobals(): void {
+  /**
+   * A global whose type holds a function block instance cannot precede that
+   * class, so it is emitted with the types that were held back.
+   */
+  private globalFollowsBlocks(typeName: string): boolean {
+    const upper = typeName.toUpperCase();
+    // `GlobalVar<V>` holds V by value, so the storage cannot precede the
+    // structure any more than the structure can precede what it names.
+    return (
+      this.knownFBTypes.has(upper) ||
+      this.fbBearingTypeDeps.has(upper) ||
+      this.libraryTypeBearingTypes.has(upper)
+    );
+  }
+
+  private emitFileScopeGlobals(phase: "early" | "late"): void {
     if (!this.projectModel) return;
     const seen = new Set<string>();
     let emittedAny = false;
     for (const config of this.projectModel.configurations) {
       for (const gvar of config.globalVars) {
         const key = gvar.name.toUpperCase();
+        if (this.globalFollowsBlocks(gvar.typeName) !== (phase === "late")) {
+          continue;
+        }
         // Same name across configurations = one canonical global (strucpp
         // already treats them as such); emit its storage once.
         if (seen.has(key)) continue;
@@ -3078,6 +3421,24 @@ export class CodeGenerator {
         this.generateRepeatStatement(stmt, indent);
         isCompound = true;
         break;
+      case "ContinueStatement": {
+        // A plain `continue` is correct here, where EXIT needs a goto: `break`
+        // inside the switch an ST CASE compiles to would break the SWITCH, but
+        // `continue` is never captured by a switch and always reaches the
+        // innermost enclosing loop — which is exactly ST's rule.
+        //
+        // It lands in the right place for each loop form too: a FOR still runs
+        // its increment, and a WHILE or REPEAT re-tests its condition.
+        if (this.loopExitLabelStack.length > 0) {
+          this.emit(`${indent}continue;`);
+        } else {
+          // CONTINUE outside a loop is invalid IEC ST, and a bare `continue`
+          // would not compile. Emit nothing rather than crash codegen, matching
+          // the defensive branch on EXIT below.
+          this.emit(`${indent}; // CONTINUE outside a loop`);
+        }
+        break;
+      }
       case "ExitStatement": {
         const top = this.loopExitLabelStack[this.loopExitLabelStack.length - 1];
         if (top) {
@@ -3111,8 +3472,32 @@ export class CodeGenerator {
         );
       }
     }
+    this.flushStringSyncs(indent);
     if (!isCompound) {
       this.recordLineMapping(stmt.sourceSpan.startLine, cppStartLine);
+    }
+  }
+
+  /**
+   * Emit `sync_length()` for each STRING or WSTRING variable this statement
+   * handed to a generic parameter.
+   *
+   * The descriptor's `PVALUE` is `raw_ptr()`, the character buffer. Unlike
+   * CODESYS, where a STRING is a plain NUL-terminated array, the length is
+   * cached beside the characters and must be recomputed after the call.
+   *
+   * Emitted after the statement, since an expression has nowhere to put one.
+   * Duplicates are dropped: two parameters may name the same variable.
+   */
+  private flushStringSyncs(indent: string): void {
+    if (this.pendingStringSyncs.length === 0) return;
+    const pending = this.pendingStringSyncs;
+    this.pendingStringSyncs = [];
+    const seen = new Set<string>();
+    for (const name of pending) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      this.emit(`${indent}${name}.sync_length();`);
     }
   }
 
@@ -3148,15 +3533,17 @@ export class CodeGenerator {
       return;
     }
 
-    // Bit access write: var.N := value → var = (var & ~(1ULL << N)) | ((value ? 1ULL : 0ULL) << N)
-    // Uses 1ULL (64-bit) to avoid UB when bit index >= 32 (e.g., LWORD.33)
-    if (
+    // Partial access write: `var.N := v` and `var.%B1 := v` alike become a
+    // read-modify-write of the whole variable. All arithmetic is 64-bit, so a
+    // shift of 32 or more (LWORD.%D1, LWORD.33) is not undefined behaviour.
+    const writePart =
       stmt.target.kind === "VariableExpression" &&
-      stmt.target.fieldAccess.length > 0 &&
-      /^\d+$/.test(stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!)
-    ) {
-      const bitIdx =
-        stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!;
+      stmt.target.fieldAccess.length > 0
+        ? parsePartialAccess(
+            stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!,
+          )
+        : undefined;
+    if (stmt.target.kind === "VariableExpression" && writePart) {
       // Build the base variable (without the bit index)
       const baseVar: VariableExpression = {
         ...stmt.target,
@@ -3176,7 +3563,7 @@ export class CodeGenerator {
       const baseCode = this.generateExpression(baseVar);
       const value = this.generateExpression(stmt.value);
       this.emit(
-        `${indent}${baseCode} = (${baseCode} & ~(1ULL << ${bitIdx})) | ((${value} ? 1ULL : 0ULL) << ${bitIdx});`,
+        `${indent}${baseCode} = ${this.partialAccessWrite(baseCode, value, writePart)};`,
       );
       return;
     }
@@ -3255,10 +3642,12 @@ export class CodeGenerator {
     this.emit(`${indent}auto ${tmp} = ${value};`);
 
     const lastField = target.fieldAccess[target.fieldAccess.length - 1];
-    const isBitWrite =
-      target.fieldAccess.length > 0 && /^\d+$/.test(lastField ?? "");
+    const writePart =
+      target.fieldAccess.length > 0
+        ? parsePartialAccess(lastField ?? "")
+        : undefined;
 
-    if (isBitWrite) {
+    if (writePart) {
       // Base without the trailing bit index, rendered on the lock lambda param.
       const baseVar: VariableExpression = {
         ...target,
@@ -3271,7 +3660,7 @@ export class CodeGenerator {
       }
       const lv = this.renderAccessTail("(*__glk)", baseVar, nameUpper);
       this.emit(
-        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = (${lv} & ~(1ULL << ${lastField})) | ((${tmp} ? 1ULL : 0ULL) << ${lastField}); });`,
+        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${this.partialAccessWrite(lv, tmp, writePart)}; });`,
       );
       return;
     }
@@ -3723,6 +4112,44 @@ export class CodeGenerator {
   /**
    * Generate C++ for a variable expression.
    */
+  /**
+   * An operand as an LVALUE naming the storage itself, for anything that
+   * aliases it rather than reading it.
+   *
+   * The read paths for a shared global hand back a COPY — `read()` for a
+   * scalar external, `with_lock(...)` for a composite one. Aliasing that copy
+   * gives a pointer to a temporary that dies at the end of the full
+   * expression, so both are reached at their canonical storage instead.
+   *
+   * Naming the storage also keeps the operand a plain lvalue rather than a
+   * `with_lock` lambda, which matters wherever the caller puts it in an
+   * unevaluated context: a lambda inside `sizeof` / `IEC_SIZEOF` is C++20 and
+   * this compiler targets C++17.
+   *
+   * Anything that is not a shared global is already its own storage, so it
+   * falls through to the ordinary expression.
+   */
+  private generateAliasLvalue(expr: Expression): string {
+    if (expr.kind === "VariableExpression" && !expr.isDereference) {
+      const nameUpper = expr.name.toUpperCase();
+      if (this.compositeExternals.has(nameUpper)) {
+        const ptr = this.resolveVariableBaseName(expr.name);
+        return this.renderAccessTail(`${ptr}->value`, expr, nameUpper);
+      }
+      if (this.programExternals.has(nameUpper)) {
+        return this.renderAccessTail(`${expr.name}->value`, expr, nameUpper);
+      }
+    }
+    return this.generateExpression(expr);
+  }
+
+  /**
+   * The address of an operand, for a parameter that aliases it.
+   */
+  private generateAddressOf(expr: Expression): string {
+    return `&${this.generateAliasLvalue(expr)}`;
+  }
+
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
@@ -3845,7 +4272,11 @@ export class CodeGenerator {
     } else {
       // Check for VAR_INST name mangling
       const mangledName = this.varInstMangledNames.get(nameUpper);
-      if (mangledName) {
+      if (this.currentRefInouts.has(nameUpper)) {
+        // An FB-typed inout is a pointer to the caller's own instance, so a
+        // read, a write or a call through it reaches the caller's block.
+        result = `(*${this.memberMangledNames.get(nameUpper) ?? expr.name})`;
+      } else if (mangledName) {
         result = mangledName;
       } else {
         // Check for member name collision mangling (SENSOR SENSOR → SENSOR SENSOR_)
@@ -3928,9 +4359,12 @@ export class CodeGenerator {
       for (let i = 0; i < expr.fieldAccess.length; i++) {
         const field = expr.fieldAccess[i]!;
         const isLast = i === expr.fieldAccess.length - 1;
-        // Bit access: numeric field like .0, .15, .31 → ((var >> N) & 1)
-        if (/^\d+$/.test(field)) {
-          result = `((static_cast<uint64_t>(${result}) >> ${field}) & 1)`;
+        // Partial access: `.0`/`.%X0` for a bit, `.%B1`, `.%W0`, `.%D1` for a
+        // wider part. Shifted by the part's width, so index 0 is the least
+        // significant.
+        const part = parsePartialAccess(field);
+        if (part) {
+          result = this.partialAccessRead(result, part);
           continue;
         }
         if (isLast) {
@@ -3990,9 +4424,10 @@ export class CodeGenerator {
 
       switch (step.kind) {
         case "field": {
-          // Bit access: numeric field like .0, .15, .31
-          if (/^\d+$/.test(step.name)) {
-            result = `((static_cast<uint64_t>(${result}) >> ${step.name}) & 1)`;
+          // Partial access — see partialAccessRead.
+          const part = parsePartialAccess(step.name);
+          if (part) {
+            result = this.partialAccessRead(result, part);
             continue;
           }
           // Property access on the last step
@@ -4121,11 +4556,49 @@ export class CodeGenerator {
    * Generate C++ for a method call expression (chained method calls).
    * e.g., fb.method1(args).method2(args) → fb.method1(args).method2(args)
    */
+  /**
+   * Arguments for a method call, with a descriptor built for any parameter
+   * declared generic.
+   *
+   * Shared because a method call reaches codegen in two shapes: a
+   * `MethodCallExpression`, and a `FunctionCallExpression` whose name carries
+   * the dot (`inst.Method`) — which is the one `x := inst.Method(y)` uses.
+   */
+  private generateCallArguments(
+    ownerType: string | undefined,
+    methodName: string,
+    args: ReadonlyArray<{ name?: string; value: Expression }>,
+  ): string[] {
+    const key = ownerType
+      ? `${ownerType.toUpperCase()}.${methodName.toUpperCase()}`
+      : undefined;
+    const generics = key ? this.methodGenericParams.get(key) : undefined;
+    const order = key ? this.methodInputOrder.get(key) : undefined;
+
+    let positional = 0;
+    return args.map((arg) => {
+      const paramName = arg.name ?? order?.[positional];
+      if (!arg.name) positional++;
+      if (paramName && generics?.has(paramName.toUpperCase())) {
+        const descriptor = this.generateAnyDescriptor(arg.value);
+        if (descriptor) return descriptor;
+      }
+      return this.generateExpression(arg.value);
+    });
+  }
+
   private generateMethodCallExpression(expr: MethodCallExpression): string {
     const obj = this.generateExpression(expr.object);
-    const args = expr.arguments
-      .map((a) => this.generateExpression(a.value))
-      .join(", ");
+
+    const ownerTypeForArgs =
+      expr.object.kind === "VariableExpression"
+        ? this.currentScopeVarTypes.get(expr.object.name.toUpperCase())
+        : undefined;
+    const args = this.generateCallArguments(
+      ownerTypeForArgs,
+      expr.methodName,
+      expr.arguments,
+    ).join(", ");
     // Try type-specific resolution first (avoids collisions when two FBs share a method name)
     let resolvedName: string;
     if (expr.object.kind === "VariableExpression") {
@@ -4307,6 +4780,9 @@ export class CodeGenerator {
       if (!argType) continue;
       const paramType = paramTypes[i]!;
       if (argType === paramType) continue;
+      // A generic parameter takes a descriptor, which is not the argument's
+      // type and must not be cast to one.
+      if (isDeclarableGenericType(paramType)) continue;
       // Bare literals (no typePrefix) are untyped — always castable to param type
       if (
         this.isBareLiteral(expr) ||
@@ -4569,12 +5045,18 @@ export class CodeGenerator {
       const dotIdx = expr.functionName.indexOf(".");
       const prefix = expr.functionName.substring(0, dotIdx);
       const methodName = expr.functionName.substring(dotIdx + 1);
-      const args = expr.arguments.map((arg) =>
-        this.generateExpression(arg.value),
-      );
 
       // Resolve method name case from declaration
       const varType = this.currentScopeVarTypes.get(prefix.toUpperCase());
+
+      // A generic method parameter takes the same descriptor a generic
+      // function block input does — METHOD is one of the three scopes a
+      // generic may be declared in.
+      const args = this.generateCallArguments(
+        varType,
+        methodName,
+        expr.arguments,
+      );
       const resolvedMethod = varType
         ? this.resolveMethodName(varType, methodName)
         : this.resolveMethodNameGlobal(methodName);
@@ -4585,7 +5067,7 @@ export class CodeGenerator {
         return `${this.currentFBExtends}::${resolvedMethod}(${args.join(", ")})`;
       } else {
         // instance.method() call
-        return `${prefix}.${resolvedMethod}(${args.join(", ")})`;
+        return `${this.instanceBaseName(prefix)}.${resolvedMethod}(${args.join(", ")})`;
       }
     }
 
@@ -4695,8 +5177,15 @@ export class CodeGenerator {
     }
 
     // 4. Default: emit as-is (with output argument validation)
+    const generics = this.functionGenericParams.get(nameUpper);
+    const paramOrder = this.functionParamOrder.get(nameUpper);
+    let positionalSlot = 0;
     const args = expr.arguments.map((arg) => {
-      const generated = this.generateExpression(arg.value);
+      const paramName = arg.name ?? paramOrder?.[positionalSlot];
+      if (!arg.name) positionalSlot++;
+      const generated =
+        this.generateGenericArgument(generics, paramName, arg.value) ??
+        this.generateExpression(arg.value);
       if (arg.isOutput && arg.value.kind !== "VariableExpression") {
         this.codegenWarnings.push({
           message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
@@ -4809,14 +5298,17 @@ export class CodeGenerator {
 
     // Build set of parameter slots claimed by named arguments
     // (skip implicit EN/ENO — handled separately by EN/ENO codegen logic)
-    const namedArgs = new Map<string, { expr: string; isOutput: boolean }>();
+    const namedArgs = new Map<
+      string,
+      { value: Expression; isOutput: boolean }
+    >();
     const claimedSlots = new Set<string>();
     for (const arg of expr.arguments) {
       if (arg.name !== undefined) {
         const upperName = arg.name.toUpperCase();
         if (upperName === "EN" || upperName === "ENO") continue;
         namedArgs.set(upperName, {
-          expr: this.generateExpression(arg.value),
+          value: arg.value,
           isOutput: arg.isOutput,
         });
         claimedSlots.add(upperName);
@@ -4857,13 +5349,21 @@ export class CodeGenerator {
       }
     }
 
-    // Collect positional args (preserving source order)
-    const positionalArgs: string[] = [];
+    // Collect positional args (preserving source order). Rendered once the
+    // slot each fills is known, since a generic slot takes a descriptor
+    // instead of the value.
+    const positionalArgs: Expression[] = [];
     for (const arg of expr.arguments) {
       if (arg.name === undefined) {
-        positionalArgs.push(this.generateExpression(arg.value));
+        positionalArgs.push(arg.value);
       }
     }
+    const generics = this.functionGenericParams.get(
+      expr.functionName.toUpperCase(),
+    );
+    const renderArg = (value: Expression, paramName: string): string =>
+      this.generateGenericArgument(generics, paramName, value) ??
+      this.generateExpression(value);
 
     // Assign positional args to unclaimed parameter slots (in declaration order)
     const result: (string | undefined)[] = new Array<string | undefined>(
@@ -4877,7 +5377,7 @@ export class CodeGenerator {
         continue;
       }
       if (positionalIdx < positionalArgs.length) {
-        result[i] = positionalArgs[positionalIdx]!;
+        result[i] = renderArg(positionalArgs[positionalIdx]!, param.name);
         positionalIdx++;
       }
     }
@@ -4887,7 +5387,7 @@ export class CodeGenerator {
       const param = params[i]!;
       const named = namedArgs.get(param.name);
       if (named !== undefined) {
-        result[i] = named.expr;
+        result[i] = renderArg(named.value, param.name);
       }
     }
 
@@ -5098,6 +5598,42 @@ export class CodeGenerator {
   }
 
   /**
+   * Read one part of a bit-field variable.
+   *
+   * `index` counts parts from the least significant end, so the shift is the
+   * part's own width times its index: `Do.%B3` is `(Do >> 24) & 0xFF`. All of
+   * it is done in 64 bits, so a shift of 32 or more is well defined.
+   */
+  private partialAccessRead(base: string, part: PartialAccess): string {
+    const shift = part.index * part.widthBits;
+    const mask =
+      part.widthBits === 1
+        ? "1"
+        : `0x${((1n << BigInt(part.widthBits)) - 1n).toString(16).toUpperCase()}ULL`;
+    return `((static_cast<uint64_t>(${base}) >> ${shift}) & ${mask})`;
+  }
+
+  /**
+   * The right-hand side of a partial-access write: the whole variable with one
+   * part replaced. Clears the part's bits, then ORs the value in, masked to the
+   * part's width so a wider value cannot corrupt its neighbours.
+   *
+   * A bit keeps its `value ? 1 : 0` form, since the source is a BOOL.
+   */
+  private partialAccessWrite(
+    base: string,
+    value: string,
+    part: PartialAccess,
+  ): string {
+    const shift = part.index * part.widthBits;
+    if (part.widthBits === 1) {
+      return `(${base} & ~(1ULL << ${shift})) | ((${value} ? 1ULL : 0ULL) << ${shift})`;
+    }
+    const mask = `0x${((1n << BigInt(part.widthBits)) - 1n).toString(16).toUpperCase()}ULL`;
+    return `(${base} & ~(${mask} << ${shift})) | ((static_cast<uint64_t>(${value}) & ${mask}) << ${shift})`;
+  }
+
+  /**
    * Remove the last field step from an access chain (for bit access / property trim).
    * Returns undefined if the chain becomes empty.
    */
@@ -5177,6 +5713,156 @@ export class CodeGenerator {
     this.currentScopeVarTypes.clear();
   }
 
+  /** Write out a set of user-defined type declarations. */
+  private emitTypeDeclarations(types: CompilationUnit["types"]): void {
+    if (types.length === 0) return;
+    const typeRegistry = new TypeRegistry();
+    typeRegistry.registerTypes(types);
+    const typeCodeGen = new TypeCodeGenerator({
+      indent: this.options.indent,
+      lineEnding: this.options.lineEnding,
+      emitChunkMarkers: this.options.emitChunkMarkers ?? false,
+      // Struct fields must mangle by the same rule as everything else that
+      // names them, and only codegen knows the FB / program type names.
+      isUserDefinedType: (t): boolean => this.isUserDefinedType(t),
+    });
+    const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
+    for (const line of typeCode.split(this.options.lineEnding)) {
+      this.emitHeader(line);
+    }
+  }
+
+  /** Release each held-back type once every class it holds has been emitted. */
+  private emitFbBearingTypes(emittedFBs: Set<string>): void {
+    const ready = this.pendingFbBearingTypes.filter((td) => {
+      const deps = this.fbBearingTypeDeps.get(td.name.toUpperCase());
+      return !deps || [...deps].every((d) => emittedFBs.has(d));
+    });
+    if (ready.length === 0) return;
+    this.pendingFbBearingTypes = this.pendingFbBearingTypes.filter(
+      (td) => !ready.includes(td),
+    );
+    this.emitTypeDeclarations(ready);
+  }
+
+  /**
+   * Structures that reach a type a LIBRARY declares — an enumeration or a
+   * structure out of a `.stlib`.
+   *
+   * The library chunks are injected after the user's types, so a structure
+   * naming one of them was emitted before the declaration it needs and the
+   * C++ compiler reported the type as undeclared. A global variable list is an
+   * ordinary structure here, so this is what a `TP_QUALITY` or `UIO_RESULT`
+   * member of one used to run into.
+   *
+   * A structure holding a library FUNCTION BLOCK never hit it, because
+   * `collectFbBearingTypes` already defers that one — which is why a list
+   * holding a `NODE` worked while the same list holding a `TP_QUALITY` did
+   * not.
+   *
+   * Unlike the function-block case there is nothing to wait for beyond the
+   * library section itself, so these carry no dependency set and the first
+   * flush releases them.
+   */
+  private collectLibraryTypeBearingTypes(ast: CompilationUnit): Set<string> {
+    if (this.libraryTypeNames.size === 0) return new Set();
+
+    // Every kind of definition can name a library type, not just a structure:
+    // an alias IS a type reference (`TYPE Mode : LibMode;`), a top-level array
+    // names its element, and a subrange or a typed enum names its base. Each
+    // one is emitted as its own declaration, so each one can land ahead of the
+    // library section.
+    const referenced = new Map<string, string[]>();
+    for (const td of ast.types) {
+      const names: string[] = [];
+      const definition = td.definition;
+      switch (definition.kind) {
+        case "StructDefinition":
+          for (const field of definition.fields) {
+            names.push(field.type.name);
+            if (field.type.elementTypeName)
+              names.push(field.type.elementTypeName);
+          }
+          break;
+        case "ArrayDefinition":
+          names.push(definition.elementType.name);
+          if (definition.elementType.elementTypeName) {
+            names.push(definition.elementType.elementTypeName);
+          }
+          break;
+        case "SubrangeDefinition":
+          names.push(definition.baseType.name);
+          break;
+        case "EnumDefinition":
+          if (definition.baseType) names.push(definition.baseType.name);
+          break;
+        default:
+          // A bare `TypeReference` is an alias for the type it names.
+          names.push(definition.name);
+          if (definition.elementTypeName)
+            names.push(definition.elementTypeName);
+          break;
+      }
+      referenced.set(
+        td.name.toUpperCase(),
+        names.map((name) => name.toUpperCase()),
+      );
+    }
+
+    const found = new Set<string>();
+    const visit = (name: string, seen: Set<string>): boolean => {
+      if (found.has(name)) return true;
+      if (seen.has(name)) return false;
+      seen.add(name);
+      for (const candidate of referenced.get(name) ?? []) {
+        if (this.libraryTypeNames.has(candidate) || visit(candidate, seen)) {
+          found.add(name);
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const name of referenced.keys()) visit(name, new Set());
+    return found;
+  }
+
+  /**
+   * Structures that reach a function block instance, mapped to the classes
+   * they need declared first. A member held by value needs the complete type,
+   * so such a structure cannot precede the class it holds.
+   */
+  private collectFbBearingTypes(
+    ast: CompilationUnit,
+  ): Map<string, Set<string>> {
+    const fields = new Map<string, VarDeclaration[]>();
+    for (const td of ast.types) {
+      if (td.definition.kind === "StructDefinition") {
+        fields.set(td.name.toUpperCase(), td.definition.fields);
+      }
+    }
+    const found = new Map<string, Set<string>>();
+    const visit = (name: string, seen: Set<string>): Set<string> => {
+      const done = found.get(name);
+      if (done) return done;
+      const blocks = new Set<string>();
+      if (seen.has(name)) return blocks;
+      seen.add(name);
+      for (const field of fields.get(name) ?? []) {
+        const type = field.type.name.toUpperCase();
+        const element = field.type.elementTypeName?.toUpperCase();
+        for (const candidate of [type, element]) {
+          if (candidate === undefined) continue;
+          if (this.knownFBTypes.has(candidate)) blocks.add(candidate);
+          else for (const inner of visit(candidate, seen)) blocks.add(inner);
+        }
+      }
+      if (blocks.size > 0) found.set(name, blocks);
+      return blocks;
+    };
+    for (const name of fields.keys()) visit(name, new Set());
+    return found;
+  }
+
   /**
    * Topologically sort function blocks so that FBs containing instances of
    * other FBs are emitted after their dependencies (Kahn's algorithm).
@@ -5201,6 +5887,13 @@ export class CodeGenerator {
           const typeName = decl.type.name.toUpperCase();
           if (fbMap.has(typeName) && typeName !== fb.name.toUpperCase()) {
             fbDeps.add(typeName);
+          }
+          // A structure holding an instance is emitted with those classes, so
+          // a block using it has to follow them too.
+          for (const held of this.fbBearingTypeDeps.get(typeName) ?? []) {
+            if (fbMap.has(held) && held !== fb.name.toUpperCase()) {
+              fbDeps.add(held);
+            }
           }
         }
       }
@@ -5270,7 +5963,17 @@ export class CodeGenerator {
     const declaredType = this.currentScopeVarTypes.get(
       functionName.toUpperCase(),
     );
-    if (!declaredType) return undefined;
+    if (!declaredType) {
+      // A block reached through a structure: walk the members to its type.
+      // A method name resolves to no member, so a method call falls through.
+      if (!functionName.includes(".")) return undefined;
+      const parts = functionName.split(".");
+      let walked = this.currentScopeVarTypes.get(parts[0]!.toUpperCase());
+      for (let i = 1; i < parts.length && walked; i++) {
+        walked = this.resolveMemberType(walked, parts[i]!);
+      }
+      return walked && this.isFBType(walked) ? walked : undefined;
+    }
     const varType = isElementCall
       ? this.ast
         ? resolveArrayElementTypeUtil(declaredType, this.ast)
@@ -5380,28 +6083,19 @@ export class CodeGenerator {
   ): void {
     const rawName = this.resolveVariableBaseName(call.functionName);
 
-    // Calling a function-block instance that is a shared global: not yet
-    // supported (see generateVariableExpression for the rationale). An FB call
-    // mutates instance state and reads its outputs across several emitted
-    // lines; doing that safely needs a single with_lock() spanning the whole
-    // call, which is a follow-up phase. Fail loudly.
-    if (this.compositeExternals.has(call.functionName.toUpperCase())) {
-      throw new Error(
-        `Shared global '${call.functionName}' is a function-block instance and ` +
-          `is invoked in a program body. Calling a shared function-block global ` +
-          `is not yet supported in the mutex-based shared-global model — scalar ` +
-          `globals only for now.`,
-      );
-    }
-
     // `units[0](…)` invokes an element rather than a bare instance: the target
     // is the subscripted expression, and the FB type is the array's element
     // type. Everything below (input assignment, the call, inout copy-back,
     // output capture) then works against that expression unchanged.
+    // A shared global's mutex is bypassed here for the same reason binding one
+    // to an inout bypasses it: the caller holds the instance across the call,
+    // so a lock spanning it would not be the thing protecting it.
     const instanceName =
       call.instance !== undefined
         ? this.generateExpression(call.instance)
-        : (this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName);
+        : rawName.includes(".")
+          ? this.dottedInstanceName(rawName, call.sourceSpan)
+          : this.instanceBaseName(rawName);
 
     // Extract implicit EN/ENO parameters
     const { enExpr, enoVar, filteredArgs } = this.extractEnEno(call.arguments);
@@ -5415,23 +6109,60 @@ export class CodeGenerator {
       ? this.fbInputParams.get(fbTypeName.toUpperCase())
       : undefined;
 
+    // A function-block inout is bound to the caller's instance rather than
+    // given a copy of it.
+    const refInoutBind = fbTypeName
+      ? this.fbRefInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+
+    // Which parameter each argument fills. A named one says so; the rest take
+    // the slots the named ones left, in declaration order.
+    const slotOf = new Map<Argument, string>();
+    const claimed = new Set<string>();
+    for (const arg of filteredArgs) {
+      if (arg.name) claimed.add(arg.name.toUpperCase());
+    }
+    const order =
+      (fbTypeName
+        ? this.fbParamOrder.get(fbTypeName.toUpperCase())
+        : undefined) ??
+      inputParamNames ??
+      [];
+    let nextSlot = 0;
+    for (const arg of filteredArgs) {
+      if (arg.name) {
+        slotOf.set(arg, arg.name);
+        continue;
+      }
+      while (nextSlot < order.length && claimed.has(order[nextSlot]!))
+        nextSlot++;
+      if (nextSlot >= order.length) continue;
+      slotOf.set(arg, order[nextSlot]!);
+      claimed.add(order[nextSlot]!);
+      nextSlot++;
+    }
+
     // Assign input parameters (named or positional)
     let positionalIndex = 0;
     for (const arg of filteredArgs) {
       if (arg.isOutput) continue;
+      const paramName = slotOf.get(arg);
 
-      if (arg.name) {
-        // Named argument: assign directly
+      if (paramName && refInoutBind?.has(paramName.toUpperCase())) {
         this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${this.generateAddressOf(arg.value)};`,
         );
-      } else if (inputParamNames && positionalIndex < inputParamNames.length) {
-        // Positional argument: map to VAR_INPUT by position
-        const paramName = inputParamNames[positionalIndex];
+      } else if (paramName && this.isOutputParam(fbTypeName, paramName)) {
+        // An output filled positionally reads back after the call, not before.
         this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(paramName!, fbTypeName)} = ${this.generateExpression(arg.value)};`,
+          `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
         );
         positionalIndex++;
+      } else if (paramName) {
+        this.emit(
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${this.generateArgumentValue(paramName, arg.value, fbTypeName)};`,
+        );
+        if (!arg.name) positionalIndex++;
       } else {
         // Positional argument without type info — emit as warning comment
         this.emit(
@@ -5454,22 +6185,36 @@ export class CodeGenerator {
       `${instanceName}.ENO`,
     );
 
-    // Copy VAR_IN_OUT parameters back to the caller's variables. FB inout params
-    // are stored as by-value members and copied IN before the call; without this
-    // copy-OUT the callee's mutations would be discarded (true inout semantics
-    // require both directions). Mirrors the graphical-language convention of
-    // tying an inout pin on both sides. A follow-up strucpp branch replaces this
-    // copy-in/copy-out with by-reference (pointer) inout members.
+    // A value inout is stored by value and copied in before the call, so it has
+    // to be copied back or the callee's writes are lost.
     const inoutParams = fbTypeName
       ? this.fbInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+    const vlaInouts = fbTypeName
+      ? this.fbVlaInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+    const refInouts = fbTypeName
+      ? this.fbRefInoutParams.get(fbTypeName.toUpperCase())
       : undefined;
     if (inoutParams && inoutParams.size > 0) {
       for (const arg of filteredArgs) {
         if (arg.isOutput) continue;
-        if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
+        const paramName = slotOf.get(arg);
+        if (!paramName) continue;
+        const upper = paramName.toUpperCase();
+        // A variable-length parameter is a view onto the caller's own array,
+        // so the callee's writes already landed there. Copying back would mean
+        // assigning an ArrayView to the concrete array it points at — which is
+        // not a conversion that exists, and would be a self-assignment if it
+        // were.
+        if (vlaInouts?.has(upper)) continue;
+        // A function-block inout is a pointer at the caller's own instance, so
+        // the callee wrote there directly.
+        if (refInouts?.has(upper)) continue;
+        if (inoutParams.has(upper)) {
           this.emitCaptureToLvalue(
             arg.value,
-            `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
+            `${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)}`,
             indent,
           );
         }
@@ -5621,10 +6366,204 @@ export class CodeGenerator {
     return name;
   }
 
+  /** Whether a parameter is one of the block's outputs. */
+  private isOutputParam(
+    fbTypeName: string | undefined,
+    paramName: string,
+  ): boolean {
+    if (!fbTypeName) return false;
+    const key = fbTypeName.toUpperCase();
+    const upper = paramName.toUpperCase();
+    if (!this.fbParamOrder.get(key)?.includes(upper)) return false;
+    return (
+      !this.fbInputParams.get(key)?.includes(upper) &&
+      !this.fbInoutParams.get(key)?.has(upper)
+    );
+  }
+
+  /**
+   * The C++ name an FB instance is reached by — a dereference when the instance
+   * is an FB-typed inout, which is held as a pointer.
+   */
+  private instanceBaseName(name: string): string {
+    const raw = this.resolveVariableBaseName(name);
+    const upper = raw.toUpperCase();
+    // A shared global is held behind a pointer, so reach its value.
+    if (this.compositeExternals.has(upper)) return `${raw}->value`;
+    const member = this.memberMangledNames.get(upper) ?? raw;
+    return this.currentRefInouts.has(upper) ? `(*${member})` : member;
+  }
+
+  /**
+   * The instance a call names, when it is written as a dotted path. Built as a
+   * variable access so member mangling and the shared-global holder are
+   * rendered the same way they are everywhere else.
+   */
+  private dottedInstanceName(name: string, span: SourceSpan): string {
+    const parts = name.split(".");
+    const head = parts[0]!;
+    const expr: VariableExpression = {
+      kind: "VariableExpression",
+      sourceSpan: span,
+      name: head,
+      subscripts: [],
+      fieldAccess: parts.slice(1),
+      isDereference: false,
+    };
+    return this.renderAccessTail(
+      this.instanceBaseName(head),
+      expr,
+      head.toUpperCase(),
+    );
+  }
+
   /**
    * Emit the call line for a POU (FB or program) invocation.
    * Subclasses can override to change the call pattern (e.g., ".run()" for programs).
    */
+  /**
+   * What to assign to one FB input member: the argument itself, or — when the
+   * parameter was declared generic — a descriptor addressing it.
+   */
+  private generateArgumentValue(
+    paramName: string,
+    value: Expression,
+    fbTypeName: string | undefined,
+  ): string {
+    if (this.genericParamType(fbTypeName, paramName)) {
+      const descriptor = this.generateAnyDescriptor(value);
+      if (descriptor) return descriptor;
+    }
+    return this.generateExpression(value);
+  }
+
+  /**
+   * A descriptor for an argument filling a generic parameter, or undefined
+   * when the parameter is not generic.
+   */
+  private generateGenericArgument(
+    generics: Map<string, string> | undefined,
+    paramName: string | undefined,
+    value: Expression,
+  ): string | undefined {
+    if (!generics || !paramName) return undefined;
+    if (!generics.has(paramName.toUpperCase())) return undefined;
+    return this.generateAnyDescriptor(value);
+  }
+
+  /** Record that one FB parameter was declared with a generic type. */
+  private noteGenericParam(
+    fbUpper: string,
+    paramName: string,
+    genericType: string,
+  ): void {
+    let params = this.fbGenericParams.get(fbUpper);
+    if (!params) {
+      params = new Map();
+      this.fbGenericParams.set(fbUpper, params);
+    }
+    params.set(paramName.toUpperCase(), genericType.toUpperCase());
+  }
+
+  /** The generic type a parameter was declared with, or undefined. */
+  private genericParamType(
+    fbTypeName: string | undefined,
+    paramName: string,
+  ): string | undefined {
+    if (!fbTypeName) return undefined;
+    return this.fbGenericParams
+      .get(fbTypeName.toUpperCase())
+      ?.get(paramName.toUpperCase());
+  }
+
+  /**
+   * The `IEC_ANY` descriptor for an argument bound to a generic parameter.
+   *
+   * Three fields, as CODESYS defines them:
+   *
+   *   - `typeclass` from the DECLARED type: the C++ payload cannot tell `BYTE`
+   *     from `USINT`;
+   *   - `pvalue` from `raw_ptr()`, the payload rather than the forcing wrapper,
+   *     and the one `force()` keeps current;
+   *   - `diSize` from `IEC_SIZEOF`, the logical IEC width.
+   *
+   * Undefined when the argument's type is not one a generic accepts; the
+   * analyzer already rejects that.
+   */
+  private generateAnyDescriptor(expr: Expression): string | undefined {
+    const declaredType = this.inferExprType(expr);
+    if (!declaredType) return undefined;
+
+    // An IEC_ANY aliases its operand: it hands the callee a pointer the
+    // callee keeps. So the operand has to name the storage, not a read of it
+    // — see generateAliasLvalue.
+    const value = this.generateAliasLvalue(expr);
+    const element = arrayElementTypeName(declaredType);
+    if (element) return this.anyDescriptorForArray(value, element);
+
+    const typeClass = TYPE_CLASS_BY_IEC_TYPE[declaredType.toUpperCase()];
+    if (typeClass) {
+      if (typeClass === "TYPE_STRING" || typeClass === "TYPE_WSTRING") {
+        // The characters travel through raw_ptr(); the cached length does not.
+        this.pendingStringSyncs.push(value);
+      }
+      return (
+        `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::${typeClass}, ` +
+        `reinterpret_cast<uint8_t*>(${value}.raw_ptr()), ` +
+        `static_cast<int32_t>(strucpp::IEC_SIZEOF(${value})), 1, ` +
+        `static_cast<int32_t>(sizeof(${value})), ` +
+        `strucpp::TYPE_CLASS::${typeClass} }`
+      );
+    }
+
+    // A structure is TYPE_USERDEF and addressed whole; an enumeration is
+    // TYPE_ENUM and has a payload pointer.
+    if (this.isUserDefinedType(declaredType)) {
+      const isEnum = this.enumTypeMembers.has(declaredType.toUpperCase());
+      const cls = isEnum ? "TYPE_ENUM" : "TYPE_USERDEF";
+      const ptr = isEnum
+        ? `reinterpret_cast<uint8_t*>(${value}.raw_ptr())`
+        : `reinterpret_cast<uint8_t*>(&${value})`;
+      const size = isEnum
+        ? `static_cast<int32_t>(strucpp::IEC_SIZEOF(${value}))`
+        : `static_cast<int32_t>(sizeof(${value}))`;
+      return (
+        `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::${cls}, ${ptr}, ${size}, 1, ` +
+        `static_cast<int32_t>(sizeof(${value})), strucpp::TYPE_CLASS::${cls} }`
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * The descriptor for an array argument: `TYPE_ARRAY` whatever the elements
+   * are, `DISIZE` the payload packed, `DISTRIDE` the wrapper's width.
+   */
+  private anyDescriptorForArray(
+    value: string,
+    elementTypeName: string,
+  ): string {
+    const payload = this.typeCodeGen.mapTypeToCpp(elementTypeName);
+    const wrapper = this.typeCodeGen.mapStructFieldTypeToCpp(elementTypeName);
+    const count = `static_cast<int32_t>(${value}.element_count())`;
+    const elementClass = TYPE_CLASS_BY_IEC_TYPE[elementTypeName.toUpperCase()];
+    const base = elementClass
+      ? `reinterpret_cast<uint8_t*>(${value}.elements()->raw_ptr())`
+      : `reinterpret_cast<uint8_t*>(${value}.elements())`;
+    // The element's class is known here and nowhere downstream: TYPECLASS says
+    // only TYPE_ARRAY, and the width cannot separate WORD from UINT.
+    const elemClass = elementClass
+      ? `strucpp::TYPE_CLASS::${elementClass}`
+      : this.enumTypeMembers.has(elementTypeName.toUpperCase())
+        ? "strucpp::TYPE_CLASS::TYPE_ENUM"
+        : "strucpp::TYPE_CLASS::TYPE_USERDEF";
+    return (
+      `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::TYPE_ARRAY, ${base}, ` +
+      `static_cast<int32_t>(${value}.element_count() * sizeof(${payload})), ` +
+      `${count}, static_cast<int32_t>(sizeof(${wrapper})), ${elemClass} }`
+    );
+  }
+
   protected emitPOUCallLine(
     instanceName: string,
     _rawName: string,

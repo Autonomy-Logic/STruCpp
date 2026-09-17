@@ -6,7 +6,11 @@
 
 #include <gtest/gtest.h>
 #include <cmath>
+#include <cstring>
 #include "iec_std_lib.hpp"
+#include "iec_array.hpp"
+#include "iec_any.hpp"
+#include "iec_enum.hpp"
 #include "iec_time.hpp"
 #include "iec_date.hpp"
 #include "iec_tod.hpp"
@@ -175,13 +179,14 @@ TEST(TimeTest, UnitConversion) {
     EXPECT_EQ(TIME_TO_D(t), 1);
     EXPECT_EQ(TIME_TO_H(t), 26);
     EXPECT_EQ(TIME_TO_M(t), 26 * 60 + 30);
-    EXPECT_EQ(TIME_TO_S(t), 26LL * 3600LL + 30 * 60 + 45);
+    // TIME_TO_S returns LREAL, so the 500 ms survives.
+    EXPECT_DOUBLE_EQ(TIME_TO_S(t), 26.0 * 3600 + 30 * 60 + 45.5);
 }
 
 TEST(DateTest, Construction) {
     IEC_DATE d = DATE_FROM_YMD(2024, 6, 15);
     // 2024-06-15 is 19888 days since 1970-01-01.
-    EXPECT_EQ(DATE_TO_DAYS(d), 19888);
+    EXPECT_EQ(DATE_TO_DAYS(d), 19889);  // 1970-01-01 .. 2024-06-15
 }
 
 TEST(DateTest, Arithmetic) {
@@ -232,7 +237,7 @@ TEST(TodTest, Comparison) {
 TEST(DtTest, Construction) {
     IEC_DT dt = DT_FROM_COMPONENTS(2024, 6, 15, 14, 30, 45);
     // 2024-06-15 14:30:45 UTC = days_to_epoch * 86400 + 14*3600 + 30*60 + 45 seconds.
-    const int64_t expected_seconds = 19888LL * 86400LL + 14LL * 3600LL + 30LL * 60LL + 45LL;
+    const int64_t expected_seconds = 19889LL * 86400LL + 14LL * 3600LL + 30LL * 60LL + 45LL;
     EXPECT_EQ(DT_TO_SECONDS(dt), expected_seconds);
     EXPECT_EQ(DT_TO_NS(dt), expected_seconds * 1000000000LL);
 }
@@ -304,7 +309,8 @@ TEST(StringTest, Substring) {
     auto right = RIGHT(s, 5);
     EXPECT_STREQ(right.c_str(), "World");
     
-    auto mid = MID(s, 7, 5);
+    // MID(IN, L, P): L characters from position P.
+    auto mid = MID(s, 5, 7);
     EXPECT_STREQ(mid.c_str(), "World");
 }
 
@@ -382,9 +388,11 @@ TEST(TimeVarTest, Forcing) {
 
     tv.set(20LL * NS_PER_S);
     EXPECT_EQ(TIME_TO_S(tv), 99);  // forced value still wins
-    EXPECT_EQ(tv.get_underlying() / NS_PER_S, 20);
+    EXPECT_EQ(tv.get_underlying() / NS_PER_S, 99);  // set() ignored while forced
 
     tv.unforce();
+    EXPECT_EQ(TIME_TO_S(tv), 99);  // keeps the forced value until written
+    tv.set(20LL * NS_PER_S);
     EXPECT_EQ(TIME_TO_S(tv), 20);
 }
 
@@ -396,10 +404,267 @@ TEST(StringVarTest, Forcing) {
     EXPECT_TRUE(sv.is_forced());
     EXPECT_STREQ(sv.get().c_str(), "Forced");
     
+    // A forced STRING behaves exactly like a forced INT. It did not before:
+    // IECStringVar::set was unguarded, so ST overwrote the raw slot that
+    // debug_dispatch's read_string reports, and the debugger and the program
+    // disagreed about the same variable.
     sv.set("World");
     EXPECT_STREQ(sv.get().c_str(), "Forced");
-    EXPECT_STREQ(sv.get_underlying().c_str(), "World");
+    EXPECT_STREQ(sv.get_underlying().c_str(), "Forced");
     
     sv.unforce();
+    EXPECT_STREQ(sv.get().c_str(), "Forced");
+    sv.set("World");
     EXPECT_STREQ(sv.get().c_str(), "World");
+}
+
+// ---------------------------------------------------------------------------
+// SIZEOF on a variable-length array parameter
+// ---------------------------------------------------------------------------
+//
+// A view is a descriptor — a pointer plus bounds — whose own size says nothing
+// about what it addresses. Without an overload it fell to the generic
+// `IEC_SIZEOF(const T&)` and reported `sizeof(ArrayView1D<T>)`: the same number
+// for every element type and every length, so `SIZEOF(a) / count` produced a
+// stride that was right only by coincidence.
+
+TEST(SizeofViewTest, ReportsTheDataNotTheDescriptor) {
+    IEC_ARRAY_1D<IEC_INT, ArrayBounds<0, 3>> ints;
+    ArrayView1D<IEC_INT> view(ints);
+
+    // The descriptor is the same size whatever it points at, which is exactly
+    // why it is the wrong answer.
+    EXPECT_EQ(sizeof(ArrayView1D<IEC_INT>), sizeof(ArrayView1D<IEC_REAL>));
+    EXPECT_EQ(IEC_SIZEOF(view), 4u * sizeof(IEC_INT));
+}
+
+TEST(SizeofViewTest, MatchesTheFixedBoundArrayItViews) {
+    IEC_ARRAY_1D<IEC_REAL, ArrayBounds<0, 2>> reals;
+    ArrayView1D<IEC_REAL> view(reals);
+    EXPECT_EQ(IEC_SIZEOF(view), sizeof(reals));
+}
+
+// The point of the fix: `SIZEOF(a) / count` is the element stride, computed
+// rather than tabulated, so it stays right on any target and for any type.
+TEST(SizeofViewTest, DividesToTheElementStride) {
+    IEC_ARRAY_1D<IEC_INT, ArrayBounds<0, 3>> ints;
+    IEC_ARRAY_1D<IEC_REAL, ArrayBounds<0, 2>> reals;
+    ArrayView1D<IEC_INT> vi(ints);
+    ArrayView1D<IEC_REAL> vr(reals);
+
+    EXPECT_EQ(IEC_SIZEOF(vi) / vi.length(), sizeof(IEC_INT));
+    EXPECT_EQ(IEC_SIZEOF(vr) / vr.length(), sizeof(IEC_REAL));
+
+    // And that stride actually walks the elements.
+    ints[0] = 10; ints[1] = 20; ints[2] = 30; ints[3] = 40;
+    const auto stride = IEC_SIZEOF(vi) / vi.length();
+    const auto* base = reinterpret_cast<const uint8_t*>(&ints[0]);
+    const int16_t expected[] = {10, 20, 30, 40};
+    for (int i = 0; i < 4; ++i) {
+        int16_t v;
+        std::memcpy(&v, base + i * stride, sizeof v);
+        EXPECT_EQ(v, expected[i]) << "element " << i;
+    }
+}
+
+TEST(SizeofViewTest, TwoDimensionalViewCountsBothDimensions) {
+    IEC_ARRAY_2D<IEC_INT, ArrayBounds<0, 1>, ArrayBounds<0, 2>> grid;
+    ArrayView2D<IEC_INT> view(grid);
+    EXPECT_EQ(IEC_SIZEOF(view), 6u * sizeof(IEC_INT));
+}
+
+TEST(SizeofViewTest, EmptyViewIsZero) {
+    ArrayView1D<IEC_INT> empty;
+    EXPECT_EQ(IEC_SIZEOF(empty), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// The stride idiom, across every elementary type
+// ---------------------------------------------------------------------------
+//
+// `SIZEOF(a) / count` is how a block walks an array it did not declare. It has
+// to hold for every element type, not just the one that was tried first: an
+// earlier version divided the view descriptor's own size, which happened to
+// give the right answer for a 4-element INT array and nothing else.
+//
+// Two things are checked per type. The quotient must equal the real element
+// stride, and walking at that stride must land exactly on each element — the
+// second is what catches padding the first would miss.
+
+template <typename VarT>
+static void ExpectStrideWalksElements(const char* name) {
+    IEC_ARRAY_1D<VarT, ArrayBounds<0, 3>> arr;
+    ArrayView1D<VarT> view(arr);
+
+    const auto stride = IEC_SIZEOF(view) / view.length();
+    EXPECT_EQ(stride, sizeof(VarT)) << name << ": quotient is not the element stride";
+
+    const auto base = reinterpret_cast<uintptr_t>(&arr[0]);
+    for (int64_t i = 0; i < view.length(); ++i) {
+        EXPECT_EQ(base + i * stride, reinterpret_cast<uintptr_t>(&arr[i]))
+            << name << ": stride does not land on element " << i;
+    }
+}
+
+TEST(SizeofViewTest, StrideHoldsForEveryElementaryType) {
+    ExpectStrideWalksElements<IEC_BOOL>("BOOL");
+    ExpectStrideWalksElements<IEC_BYTE>("BYTE");
+    ExpectStrideWalksElements<IEC_WORD>("WORD");
+    ExpectStrideWalksElements<IEC_DWORD>("DWORD");
+    ExpectStrideWalksElements<IEC_LWORD>("LWORD");
+    ExpectStrideWalksElements<IEC_SINT>("SINT");
+    ExpectStrideWalksElements<IEC_INT>("INT");
+    ExpectStrideWalksElements<IEC_DINT>("DINT");
+    ExpectStrideWalksElements<IEC_LINT>("LINT");
+    ExpectStrideWalksElements<IEC_USINT>("USINT");
+    ExpectStrideWalksElements<IEC_UINT>("UINT");
+    ExpectStrideWalksElements<IEC_UDINT>("UDINT");
+    ExpectStrideWalksElements<IEC_ULINT>("ULINT");
+    ExpectStrideWalksElements<IEC_REAL>("REAL");
+    ExpectStrideWalksElements<IEC_LREAL>("LREAL");
+    ExpectStrideWalksElements<IEC_TIME>("TIME");
+    ExpectStrideWalksElements<IEC_DATE>("DATE");
+    ExpectStrideWalksElements<IEC_TOD>("TOD");
+    ExpectStrideWalksElements<IEC_DT>("DT");
+    ExpectStrideWalksElements<IEC_LTIME>("LTIME");
+    ExpectStrideWalksElements<IEC_LTOD>("LTOD");
+    ExpectStrideWalksElements<IEC_LDT>("LDT");
+    ExpectStrideWalksElements<IEC_CHAR>("CHAR");
+    ExpectStrideWalksElements<IEC_WCHAR>("WCHAR");
+    ExpectStrideWalksElements<IECStringVar<16>>("STRING(16)");
+    ExpectStrideWalksElements<IECStringVar<80>>("STRING(80)");
+    ExpectStrideWalksElements<IECWStringVar<16>>("WSTRING(16)");
+}
+
+// `SIZEOF(x)` on one element is the payload width. Pinned per type because it
+// is the half of the pair another toolchain also has to agree with, where the
+// stride above only has to be right here.
+TEST(SizeofViewTest, ElementSizeIsThePayloadWidth) {
+    IEC_ARRAY_1D<IEC_BOOL, ArrayBounds<0, 0>> b;   EXPECT_EQ(IEC_SIZEOF(b[0]), 1u);
+    IEC_ARRAY_1D<IEC_BYTE, ArrayBounds<0, 0>> by;  EXPECT_EQ(IEC_SIZEOF(by[0]), 1u);
+    IEC_ARRAY_1D<IEC_WORD, ArrayBounds<0, 0>> w;   EXPECT_EQ(IEC_SIZEOF(w[0]), 2u);
+    IEC_ARRAY_1D<IEC_DWORD, ArrayBounds<0, 0>> d;  EXPECT_EQ(IEC_SIZEOF(d[0]), 4u);
+    IEC_ARRAY_1D<IEC_LWORD, ArrayBounds<0, 0>> l;  EXPECT_EQ(IEC_SIZEOF(l[0]), 8u);
+    IEC_ARRAY_1D<IEC_SINT, ArrayBounds<0, 0>> si;  EXPECT_EQ(IEC_SIZEOF(si[0]), 1u);
+    IEC_ARRAY_1D<IEC_INT, ArrayBounds<0, 0>> i;    EXPECT_EQ(IEC_SIZEOF(i[0]), 2u);
+    IEC_ARRAY_1D<IEC_DINT, ArrayBounds<0, 0>> di;  EXPECT_EQ(IEC_SIZEOF(di[0]), 4u);
+    IEC_ARRAY_1D<IEC_LINT, ArrayBounds<0, 0>> li;  EXPECT_EQ(IEC_SIZEOF(li[0]), 8u);
+    IEC_ARRAY_1D<IEC_REAL, ArrayBounds<0, 0>> r;   EXPECT_EQ(IEC_SIZEOF(r[0]), 4u);
+    IEC_ARRAY_1D<IEC_LREAL, ArrayBounds<0, 0>> lr; EXPECT_EQ(IEC_SIZEOF(lr[0]), 8u);
+    IEC_ARRAY_1D<IEC_CHAR, ArrayBounds<0, 0>> c;   EXPECT_EQ(IEC_SIZEOF(c[0]), 1u);
+    IEC_ARRAY_1D<IEC_WCHAR, ArrayBounds<0, 0>> wc; EXPECT_EQ(IEC_SIZEOF(wc[0]), 2u);
+
+    // The long time types are signed 64-bit nanoseconds, so 8 bytes.
+    IEC_ARRAY_1D<IEC_LTIME, ArrayBounds<0, 0>> lt; EXPECT_EQ(IEC_SIZEOF(lt[0]), 8u);
+    IEC_ARRAY_1D<IEC_LTOD, ArrayBounds<0, 0>> lto; EXPECT_EQ(IEC_SIZEOF(lto[0]), 8u);
+    IEC_ARRAY_1D<IEC_LDT, ArrayBounds<0, 0>> ldt;  EXPECT_EQ(IEC_SIZEOF(ldt[0]), 8u);
+
+    // The short forms have no fixed width, so it is ours to choose. 64-bit
+    // here, which is what lets LTIME, LTOD and LDT share their storage.
+    // Other toolchains use 32; pinned so the choice stays visible.
+    IEC_ARRAY_1D<IEC_TIME, ArrayBounds<0, 0>> t;   EXPECT_EQ(IEC_SIZEOF(t[0]), 8u);
+    IEC_ARRAY_1D<IEC_DATE, ArrayBounds<0, 0>> dt;  EXPECT_EQ(IEC_SIZEOF(dt[0]), 8u);
+    IEC_ARRAY_1D<IEC_TOD, ArrayBounds<0, 0>> tod;  EXPECT_EQ(IEC_SIZEOF(tod[0]), 8u);
+    IEC_ARRAY_1D<IEC_DT, ArrayBounds<0, 0>> dat;   EXPECT_EQ(IEC_SIZEOF(dat[0]), 8u);
+
+    // STRING(n) is n + 1 for the terminator, WSTRING the same count doubled.
+    IEC_ARRAY_1D<IECStringVar<16>, ArrayBounds<0, 0>> s16;
+    EXPECT_EQ(IEC_SIZEOF(s16[0]), 17u);
+    IEC_ARRAY_1D<IECWStringVar<16>, ArrayBounds<0, 0>> ws16;
+    EXPECT_EQ(IEC_SIZEOF(ws16[0]), 34u);
+}
+
+// ---------------------------------------------------------------------------
+// The generic descriptor's defaults
+// ---------------------------------------------------------------------------
+//
+// A generic input pin left unwired keeps these, which is how a block tells it
+// was given nothing. As a function block member with no initialisers the
+// members were default-initialised — indeterminate — so a block testing
+// `DISIZE > 0` read whatever happened to be on the stack and treated an
+// unwired pin as a live argument.
+
+// Zeroed, not a sentinel class: an unwired pin reads typeclass 0, diSize 0,
+// pvalue NULL. TYPE_BOOL is also 0, so PVALUE and DISIZE are what separate
+// "nothing passed" from "a BOOL was passed".
+TEST(AnyDescriptorTest, DefaultsToEmpty) {
+    IEC_ANY a{};
+    EXPECT_EQ(static_cast<uint32_t>(a.TYPECLASS), 0u);
+    EXPECT_EQ(a.PVALUE, nullptr);
+    EXPECT_EQ(a.DISIZE, 0);
+    EXPECT_EQ(a.DICOUNT, 0);
+    EXPECT_EQ(a.DISTRIDE, 0);
+}
+
+TEST(AnyDescriptorTest, DefaultsSurviveAsAMember) {
+    struct Block { IEC_ANY PIN; };
+    Block b;
+    EXPECT_EQ(static_cast<uint32_t>(b.PIN.TYPECLASS), 0u);
+    EXPECT_EQ(b.PIN.PVALUE, nullptr);
+    EXPECT_EQ(b.PIN.DISIZE, 0);
+    EXPECT_EQ(b.PIN.DICOUNT, 0);
+}
+
+// Codegen builds a wired pin with aggregate initialisation, which the defaults
+// must not disturb.
+TEST(AnyDescriptorTest, AggregateInitialisationStillWires) {
+    IEC_INT v(7);
+    IEC_ANY a{TYPE_CLASS::TYPE_INT, reinterpret_cast<uint8_t*>(v.raw_ptr()),
+              static_cast<int32_t>(sizeof(INT_t))};
+    EXPECT_EQ(a.TYPECLASS, TYPE_INT);
+    EXPECT_NE(a.PVALUE, nullptr);
+    EXPECT_EQ(a.DISIZE, 2);
+}
+
+// ---------------------------------------------------------------------------
+// The pieces a generic argument's descriptor is built from
+// ---------------------------------------------------------------------------
+
+namespace { enum class Colour { Red, Green }; }
+
+// Without an overload this fell to the generic IEC_SIZEOF and reported the
+// whole wrapper — forced state included — rather than the width of the
+// enumeration's own base type.
+TEST(AnyDescriptorTest, SizeofEnumIsTheValueNotTheWrapper) {
+    IEC_ENUM_Var<Colour> e{Colour::Green};
+    EXPECT_EQ(IEC_SIZEOF(e), sizeof(IEC_ENUM_Value<Colour>));
+    EXPECT_LT(IEC_SIZEOF(e), sizeof(e));
+}
+
+// force() mirrors into the raw slot, so what raw_ptr addresses is the forced
+// value while a force stands — the contract IECVar::raw_ptr carries.
+TEST(AnyDescriptorTest, EnumRawPtrFollowsAForce) {
+    IEC_ENUM_Var<Colour> e{Colour::Red};
+    EXPECT_EQ(*e.raw_ptr(), static_cast<IEC_ENUM_Value<Colour>>(Colour::Red));
+    e.force(static_cast<IEC_ENUM_Value<Colour>>(Colour::Green));
+    EXPECT_EQ(*e.raw_ptr(), static_cast<IEC_ENUM_Value<Colour>>(Colour::Green));
+}
+
+// The address of the first element whatever the declared lower bound, and a
+// count that does not depend on the rank. ARRAY[1..3] and ARRAY[0..2] hold the
+// same 6 bytes, so the lower bound must not enter into it.
+TEST(AnyDescriptorTest, ArrayStorageIgnoresTheLowerBound) {
+    IEC_ARRAY_1D<IEC_WORD, ArrayBounds<1, 3>> based;
+    based[1] = 111; based[2] = 222; based[3] = 333;
+    EXPECT_EQ(based.element_count(), 3u);
+    EXPECT_EQ(based.elements(), &based[1]);
+    EXPECT_EQ(based.elements()->get(), 111);
+}
+
+TEST(AnyDescriptorTest, TwoDimensionalCountIsEveryElement) {
+    IEC_ARRAY_2D<IEC_WORD, ArrayBounds<0, 1>, ArrayBounds<0, 1>> grid;
+    EXPECT_EQ(grid.element_count(), 4u);
+    EXPECT_EQ(grid.elements(), &grid(0, 0));
+}
+
+// DISIZE is the payload packed, while DISTRIDE is what the memory actually
+// steps by. Equal on a runtime that packs its arrays; not here, which is the
+// whole reason DISTRIDE exists.
+TEST(AnyDescriptorTest, PackedSizeAndStrideDifferHere) {
+    IEC_ARRAY_1D<IEC_WORD, ArrayBounds<0, 2>> a;
+    const auto packed = a.element_count() * sizeof(WORD_t);
+    const auto stride = sizeof(IEC_WORD);
+    EXPECT_EQ(packed, 6u);
+    EXPECT_GT(stride, sizeof(WORD_t));
+    EXPECT_EQ(stride * a.element_count(), sizeof(a));
 }

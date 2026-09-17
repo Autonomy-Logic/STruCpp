@@ -10,6 +10,7 @@
 #include <gtest/gtest.h>
 #include "debug_dispatch.hpp"
 #include "iec_var.hpp"
+#include "iec_string.hpp"
 
 namespace sd = strucpp::debug;
 using namespace strucpp;
@@ -24,14 +25,19 @@ static IEC_DINT  t_dint  { 0 };
 static IEC_LINT  t_lint  { 0 };
 static IEC_REAL  t_real  { 0.0f };
 static IEC_LREAL t_lreal { 0.0 };
+// A sized string, so the table carries a non-zero `cap`. Every other entry
+// declares 0, which cannot tell a propagated capacity from a dropped one.
+static IECStringVar<23> t_str {};
 
 static const sd::Entry g_arr_0[] = {
-    { (void*)&t_bool,  sd::TAG_BOOL,  0 },
-    { (void*)&t_int,   sd::TAG_INT,   0 },
-    { (void*)&t_dint,  sd::TAG_DINT,  0 },
-    { (void*)&t_lint,  sd::TAG_LINT,  0 },
-    { (void*)&t_real,  sd::TAG_REAL,  0 },
-    { (void*)&t_lreal, sd::TAG_LREAL, 0 },
+    //                                 flags, cap
+    { (void*)&t_bool,  sd::TAG_BOOL,   0, 0 },
+    { (void*)&t_int,   sd::TAG_INT,    0, 0 },
+    { (void*)&t_dint,  sd::TAG_DINT,   0, 0 },
+    { (void*)&t_lint,  sd::TAG_LINT,   0, 0 },
+    { (void*)&t_real,  sd::TAG_REAL,   0, 0 },
+    { (void*)&t_lreal, sd::TAG_LREAL,  0, 0 },
+    { (void*)&t_str,   sd::TAG_STRING, 0, 23 },
 };
 
 // Definitions for the `extern` declarations in debug_dispatch.hpp.
@@ -63,9 +69,43 @@ TEST(DebugDispatch, HandleArrayCount) {
 
 TEST(DebugDispatch, HandleElemCount) {
     reset_vars();
-    EXPECT_EQ(sd::handle_elem_count(0), 6u);
+    EXPECT_EQ(sd::handle_elem_count(0), 7u);
     EXPECT_EQ(sd::handle_elem_count(1), 0u);  // out of range
     EXPECT_EQ(sd::handle_elem_count(255), 0u);
+}
+
+// ---------------------------------------------------------------------------
+// Entry layout and capacity propagation.
+//
+// read_entry cannot copy an Entry out of PROGMEM as a struct on AVR; those
+// branches read each member at a byte offset. Both of them once read `ptr` and
+// `tag` and stopped, leaving `cap` at 0, so every sized STRING was treated as
+// the 254 default and the string ops computed their forced-value offsets past
+// the end of the object. These pin the arithmetic and the propagation.
+// ---------------------------------------------------------------------------
+TEST(DebugDispatch, EntryLayoutMatchesTheByteOffsetsAvrReadsAt) {
+    const sd::Entry e{ (void*)&t_str, sd::TAG_STRING, 0, 23 };
+    const uint8_t* raw = reinterpret_cast<const uint8_t*>(&e);
+
+    EXPECT_EQ(offsetof(sd::Entry, ptr), 0u);
+    EXPECT_EQ(offsetof(sd::Entry, tag), sizeof(void*));
+    EXPECT_EQ(offsetof(sd::Entry, flags), sizeof(void*) + 1);
+    EXPECT_EQ(offsetof(sd::Entry, cap), sizeof(void*) + 2);
+
+    EXPECT_EQ(raw[sizeof(void*)],     static_cast<uint8_t>(sd::TAG_STRING));
+    EXPECT_EQ(raw[sizeof(void*) + 1], 0u);
+    EXPECT_EQ(raw[sizeof(void*) + 2], 23u);
+}
+
+TEST(DebugDispatch, ReadEntryPropagatesCap) {
+    reset_vars();
+    const sd::Entry sized = sd::read_entry(0, 6);
+    EXPECT_EQ(sized.tag, static_cast<uint8_t>(sd::TAG_STRING));
+    EXPECT_EQ(sized.cap, 23u);
+
+    // An unqualified entry still reports 0, which the string ops read as the
+    // 254 default.
+    EXPECT_EQ(sd::read_entry(0, 1).cap, 0u);
 }
 
 TEST(DebugDispatch, HandleSize) {

@@ -15,6 +15,7 @@ import {
   compileLibrary,
   compileStlib,
 } from "../../src/library/library-compiler.js";
+import { compile } from "../../src/index.js";
 import { loadStlibFromString } from "../../src/library/library-loader.js";
 import {
   LIBRARY_SOURCE_EXTENSIONS,
@@ -260,6 +261,95 @@ describe("compileLibrary with native sources", () => {
   });
 });
 
+describe("a native block and its own library's ST", () => {
+  // The native headers and the ST sources are two separate compiles. The
+  // native one used to run first, so a native block could not name a type its
+  // own library declared — while the same type reached through a dependency
+  // resolved fine. Compiling ST first and handing it to the native pass as a
+  // synthetic archive removes the difference: where a symbol is declared stops
+  // deciding whether it can be seen.
+  const TYPES_ST = `
+TYPE PROBE_SPACE : (COIL, REGISTER); END_TYPE
+TYPE PROBE_SETTINGS : STRUCT
+  ADDRESS : UINT;
+  SPACE   : PROBE_SPACE;
+END_STRUCT END_TYPE
+`;
+
+  const NATIVE_USING_OWN_TYPES = `(* Binds one register. *)
+FUNCTION_BLOCK PROBE_ADD
+VAR_INPUT
+  CFG : PROBE_SETTINGS;
+  SP : PROBE_SPACE;
+END_VAR
+VAR_OUTPUT
+  BOUND : BOOL;
+END_VAR
+void setup() { BOUND = false; }
+void loop() { BOUND = true; }
+END_FUNCTION_BLOCK
+`;
+
+  const compileProbe = () =>
+    compileLibrary(
+      [
+        { source: TYPES_ST, fileName: "_types.st", category: "data-type" },
+        { source: NATIVE_USING_OWN_TYPES, fileName: "PROBE_ADD.cpp" },
+      ],
+      { name: "probe", version: "1.0.0", namespace: "probe" },
+    );
+
+  it("resolves a structure and an enumeration the same library declares", () => {
+    const result = compileProbe();
+
+    expect(result.errors).toEqual([]);
+    expect(result.success).toBe(true);
+  });
+
+  it("keeps the declared pin types on the manifest entry", () => {
+    const fb = compileProbe().manifest.functionBlocks.find(
+      (entry) => entry.name.toUpperCase() === "PROBE_ADD",
+    );
+
+    expect(fb?.inputs).toEqual([
+      { name: "CFG", type: "PROBE_SETTINGS" },
+      { name: "SP", type: "PROBE_SPACE" },
+    ]);
+    expect(fb?.implementation).toBe("cpp");
+  });
+
+  it("still exports the ST types alongside the native block", () => {
+    const manifest = compileProbe().manifest;
+
+    expect(manifest.types.map((t) => t.name).sort()).toEqual([
+      "PROBE_SETTINGS",
+      "PROBE_SPACE",
+    ]);
+    expect(manifest.functionBlocks.map((fb) => fb.name)).toContain("PROBE_ADD");
+  });
+
+  it("still reports a genuinely undefined type", () => {
+    const result = compileLibrary(
+      [
+        { source: TYPES_ST, fileName: "_types.st", category: "data-type" },
+        {
+          source: NATIVE_USING_OWN_TYPES.replace(
+            "PROBE_SETTINGS",
+            "NOT_DECLARED",
+          ),
+          fileName: "PROBE_ADD.cpp",
+        },
+      ],
+      { name: "probe", version: "1.0.0", namespace: "probe" },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errors.map((e) => e.message).join("\n")).toContain(
+      "Undefined type 'NOT_DECLARED'",
+    );
+  });
+});
+
 describe("compileStlib with native sources", () => {
   const build = (noSource: boolean) =>
     compileStlib(
@@ -388,5 +478,164 @@ describe("duplicate exports", () => {
     ]);
     expect(res.success).toBe(false);
     expect(res.errors[0]?.message).toContain("exported 2 times");
+  });
+});
+
+describe("an enum a library exports", () => {
+  // A consuming program names an enumerator bare — `MB_HOLDING_REGISTER`, not
+  // `MB_SPACE#MB_HOLDING_REGISTER`, which this dialect does not lex. Resolving
+  // it needs the members, and the manifest carried only the type's name: the
+  // consumer knew PROBE_SPACE was an enum, which is enough to spell a variable
+  // `IEC_PROBE_SPACE`, but not what may be written into one. Every enumerator
+  // read as an undeclared identifier.
+  const ENUM_ST = `TYPE PROBE_SPACE : (PROBE_FIRST, PROBE_SECOND, PROBE_THIRD); END_TYPE`;
+
+  const archive = () =>
+    compileStlib([{ source: ENUM_ST, fileName: "_types.st", category: "data-type" }], {
+      name: "probe",
+      version: "1.0.0",
+      namespace: "probe",
+    }).archive;
+
+  it("carries the enumerators on the manifest entry", () => {
+    const type = archive().manifest.types.find((t) => t.name === "PROBE_SPACE");
+
+    expect(type?.kind).toBe("enum");
+    expect(type?.members).toEqual(["PROBE_FIRST", "PROBE_SECOND", "PROBE_THIRD"]);
+  });
+
+  it("leaves a struct's entry without members", () => {
+    const structArchive = compileStlib(
+      [
+        {
+          source: "TYPE PROBE_CFG : STRUCT ADDRESS : UINT; END_STRUCT END_TYPE",
+          fileName: "_types.st",
+          category: "data-type",
+        },
+      ],
+      { name: "probe", version: "1.0.0", namespace: "probe" },
+    ).archive;
+
+    const type = structArchive.manifest.types.find((t) => t.name === "PROBE_CFG");
+    expect(type?.kind).toBe("struct");
+    expect(type?.members).toBeUndefined();
+  });
+
+  it("lets a consuming program name an enumerator bare", () => {
+    const consumer = `
+PROGRAM main
+VAR
+  picked : PROBE_SPACE := PROBE_SECOND;
+  other  : PROBE_SPACE;
+END_VAR
+  other := PROBE_THIRD;
+END_PROGRAM`;
+
+    const result = compile(consumer, { libraries: [archive()] });
+
+    expect(result.errors).toEqual([]);
+    expect(result.success).toBe(true);
+  });
+
+  it("qualifies that enumerator with its owning type in the C++", () => {
+    const consumer = `
+PROGRAM main
+VAR
+  picked : PROBE_SPACE := PROBE_SECOND;
+END_VAR
+  picked := PROBE_THIRD;
+END_PROGRAM`;
+
+    const cpp = compile(consumer, { libraries: [archive()] }).cppCode;
+
+    // Bare, it names nothing: the C++ enum is an `enum class`.
+    expect(cpp).toContain("PROBE_SPACE::PROBE_THIRD");
+  });
+
+  it("still rejects a member no enum declares", () => {
+    const consumer = `
+PROGRAM main
+VAR
+  picked : PROBE_SPACE;
+END_VAR
+  picked := PROBE_FOURTH;
+END_PROGRAM`;
+
+    expect(compile(consumer, { libraries: [archive()] }).success).toBe(false);
+  });
+});
+
+describe("every kind of data type a library exports", () => {
+  // A consuming project may put any of the three on a native block's pin. The
+  // bridge spells each `IEC_<NAME>`, which strucpp aliases — identity for a
+  // structure or an array, `IEC_ENUM<>` for an enumeration — so all three have
+  // to reach the consumer's symbol table, not the enumerations alone.
+  const TYPES_ST = `
+TYPE PROBE_SPACE : (PROBE_FIRST, PROBE_SECOND); END_TYPE
+TYPE PROBE_TREND : ARRAY [0..3] OF INT; END_TYPE
+TYPE PROBE_CFG : STRUCT
+  ADDRESS : UINT;
+  KIND : PROBE_SPACE;
+END_STRUCT END_TYPE
+`;
+
+  const archive = () =>
+    compileStlib([{ source: TYPES_ST, fileName: "_types.st", category: "data-type" }], {
+      name: "probe",
+      version: "1.0.0",
+      namespace: "probe",
+    }).archive;
+
+  it("exports all three kinds", () => {
+    const byName = new Map(archive().manifest.types.map((t) => [t.name, t]));
+
+    expect(byName.get("PROBE_SPACE")?.kind).toBe("enum");
+    expect(byName.get("PROBE_CFG")?.kind).toBe("struct");
+    expect(byName.get("PROBE_TREND")?.kind).toBe("alias");
+  });
+
+  it("carries what each kind needs to be used — members, fields", () => {
+    const byName = new Map(archive().manifest.types.map((t) => [t.name, t]));
+
+    expect(byName.get("PROBE_SPACE")?.members).toEqual(["PROBE_FIRST", "PROBE_SECOND"]);
+    expect(byName.get("PROBE_CFG")?.fields).toEqual([
+      { name: "ADDRESS", type: "UINT" },
+      { name: "KIND", type: "PROBE_SPACE" },
+    ]);
+  });
+
+  it("lets a consuming program declare and use one of each", () => {
+    const consumer = `
+PROGRAM main
+VAR
+  picked : PROBE_SPACE := PROBE_SECOND;
+  cfg    : PROBE_CFG;
+  trend  : PROBE_TREND;
+  total  : INT;
+END_VAR
+  cfg.ADDRESS := 40;
+  cfg.KIND := PROBE_FIRST;
+  trend[0] := 10;
+  total := trend[0];
+END_PROGRAM`;
+
+    const result = compile(consumer, { libraries: [archive()] });
+
+    expect(result.errors).toEqual([]);
+    expect(result.success).toBe(true);
+  });
+
+  it("qualifies an enumerator reached through a structure field", () => {
+    const consumer = `
+PROGRAM main
+VAR
+  cfg : PROBE_CFG;
+END_VAR
+  cfg.KIND := PROBE_SECOND;
+END_PROGRAM`;
+
+    expect(compile(consumer, { libraries: [archive()] }).cppCode).toContain(
+      "PROBE_SPACE::PROBE_SECOND",
+    );
   });
 });

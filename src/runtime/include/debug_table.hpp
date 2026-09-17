@@ -40,6 +40,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // ---------------------------------------------------------------------------
@@ -118,18 +119,39 @@ constexpr uint8_t LEAF_FLAG_RETAIN = 1 << 1;
 // ---------------------------------------------------------------------------
 // Debug entry: one per leaf variable.  Layout is ABI; see notes in
 // debug_dispatch.hpp's runtime dispatch for the per-platform size:
-// 4 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (flags absorbs
-// alignment).
+// 6 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (the trailing
+// bytes absorb alignment).
 //
-// `flags` occupies the byte that used to be `_pad`, so sizeof(Entry) is
-// unchanged on every target — the read-only gate costs no flash and no RAM,
-// which is why it is a whole byte rather than a bit stolen from `tag`.
+// `flags` took the byte that used to be `_pad`. `cap` follows it, and on AVR
+// that is the one member that costs anything: a 2-byte pointer, three bytes
+// and 2-byte alignment make the entry 6 rather than 4. It is not optional —
+// without it every sized STRING reads as the 254 default and the string ops
+// compute their forced-value offsets past the end of the object.
 // ---------------------------------------------------------------------------
 struct Entry {
     void* ptr;
     uint8_t tag;
     uint8_t flags;
+
+    /**
+     * Declared capacity of a `STRING(n)` / `WSTRING(n)`; 0 for every other type,
+     * and for an unqualified string, where it means the 254 default.
+     *
+     * The string ops need it: `IECStringVar<23>` and `IECStringVar<254>` are
+     * different types, while `type_ops[]` has one row per TypeTag. See
+     * `debug_dispatch.hpp`.
+     */
+    uint8_t cap;
 };
+
+// The AVR branches of `read_entry` cannot copy an `Entry` out of PROGMEM as a
+// struct; they read each member by offset. These pin the offsets that
+// arithmetic assumes, on every target, so a member added or reordered here is a
+// compile error rather than an out-of-bounds string access on an ATmega.
+static_assert(offsetof(Entry, ptr) == 0, "Entry::ptr must be first");
+static_assert(offsetof(Entry, tag) == sizeof(void*), "Entry::tag follows ptr");
+static_assert(offsetof(Entry, flags) == sizeof(void*) + 1, "Entry::flags follows tag");
+static_assert(offsetof(Entry, cap) == sizeof(void*) + 2, "Entry::cap follows flags");
 
 // ---------------------------------------------------------------------------
 // Per-project tables — DECLARED here, DEFINED by generated_debug.cpp.

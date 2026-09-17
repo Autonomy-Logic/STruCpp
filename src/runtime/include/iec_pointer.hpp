@@ -261,7 +261,8 @@ public:
         return ptr_;
     }
 
-    const pointer_type operator->() const {
+    /** Const propagates to the pointee, as `deref()` and `operator*` do. */
+    const IECVar<T>* operator->() const {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();

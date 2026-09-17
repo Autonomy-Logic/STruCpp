@@ -91,6 +91,104 @@ export type TypeCategory =
   | "ANY_DATE";
 
 /**
+ * The generic type names that may be written in a declaration — CODESYS's
+ * seven, and only those.
+ *
+ * `ANY_ELEMENTARY`, `ANY_MAGNITUDE` and `ANY_DERIVED` are in `TypeCategory`
+ * because the hierarchy classifies by them, but neither CODESYS nor this
+ * compiler lets you declare a parameter of one.
+ *
+ * A CODESYS-compatible extension, not a conformance feature — the same footing
+ * as `__XWORD`, `ADR` and `SIZEOF`.
+ */
+export const DECLARABLE_GENERIC_TYPES: readonly TypeCategory[] = [
+  "ANY",
+  "ANY_BIT",
+  "ANY_DATE",
+  "ANY_NUM",
+  "ANY_REAL",
+  "ANY_INT",
+  "ANY_STRING",
+];
+
+/**
+ * `__SYSTEM.TYPE_CLASS` enumerator for each elementary type, by IEC name.
+ *
+ * What codegen stamps into an `IEC_ANY` descriptor's `typeclass`. Keyed on the
+ * IEC name, not the C++ payload: `BYTE_t` and `USINT_t` are both `uint8_t`, as
+ * are `WORD_t`/`UINT_t`, `DWORD_t`/`UDINT_t` and `LWORD_t`/`ULINT_t`.
+ *
+ * `__XWORD` is absent: CODESYS does not list it as acceptable to a generic.
+ */
+export const TYPE_CLASS_BY_IEC_TYPE: Readonly<Record<string, string>> = {
+  BOOL: "TYPE_BOOL",
+  BYTE: "TYPE_BYTE",
+  WORD: "TYPE_WORD",
+  DWORD: "TYPE_DWORD",
+  LWORD: "TYPE_LWORD",
+  SINT: "TYPE_SINT",
+  INT: "TYPE_INT",
+  DINT: "TYPE_DINT",
+  LINT: "TYPE_LINT",
+  USINT: "TYPE_USINT",
+  UINT: "TYPE_UINT",
+  UDINT: "TYPE_UDINT",
+  ULINT: "TYPE_ULINT",
+  REAL: "TYPE_REAL",
+  LREAL: "TYPE_LREAL",
+  STRING: "TYPE_STRING",
+  WSTRING: "TYPE_WSTRING",
+  TIME: "TYPE_TIME",
+  DATE: "TYPE_DATE",
+  DATE_AND_TIME: "TYPE_DATEANDTIME",
+  DT: "TYPE_DATEANDTIME",
+  TIME_OF_DAY: "TYPE_TIMEOFDAY",
+  TOD: "TYPE_TIMEOFDAY",
+  // There is no enumerator for LTOD or LDT, so they report their short form's
+  // class. Both hold int64 nanoseconds either way, so only the name is lost.
+  LTIME: "TYPE_LTIME",
+  LTOD: "TYPE_TIMEOFDAY",
+  LTIME_OF_DAY: "TYPE_TIMEOFDAY",
+  LDT: "TYPE_DATEANDTIME",
+  LDATE_AND_TIME: "TYPE_DATEANDTIME",
+};
+
+/**
+ * The descriptor type behind a generic parameter, as CODESYS names it.
+ *
+ * `ANY` cannot be a variable: the descriptor is filled by the caller, and a
+ * local has none. CODESYS offers the structure itself instead, so a block can
+ * keep what it was handed — `saved : __SYSTEM.AnyType;`.
+ *
+ * An ordinary concrete type, declarable anywhere, unlike the generics.
+ */
+export const ANY_DESCRIPTOR_TYPE = "__SYSTEM.ANYTYPE";
+
+/**
+ * The element type of a synthetic array type name — `__INLINE_ARRAY_WORD`,
+ * `__VLA_1D_WORD` — or undefined.
+ */
+export function arrayElementTypeName(typeName: string): string | undefined {
+  const upper = typeName.toUpperCase();
+  const inline = "__INLINE_ARRAY_";
+  if (upper.startsWith(inline)) return upper.slice(inline.length) || undefined;
+  const vla = /^__VLA_\d+D_(.+)$/.exec(upper);
+  return vla?.[1];
+}
+
+/** Whether a written type name is CODESYS's `__SYSTEM.AnyType`. */
+export function isAnyDescriptorType(name: string): boolean {
+  return name.toUpperCase() === ANY_DESCRIPTOR_TYPE;
+}
+
+/** Whether a written type name is one of the declarable generics. */
+export function isDeclarableGenericType(name: string): boolean {
+  return (DECLARABLE_GENERIC_TYPES as readonly string[]).includes(
+    name.toUpperCase(),
+  );
+}
+
+/**
  * Map of type names to their categories.
  */
 export const TYPE_CATEGORIES: Record<string, TypeCategory[]> = {
@@ -113,9 +211,28 @@ export const TYPE_CATEGORIES: Record<string, TypeCategory[]> = {
   TIME: ["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE", "ANY_DATE"],
   DATE: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
   TIME_OF_DAY: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
+  TOD: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
   DATE_AND_TIME: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
+  DT: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
+  // The long time types sit exactly where their short counterparts do, so a
+  // generic pin accepting TIME accepts LTIME.
+  LTIME: ["ANY", "ANY_ELEMENTARY", "ANY_MAGNITUDE", "ANY_DATE"],
+  LTOD: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
+  LTIME_OF_DAY: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
+  LDT: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
+  LDATE_AND_TIME: ["ANY", "ANY_ELEMENTARY", "ANY_DATE"],
   STRING: ["ANY", "ANY_ELEMENTARY", "ANY_STRING"],
   WSTRING: ["ANY", "ANY_ELEMENTARY", "ANY_STRING"],
+};
+
+/**
+ * Implicit widening from a short time type to its long form. Keyed and valued
+ * by canonical elementary name; one direction only.
+ */
+const LONG_TIME_PROMOTION: Record<string, string> = {
+  TIME: "LTIME",
+  TOD: "LTOD",
+  DT: "LDT",
 };
 
 /**
@@ -157,7 +274,72 @@ export function getTypeBits(name: string): number | undefined {
   return ELEMENTARY_TYPES[name.toUpperCase()]?.sizeBits;
 }
 
-/** Types that support bit access (integer and bit types only — not REAL/LREAL). */
+/**
+ * One part of a bit-field variable: `Do.%B3`, `Wo.%X15`.
+ *
+ * `X`/`B`/`W`/`D` is the part's width, and the index counts from the least
+ * significant end — so `Do.%B3` is the most significant byte of a DWORD. `%X`
+ * is optional for bits, so a bare `Wo.3` parses to the same thing.
+ */
+export interface PartialAccess {
+  /** Width of the addressed part, in bits: 1, 8, 16 or 32. */
+  widthBits: number;
+  /** Which part, counting from the least significant. */
+  index: number;
+  /** The type the access yields. */
+  resultType: "BOOL" | "BYTE" | "WORD" | "DWORD";
+}
+
+const PARTIAL_ACCESS_SIZES: Record<string, PartialAccess["resultType"]> = {
+  X: "BOOL",
+  B: "BYTE",
+  W: "WORD",
+  D: "DWORD",
+};
+
+const PARTIAL_ACCESS_WIDTHS: Record<PartialAccess["resultType"], number> = {
+  BOOL: 1,
+  BYTE: 8,
+  WORD: 16,
+  DWORD: 32,
+};
+
+/**
+ * Parse one field-access step as a partial access, or undefined if it is an
+ * ordinary struct member.
+ *
+ * Accepts the bare bit form (`3`) and the prefixed forms (`%X3`, `%B1`, `%W0`,
+ * `%D1`). Single-sourced because the analyzer, the type checker and both
+ * codegen paths all have to agree on what a step means.
+ */
+export function parsePartialAccess(field: string): PartialAccess | undefined {
+  if (/^\d+$/.test(field)) {
+    return { widthBits: 1, index: parseInt(field, 10), resultType: "BOOL" };
+  }
+  const match = /^%([XBWD])(\d+)$/i.exec(field);
+  if (!match) return undefined;
+  const resultType = PARTIAL_ACCESS_SIZES[match[1]!.toUpperCase()]!;
+  return {
+    widthBits: PARTIAL_ACCESS_WIDTHS[resultType],
+    index: parseInt(match[2]!, 10),
+    resultType,
+  };
+}
+
+/**
+ * Types a part may be taken of, and their widths.
+ *
+ * The bit-field types are the strict set. The integers and BOOL are accepted
+ * as well — a VFD control word arrives as an INT as often as a WORD, and
+ * refusing `iStatus.6` would reject working programs. `isStandardPartialAccessType`
+ * is what separates the two, so the analyzer can warn on the wider set.
+ *
+ * REAL and LREAL are absent: a part of a float is meaningless.
+ *
+ * A direct variable cannot take a part, by construction rather than by check —
+ * `%IB10` is not an expression operand, so `%IB10.%X0` cannot be written. A
+ * variable declared `AT %IB10` is symbolic and may.
+ */
 const BIT_ACCESSIBLE_TYPES: Record<string, number> = {
   BOOL: 1,
   BYTE: 8,
@@ -180,6 +362,24 @@ const BIT_ACCESSIBLE_TYPES: Record<string, number> = {
  */
 export function getBitAccessWidth(name: string): number | undefined {
   return BIT_ACCESSIBLE_TYPES[name.toUpperCase()];
+}
+
+/** The bit-field types — the strict set a part may be taken of. */
+const ANY_BIT_TYPES: ReadonlySet<string> = new Set([
+  "BYTE",
+  "WORD",
+  "DWORD",
+  "LWORD",
+]);
+
+/**
+ * Whether a part of this type is the strict form or the accepted extension.
+ *
+ * A part of an integer compiles and warns: an existing program keeps working
+ * and a new one is told it is relying on the wider set.
+ */
+export function isStandardPartialAccessType(name: string): boolean {
+  return ANY_BIT_TYPES.has(name.toUpperCase());
 }
 
 /**
@@ -342,6 +542,15 @@ export function isImplicitlyConvertible(
   const tBits = ELEMENTARY_TYPES[t]?.sizeBits;
   const sCat = WIDENING_CATEGORY[s];
   const tCat = WIDENING_CATEGORY[t];
+
+  // The short-to-long time promotions. One-directional, so a
+  // WIDENING_CATEGORY entry would be wrong — the pair is the same width.
+  // Checked before the width rules, which have no category for either.
+  if (
+    LONG_TIME_PROMOTION[canonicalElementaryName(s)] ===
+    canonicalElementaryName(t)
+  )
+    return true;
 
   if (sBits === undefined || tBits === undefined || !sCat || !tCat)
     return false;
@@ -759,7 +968,15 @@ export function buildEnumMemberMap(
   enumTypes: Iterable<{ name: string; members: string[] }>,
 ): Map<string, EnumMemberEntry> {
   const map = new Map<string, EnumMemberEntry>();
+  // One enum may be described twice — a library compiling against a dependency
+  // archive that re-exports its own types sees each of them from both sides.
+  // The same type named twice is one type, not a conflict; without this every
+  // member of it reads as ambiguous with itself.
+  const seenTypes = new Set<string>();
   for (const enumType of enumTypes) {
+    const typeKey = enumType.name.toUpperCase();
+    if (seenTypes.has(typeKey)) continue;
+    seenTypes.add(typeKey);
     for (const member of enumType.members) {
       const key = member.toUpperCase();
       const existing = map.get(key);

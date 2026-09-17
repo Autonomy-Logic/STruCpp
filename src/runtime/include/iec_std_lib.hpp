@@ -24,8 +24,13 @@
 #include "iec_traits.hpp"
 #include "iec_retain.hpp"
 #include "iec_ptr.hpp"
+#include "iec_any.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
+// Enumerated types, for the same reason as the temporal headers below: codegen
+// emits one `#include "iec_std_lib.hpp"`, so EQ and NE on an enumeration
+// (IEC 61131-3 Table 38) can only be found through this chain.
+#include "iec_enum.hpp"
 // IEC 61131-3 temporal types — pulled in here so the standard
 // library entry point exposes every standard function (`ADD_TIME`,
 // `ADD_DATE`, `ADD_DT`, `ADD_TOD`, `CONCAT_DATE_TOD`, etc.) without
@@ -523,6 +528,49 @@ inline IEC_BOOL EQ(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) == iec_unwrap(b));
 }
 
+// -----------------------------------------------------------------------------
+// EQ and NE on an enumerated data type — IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38
+// -----------------------------------------------------------------------------
+//
+// An enumeration is ANY_DERIVED (§6.4.3 rule 3), not ANY_ELEMENTARY, so it does
+// not satisfy the comparison constraint above and never could — Table 33's
+// inputs are ANY_ELEMENTARY. Table 38 is the separate provision that admits it,
+// and it admits exactly four functions: SEL, MUX, EQ and NE.
+//
+// Without these overloads the two spellings of the SAME Table 38 function
+// disagree: `q = GOOD` compiles, because codegen emits `==` on the enum
+// directly, while `EQ(q, GOOD)` does not. A ladder or FBD box has no symbol
+// form — the box IS the name form — so an enumeration could not be compared in
+// a graphical language at all, which §8.1.2 requires ("All supported data types
+// shall be accessible as operands or parameters in the graphical languages").
+//
+// GT, GE, LT and LE are deliberately absent. Table 38 does not list them, an
+// enumeration has no defined order, and §6.4.4.2 warns that two enumerations
+// may share enumerator names — so an ordering would be over the declaration
+// order of one particular type and mean nothing. They keep failing to compile,
+// which is the correct answer.
+template<typename A, typename B>
+using enable_if_two_same_enum = std::enable_if_t<is_same_iec_enum_v<A, B>, int>;
+
+template<typename A, typename B, enable_if_two_same_enum<A, B> = 0>
+inline IEC_BOOL EQ(const A& a, const B& b) noexcept {
+    return IEC_BOOL(iec_enum_value(a) == iec_enum_value(b));
+}
+
+/** Extensible, as Table 33 feature 3 is: OUT := (IN1=IN2) & (IN2=IN3) & … */
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_same_enum<A, B> = 0>
+inline IEC_BOOL EQ(const A& a, const B& b, const C& c, const Rest&... rest) noexcept {
+    if (!(iec_enum_value(a) == iec_enum_value(b))) return IEC_BOOL(false);
+    return EQ(b, c, rest...);
+}
+
+/** NE is non-extensible — Table 33 feature 6 takes exactly two operands. */
+template<typename A, typename B, enable_if_two_same_enum<A, B> = 0>
+inline IEC_BOOL NE(const A& a, const B& b) noexcept {
+    return IEC_BOOL(iec_enum_value(a) != iec_enum_value(b));
+}
+
 /**
  * LE - Less than or equal
  * Input: ANY_ELEMENTARY, Output: BOOL
@@ -730,13 +778,35 @@ inline T ROR(T in, N n) noexcept {
 // =============================================================================
 
 /**
+ * Round to nearest, ties to even — the rule IEC 61131-3 gives for a REAL/LREAL
+ * to integer conversion. 2.5 gives 2, 3.5 gives 4, -2.5 gives -2.
+ *
+ * `std::round` rounds halves away from zero, and `std::nearbyint` follows the
+ * current FP rounding mode and is absent from avr-libc, so this is written out
+ * with `floor` and `fmod`.
+ *
+ * Distinct from `ROUND()` above, a CODESYS extension that documents its own
+ * half-away-from-zero choice.
+ */
+template<typename T>
+inline double iec_round_half_even(T value) noexcept {
+    const double d = static_cast<double>(value);
+    double r = std::floor(d + 0.5);
+    // Landed exactly on a tie and rounded to an odd number: step to the even one.
+    if ((r - d) == 0.5 && std::fmod(r, 2.0) != 0.0) {
+        r -= 1.0;
+    }
+    return r;
+}
+
+/**
  * Helper: round-then-cast for REAL→integer conversions per IEC 61131-3
  */
 template<typename ToVal, typename FromVal>
 inline ToVal iec_convert_value(FromVal value) noexcept {
-    // IEC 61131-3: REAL/LREAL to integer types use rounding (nearest)
+    // IEC 61131-3: REAL/LREAL to integer types round to nearest, ties to even.
     if constexpr (std::is_floating_point_v<FromVal> && std::is_integral_v<ToVal>) {
-        return static_cast<ToVal>(std::round(static_cast<double>(value)));
+        return static_cast<ToVal>(iec_round_half_even(value));
     } else {
         return static_cast<ToVal>(value);
     }
@@ -1488,6 +1558,33 @@ inline IEC_UDINT IEC_SIZEOF(const IECVar<T>&) noexcept {
 template<typename T>
 inline IEC_UDINT IEC_SIZEOF(const T&) noexcept {
     return static_cast<IEC_UDINT>(sizeof(T));
+}
+
+/**
+ * STRING / WSTRING: the character buffer, not the forcing wrapper.
+ *
+ * `IECStringVar` is not an `IECVar`, so without these it falls to the generic
+ * overload and reports the whole wrapper — 518 bytes for the default STRING,
+ * where CODESYS reports 255.
+ *
+ * `capacity + 1` for the terminator, matching CODESYS; a WSTRING is UCS-2, so
+ * the same count doubled.
+ */
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECStringVar<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>(MaxLen + 1);
+}
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECString<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>(MaxLen + 1);
+}
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECWStringVar<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>((MaxLen + 1) * sizeof(char16_t));
+}
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECWString<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>((MaxLen + 1) * sizeof(char16_t));
 }
 
 /**

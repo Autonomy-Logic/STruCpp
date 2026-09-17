@@ -329,7 +329,11 @@ export class TypeCodeGenerator {
         );
       }
       if (field.type.referenceKind === "pointer_to") {
-        cppType += "*";
+        cppType = this.pointerTypeToCpp(
+          cppType,
+          field.type.name,
+          Boolean(field.type.arrayDimensions),
+        );
       }
       for (const fieldName of field.names) {
         // One rule, shared with the class definition and the debug table — see
@@ -502,10 +506,27 @@ export class TypeCodeGenerator {
       cppType = this.mapTypeToCpp(def.name);
     }
     if (def.referenceKind === "pointer_to") {
-      cppType += "*";
+      cppType = this.pointerTypeToCpp(
+        cppType,
+        def.name ?? "",
+        Boolean(def.arrayDimensions),
+      );
     }
     this.emit(`using ${name} = ${cppType};`);
     this.emit("");
+  }
+
+  /**
+   * A `POINTER TO` field or alias, lowered the way a pointer variable is.
+   * `IEC_Ptr<T>` accepts the address of any type; a raw `T*` does not, so
+   * `pByte := ADR(anInt)` type-checked and then failed in C++.
+   */
+  private pointerTypeToCpp(
+    baseCpp: string,
+    typeName: string,
+    isArray: boolean,
+  ): string {
+    return `IEC_Ptr<${isArray ? baseCpp : this.mapTypeToCpp(typeName)}>`;
   }
 
   /**

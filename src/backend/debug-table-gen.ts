@@ -25,12 +25,17 @@ import type {
   ProgramDeclaration,
   TypeReference,
   StructDefinition,
+  VarBlock,
   VarDeclaration,
 } from "../frontend/ast.js";
 import type { ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import { isElementaryType } from "../semantic/type-registry.js";
-import { evalIntConst } from "../semantic/type-utils.js";
+import {
+  evalIntConst,
+  isAnyDescriptorType,
+  isDeclarableGenericType,
+} from "../semantic/type-utils.js";
 import { formatArrayElementAccess } from "./codegen-utils.js";
 import { mangledMemberName } from "./member-mangling.js";
 
@@ -175,7 +180,9 @@ const IEC_NAME_TO_TAG: Record<string, TagName> = {
   TIME: "TIME",
   LTIME: "TIME",
   DATE: "DATE",
-  LDATE: "DATE",
+  // LDATE is deliberately absent: it wants nanoseconds where DATE_t holds
+  // whole days, so tagging it as DATE would misreport every value by 86400e9.
+  // Unsupported until it has its own representation.
   TOD: "TOD",
   TIME_OF_DAY: "TOD",
   LTOD: "TOD",
@@ -346,6 +353,12 @@ interface Entry {
   size: number;
   /** Bitwise OR of LEAF_FLAG_*, emitted into the entry's `flags` byte. */
   flags: number;
+
+  /**
+   * Declared capacity of a `STRING(n)` / `WSTRING(n)`; 0 for everything else and
+   * for an unqualified string, which the runtime reads as the 254 default.
+   */
+  cap: number;
 }
 
 export function generateDebugTable(
@@ -389,6 +402,12 @@ export function generateDebugTable(
       programByName.has(upper)
     );
   };
+
+  const functionBlockTypeNames = new Set(
+    ast.functionBlocks.map((fb) => fb.name.toUpperCase()),
+  );
+  const isFunctionBlockTypeName = (name: string): boolean =>
+    functionBlockTypeNames.has(name.toUpperCase());
 
   /**
    * FB type name → upper-cased method names of every interface it implements,
@@ -453,6 +472,7 @@ export function generateDebugTable(
     cppExpr: string,
     iecName: string,
     flags: number,
+    maxLength?: number | string,
   ) => {
     const tagName = IEC_NAME_TO_TAG[iecName.toUpperCase()];
     if (tagName === undefined) {
@@ -464,7 +484,13 @@ export function generateDebugTable(
     const bucket = tail();
     const arrIdx = arrays.length - 1;
     const elemIdx = bucket.length;
-    bucket.push({ cppExpr, tagName, path, type: tagName, size, flags });
+    // A symbolic length (`STRING(BUF_MAX)`) is not resolved here, so it records
+    // 0 and the runtime treats the variable as the 254 default.
+    const cap =
+      typeof maxLength === "number" && maxLength >= 1 && maxLength <= 254
+        ? maxLength
+        : 0;
+    bucket.push({ cppExpr, tagName, path, type: tagName, size, flags, cap });
     leaves.push({
       arrayIdx: arrIdx,
       elemIdx,
@@ -497,6 +523,8 @@ export function generateDebugTable(
         0,
         typeRef.elementTypeName,
         flags,
+        [],
+        typeRef.elementMaxLength,
       );
       return;
     }
@@ -505,7 +533,19 @@ export function generateDebugTable(
 
     // Named elementary type (or alias thereof).
     if (IEC_NAME_TO_TAG[name] !== undefined) {
-      addLeaf(path, cppExpr, name, flags);
+      addLeaf(path, cppExpr, name, flags, typeRef.maxLength);
+      return;
+    }
+
+    // A generic parameter and its descriptor are not values: `pvalue` addresses
+    // another variable the debugger already lists, and the type class and size
+    // describe that one. Skipped by name rather than as an unsupported kind.
+    if (isDeclarableGenericType(name) || isAnyDescriptorType(name)) {
+      skipped.push({
+        path,
+        reason: `${name} is a generic parameter descriptor, not a value`,
+      });
+
       return;
     }
 
@@ -513,7 +553,16 @@ export function generateDebugTable(
     // types (struct/enum/alias). The symbol table is the unified source.
     const ts = symbolTables.lookupType(name);
     if (ts) {
-      const def = ts.declaration.definition;
+      // Built-in types are seeded without a declaration. Every one carrying a
+      // value is matched by IEC_NAME_TO_TAG above, so there is nothing to walk.
+      const def = ts.declaration?.definition;
+      if (!def) {
+        skipped.push({
+          path,
+          reason: `built-in type ${name} has no fields to watch`,
+        });
+        return;
+      }
       if (def.kind === "StructDefinition") {
         visitStructFields(path, cppExpr, def, flags);
         return;
@@ -537,6 +586,8 @@ export function generateDebugTable(
           0,
           def.elementType.name,
           flags,
+          [],
+          def.elementType.maxLength,
         );
         return;
       }
@@ -666,26 +717,101 @@ export function generateDebugTable(
           }
         }
       } else {
-        for (const block of fbSym.declaration.varBlocks) {
-          if (
-            block.blockType === "VAR" ||
-            block.blockType === "VAR_INPUT" ||
-            block.blockType === "VAR_OUTPUT" ||
-            block.blockType === "VAR_IN_OUT"
-          ) {
-            // A `VAR CONSTANT` inside a function block is read-only for every
-            // instance of it, and a `VAR RETAIN` member is retained in every
-            // instance, so the block's own qualifiers are folded in here rather
-            // than only at the program level.
-            const memberFlags = applyBlockFlags(flags, block);
+        // Walk the EXTENDS chain: an inherited member is a real member of the
+        // instance, resolvable in ST and present in C++.
+        //
+        // `owner` is the type that DECLARES each member. `memberCppName` mangles
+        // against the owner's interface methods, so passing the derived name for
+        // a base member would spell it wrong.
+        const chain: Array<{ owner: string; blocks: VarBlock[] }> = [];
+        const visited = new Set<string>();
+        let cursor: typeof fbSym | undefined = fbSym;
+        let cursorName = name;
+        // Bounded by `visited`, so a cycle in EXTENDS ends the walk instead of
+        // hanging the compiler.
+        while (cursor && !visited.has(cursorName.toUpperCase())) {
+          visited.add(cursorName.toUpperCase());
+          chain.push({
+            owner: cursorName,
+            blocks: cursor.declaration.varBlocks,
+          });
+          const base = cursor.declaration.extends;
+          if (!base) break;
+          cursorName = base;
+          cursor = symbolTables.lookupFunctionBlock(base);
+        }
+
+        // A derived declaration hides the base's, so claim derived-first and
+        // emit base-first — the order C++ lays the members out in.
+        const claimed = new Set<string>();
+        const emit: Array<{
+          owner: string;
+          blocks: VarBlock[];
+          take: Set<string>;
+        }> = [];
+        for (const entry of chain) {
+          const take = new Set<string>();
+          for (const block of entry.blocks) {
+            if (
+              block.blockType !== "VAR" &&
+              block.blockType !== "VAR_INPUT" &&
+              block.blockType !== "VAR_OUTPUT" &&
+              block.blockType !== "VAR_IN_OUT"
+            ) {
+              continue;
+            }
             for (const fieldDecl of block.declarations) {
               for (const fieldName of fieldDecl.names) {
-                visitTypeRef(
-                  `${path}.${fieldName.toUpperCase()}`,
-                  `${cppExpr}.${memberCppName(fieldName, fieldDecl.type, name)}`,
-                  fieldDecl.type,
-                  memberFlags,
-                );
+                const key = fieldName.toUpperCase();
+                if (claimed.has(key)) continue;
+                claimed.add(key);
+                take.add(key);
+              }
+            }
+          }
+          emit.push({ owner: entry.owner, blocks: entry.blocks, take });
+        }
+
+        for (const entry of emit.reverse()) {
+          for (const block of entry.blocks) {
+            if (
+              block.blockType === "VAR" ||
+              block.blockType === "VAR_INPUT" ||
+              block.blockType === "VAR_OUTPUT" ||
+              block.blockType === "VAR_IN_OUT"
+            ) {
+              // A `VAR CONSTANT` inside a function block is read-only for every
+              // instance of it, and a `VAR RETAIN` member is retained in every
+              // instance, so the block's own qualifiers are folded in here
+              // rather than only at the program level.
+              const memberFlags = applyBlockFlags(flags, block);
+              for (const fieldDecl of block.declarations) {
+                // A function block passed as an in-out is a pointer at someone
+                // else's instance, which is in the table under its own name.
+                // Following it would emit `.member` on a pointer, and it is
+                // null until the caller binds it.
+                if (
+                  block.blockType === "VAR_IN_OUT" &&
+                  isFunctionBlockTypeName(fieldDecl.type.name)
+                ) {
+                  for (const fieldName of fieldDecl.names) {
+                    skipped.push({
+                      path: `${path}.${fieldName.toUpperCase()}`,
+                      reason:
+                        "function block in-out: an alias, debugged at its own name",
+                    });
+                  }
+                  continue;
+                }
+                for (const fieldName of fieldDecl.names) {
+                  if (!entry.take.has(fieldName.toUpperCase())) continue;
+                  visitTypeRef(
+                    `${path}.${fieldName.toUpperCase()}`,
+                    `${cppExpr}.${memberCppName(fieldName, fieldDecl.type, entry.owner)}`,
+                    fieldDecl.type,
+                    memberFlags,
+                  );
+                }
               }
             }
           }
@@ -740,10 +866,14 @@ export function generateDebugTable(
     elementTypeName: string,
     flags: number,
     indices: number[] = [],
+    elementMaxLength?: number | string,
   ): void => {
     if (dimIdx >= dims.length) {
       // Innermost element — visit as a TypeReference with the element type
       // name. Manufacture a minimal TypeReference for recursion.
+      //
+      // The element's declared length travels with it: every element of an
+      // `ARRAY [0..3] OF STRING(23)` is an `IECStringVar<23>`.
       visitTypeRef(
         path,
         formatArrayElementAccess(cppExpr, indices),
@@ -752,6 +882,9 @@ export function generateDebugTable(
           name: elementTypeName,
           isReference: false,
           referenceKind: "none",
+          ...(elementMaxLength !== undefined
+            ? { maxLength: elementMaxLength }
+            : {}),
         } as TypeReference,
         flags,
       );
@@ -767,6 +900,7 @@ export function generateDebugTable(
         elementTypeName,
         flags,
         [...indices, i],
+        elementMaxLength,
       );
     }
   };
@@ -1009,7 +1143,7 @@ function renderCpp(
           // declared `const`, and a C-style cast strips that silently where
           // `static_cast` would refuse. The flags byte is what carries the
           // qualifier through to the runtime so the write paths can honour it.
-          `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, ${flagsLiteral(e.flags)} },  // ${e.path}`,
+          `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, ${flagsLiteral(e.flags)}, ${e.cap} },  // ${e.path}`,
         );
       }
     }

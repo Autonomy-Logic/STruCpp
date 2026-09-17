@@ -314,13 +314,13 @@ export function runE2ETestPipeline(
     const gppCommand = [
       'g++',
       '-std=c++17',
-      `-I${RUNTIME_INCLUDE_PATH}`,
-      `-I${TEST_RUNTIME_PATH}`,
-      `-I${tempDir}`,
-      path.join(tempDir, 'test_main.cpp'),
-      path.join(tempDir, 'generated.cpp'),
+      `-I"${RUNTIME_INCLUDE_PATH}"`,
+      `-I"${TEST_RUNTIME_PATH}"`,
+      `-I"${tempDir}"`,
+      `"${path.join(tempDir, 'test_main.cpp')}"`,
+      `"${path.join(tempDir, 'generated.cpp')}"`,
       '-o',
-      binaryPath,
+      `"${binaryPath}"`,
     ].join(' ');
 
     try {

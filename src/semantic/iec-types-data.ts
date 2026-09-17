@@ -329,6 +329,43 @@ export const IEC_BASE_TYPES: readonly IECTypeMetadata[] = [
     xml: { elementName: "DT", plcopenStandard: true },
     literalDisplay: "DT#YYYY-MM-DD-HH:MM:SS",
   },
+  // The long time types: signed 64-bit nanoseconds, which is how TIME, TOD and
+  // DT are already stored, so each shares its short form's representation.
+  // LDATE is absent because it wants nanoseconds where DATE_t holds whole days.
+  // No PLCopen element exists for any of them, hence plcopenStandard: false.
+  {
+    name: "LTIME",
+    aliases: [],
+    byteSize: 8,
+    bits: 64,
+    signed: true,
+    cppType: "LTIME_t",
+    wireFormat: "duration-ns-i64",
+    xml: { elementName: "LTIME", plcopenStandard: false },
+    literalDisplay: "LTIME#1d2h3m",
+  },
+  {
+    name: "LTOD",
+    aliases: ["LTIME_OF_DAY"],
+    byteSize: 8,
+    bits: 64,
+    signed: true,
+    cppType: "LTOD_t",
+    wireFormat: "tod-ns-i64",
+    xml: { elementName: "LTOD", plcopenStandard: false },
+    literalDisplay: "LTOD#HH:MM:SS",
+  },
+  {
+    name: "LDT",
+    aliases: ["LDATE_AND_TIME"],
+    byteSize: 8,
+    bits: 64,
+    signed: true,
+    cppType: "LDT_t",
+    wireFormat: "datetime-ns-i64",
+    xml: { elementName: "LDT", plcopenStandard: false },
+    literalDisplay: "LDT#YYYY-MM-DD-HH:MM:SS",
+  },
 
   // ── Character strings ────────────────────────────────────────────
   // byteSize 0 ⇒ variable-width on the wire (the per-declaration cap

@@ -12,6 +12,8 @@
  */
 
 #include <gtest/gtest.h>
+
+#include <type_traits>
 #include "../include/iec_array.hpp"
 #include "../include/iec_struct.hpp"
 #include "../include/iec_enum.hpp"
@@ -28,7 +30,7 @@ using namespace strucpp;
 
 TEST(IECArrayTest, Array1D_BasicOperations) {
     // Create array with bounds [1..5]
-    using IntArray = IEC_ARRAY_1D<INT_t, ArrayBounds<1, 5>>;
+    using IntArray = IEC_ARRAY_1D<IEC_INT, ArrayBounds<1, 5>>;
     IntArray arr;
     
     // Test size and bounds
@@ -51,7 +53,7 @@ TEST(IECArrayTest, Array1D_BasicOperations) {
 }
 
 TEST(IECArrayTest, Array1D_BoundsCheckedAccess) {
-    using IntArray = IEC_ARRAY_1D<INT_t, ArrayBounds<1, 3>>;
+    using IntArray = IEC_ARRAY_1D<IEC_INT, ArrayBounds<1, 3>>;
     IntArray arr;
     
     arr[1] = 100;
@@ -69,7 +71,7 @@ TEST(IECArrayTest, Array1D_BoundsCheckedAccess) {
 }
 
 TEST(IECArrayTest, Array1D_ElementForcing) {
-    using IntArray = IEC_ARRAY_1D<INT_t, ArrayBounds<1, 3>>;
+    using IntArray = IEC_ARRAY_1D<IEC_INT, ArrayBounds<1, 3>>;
     IntArray arr;
     
     arr[1] = 10;
@@ -85,13 +87,18 @@ TEST(IECArrayTest, Array1D_ElementForcing) {
     EXPECT_EQ(arr[1].get(), 999);
     
     // Unforce
+    // force() mirrors into the raw slot, and set() is ignored while forced,
+    // so unforcing leaves the variable at the value it was forced to until
+    // the program next writes it. Same contract as IECVar.
     arr[1].unforce();
     EXPECT_FALSE(arr[1].is_forced());
-    EXPECT_EQ(arr[1].get(), 0);  // Now shows the set value
+    EXPECT_EQ(arr[1].get(), 999);
+    arr[1] = 0;
+    EXPECT_EQ(arr[1].get(), 0);
 }
 
 TEST(IECArrayTest, Array1D_Iteration) {
-    using IntArray = IEC_ARRAY_1D<INT_t, ArrayBounds<1, 5>>;
+    using IntArray = IEC_ARRAY_1D<IEC_INT, ArrayBounds<1, 5>>;
     IntArray arr;
     
     // Initialize with values
@@ -109,7 +116,7 @@ TEST(IECArrayTest, Array1D_Iteration) {
 }
 
 TEST(IECArrayTest, Array1D_InitializerList) {
-    using IntArray = IEC_ARRAY_1D<INT_t, ArrayBounds<1, 3>>;
+    using IntArray = IEC_ARRAY_1D<IEC_INT, ArrayBounds<1, 3>>;
     IntArray arr = {10, 20, 30};
     
     EXPECT_EQ(arr[1].get(), 10);
@@ -119,7 +126,7 @@ TEST(IECArrayTest, Array1D_InitializerList) {
 
 TEST(IECArrayTest, Array1D_NegativeBounds) {
     // Test array with negative lower bound
-    using IntArray = IEC_ARRAY_1D<INT_t, ArrayBounds<-2, 2>>;
+    using IntArray = IEC_ARRAY_1D<IEC_INT, ArrayBounds<-2, 2>>;
     IntArray arr;
     
     EXPECT_EQ(arr.length(), 5);
@@ -139,7 +146,7 @@ TEST(IECArrayTest, Array1D_NegativeBounds) {
 
 TEST(IECArrayTest, Array2D_BasicOperations) {
     // Create 2D array [1..3, 1..4]
-    using IntArray2D = IEC_ARRAY_2D<INT_t, ArrayBounds<1, 3>, ArrayBounds<1, 4>>;
+    using IntArray2D = IEC_ARRAY_2D<IEC_INT, ArrayBounds<1, 3>, ArrayBounds<1, 4>>;
     IntArray2D arr;
     
     EXPECT_EQ(arr.dim1_size(), 3);
@@ -162,7 +169,7 @@ TEST(IECArrayTest, Array2D_BasicOperations) {
 }
 
 TEST(IECArrayTest, Array2D_BoundsCheckedAccess) {
-    using IntArray2D = IEC_ARRAY_2D<INT_t, ArrayBounds<1, 2>, ArrayBounds<1, 2>>;
+    using IntArray2D = IEC_ARRAY_2D<IEC_INT, ArrayBounds<1, 2>, ArrayBounds<1, 2>>;
     IntArray2D arr;
     
     arr(1, 1) = 11;
@@ -182,7 +189,7 @@ TEST(IECArrayTest, Array2D_BoundsCheckedAccess) {
 
 TEST(IECArrayTest, Array3D_BasicOperations) {
     // Create 3D array [1..2, 1..2, 1..2]
-    using IntArray3D = IEC_ARRAY_3D<INT_t, ArrayBounds<1, 2>, ArrayBounds<1, 2>, ArrayBounds<1, 2>>;
+    using IntArray3D = IEC_ARRAY_3D<IEC_INT, ArrayBounds<1, 2>, ArrayBounds<1, 2>, ArrayBounds<1, 2>>;
     IntArray3D arr;
     
     EXPECT_EQ(arr.dim1_size(), 2);
@@ -200,14 +207,14 @@ TEST(IECArrayTest, Array3D_BasicOperations) {
 
 TEST(IECArrayTest, ConvenienceAliases) {
     // Test convenience type aliases
-    Array1D<INT_t, 1, 5> arr1d;
+    Array1D<IEC_INT, 1, 5> arr1d;
     EXPECT_EQ(arr1d.length(), 5);
     
-    Array2D<INT_t, 1, 2, 1, 3> arr2d;
+    Array2D<IEC_INT, 1, 2, 1, 3> arr2d;
     EXPECT_EQ(arr2d.dim1_size(), 2);
     EXPECT_EQ(arr2d.dim2_size(), 3);
     
-    Array3D<INT_t, 1, 2, 1, 2, 1, 2> arr3d;
+    Array3D<IEC_INT, 1, 2, 1, 2, 1, 2> arr3d;
     EXPECT_EQ(arr3d.dim1_size(), 2);
     EXPECT_EQ(arr3d.dim2_size(), 2);
     EXPECT_EQ(arr3d.dim3_size(), 2);
@@ -255,8 +262,13 @@ TEST(IECEnumTest, EnumVar_Forcing) {
     EXPECT_EQ(light.get().get(), TrafficLight::GREEN);
     
     // Unforce
+    // force() mirrors into the raw slot, and set() is ignored while forced,
+    // so unforcing leaves the variable at the value it was forced to until
+    // the program next writes it. Same contract as IECVar.
     light.unforce();
     EXPECT_FALSE(light.is_forced());
+    EXPECT_EQ(light.get().get(), TrafficLight::GREEN);
+    light = TrafficLight::YELLOW;
     EXPECT_EQ(light.get().get(), TrafficLight::YELLOW);
 }
 
@@ -332,7 +344,12 @@ TEST(IECSubrangeTest, SubrangeVar_Forcing) {
     EXPECT_EQ(static_cast<int16_t>(pct.get()), 75);
     
     // Unforce
+    // force() mirrors into the raw slot, and set() is ignored while forced,
+    // so unforcing leaves the variable at the value it was forced to until
+    // the program next writes it. Same contract as IECVar.
     pct.unforce();
+    EXPECT_EQ(static_cast<int16_t>(pct.get()), 75);
+    pct = 25;
     EXPECT_EQ(static_cast<int16_t>(pct.get()), 25);
 }
 
@@ -403,7 +420,12 @@ TEST(IECStructTest, Struct_FieldForcing) {
     EXPECT_FLOAT_EQ(p.x.get(), 100.0f);
     
     // Unforce
+    // force() mirrors into the raw slot, and set() is ignored while forced,
+    // so unforcing leaves the variable at the value it was forced to until
+    // the program next writes it. Same contract as IECVar.
     p.x.unforce();
+    EXPECT_FLOAT_EQ(p.x.get(), 100.0f);
+    p.x = 0.0f;
     EXPECT_FLOAT_EQ(p.x.get(), 0.0f);
 }
 
@@ -435,7 +457,7 @@ TEST(IECStructTest, Struct_Nested) {
 // =============================================================================
 
 TEST(IECTraitsTest, ArrayTraits) {
-    using IntArray = IEC_ARRAY_1D<INT_t, ArrayBounds<1, 5>>;
+    using IntArray = IEC_ARRAY_1D<IEC_INT, ArrayBounds<1, 5>>;
     
     EXPECT_TRUE(is_iec_array_v<IntArray>);
     EXPECT_FALSE(is_iec_struct_v<IntArray>);
@@ -812,45 +834,11 @@ TEST(IECPointerTest, Pointer_Reassignment) {
     EXPECT_EQ(ptr.deref().get(), 200);
 }
 
-TEST(IECPointerTest, Pointer_Forcing) {
-    IEC_INT target1(100);
-    IEC_INT target2(200);
-    REF_TO<INT_t> ptr = REF(target1);
-    
-    EXPECT_EQ(ptr.deref().get(), 100);
-    EXPECT_FALSE(ptr.is_forced());
-    
-    // Force pointer to point to target2
-    ptr.force(&target2);
-    EXPECT_TRUE(ptr.is_forced());
-    EXPECT_EQ(ptr.deref().get(), 200);
-    
-    // Setting pointer is ignored while forced
-    ptr = REF(target1);
-    EXPECT_EQ(ptr.deref().get(), 200);  // Still points to target2
-    
-    // Unforce
-    ptr.unforce();
-    EXPECT_FALSE(ptr.is_forced());
-    EXPECT_EQ(ptr.deref().get(), 100);  // Now points to target1
-}
-
-TEST(IECPointerTest, Pointer_ForceToNull) {
-    IEC_INT target(42);
-    REF_TO<INT_t> ptr = REF(target);
-    
-    EXPECT_FALSE(ptr.is_null());
-    
-    // Force to NULL
-    ptr.force(nullptr);
-    EXPECT_TRUE(ptr.is_forced());
-    EXPECT_TRUE(ptr.is_null());
-    
-    // Unforce
-    ptr.unforce();
-    EXPECT_FALSE(ptr.is_null());
-    EXPECT_EQ(ptr.deref().get(), 42);
-}
+// REF_TO carries no forcing of its own: a reference is a binding, with
+// assignment, NULL comparison, REF() and ^ and nothing else. Forcing applies
+// to the variable it refers to, through that variable's own IECVar.
+// The two tests that stood here called REF_TO::force()/unforce()/is_forced(),
+// which have never existed.
 
 TEST(IECPointerTest, Pointer_Comparison) {
     IEC_INT target1(100);
@@ -878,8 +866,27 @@ TEST(IECPointerTest, Pointer_ArrowOperator) {
     EXPECT_EQ(ptr->get(), 999);
     EXPECT_TRUE(ptr->is_forced());
     
+    // force() mirrors into the raw slot, and set() is ignored while forced,
+    // so unforcing leaves the variable at the value it was forced to until
+    // the program next writes it. Same contract as IECVar.
     ptr->unforce();
+    EXPECT_EQ(ptr->get(), 999);
+    (*ptr) = 42;
     EXPECT_EQ(ptr->get(), 42);
+}
+
+// The const overload returns a pointer to const, matching `deref() const` and
+// `operator*() const`. It went unused, which is how it came to be spelled
+// `const pointer_type` — a const pointer returned by value, which says nothing.
+TEST(IECPointerTest, Pointer_ArrowOperatorConst) {
+    IEC_INT target(7);
+    const REF_TO<INT_t> ptr = REF(target);
+
+    EXPECT_EQ(ptr->get(), 7);
+    EXPECT_FALSE(ptr->is_forced());
+
+    static_assert(std::is_same_v<decltype(ptr.operator->()), const IECVar<INT_t>*>,
+                  "const operator-> must yield a pointer to const");
 }
 
 TEST(IECPointerTest, Pointer_StarOperator) {
@@ -891,21 +898,6 @@ TEST(IECPointerTest, Pointer_StarOperator) {
     
     (*ptr) = 100;
     EXPECT_EQ(target.get(), 100);
-}
-
-TEST(IECPointerTest, Pointer_GetUnderlying) {
-    IEC_INT target1(100);
-    IEC_INT target2(200);
-    REF_TO<INT_t> ptr = REF(target1);
-    
-    // Force to target2
-    ptr.force(&target2);
-    
-    // get() returns forced pointer
-    EXPECT_EQ(ptr.get(), &target2);
-    
-    // get_underlying() returns original pointer
-    EXPECT_EQ(ptr.get_underlying(), &target1);
 }
 
 // =============================================================================
@@ -922,7 +914,6 @@ TEST(IECTraitsTest, PointerTraits) {
     EXPECT_TRUE(is_any_derived_v<IntPtr>);
 }
 
-int main(int argc, char **argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
-}
+// No main(): the runtime_tests target links GTest::gtest_main, which
+// provides one. The other test files in this target do the same.
+

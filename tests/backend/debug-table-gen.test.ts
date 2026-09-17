@@ -675,9 +675,12 @@ END_PROGRAM${CFG_RO}`,
     // Omitted rather than false — the map carries thousands of leaves and the
     // flag is rare, so absence is the encoding for "writable".
     expect(byPath.get("INSTANCE0.LIVE")).not.toHaveProperty("readOnly");
-    // The emitted table names the constant, not a bare bitmask.
-    expect(cpp).toContain("TAG_DINT, LEAF_FLAG_READONLY },  // INSTANCE0.LIMIT");
-    expect(cpp).toContain("TAG_DINT, 0 },  // INSTANCE0.LIVE");
+    // The emitted table names the constant, not a bare bitmask. The trailing
+    // 0 is `cap`, which only a sized STRING or WSTRING carries.
+    expect(cpp).toContain(
+      "TAG_DINT, LEAF_FLAG_READONLY, 0 },  // INSTANCE0.LIMIT",
+    );
+    expect(cpp).toContain("TAG_DINT, 0, 0 },  // INSTANCE0.LIVE");
   });
 
   it("flags a VAR CONSTANT declared inside a FUNCTION_BLOCK, per instance", () => {

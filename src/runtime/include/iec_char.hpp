@@ -17,96 +17,12 @@
 
 namespace strucpp {
 
-template<typename CharType>
-class IECCharVar {
-public:
-    using value_type = CharType;
-
-    constexpr IECCharVar() noexcept : value_{}, forced_{false}, forced_value_{} {}
-    constexpr explicit IECCharVar(CharType v) noexcept : value_{v}, forced_{false}, forced_value_{} {}
-    IECCharVar(const IECCharVar&) = default;
-    IECCharVar(IECCharVar&&) = default;
-    IECCharVar& operator=(const IECCharVar&) = default;
-    IECCharVar& operator=(IECCharVar&&) = default;
-
-    constexpr CharType get() const noexcept {
-        return forced_ ? forced_value_ : value_;
-    }
-
-    void set(CharType v) noexcept {
-        value_ = v;
-    }
-
-    constexpr CharType get_underlying() const noexcept {
-        return value_;
-    }
-
-    void force(CharType v) noexcept {
-        forced_ = true;
-        forced_value_ = v;
-    }
-
-    void unforce() noexcept {
-        forced_ = false;
-    }
-
-    constexpr bool is_forced() const noexcept {
-        return forced_;
-    }
-
-    constexpr CharType get_forced_value() const noexcept {
-        return forced_value_;
-    }
-
-    constexpr operator CharType() const noexcept {
-        return get();
-    }
-
-    IECCharVar& operator=(CharType v) noexcept {
-        set(v);
-        return *this;
-    }
-
-    constexpr bool operator==(const IECCharVar& other) const noexcept {
-        return get() == other.get();
-    }
-
-    constexpr bool operator!=(const IECCharVar& other) const noexcept {
-        return get() != other.get();
-    }
-
-    constexpr bool operator<(const IECCharVar& other) const noexcept {
-        return get() < other.get();
-    }
-
-    constexpr bool operator<=(const IECCharVar& other) const noexcept {
-        return get() <= other.get();
-    }
-
-    constexpr bool operator>(const IECCharVar& other) const noexcept {
-        return get() > other.get();
-    }
-
-    constexpr bool operator>=(const IECCharVar& other) const noexcept {
-        return get() >= other.get();
-    }
-
-    constexpr bool operator==(CharType c) const noexcept {
-        return get() == c;
-    }
-
-    constexpr bool operator!=(CharType c) const noexcept {
-        return get() != c;
-    }
-
-private:
-    CharType value_;
-    bool forced_;
-    CharType forced_value_;
-};
-
-using IEC_CHAR_Var = IECCharVar<CHAR_t>;
-using IEC_WCHAR_Var = IECCharVar<WCHAR_t>;
+// CHAR and WCHAR variables are `IECVar<CHAR_t>` / `IECVar<WCHAR_t>`, spelled
+// `IEC_CHAR` and `IEC_WCHAR` in iec_var.hpp. There is deliberately no separate
+// character wrapper: forcing lives in `IECVar` alone, and debug_dispatch.hpp's
+// force_impl/read_impl reach every variable through `IECVar<T>`.
+//
+// The functions below take the raw CHAR_t / WCHAR_t payload.
 
 inline constexpr CHAR_t CHAR_FROM_INT(int32_t code) noexcept {
     return static_cast<CHAR_t>(code & 0xFF);

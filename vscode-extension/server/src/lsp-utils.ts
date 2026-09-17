@@ -27,12 +27,35 @@ export interface InlineArrayInfo {
   dimensions: Array<{ start: number; end: number }>;
 }
 
-export function inlineArrayInfo(sym: TypedSymbol): InlineArrayInfo | undefined {
-  const decl = sym.declaration?.type;
-  if (!decl?.elementTypeName) return undefined;
-  const dimensions = decl.arrayDimensions;
+/**
+ * The same facts read straight off a `TypeReference`, for the places that have
+ * a type node but no symbol to hang it on — a STRUCT field is declared as
+ * `{ names, type }` and never becomes a `VariableSymbol`, so it cannot go
+ * through {@link inlineArrayInfo}.
+ */
+export function inlineArrayInfoFromType(
+  type: { elementTypeName?: string; arrayDimensions?: Array<{ start: number; end: number }> } | undefined,
+): InlineArrayInfo | undefined {
+  if (!type?.elementTypeName) return undefined;
+  const dimensions = type.arrayDimensions;
   if (!dimensions || dimensions.length === 0) return undefined;
-  return { elementType: decl.elementTypeName, dimensions };
+  return { elementType: type.elementTypeName, dimensions };
+}
+
+export function inlineArrayInfo(sym: TypedSymbol): InlineArrayInfo | undefined {
+  return inlineArrayInfoFromType(sym.declaration?.type);
+}
+
+/** `ARRAY [0..7] OF BOOL` for an inline array, the declared name otherwise. */
+export function renderTypeReference(
+  type: { name?: string; elementTypeName?: string; arrayDimensions?: Array<{ start: number; end: number }> } | undefined,
+): string | undefined {
+  const array = inlineArrayInfoFromType(type);
+  if (array) {
+    const dims = array.dimensions.map((d) => `${d.start}..${d.end}`).join(", ");
+    return `ARRAY [${dims}] OF ${array.elementType}`;
+  }
+  return type?.name;
 }
 
 /**
@@ -54,12 +77,9 @@ export function inlineArrayInfo(sym: TypedSymbol): InlineArrayInfo | undefined {
  * signature help — must go through here, so no internal name can escape.
  */
 export function renderVariableType(sym: TypedSymbol): string | undefined {
-  const array = inlineArrayInfo(sym);
-  if (array) {
-    const dims = array.dimensions.map((d) => `${d.start}..${d.end}`).join(", ");
-    return `ARRAY [${dims}] OF ${array.elementType}`;
-  }
-  return sym.declaration?.type?.name ?? (sym.type ? typeName(sym.type) : undefined);
+  return (
+    renderTypeReference(sym.declaration?.type) ?? (sym.type ? typeName(sym.type) : undefined)
+  );
 }
 
 /**
