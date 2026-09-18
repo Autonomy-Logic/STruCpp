@@ -315,11 +315,12 @@ struct TypeOps {
     void (*unforce)(void*);
     void (*read)   (const void*, uint8_t*);
     void (*write)  (void*, const uint8_t*);
-    /** Address the value in place instead of copying it out, and report its
-     *  length in BYTES. Same value `read` would produce, same force
-     *  resolution — see ptr_impl(). */
-    const void* (*ptr)(const void*, uint16_t*);
     uint8_t size;
+};
+
+/** The pointer op, in a table of its own — see ptr_ops[] below. */
+struct PtrOps {
+    const void* (*ptr)(const void*, uint16_t*);
 };
 
 // ---------------------------------------------------------------------------
@@ -329,42 +330,80 @@ struct TypeOps {
 // NOT flash-resident on AVR, whatever "inline constexpr" suggests. The Entry
 // tables carry STRUCPP_DEBUG_FLASH (see debug_table.hpp) and this does not, so
 // on a Harvard target it is const data in .rodata, which the startup code
-// copies into SRAM. Every AVR firmware pays for it, including one that only
-// ever calls handle_read/handle_write.
+// copies into SRAM. Every AVR firmware pays for this table.
 //
-// The `ptr` column costs one function pointer per row: 21 rows x 2 bytes = 42
-// bytes of SRAM on an ATmega-class part, plus the ptr_impl<T> instantiations in
-// flash. (Measured on the host — 48 vs 40 bytes per row at 8-byte pointers —
-// and scaled to AVR's 2-byte function pointers; it could NOT be measured on
-// target, because no AVR core is installed to build against.)
+// That is why the pointer op is NOT a column here — see ptr_ops[] below.
 //
-// Moving this to STRUCPP_DEBUG_FLASH is not a one-line change: every read of a
-// row would have to go through pgm_read_ptr, in the hot path of handle_read /
-// handle_write / handle_set. Worth doing only against a real AVR build that can
-// show the before and after.
+// Moving this one to STRUCPP_DEBUG_FLASH would mean routing every row read
+// through pgm_read_ptr in the hot path of handle_read / handle_write /
+// handle_set. Worth doing on its own evidence, not as a side effect.
 // ---------------------------------------------------------------------------
 inline constexpr TypeOps type_ops[TAG__COUNT] = {
-    /*BOOL  */ { &force_impl<BOOL_t>,  &unforce_impl<BOOL_t>,  &read_impl<BOOL_t>,  &write_impl<BOOL_t>,  &ptr_impl<BOOL_t>,  sizeof(BOOL_t)  },
-    /*SINT  */ { &force_impl<SINT_t>,  &unforce_impl<SINT_t>,  &read_impl<SINT_t>,  &write_impl<SINT_t>,  &ptr_impl<SINT_t>,  sizeof(SINT_t)  },
-    /*USINT */ { &force_impl<USINT_t>, &unforce_impl<USINT_t>, &read_impl<USINT_t>, &write_impl<USINT_t>, &ptr_impl<USINT_t>, sizeof(USINT_t) },
-    /*INT   */ { &force_impl<INT_t>,   &unforce_impl<INT_t>,   &read_impl<INT_t>,   &write_impl<INT_t>,   &ptr_impl<INT_t>,   sizeof(INT_t)   },
-    /*UINT  */ { &force_impl<UINT_t>,  &unforce_impl<UINT_t>,  &read_impl<UINT_t>,  &write_impl<UINT_t>,  &ptr_impl<UINT_t>,  sizeof(UINT_t)  },
-    /*DINT  */ { &force_impl<DINT_t>,  &unforce_impl<DINT_t>,  &read_impl<DINT_t>,  &write_impl<DINT_t>,  &ptr_impl<DINT_t>,  sizeof(DINT_t)  },
-    /*UDINT */ { &force_impl<UDINT_t>, &unforce_impl<UDINT_t>, &read_impl<UDINT_t>, &write_impl<UDINT_t>, &ptr_impl<UDINT_t>, sizeof(UDINT_t) },
-    /*LINT  */ { &force_impl<LINT_t>,  &unforce_impl<LINT_t>,  &read_impl<LINT_t>,  &write_impl<LINT_t>,  &ptr_impl<LINT_t>,  sizeof(LINT_t)  },
-    /*ULINT */ { &force_impl<ULINT_t>, &unforce_impl<ULINT_t>, &read_impl<ULINT_t>, &write_impl<ULINT_t>, &ptr_impl<ULINT_t>, sizeof(ULINT_t) },
-    /*REAL  */ { &force_impl<REAL_t>,  &unforce_impl<REAL_t>,  &read_impl<REAL_t>,  &write_impl<REAL_t>,  &ptr_impl<REAL_t>,  sizeof(REAL_t)  },
-    /*LREAL */ { &force_impl<LREAL_t>, &unforce_impl<LREAL_t>, &read_impl<LREAL_t>, &write_impl<LREAL_t>, &ptr_impl<LREAL_t>, sizeof(LREAL_t) },
-    /*BYTE  */ { &force_impl<BYTE_t>,  &unforce_impl<BYTE_t>,  &read_impl<BYTE_t>,  &write_impl<BYTE_t>,  &ptr_impl<BYTE_t>,  sizeof(BYTE_t)  },
-    /*WORD  */ { &force_impl<WORD_t>,  &unforce_impl<WORD_t>,  &read_impl<WORD_t>,  &write_impl<WORD_t>,  &ptr_impl<WORD_t>,  sizeof(WORD_t)  },
-    /*DWORD */ { &force_impl<DWORD_t>, &unforce_impl<DWORD_t>, &read_impl<DWORD_t>, &write_impl<DWORD_t>, &ptr_impl<DWORD_t>, sizeof(DWORD_t) },
-    /*LWORD */ { &force_impl<LWORD_t>, &unforce_impl<LWORD_t>, &read_impl<LWORD_t>, &write_impl<LWORD_t>, &ptr_impl<LWORD_t>, sizeof(LWORD_t) },
-    /*TIME  */ { &force_impl<TIME_t>,  &unforce_impl<TIME_t>,  &read_impl<TIME_t>,  &write_impl<TIME_t>,  &ptr_impl<TIME_t>,  sizeof(TIME_t)  },
-    /*DATE  */ { &force_impl<DATE_t>,  &unforce_impl<DATE_t>,  &read_impl<DATE_t>,  &write_impl<DATE_t>,  &ptr_impl<DATE_t>,  sizeof(DATE_t)  },
-    /*TOD   */ { &force_impl<TOD_t>,   &unforce_impl<TOD_t>,   &read_impl<TOD_t>,   &write_impl<TOD_t>,   &ptr_impl<TOD_t>,   sizeof(TOD_t)   },
-    /*DT    */ { &force_impl<DT_t>,    &unforce_impl<DT_t>,    &read_impl<DT_t>,    &write_impl<DT_t>,    &ptr_impl<DT_t>,    sizeof(DT_t)    },
-    /*STRING*/ { &force_string,        &unforce_string,        &read_string,        &write_string,        &ptr_string,        DEBUG_STRING_WIDTH },
-    /*WSTRING*/ { &force_wstring,       &unforce_wstring,       &read_wstring,       &write_wstring,       &ptr_wstring,       DEBUG_WSTRING_WIDTH },
+    /*BOOL    */ { &force_impl<BOOL_t>,  &unforce_impl<BOOL_t>,  &read_impl<BOOL_t>,  &write_impl<BOOL_t>,  sizeof(BOOL_t)      },
+    /*SINT    */ { &force_impl<SINT_t>,  &unforce_impl<SINT_t>,  &read_impl<SINT_t>,  &write_impl<SINT_t>,  sizeof(SINT_t)      },
+    /*USINT   */ { &force_impl<USINT_t>, &unforce_impl<USINT_t>, &read_impl<USINT_t>, &write_impl<USINT_t>, sizeof(USINT_t)     },
+    /*INT     */ { &force_impl<INT_t>,   &unforce_impl<INT_t>,   &read_impl<INT_t>,   &write_impl<INT_t>,   sizeof(INT_t)       },
+    /*UINT    */ { &force_impl<UINT_t>,  &unforce_impl<UINT_t>,  &read_impl<UINT_t>,  &write_impl<UINT_t>,  sizeof(UINT_t)      },
+    /*DINT    */ { &force_impl<DINT_t>,  &unforce_impl<DINT_t>,  &read_impl<DINT_t>,  &write_impl<DINT_t>,  sizeof(DINT_t)      },
+    /*UDINT   */ { &force_impl<UDINT_t>, &unforce_impl<UDINT_t>, &read_impl<UDINT_t>, &write_impl<UDINT_t>, sizeof(UDINT_t)     },
+    /*LINT    */ { &force_impl<LINT_t>,  &unforce_impl<LINT_t>,  &read_impl<LINT_t>,  &write_impl<LINT_t>,  sizeof(LINT_t)      },
+    /*ULINT   */ { &force_impl<ULINT_t>, &unforce_impl<ULINT_t>, &read_impl<ULINT_t>, &write_impl<ULINT_t>, sizeof(ULINT_t)     },
+    /*REAL    */ { &force_impl<REAL_t>,  &unforce_impl<REAL_t>,  &read_impl<REAL_t>,  &write_impl<REAL_t>,  sizeof(REAL_t)      },
+    /*LREAL   */ { &force_impl<LREAL_t>, &unforce_impl<LREAL_t>, &read_impl<LREAL_t>, &write_impl<LREAL_t>, sizeof(LREAL_t)     },
+    /*BYTE    */ { &force_impl<BYTE_t>,  &unforce_impl<BYTE_t>,  &read_impl<BYTE_t>,  &write_impl<BYTE_t>,  sizeof(BYTE_t)      },
+    /*WORD    */ { &force_impl<WORD_t>,  &unforce_impl<WORD_t>,  &read_impl<WORD_t>,  &write_impl<WORD_t>,  sizeof(WORD_t)      },
+    /*DWORD   */ { &force_impl<DWORD_t>, &unforce_impl<DWORD_t>, &read_impl<DWORD_t>, &write_impl<DWORD_t>, sizeof(DWORD_t)     },
+    /*LWORD   */ { &force_impl<LWORD_t>, &unforce_impl<LWORD_t>, &read_impl<LWORD_t>, &write_impl<LWORD_t>, sizeof(LWORD_t)     },
+    /*TIME    */ { &force_impl<TIME_t>,  &unforce_impl<TIME_t>,  &read_impl<TIME_t>,  &write_impl<TIME_t>,  sizeof(TIME_t)      },
+    /*DATE    */ { &force_impl<DATE_t>,  &unforce_impl<DATE_t>,  &read_impl<DATE_t>,  &write_impl<DATE_t>,  sizeof(DATE_t)      },
+    /*TOD     */ { &force_impl<TOD_t>,   &unforce_impl<TOD_t>,   &read_impl<TOD_t>,   &write_impl<TOD_t>,   sizeof(TOD_t)       },
+    /*DT      */ { &force_impl<DT_t>,    &unforce_impl<DT_t>,    &read_impl<DT_t>,    &write_impl<DT_t>,    sizeof(DT_t)        },
+    /*STRING  */ { &force_string,        &unforce_string,        &read_string,        &write_string,        DEBUG_STRING_WIDTH  },
+    /*WSTRING */ { &force_wstring,       &unforce_wstring,       &read_wstring,       &write_wstring,       DEBUG_WSTRING_WIDTH },
+};
+
+// ---------------------------------------------------------------------------
+// ptr_ops[]: the pointer op, deliberately NOT a sixth column of type_ops.
+//
+// Only handle_ptr reads this, and only the baremetal OPC-UA server calls
+// handle_ptr — but as a column it was reachable from handle_read/handle_write
+// too, so the whole table grew for every firmware. Measured on an ATmega2560
+// (arduino:avr:mega, the simulator's target) with a sketch that only ever calls
+// handle_read/handle_write: 383 -> 425 bytes of SRAM and 4654 -> 5128 of flash.
+//
+// Split out, nothing references this table unless handle_ptr is called, and
+// -ffunction-sections/-fdata-sections + --gc-sections (which the AVR core
+// passes) drop both it and the ptr_impl<T> instantiations.
+//
+// Measured on arduino:avr:mega, same sketch, same runtime tree:
+//
+//   never calls handle_ptr   383 B SRAM / 4728 B flash   (was 425 / 5128)
+//   calls handle_ptr         425 B SRAM / 5196 B flash
+//
+// So the feature now costs what it costs, and only to firmware that uses it.
+// ---------------------------------------------------------------------------
+inline constexpr PtrOps ptr_ops[TAG__COUNT] = {
+    /*BOOL    */ { &ptr_impl<BOOL_t> },
+    /*SINT    */ { &ptr_impl<SINT_t> },
+    /*USINT   */ { &ptr_impl<USINT_t> },
+    /*INT     */ { &ptr_impl<INT_t> },
+    /*UINT    */ { &ptr_impl<UINT_t> },
+    /*DINT    */ { &ptr_impl<DINT_t> },
+    /*UDINT   */ { &ptr_impl<UDINT_t> },
+    /*LINT    */ { &ptr_impl<LINT_t> },
+    /*ULINT   */ { &ptr_impl<ULINT_t> },
+    /*REAL    */ { &ptr_impl<REAL_t> },
+    /*LREAL   */ { &ptr_impl<LREAL_t> },
+    /*BYTE    */ { &ptr_impl<BYTE_t> },
+    /*WORD    */ { &ptr_impl<WORD_t> },
+    /*DWORD   */ { &ptr_impl<DWORD_t> },
+    /*LWORD   */ { &ptr_impl<LWORD_t> },
+    /*TIME    */ { &ptr_impl<TIME_t> },
+    /*DATE    */ { &ptr_impl<DATE_t> },
+    /*TOD     */ { &ptr_impl<TOD_t> },
+    /*DT      */ { &ptr_impl<DT_t> },
+    /*STRING  */ { &ptr_string },
+    /*WSTRING */ { &ptr_wstring },
 };
 
 // ---------------------------------------------------------------------------
@@ -568,7 +607,7 @@ inline const void* handle_ptr(uint8_t arr, uint16_t elem, uint16_t* out_len) noe
         return nullptr;
     }
     uint16_t len = 0;
-    const void* p = type_ops[e.tag].ptr(e.ptr, &len);
+    const void* p = ptr_ops[e.tag].ptr(e.ptr, &len);
     if (out_len) *out_len = len;
     return p;
 }
