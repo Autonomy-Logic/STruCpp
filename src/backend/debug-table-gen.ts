@@ -187,6 +187,16 @@ const IEC_NAME_TO_TAG: Record<string, TagName> = {
 };
 
 /** Byte size for each IEC elementary type — authoritative for debug. */
+/**
+ * The string capacity the debug dispatch assumes.
+ *
+ * `debug_dispatch.hpp` casts every STRING/WSTRING leaf to
+ * `IECStringVar<254>` / `IECWStringVar<254>`. A leaf declared with any other
+ * length has its members at different offsets, so it cannot be registered —
+ * see the check in `visit()`. Keep in step with those casts.
+ */
+const DISPATCH_STRING_CAPACITY = 254;
+
 const IEC_NAME_TO_SIZE: Record<string, number> = {
   BOOL: 1,
   SINT: 1,
@@ -505,6 +515,42 @@ export function generateDebugTable(
 
     // Named elementary type (or alias thereof).
     if (IEC_NAME_TO_TAG[name] !== undefined) {
+      // A parameterised STRING(n) / WSTRING(n) cannot be dispatched. Every
+      // string op in `debug_dispatch.hpp` casts the leaf to
+      // `IECStringVar<254>` / `IECWStringVar<254>`, but codegen emits the
+      // DECLARED size (`IECStringVar<n>`), and `length_` sits at a different
+      // offset for every `n` — so the cast reads out of bounds. Measured on
+      // `s20 : STRING(20) := 'hello'`: `sizeof` 50 vs 518, and the length came
+      // back from 468 bytes past the end of the object. It read 0 there, but
+      // the value is undefined: with non-zero neighbouring memory it reads as
+      // the cap, and the read path would then serve that many bytes of
+      // adjacent memory.
+      //
+      // The dispatch has one function per TAG and `Entry` has nowhere to carry
+      // a per-leaf size, so making this work needs a per-leaf width in the
+      // table — a real change to a structure that is deliberately 6 bytes on
+      // AVR. Until then the leaf is SKIPPED rather than registered wrong:
+      // `skipped` is already surfaced to the caller, so this is a visible
+      // build warning instead of an out-of-bounds read at runtime.
+      //
+      // Nothing authored in the editor reaches this: its type picker is a
+      // closed list from the IEC registry, which carries `STRING` with no
+      // length parameter. It is hand-written ST compiled through the CLI that
+      // can declare `STRING(n)`.
+      if (
+        (name === "STRING" || name === "WSTRING") &&
+        typeRef.maxLength !== undefined &&
+        typeRef.maxLength !== DISPATCH_STRING_CAPACITY
+      ) {
+        skipped.push({
+          path,
+          reason:
+            `declared ${name}(${typeRef.maxLength}), but the debug dispatch ` +
+            `addresses strings as ${name}(${DISPATCH_STRING_CAPACITY}). ` +
+            `Declare it as a plain ${name} to expose it.`,
+        });
+        return;
+      }
       addLeaf(path, cppExpr, name, flags);
       return;
     }
