@@ -95,6 +95,24 @@ describe("semantic tokens never overlap", () => {
     expect(tokensOn(CASES["array declaration"], 3)).toEqual([{ text: "Arr", type: "variable" }]);
   });
 
+  it("keeps the token on __XWORD, which is a real elementary type", () => {
+    const source = `PROGRAM Main\nVAR\n  addr : __XWORD;\nEND_VAR\n  ;\nEND_PROGRAM\n`;
+    expect(tokensOn(source, 3)).toEqual([
+      { text: "addr", type: "variable" },
+      { text: "__XWORD", type: "type" },
+    ]);
+  });
+
+  it("keeps the token on a user type whose name starts with underscores", () => {
+    const source =
+      `TYPE\n  __Count : STRUCT\n    A : INT;\n  END_STRUCT;\nEND_TYPE\n\n` +
+      `PROGRAM Main\nVAR\n  c : __Count;\nEND_VAR\n  ;\nEND_PROGRAM\n`;
+    expect(tokensOn(source, 9)).toEqual([
+      { text: "c", type: "variable" },
+      { text: "__Count", type: "type" },
+    ]);
+  });
+
   it("emits a subscript index once", () => {
     const onBody = tokensOn(CASES["array subscript"], 6);
     expect(onBody.filter((t) => t.text === "I")).toHaveLength(1);

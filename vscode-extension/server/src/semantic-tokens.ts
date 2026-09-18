@@ -59,6 +59,9 @@ export const TOKEN_MODIFIERS: string[] = [
 const TYPE_IDX = Object.fromEntries(TOKEN_TYPES.map((t, i) => [t, i]));
 const MOD_BIT = Object.fromEntries(TOKEN_MODIFIERS.map((m, i) => [m, 1 << i]));
 
+/** Names the AST builder mints for inline arrays; they appear in no source file. */
+const SYNTHETIC_TYPE_PREFIXES = ["__INLINE_ARRAY_", "__VLA_"];
+
 // ---------------------------------------------------------------------------
 // Raw token collection
 // ---------------------------------------------------------------------------
@@ -290,8 +293,9 @@ function emitTypeReference(
   if (!tr.sourceSpan) return;
   // Skip REF_TO/REFERENCE_TO keyword-prefixed references (the type name position is offset)
   if (tr.isReference) return;
-  // Synthesised inline-array names (`__INLINE_ARRAY_INT`, `__VLA_…`) have no source text to cover.
-  if (tr.name.startsWith("__")) return;
+  // Synthesised array names have no source text to cover. Match the two prefixes
+  // exactly: `__XWORD` is a real elementary type and must keep its token.
+  if (SYNTHETIC_TYPE_PREFIXES.some((prefix) => tr.name.startsWith(prefix))) return;
 
   const upperName = tr.name.toUpperCase();
 
