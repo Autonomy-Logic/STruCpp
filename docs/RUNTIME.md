@@ -67,6 +67,9 @@ public:
     // Raw pointer for I/O memory binding
     T* raw_ptr();
 
+    // Const pointer to the value a READER should see (force-aware)
+    const T* read_ptr() const;
+
     // Cross-type converting constructor (enables implicit widening)
     template<typename U> IECVar(const IECVar<U>& other);
 };
@@ -94,6 +97,19 @@ Array elements store raw types; the calling variable wraps the entire array.
 ### Located Variables
 
 Located variables (`AT %IX0.0`) use `raw_ptr()` to bind to an I/O image table at runtime. The code generator produces a descriptor array (`__located_vars_[]`) with metadata for each located variable (area, size, byte/bit indices) and accessor methods (`getLocatedVars()`, `getLocatedVarCount()`).
+
+### `raw_ptr()` vs `read_ptr()`
+
+Two pointers into an `IECVar`, and picking the wrong one is silently wrong for exactly one kind of variable.
+
+| | Points at | Use for |
+|---|---|---|
+| `raw_ptr()` | `value_`, always | **Binding** — the I/O image writes through it every scan |
+| `read_ptr()` | `forced_value_` while forced, `value_` otherwise | **Reading** — anything serving the value to a person or a protocol |
+
+`force()` writes through to `value_`, so for an ordinary variable the two agree the moment a force is applied. A **located** variable is the exception: the PLC program drives `value_` directly through the image binding every scan, without going through `set()`, so `raw_ptr()` would show the program's value while `get()` still reports the forced one. `read_ptr()` is `get()`'s semantics with `get()`'s copy removed, which is what an external reader needs to serve a value without copying it. `IECStringVar::c_str()` resolves the force the same way.
+
+The debug dispatch's pointer op (`handle_ptr`, and through it OPC-UA's zero-copy read) uses `read_ptr()` for that reason. The pointer it returns is valid only until the variable is next written **or its force state changes** — an `unforce()` moves the value back to a different object, and a retained pointer keeps reporting the stale forced one.
 
 ## Type Traits (`iec_traits.hpp`)
 

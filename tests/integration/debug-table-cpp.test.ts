@@ -483,6 +483,9 @@ int main() {
       `PROGRAM Main
 VAR n : DINT := 7; END_VAR
 VAR s : STRING := 'hello'; END_VAR
+VAR w : WSTRING := "hi"; END_VAR
+VAR es : STRING; END_VAR
+VAR ew : WSTRING; END_VAR
 END_PROGRAM${CFG}`,
       { headerFileName: "generated.hpp" },
     );
@@ -558,6 +561,37 @@ int main() {
   handle_read(${idx("INSTANCE0.S")}, sbuf);
   chk("wire form still carries the length byte", sbuf[0] == 5);
   chk("wire payload matches", memcmp(sbuf + 1, sp, 5) == 0);
+
+  // A forced STRING resolves through c_str() the same way the scalar op
+  // resolves through read_ptr(). Nothing proved that before.
+  unsigned char sforce[1 + 5] = { 5, 'w','o','r','l','d' };
+  handle_set(${idx("INSTANCE0.S")}, true, sforce, sizeof(sforce));
+  const void* spf = handle_ptr(${idx("INSTANCE0.S")}, &len);
+  chk("forced string len", len == 5);
+  chk("forced string payload", memcmp(spf, "world", 5) == 0);
+  handle_set(${idx("INSTANCE0.S")}, false, sforce, sizeof(sforce));
+
+  // WSTRING: len is BYTES (2 per code unit), and the code units are the same
+  // ones read_wstring() puts on the wire once its explicit LE split is undone.
+  const void* wp = handle_ptr(${idx("INSTANCE0.W")}, &len);
+  chk("wstring ptr non-null", wp != nullptr);
+  chk("wstring len is bytes not units", len == 4);
+  const unsigned char* wb = (const unsigned char*)wp;
+  unsigned char wbuf[260] = {0};
+  handle_read(${idx("INSTANCE0.W")}, wbuf);
+  chk("wstring wire count is units", wbuf[0] == 2);
+  chk("wstring unit 0 matches the wire", wb[0] == wbuf[1] && wb[1] == wbuf[2]);
+  chk("wstring unit 1 matches the wire", wb[2] == wbuf[3] && wb[3] == wbuf[4]);
+  chk("wstring units are 'hi'", wb[0] == 'h' && wb[1] == 0 && wb[2] == 'i' && wb[3] == 0);
+
+  // Empty is a VALID value, not a miss: a non-null pointer and a zero length.
+  // read_node treats zero length as a value, so this is a contract.
+  const void* ep = handle_ptr(${idx("INSTANCE0.ES")}, &len);
+  chk("empty string len", len == 0);
+  chk("empty string ptr non-null", ep != nullptr);
+  const void* ewp = handle_ptr(${idx("INSTANCE0.EW")}, &len);
+  chk("empty wstring len", len == 0);
+  chk("empty wstring ptr non-null", ewp != nullptr);
 
   // Out of range is a null, not a crash.
   chk("oob is null", handle_ptr(200, 0, &len) == nullptr && len == 0);
