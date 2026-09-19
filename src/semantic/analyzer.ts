@@ -2826,7 +2826,8 @@ export class SemanticAnalyzer {
   ): void {
     const dotIndex = functionName.indexOf(".");
     if (dotIndex < 0) return;
-    const objName = functionName.substring(0, dotIndex);
+    // Strip a pointer caret; the map holds the base type name.
+    const objName = functionName.substring(0, dotIndex).replace(/\^$/, "");
     const methodName = functionName.substring(dotIndex + 1);
 
     const calleeFBType = varTypeMap.get(objName.toUpperCase());
@@ -3381,12 +3382,12 @@ export class SemanticAnalyzer {
         }
         break;
       case "FunctionCallExpression":
-        // For dotted names (fb.method), check only the object part
+        // For dotted names (fb.method), check only the object part,
+        // stripping a pointer caret first.
         if (expr.functionName.includes(".")) {
-          const objName = expr.functionName.substring(
-            0,
-            expr.functionName.indexOf("."),
-          );
+          const objName = expr.functionName
+            .substring(0, expr.functionName.indexOf("."))
+            .replace(/\^$/, "");
           this.checkNameDeclared(objName, scope, ctx, expr.sourceSpan);
         }
         // An FB instance reached through an expression (`units[0]()`) — check

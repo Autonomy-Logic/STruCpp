@@ -132,3 +132,39 @@ END_TYPE
     expect(resolved!.symbol).toBeUndefined();
   });
 });
+
+describe("resolveSymbolAtPosition (pointer method dispatch)", () => {
+  it("resolves the instance part of a pointer method call", () => {
+    const analysis = getAnalysis();
+    const pos = findPosition("Boss^.Ping(Flag := TRUE)");
+    const resolved = resolveSymbolAtPosition(
+      analysis,
+      "complex-project.st",
+      pos.line,
+      pos.col,
+    );
+    expect(resolved).toBeDefined();
+    expect(resolved!.symbol).toBeDefined();
+    expect(resolved!.symbol!.kind).toBe("variable");
+    expect(resolved!.symbol!.name.toUpperCase()).toBe("BOSS");
+  });
+
+  it("resolves the method part of a pointer method call", () => {
+    const analysis = getAnalysis();
+    const pos = findPosition("Boss^.Ping(Flag := TRUE)");
+    const resolved = resolveSymbolAtPosition(
+      analysis,
+      "complex-project.st",
+      pos.line,
+      pos.col + "Boss^.".length,
+    );
+    expect(resolved).toBeDefined();
+    expect(resolved!.symbol).toBeDefined();
+    // Methods live as AST declarations, not scope symbols: the resolver
+    // returns the instance plus a method context that go-to-definition
+    // uses to jump to the method declaration.
+    expect(resolved!.symbol!.name.toUpperCase()).toBe("BOSS");
+    expect(resolved!.methodContext?.fbName).toBe("OWNER");
+    expect(resolved!.methodContext?.methodName.toUpperCase()).toBe("PING");
+  });
+});

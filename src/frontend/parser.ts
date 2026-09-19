@@ -1136,11 +1136,13 @@ export class STParser extends CstParser {
   }
 
   private isMethodCallAhead(): boolean {
+    // An optional caret shifts the pattern: instance.method( or pointer^.method(
+    const caret = this.LA(2).tokenType === tokens.Caret ? 1 : 0;
     return (
       this.isIdentifierOrKeywordToken(this.LA(1).tokenType) &&
-      this.LA(2).tokenType === tokens.Dot &&
-      this.isIdentifierOrKeywordToken(this.LA(3).tokenType) &&
-      this.LA(4)?.tokenType === tokens.LParen
+      this.LA(2 + caret).tokenType === tokens.Dot &&
+      this.isIdentifierOrKeywordToken(this.LA(3 + caret).tokenType) &&
+      this.LA(4 + caret)?.tokenType === tokens.LParen
     );
   }
 
@@ -1180,6 +1182,9 @@ export class STParser extends CstParser {
    */
   public methodCallStatement = this.RULE("methodCallStatement", () => {
     this.SUBRULE(this.identifierOrKeyword); // instance name
+    this.OPTION2(() => {
+      this.CONSUME(tokens.Caret); // pointer^.method(args)
+    });
     this.CONSUME(tokens.Dot);
     this.SUBRULE2(this.identifierOrKeyword); // method name
     this.CONSUME(tokens.LParen);
@@ -1663,6 +1668,9 @@ export class STParser extends CstParser {
    */
   public methodCall = this.RULE("methodCall", () => {
     this.SUBRULE(this.identifierOrKeyword); // instance name
+    this.OPTION2(() => {
+      this.CONSUME(tokens.Caret); // pointer^.method(args)
+    });
     this.CONSUME(tokens.Dot);
     this.SUBRULE2(this.identifierOrKeyword); // method name
     this.CONSUME(tokens.LParen);
