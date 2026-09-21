@@ -1039,6 +1039,21 @@ export class StdFunctionRegistry {
       category: "system",
     });
 
+    // __VARINFO(variable) -> __SYSTEM.VAR_INFO (CODESYS variable information).
+    // Like ADR and SIZEOF it takes the variable itself, not a read of it: the
+    // answer is about the storage, so codegen needs the operand to name it.
+    this.register({
+      name: "__VARINFO",
+      cppName: "__VARINFO",
+      returnConstraint: "specific",
+      returnMatchesFirstParam: false,
+      specificReturnType: "__SYSTEM.VAR_INFO",
+      params: [{ name: "IN", constraint: "ANY", isByRef: true }],
+      isVariadic: false,
+      isConversion: false,
+      category: "system",
+    });
+
     // MEMCPY(dest, src, n) -> ULINT (CODESYS memcpy)
     this.register({
       name: "MEMCPY",

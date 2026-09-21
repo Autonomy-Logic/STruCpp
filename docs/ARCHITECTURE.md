@@ -61,6 +61,8 @@ src/
   backend/
     codegen.ts               Main C++ code generator (expressions, statements, POUs)
     type-codegen.ts          Struct/enum/array type definitions
+    type-descriptor-gen.ts   TypeClassifier (shared TYPE_CLASS mapping) + STRUCT
+                             member layout tables (IEC_ANY::TYPEDESC)
     codegen-utils.ts         Type mapping helpers (IEC -> C++ types)
     test-main-gen.ts         Test runner main() generation
     test-codegen.ts          Test assertion code generation

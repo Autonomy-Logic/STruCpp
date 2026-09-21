@@ -34,6 +34,7 @@ import { isElementaryType } from "../semantic/type-registry.js";
 import {
   evalIntConst,
   isAnyDescriptorType,
+  isVarInfoType,
   isDeclarableGenericType,
 } from "../semantic/type-utils.js";
 import { formatArrayElementAccess } from "./codegen-utils.js";
@@ -539,11 +540,18 @@ export function generateDebugTable(
 
     // A generic parameter and its descriptor are not values: `pvalue` addresses
     // another variable the debugger already lists, and the type class and size
-    // describe that one. Skipped by name rather than as an unsupported kind.
-    if (isDeclarableGenericType(name) || isAnyDescriptorType(name)) {
+    // describe that one. `__SYSTEM.VAR_INFO` is the same thing for a named
+    // variable — `ByteAddress` points at a leaf the debugger already has.
+    // Skipped by name rather than as an unsupported kind, so the reason says
+    // why rather than reading as a hole in the walker.
+    if (
+      isDeclarableGenericType(name) ||
+      isAnyDescriptorType(name) ||
+      isVarInfoType(name)
+    ) {
       skipped.push({
         path,
-        reason: `${name} is a generic parameter descriptor, not a value`,
+        reason: `${name} describes a variable rather than being one`,
       });
 
       return;

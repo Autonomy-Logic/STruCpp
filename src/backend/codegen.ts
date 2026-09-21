@@ -55,6 +55,7 @@ import {
   parseTodLiteralToNs,
 } from "../project-model.js";
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
+import { TypeClassifier } from "./type-descriptor-gen.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
   formatArrayType,
@@ -69,6 +70,7 @@ import {
   getTypeBits,
   getTypeCategory,
   isAnyDescriptorType,
+  isVarInfoType,
   isDeclarableGenericType,
   isImplicitlyConvertible,
   parsePartialAccess,
@@ -427,6 +429,21 @@ export class CodeGenerator {
 
   /** Set of known struct/UDT type names (upper case) */
   protected knownStructTypes: Set<string> = new Set();
+  /** UPPER(names) of STRUCT types that got a layout table beside them, so a
+   *  generic argument can hand its callee a descriptor. Not every struct
+   *  qualifies — see type-descriptor-gen.ts. */
+  protected describedStructTypes: Set<string> = new Set();
+  /** UPPER(name) → definition, for walking a STRUCT's members without a
+   *  symbol-table round trip. Populated alongside `knownStructTypes`. */
+  protected structDefs: Map<
+    string,
+    import("../frontend/ast.js").StructDefinition
+  > = new Map();
+
+  /** Classifies a declared type into TYPE_CLASS. Shared with the struct
+   *  descriptors so `__VARINFO(x)` and a member's descriptor answer
+   *  identically for the same type. */
+  protected typeClassifier: TypeClassifier = new TypeClassifier([]);
 
   /** Map of enum type name (upper case) → set of member names (upper case) for :: emission */
   protected enumTypeMembers: Map<string, Set<string>> = new Map();
@@ -587,12 +604,14 @@ export class CodeGenerator {
    *  so a positional argument can be matched to the parameter it fills. */
   private functionParamOrder: Map<string, string[]> = new Map();
 
-  /** Names of STRING/WSTRING variables handed to a generic parameter by the
-   *  statement being generated.
+  /** Statements that re-cache a string length after this statement handed a
+   *  STRING, WSTRING, or a STRUCT containing one, to a generic parameter.
    *
    *  `raw_ptr()` gives the callee the characters but not the cached length, so
-   *  a callee that writes them leaves `length()` stale. Flushed as
-   *  `sync_length()` after the call — see {@link flushStringSyncs}. */
+   *  a callee that writes them leaves `length()` stale. Flushed after the call
+   *  — see {@link flushStringSyncs}. Whole statements rather than names,
+   *  because a struct resyncs through `sync_strings()` and a scalar through
+   *  its own `sync_length()`. */
   private pendingStringSyncs: string[] = [];
 
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
@@ -644,6 +663,12 @@ export class CodeGenerator {
     // `__SYSTEM.AnyType` needs it too: a dot is not a C++ name.
     if (isDeclarableGenericType(typeName) || isAnyDescriptorType(typeName)) {
       return "IEC_ANY";
+    }
+
+    // `__SYSTEM.VAR_INFO` — same reason as `__SYSTEM.AnyType` above: a dot is
+    // not a C++ name.
+    if (isVarInfoType(typeName)) {
+      return "strucpp::VAR_INFO";
     }
 
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
@@ -1376,8 +1401,12 @@ export class CodeGenerator {
 
     // Build set of known struct/UDT types and enum member maps
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
+    this.typeClassifier = new TypeClassifier(ast.types);
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
+      if (td.definition.kind === "StructDefinition") {
+        this.structDefs.set(td.name.toUpperCase(), td.definition);
+      }
       if (td.definition.kind === "EnumDefinition") {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
@@ -3494,10 +3523,10 @@ export class CodeGenerator {
     const pending = this.pendingStringSyncs;
     this.pendingStringSyncs = [];
     const seen = new Set<string>();
-    for (const name of pending) {
-      if (seen.has(name)) continue;
-      seen.add(name);
-      this.emit(`${indent}${name}.sync_length();`);
+    for (const stmt of pending) {
+      if (seen.has(stmt)) continue;
+      seen.add(stmt);
+      this.emit(`${indent}${stmt}`);
     }
   }
 
@@ -5089,7 +5118,14 @@ export class CodeGenerator {
       return `&(${args[0] ?? ""})`;
     }
 
-    // 0a. REF_LINK(x) → REF(x) — callable form of the REF() reference operator
+    // 0a. __VARINFO(x) → a strucpp::VAR_INFO describing x.
+    if (nameUpper === "__VARINFO") {
+      const arg = expr.arguments[0]?.value;
+      const info = arg === undefined ? undefined : this.generateVarInfo(arg);
+      if (info !== undefined) return info;
+    }
+
+    // 0b. REF_LINK(x) → REF(x) — callable form of the REF() reference operator
     // (REF is a reserved token and can't take the graphical EN/IN/ENO call
     // form). Assigning the result to a REF_TO variable binds it.
     if (nameUpper === "REF_LINK") {
@@ -5727,6 +5763,20 @@ export class CodeGenerator {
       isUserDefinedType: (t): boolean => this.isUserDefinedType(t),
     });
     const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
+    for (const t of typeCodeGen.describedTypes)
+      this.describedStructTypes.add(t);
+    // A struct with no layout table is not an error — it compiles and runs, and
+    // a program that never puts it on a generic pin is unaffected. It IS worth
+    // saying, because the symptom otherwise is an MQTT topic that never appears
+    // and nothing anywhere to explain it.
+    for (const u of typeCodeGen.undescribedTypes) {
+      this.codegenWarnings.push({
+        message:
+          `STRUCT '${u.typeName}' has no member layout, so a block given one on ` +
+          `an ANY pin cannot walk it: member '${u.member}' cannot be described — ` +
+          `${u.reason}`,
+      });
+    }
     for (const line of typeCode.split(this.options.lineEnding)) {
       this.emitHeader(line);
     }
@@ -6477,6 +6527,259 @@ export class CodeGenerator {
   }
 
   /**
+   * `__VARINFO(x)` — CODESYS's `__SYSTEM.VAR_INFO` for one named variable.
+   *
+   * Resolved here, at the call site, for the same reason the `ANY` descriptor
+   * is: the IEC type name is known to codegen and to nothing downstream. A
+   * trait keyed on the C++ payload could not tell `BYTE` from `USINT`.
+   *
+   * `AREA` stays -1 and `BITADDRESS` 0 — CODESYS documents -1 as "not global in
+   * memory, but relative to an instance or on the stack", which is true of
+   * every variable here, and OpenPLC has no device-dependent area numbering to
+   * report. `BITNR` stays -1 for the same reason CODESYS gives it for a
+   * non-integer: there is no bit access to describe. `BYTEOFFSET` is 0 because
+   * the address is absolute in `BYTEADDRESS`; reporting a stack- or
+   * instance-relative offset would mean inventing a base nothing else agrees
+   * on. See iec_varinfo.hpp.
+   */
+  private generateVarInfo(expr: Expression): string | undefined {
+    const declaredType = this.inferExprType(expr);
+    if (declaredType === undefined || declaredType === "") return undefined;
+
+    const value = this.generateAliasLvalue(expr);
+    const typeName = this.cppNameLiteral(
+      this.declaredTypeDisplayName(declaredType),
+    );
+
+    // A POINTER TO / REF_TO / REFERENCE TO variable is an ADDRESS, not a value
+    // of the type it points at. `inferExprType` reports the target, so without
+    // this a `POINTER TO INT` claimed to be a TYPE_INT — the class said two
+    // bytes of integer where the storage is a pointer.
+    const refKind =
+      expr.kind === "VariableExpression"
+        ? this.currentScopeVarRefKinds.get(expr.name.toUpperCase())
+        : undefined;
+    if (refKind !== undefined) {
+      const cls = refKind === "pointer_to" ? "TYPE_POINTER" : "TYPE_REFERENCE";
+      // The type NAME has to say it is a pointer too. `inferExprType` reports
+      // the target, so "INT" alone would read as an INT beside a
+      // TYPE_POINTER class — two fields telling different stories.
+      const refName = this.cppNameLiteral(
+        `${refKind === "pointer_to" ? "POINTER TO" : "REFERENCE TO"} ` +
+          this.declaredTypeDisplayName(declaredType),
+      );
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(sizeof(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::${cls}, ${refName}, 0, ` +
+        `strucpp::TYPE_CLASS::${cls}, ` +
+        `static_cast<uint32_t>(sizeof(${value}) * 8) }`
+      );
+    }
+
+    // An array, inline (`__INLINE_ARRAY_*`) or declared as its own TYPE. The
+    // named case only became reachable once the classifier was shared: before
+    // that, an ARRAY declared as a TYPE reported TYPE_USERDEF with no count.
+    const element =
+      arrayElementTypeName(declaredType) ??
+      this.typeClassifier.namedArrayElement(declaredType)?.name;
+    if (element !== undefined) {
+      const payload = this.typeCodeGen.mapTypeToCpp(element);
+      const elem = this.typeClassifier.classify(element);
+      const base =
+        elem === undefined
+          ? "strucpp::TYPE_CLASS::TYPE_USERDEF"
+          : `strucpp::TYPE_CLASS::${elem.typeClass}`;
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(${value}.elements()), 0, -1, -1, ` +
+        `static_cast<int16_t>(sizeof(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::TYPE_ARRAY, ${typeName}, ` +
+        `static_cast<uint32_t>(${value}.element_count()), ${base}, ` +
+        `static_cast<uint32_t>(sizeof(${payload}) * 8) }`
+      );
+    }
+
+    // `__XWORD` has no single TYPE_CLASS enumerator — its width is the
+    // target's pointer width. Choosing with `sizeof` is right on a 32-bit
+    // controller and a 64-bit runtime alike, and stays a constant expression.
+    if (declaredType.toUpperCase() === "__XWORD") {
+      const cls =
+        "(sizeof(strucpp::XWORD_t) == 8 ? strucpp::TYPE_CLASS::TYPE_LWORD" +
+        " : sizeof(strucpp::XWORD_t) == 4 ? strucpp::TYPE_CLASS::TYPE_DWORD" +
+        " : strucpp::TYPE_CLASS::TYPE_WORD)";
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(strucpp::IEC_SIZEOF(${value}) * 8), 0, ` +
+        `${cls}, ${typeName}, 0, ${cls}, ` +
+        `static_cast<uint32_t>(strucpp::IEC_SIZEOF(${value}) * 8) }`
+      );
+    }
+
+    // The address comes from `&`, not `raw_ptr()`. An alias or subrange
+    // variable in a POU is declared RAW (`INT_t A;`, not `IEC_INT`) and has no
+    // `raw_ptr()` at all; for the wrapped types `iec_var.hpp` pins `&x` and
+    // `x.raw_ptr()` to the same address, so one spelling serves both.
+    const resolved = this.typeClassifier.classify(declaredType);
+    if (resolved !== undefined && resolved.nestedStruct === undefined) {
+      // An elementary type, an alias or subrange of one, or an enumeration:
+      // each has its own payload pointer.
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(strucpp::IEC_SIZEOF(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::${resolved.typeClass}, ${typeName}, 0, ` +
+        `strucpp::TYPE_CLASS::${resolved.typeClass}, ` +
+        `static_cast<uint32_t>(strucpp::IEC_SIZEOF(${value}) * 8) }`
+      );
+    }
+
+    if (this.isUserDefinedType(declaredType)) {
+      // CODESYS reports TYPE_USERDEF for a DUT and a function block instance
+      // alike; a structure is addressed whole, with no payload pointer.
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(sizeof(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::TYPE_USERDEF, ${typeName}, 0, ` +
+        `strucpp::TYPE_CLASS::TYPE_USERDEF, ` +
+        `static_cast<uint32_t>(sizeof(${value}) * 8) }`
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * `&<TYPE>__TYPEDESC` for a struct that has a layout table, else `nullptr`.
+   *
+   * Only a STRUCT gets one. A function block instance reaches an `ANY` pin
+   * today, but neither IEC 61131-3 §6.4.3 — which scopes ANY_DERIVED to the
+   * user-defined DATA types of Table 11, and a function block is a POU — nor
+   * CODESYS sanctions that, and a generated FB class may carry a vptr or an
+   * EXTENDS base subobject, where `offsetof` is not answerable. Describing one
+   * would mean publishing member offsets that are wrong on exactly the FBs
+   * that use inheritance.
+   */
+  /**
+   * Queue a `sync_strings()` for a struct that carries a string member.
+   *
+   * Same failure as the scalar case one branch up, one level deeper: a block
+   * writing a STRING MEMBER through the descriptor writes characters, and the
+   * length cached beside them stays as it was. Assign a four-character name
+   * over a nine-character one and the program keeps reading nine, five of them
+   * whatever the member held before.
+   *
+   * Skipped when the struct holds no strings, so the ordinary case pays
+   * nothing. One call whatever the struct holds — the walk is the runtime's.
+   */
+  private noteStructStringSync(value: string, typeName: string): void {
+    if (!this.structHoldsString(typeName)) return;
+    this.pendingStringSyncs.push(
+      `strucpp::sync_strings(&${value}, &${typeName}__TYPEDESC);`,
+    );
+  }
+
+  /** Whether a STRUCT has a STRING or WSTRING anywhere beneath it. */
+  private structHoldsString(typeName: string, depth = 0): boolean {
+    if (depth > 16) return false; // a cycle; the analyzer reports it
+    const def = this.structDefs.get(typeName.toUpperCase());
+    if (!def) return false;
+    for (const field of def.fields) {
+      const names = [
+        field.type.name,
+        ...(field.type.elementTypeName !== undefined
+          ? [field.type.elementTypeName]
+          : []),
+      ];
+      for (const name of names) {
+        const upper = name.toUpperCase();
+        if (upper === "STRING" || upper === "WSTRING") return true;
+        if (this.structHoldsString(name, depth + 1)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The argument as the caller wrote it, upper-cased: "PLANT",
+   * "MOTOR.SPEEDRPM", "PROFILE[2]".
+   *
+   * Rebuilt from the AST rather than sliced out of the source text, because a
+   * slice would carry whatever the caller wrote between the tokens — a
+   * comment, a line break, the spacing around a subscript — and a block
+   * publishing this as an MQTT topic would put it on the wire.
+   *
+   * A non-constant subscript has no name at this point, so it is rendered as
+   * `[*]`: the alternative is emitting the C++ index expression, which names
+   * a generated temporary and would be worse than saying nothing.
+   */
+  private argumentSourceName(expr: Expression): string | undefined {
+    if (expr.kind !== "VariableExpression") return undefined;
+    const v = expr;
+    let text = v.name.toUpperCase();
+
+    const renderIndex = (e: Expression): string =>
+      e.kind === "LiteralExpression" ? String(e.value) : "*";
+
+    if (v.accessChain !== undefined && v.accessChain.length > 0) {
+      for (const step of v.accessChain) {
+        if (step.kind === "field") text += `.${step.name.toUpperCase()}`;
+        else if (step.kind === "subscript") {
+          text += `[${step.indices.map(renderIndex).join(",")}]`;
+        } else text += "^";
+      }
+      return text;
+    }
+    // Older AST shape: subscripts then fields, which is the order the parser
+    // produced before accessChain preserved the interleaving.
+    if (v.subscripts.length > 0) {
+      text += `[${v.subscripts.map(renderIndex).join(",")}]`;
+    }
+    for (const f of v.fieldAccess) text += `.${f.toUpperCase()}`;
+    return text;
+  }
+
+  /** A C++ string literal, or `nullptr` when there is nothing to say. */
+  private cppNameLiteral(text: string | undefined): string {
+    if (text === undefined || text === "") return "nullptr";
+    return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+
+  /**
+   * `NAME` and `TYPENAME` for a generic argument, as a trailing field list.
+   *
+   * Emitted for every argument kind, not just a struct: a scalar wired to an
+   * `ANY` pin is otherwise anonymous, and a block that has to name what it was
+   * handed has nothing to name it with.
+   */
+  private anyIdentityFields(expr: Expression, declaredType: string): string {
+    return (
+      `${this.cppNameLiteral(this.argumentSourceName(expr))}, ` +
+      `${this.cppNameLiteral(this.declaredTypeDisplayName(declaredType))}`
+    );
+  }
+
+  /**
+   * The declared type as an engineer would write it.
+   *
+   * An inline or variable-length array carries a synthetic type name —
+   * `__INLINE_ARRAY_INT`, `__VLA_1D_WORD` — which is a compiler-internal
+   * spelling. A block publishing TYPENAME as a topic segment or a log line
+   * would put that on the wire, so it is rendered back into `ARRAY OF INT`.
+   */
+  private declaredTypeDisplayName(declaredType: string): string {
+    const element = arrayElementTypeName(declaredType);
+    return element === undefined
+      ? declaredType.toUpperCase()
+      : `ARRAY OF ${element.toUpperCase()}`;
+  }
+
+  private typeDescriptorArg(typeName: string | undefined): string {
+    if (typeName === undefined || typeName === "") return "nullptr";
+    const upper = typeName.toUpperCase();
+    if (!this.knownStructTypes.has(upper)) return "nullptr";
+    if (!this.describedStructTypes.has(upper)) return "nullptr";
+    return `&${typeName}__TYPEDESC`;
+  }
+
+  /**
    * The `IEC_ANY` descriptor for an argument bound to a generic parameter.
    *
    * Three fields, as CODESYS defines them:
@@ -6499,20 +6802,27 @@ export class CodeGenerator {
     // — see generateAliasLvalue.
     const value = this.generateAliasLvalue(expr);
     const element = arrayElementTypeName(declaredType);
-    if (element) return this.anyDescriptorForArray(value, element);
+    if (element) {
+      return this.anyDescriptorForArray(
+        value,
+        element,
+        this.anyIdentityFields(expr, declaredType),
+      );
+    }
 
     const typeClass = TYPE_CLASS_BY_IEC_TYPE[declaredType.toUpperCase()];
     if (typeClass) {
       if (typeClass === "TYPE_STRING" || typeClass === "TYPE_WSTRING") {
         // The characters travel through raw_ptr(); the cached length does not.
-        this.pendingStringSyncs.push(value);
+        this.pendingStringSyncs.push(`${value}.sync_length();`);
       }
       return (
         `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::${typeClass}, ` +
         `reinterpret_cast<uint8_t*>(${value}.raw_ptr()), ` +
         `static_cast<int32_t>(strucpp::IEC_SIZEOF(${value})), 1, ` +
         `static_cast<int32_t>(sizeof(${value})), ` +
-        `strucpp::TYPE_CLASS::${typeClass} }`
+        `strucpp::TYPE_CLASS::${typeClass}, nullptr, ` +
+        `${this.anyIdentityFields(expr, declaredType)} }`
       );
     }
 
@@ -6527,9 +6837,13 @@ export class CodeGenerator {
       const size = isEnum
         ? `static_cast<int32_t>(strucpp::IEC_SIZEOF(${value}))`
         : `static_cast<int32_t>(sizeof(${value}))`;
+      // An enumeration has no members to describe; a structure does.
+      const desc = isEnum ? "nullptr" : this.typeDescriptorArg(declaredType);
+      if (desc !== "nullptr") this.noteStructStringSync(value, declaredType);
       return (
         `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::${cls}, ${ptr}, ${size}, 1, ` +
-        `static_cast<int32_t>(sizeof(${value})), strucpp::TYPE_CLASS::${cls} }`
+        `static_cast<int32_t>(sizeof(${value})), strucpp::TYPE_CLASS::${cls}, ` +
+        `${desc}, ${this.anyIdentityFields(expr, declaredType)} }`
       );
     }
     return undefined;
@@ -6542,6 +6856,7 @@ export class CodeGenerator {
   private anyDescriptorForArray(
     value: string,
     elementTypeName: string,
+    identity = "nullptr, nullptr",
   ): string {
     const payload = this.typeCodeGen.mapTypeToCpp(elementTypeName);
     const wrapper = this.typeCodeGen.mapStructFieldTypeToCpp(elementTypeName);
@@ -6557,10 +6872,14 @@ export class CodeGenerator {
       : this.enumTypeMembers.has(elementTypeName.toUpperCase())
         ? "strucpp::TYPE_CLASS::TYPE_ENUM"
         : "strucpp::TYPE_CLASS::TYPE_USERDEF";
+    // For an array of structures the layout that matters is the ELEMENT's —
+    // DICOUNT and DISTRIDE already say how to step between them.
+    const desc = this.typeDescriptorArg(elementTypeName);
     return (
       `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::TYPE_ARRAY, ${base}, ` +
       `static_cast<int32_t>(${value}.element_count() * sizeof(${payload})), ` +
-      `${count}, static_cast<int32_t>(sizeof(${wrapper})), ${elemClass} }`
+      `${count}, static_cast<int32_t>(sizeof(${wrapper})), ${elemClass}, ` +
+      `${desc}, ${identity} }`
     );
   }
 

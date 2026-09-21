@@ -17,6 +17,7 @@ import type {
 } from "../frontend/ast.js";
 import {
   ANY_DESCRIPTOR_TYPE,
+  VAR_INFO_TYPE,
   DECLARABLE_GENERIC_TYPES,
   ELEMENTARY_TYPES,
 } from "./type-utils.js";
@@ -328,6 +329,10 @@ export class SymbolTables {
       // The descriptor a generic parameter carries, declarable in its own
       // right so a block can store one. Concrete, not generic.
       ANY_DESCRIPTOR_TYPE,
+
+      // What `__VARINFO(x)` yields. Concrete, and declarable so a POU can keep
+      // one in a VAR the way CODESYS's own example does.
+      VAR_INFO_TYPE,
     ];
 
     for (const typeName of builtinTypes) {

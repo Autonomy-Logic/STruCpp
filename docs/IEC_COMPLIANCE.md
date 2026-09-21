@@ -205,7 +205,8 @@ Bundled as a compiled `.stlib` library (`libs/iec-standard-fb.stlib`):
 | Dynamic memory | Supported | `__NEW(type)`, `__DELETE(ptr)` |
 | POINTER TO | Supported | Full pointer type with dereference |
 | Typed literals | Supported | `INT#5`, `DINT#42`, `REAL#3.14` |
-| Generic parameters | Supported | `ANY`, `ANY_INT`, … on input pins; elementary types only. Descriptor type `__SYSTEM.AnyType`, usable as an array element to carry arguments of mixed type |
+| `__VARINFO` | Supported | CODESYS variable information; yields `__SYSTEM.VAR_INFO`. `Area` is always -1 and `BitAddress` 0 — OpenPLC has no device memory-area numbering |
+| Generic parameters | Supported | `ANY`, `ANY_INT`, … on `VAR_INPUT` of a FUNCTION, FUNCTION_BLOCK or METHOD. Takes an elementary type, an array, an enumeration or a structure: the class names the composite (`TYPE_ARRAY`, `TYPE_ENUM`, `TYPE_USERDEF`). A structure also arrives with `TYPEDESC`, its member layout. Descriptor type `__SYSTEM.AnyType`, usable as an array element to carry arguments of mixed type |
 
 ## Not Yet Implemented
 

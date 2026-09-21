@@ -13,6 +13,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>   // offsetof, used by elements_field_offset()
 #include <cstdint>
 #include <initializer_list>
 #include "iec_fault.hpp"
@@ -147,6 +148,20 @@ public:
     element_type* elements() noexcept { return data_.data(); }
     const element_type* elements() const noexcept { return data_.data(); }
     static constexpr size_t element_count() noexcept { return size; }
+
+    /**
+     * Byte offset of the first element's payload, which must stay 0 — the
+     * counterpart of `IECVar::value_field_offset()`.
+     *
+     * A STRUCT member that is an array takes its `MemberDesc::OFFSET` from
+     * this (iec_typedesc.hpp): the member's own offset plus the container's
+     * offset to element zero, plus the element wrapper's own payload offset.
+     * Were the storage ever to move behind a bookkeeping field, a block
+     * walking the struct would read that field as the first element.
+     */
+    static constexpr size_t elements_field_offset() noexcept {
+        return offsetof(IEC_ARRAY_1D, data_);
+    }
     static constexpr int64_t lower_bound(int = 1) noexcept { return Bounds::lower; }
     static constexpr int64_t upper_bound(int = 1) noexcept { return Bounds::upper; }
     
@@ -274,6 +289,20 @@ public:
     element_type* elements() noexcept { return data_.data(); }
     const element_type* elements() const noexcept { return data_.data(); }
     static constexpr size_t element_count() noexcept { return total_size; }
+
+    /**
+     * Byte offset of the first element's payload, which must stay 0 — the
+     * counterpart of `IECVar::value_field_offset()`.
+     *
+     * A STRUCT member that is an array takes its `MemberDesc::OFFSET` from
+     * this (iec_typedesc.hpp): the member's own offset plus the container's
+     * offset to element zero, plus the element wrapper's own payload offset.
+     * Were the storage ever to move behind a bookkeeping field, a block
+     * walking the struct would read that field as the first element.
+     */
+    static constexpr size_t elements_field_offset() noexcept {
+        return offsetof(IEC_ARRAY_2D, data_);
+    }
 };
 
 // Multi-dimensional array (3D)
@@ -412,6 +441,20 @@ public:
     element_type* elements() noexcept { return data_.data(); }
     const element_type* elements() const noexcept { return data_.data(); }
     static constexpr size_t element_count() noexcept { return total_size; }
+
+    /**
+     * Byte offset of the first element's payload, which must stay 0 — the
+     * counterpart of `IECVar::value_field_offset()`.
+     *
+     * A STRUCT member that is an array takes its `MemberDesc::OFFSET` from
+     * this (iec_typedesc.hpp): the member's own offset plus the container's
+     * offset to element zero, plus the element wrapper's own payload offset.
+     * Were the storage ever to move behind a bookkeeping field, a block
+     * walking the struct would read that field as the first element.
+     */
+    static constexpr size_t elements_field_offset() noexcept {
+        return offsetof(IEC_ARRAY_3D, data_);
+    }
 };
 
 // Convenience type aliases
@@ -426,6 +469,16 @@ using Array2D = IEC_ARRAY_2D<T, ArrayBounds<L1, U1>, ArrayBounds<L2, U2>>;
 // Array3D<T, L1, U1, L2, U2, L3, U3>
 template<typename T, int64_t L1, int64_t U1, int64_t L2, int64_t U2, int64_t L3, int64_t U3>
 using Array3D = IEC_ARRAY_3D<T, ArrayBounds<L1, U1>, ArrayBounds<L2, U2>, ArrayBounds<L3, U3>>;
+
+// A struct member's array payload offset is built from these — see
+// iec_typedesc.hpp. Checked over a wrapped element and a bare composite
+// element, the two forms codegen emits.
+static_assert(Array1D<IECVar<int16_t>, 1, 10>::elements_field_offset() == 0,
+              "Array1D storage must be first");
+static_assert(Array2D<IECVar<int16_t>, 1, 3, 1, 4>::elements_field_offset() == 0,
+              "Array2D storage must be first");
+static_assert(Array3D<IECVar<int16_t>, 1, 2, 1, 2, 1, 2>::elements_field_offset() == 0,
+              "Array3D storage must be first");
 
 // =============================================================================
 // Variable-Length Array Views (Phase 3.4)

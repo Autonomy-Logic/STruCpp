@@ -167,6 +167,20 @@ public:
     value_type* raw_ptr() noexcept { return &value_; }
     const value_type* raw_ptr() const noexcept { return &value_; }
 
+    /**
+     * Byte offset of the payload, which must stay 0 — the counterpart of
+     * `IECVar::value_field_offset()`.
+     *
+     * A STRUCT member's `MemberDesc::OFFSET` is built from this
+     * (iec_typedesc.hpp). If the enumerand ever stopped being first, a block
+     * walking a struct would read the forcing flag as the enumerand's value —
+     * which for most enumerations is a legal-looking member, so nothing
+     * downstream could tell it had been handed nonsense.
+     */
+    static constexpr size_t value_field_offset() noexcept {
+        return offsetof(IEC_ENUM_Var, value_);
+    }
+
     // Get underlying value (ignoring forcing)
     value_type get_underlying() const noexcept {
         return value_;
@@ -247,6 +261,18 @@ public:
  */
 template<typename EnumType>
 using IEC_ENUM = IEC_ENUM_Var<EnumType>;
+
+// A struct member's payload offset is `offsetof(member) + value_field_offset()`
+// — see iec_typedesc.hpp. Checked over both underlying widths codegen emits, so
+// an enumeration that outgrows a byte is covered too.
+namespace detail {
+enum class EnumOffsetProbeSmall : uint8_t { A };
+enum class EnumOffsetProbeWide : int32_t { A };
+} // namespace detail
+static_assert(IEC_ENUM_Var<detail::EnumOffsetProbeSmall>::value_field_offset() == 0,
+              "IEC_ENUM_Var payload must be first");
+static_assert(IEC_ENUM_Var<detail::EnumOffsetProbeWide>::value_field_offset() == 0,
+              "IEC_ENUM_Var payload must be first");
 
 // =============================================================================
 // Enumeration traits — which enumeration an operand belongs to

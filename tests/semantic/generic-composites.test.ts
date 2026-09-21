@@ -35,6 +35,35 @@ const emitted = (vars: string, arg: string) => {
   return body.split("\n").find((l) => l.includes("IEC_ANY")) ?? "";
 };
 
+/**
+ * The ELEMCLASS field of the emitted descriptor.
+ *
+ * Read by position rather than by matching the text up to the closing brace:
+ * `IEC_ANY` grows by appending, and an assertion that spells the last field as
+ * "the one before the `}`" fails the next time one is added, reporting a
+ * layout change as if the element's class had gone wrong.
+ */
+const elemClassOf = (vars: string, arg: string) => {
+  const line = emitted(vars, arg);
+  const inner = line.slice(line.indexOf("{") + 1, line.lastIndexOf("}"));
+  // Split on commas outside parentheses, so `static_cast<int32_t>(a * b)`
+  // stays one field. Parentheses only: the `>` in `elements()->raw_ptr()`
+  // would unbalance an angle-bracket count.
+  const fields: string[] = [];
+  let depth = 0;
+  let current = "";
+  for (const ch of inner) {
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    if (ch === "," && depth === 0) {
+      fields.push(current.trim());
+      current = "";
+    } else current += ch;
+  }
+  fields.push(current.trim());
+  return fields[5] ?? "";
+};
+
 describe("what a generic accepts", () => {
   it.each([
     ["an array of a bit type", "v : ARRAY[0..2] OF WORD;", "v"],
@@ -138,29 +167,43 @@ describe("the element's class", () => {
   ])("an array of %s carries %s", (iecType, cls) => {
     const line = emitted(`v : ARRAY[0..2] OF ${iecType};`, "v");
     expect(line).toContain("TYPE_CLASS::TYPE_ARRAY");
-    expect(line).toContain(`strucpp::TYPE_CLASS::${cls} }`);
+    expect(elemClassOf(`v : ARRAY[0..2] OF ${iecType};`, "v")).toBe(
+      `strucpp::TYPE_CLASS::${cls}`,
+    );
   });
 
   it("separates two element types of the same width", () => {
     const words = emitted("v : ARRAY[0..2] OF WORD;", "v");
     const uints = emitted("v : ARRAY[0..2] OF UINT;", "v");
-    expect(words).toContain("TYPE_CLASS::TYPE_WORD }");
-    expect(uints).toContain("TYPE_CLASS::TYPE_UINT }");
+    expect(elemClassOf("v : ARRAY[0..2] OF WORD;", "v")).toBe(
+      "strucpp::TYPE_CLASS::TYPE_WORD",
+    );
+    expect(elemClassOf("v : ARRAY[0..2] OF UINT;", "v")).toBe(
+      "strucpp::TYPE_CLASS::TYPE_UINT",
+    );
     expect(words).not.toEqual(uints);
   });
 
   it("separates a bool from a byte", () => {
-    expect(emitted("v : ARRAY[0..2] OF BOOL;", "v")).toContain("TYPE_CLASS::TYPE_BOOL }");
-    expect(emitted("v : ARRAY[0..2] OF BYTE;", "v")).toContain("TYPE_CLASS::TYPE_BYTE }");
+    expect(elemClassOf("v : ARRAY[0..2] OF BOOL;", "v")).toBe(
+      "strucpp::TYPE_CLASS::TYPE_BOOL",
+    );
+    expect(elemClassOf("v : ARRAY[0..2] OF BYTE;", "v")).toBe(
+      "strucpp::TYPE_CLASS::TYPE_BYTE",
+    );
   });
 
   it("repeats the class of a scalar, so one field answers either way", () => {
     expect(emitted("v : WORD;", "v")).toContain("TYPE_CLASS::TYPE_WORD, ");
-    expect(emitted("v : WORD;", "v")).toContain("TYPE_CLASS::TYPE_WORD }");
+    expect(elemClassOf("v : WORD;", "v")).toBe("strucpp::TYPE_CLASS::TYPE_WORD");
   });
 
   it("names an array of an enumeration and of a structure", () => {
-    expect(emitted("v : ARRAY[0..1] OF EN;", "v")).toContain("TYPE_CLASS::TYPE_ENUM }");
-    expect(emitted("v : ARRAY[0..1] OF ST;", "v")).toContain("TYPE_CLASS::TYPE_USERDEF }");
+    expect(elemClassOf("v : ARRAY[0..1] OF EN;", "v")).toBe(
+      "strucpp::TYPE_CLASS::TYPE_ENUM",
+    );
+    expect(elemClassOf("v : ARRAY[0..1] OF ST;", "v")).toBe(
+      "strucpp::TYPE_CLASS::TYPE_USERDEF",
+    );
   });
 });

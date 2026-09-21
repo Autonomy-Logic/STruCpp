@@ -505,11 +505,28 @@ public:
         return offsetof(IECWStringVar, forced_value_);
     }
 
+    /**
+     * Byte offset of the payload, which must stay 0 — the counterpart of
+     * `IECVar::value_field_offset()`.
+     *
+     * A STRUCT member's `MemberDesc::OFFSET` is built from this
+     * (iec_typedesc.hpp). If the characters ever stopped being first, a block
+     * walking a struct would read the forcing flag where it expected the start
+     * of a string.
+     */
+    static constexpr size_t value_field_offset() noexcept { return offsetof(IECWStringVar, value_); }
+
 private:
     value_type value_;
     bool forced_;
     value_type forced_value_;
 };
+
+// See the matching asserts in iec_string.hpp — the padding before `length_`
+// differs with `MaxLen`, so a spread of capacities is checked.
+static_assert(IECWStringVar<1>::value_field_offset() == 0, "IECWStringVar<1> payload must be first");
+static_assert(IECWStringVar<20>::value_field_offset() == 0, "IECWStringVar<20> payload must be first");
+static_assert(IECWStringVar<254>::value_field_offset() == 0, "IECWStringVar<254> payload must be first");
 
 using WSTRING_VAR = IECWStringVar<254>;
 

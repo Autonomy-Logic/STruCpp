@@ -37,72 +37,21 @@
  * `TYPE_ARRAY` whatever its elements. A block that has to tell an array of
  * bits from an array of words wants a typed `ARRAY [*]` VAR_IN_OUT parameter
  * or a descriptor of its own.
+ *
+ * A STRUCT carries that descriptor of its own in `TYPEDESC` — member names,
+ * payload offsets and per-member types, so a block can walk what it was handed.
+ * See `iec_typedesc.hpp`.
  */
 
 #pragma once
 
 #include <cstdint>
 
+#include "iec_type_class.hpp"
+#include "iec_typedesc.hpp"
+
 namespace strucpp {
 
-/**
- * `__SYSTEM.TYPE_CLASS` — what `IEC_ANY::typeclass` holds.
- *
- * The values are CODESYS's own and are part of the ABI: imported code compares
- * against them by name, and any renumbering silently changes what a block
- * thinks it was handed. Underlying type is `uint32_t` because CODESYS declares
- * the enumeration over `DWORD`.
- *
- * Unscoped, also to match CODESYS: there an enumeration converts to its base
- * type, so `dwClass := any.typeclass` is ordinary ST. A scoped `enum class`
- * would refuse that assignment and make reading the field awkward for no gain
- * — `TYPE_CLASS::TYPE_INT` still qualifies either way.
- *
- * The whole enumeration is defined even though only the elementary members are
- * reachable from a declarable generic, so that a comparison written against
- * CODESYS documentation resolves rather than failing to compile.
- */
-enum TYPE_CLASS : uint32_t {
-    TYPE_BOOL = 0,
-    TYPE_BIT = 1,
-    TYPE_BYTE = 2,
-    TYPE_WORD = 3,
-    TYPE_DWORD = 4,
-    TYPE_LWORD = 5,
-    TYPE_SINT = 6,
-    TYPE_INT = 7,
-    TYPE_DINT = 8,
-    TYPE_LINT = 9,
-    TYPE_USINT = 10,
-    TYPE_UINT = 11,
-    TYPE_UDINT = 12,
-    TYPE_ULINT = 13,
-    TYPE_REAL = 14,
-    TYPE_LREAL = 15,
-    TYPE_STRING = 16,
-    TYPE_WSTRING = 17,
-    TYPE_TIME = 18,
-    TYPE_DATE = 19,
-    TYPE_DATEANDTIME = 20,
-    TYPE_TIMEOFDAY = 21,
-    TYPE_POINTER = 22,
-    TYPE_REFERENCE = 23,
-    TYPE_SUBRANGE = 24,
-    TYPE_ENUM = 25,
-    TYPE_ARRAY = 26,
-    TYPE_PARAMS = 27,
-    TYPE_USERDEF = 28,
-    TYPE_NONE = 29,
-    TYPE_ANY = 30,
-    TYPE_ANYBIT = 31,
-    TYPE_ANYDATE = 32,
-    TYPE_ANYINT = 33,
-    TYPE_ANYNUM = 34,
-    TYPE_ANYREAL = 35,
-    TYPE_LAZY = 36,
-    TYPE_LTIME = 37,
-    TYPE_BITCONST = 38,
-};
 
 /**
  * The descriptor a generic parameter receives.
@@ -139,6 +88,35 @@ struct IEC_ANY {
     /** The element's class for an array; the same as TYPECLASS otherwise, so a
      *  reader takes one field either way. */
     TYPE_CLASS ELEMCLASS = static_cast<TYPE_CLASS>(0);
+    /** The argument's member layout, when it has one: a STRUCT, or the element
+     *  type of an array of STRUCT. Null for an elementary type, an enumeration,
+     *  an array of elementary types, and a function block instance — where
+     *  TYPECLASS and ELEMCLASS already say everything there is to say, or
+     *  where there is no layout this compiler is willing to vouch for. See
+     *  iec_typedesc.hpp.
+     *
+     *  Appended, like DICOUNT, DISTRIDE and ELEMCLASS before it. The first
+     *  three fields are CODESYS's layout field for field, and an imported
+     *  CODESYS POU reads them by position; reordering to make room here would
+     *  hand such a POU the wrong field with no diagnostic. */
+    const TypeDesc* TYPEDESC = nullptr;
+    /** The argument as the caller wrote it, upper-cased: "PLANT",
+     *  "MOTOR.SPEEDRPM", "PROFILE[2]". Filled for every argument, whatever its
+     *  type — a scalar on a pin is otherwise anonymous, and a block that has to
+     *  name what it was given (a topic, a log line, a column heading) has
+     *  nothing to name it with. Null only for an unwired pin.
+     *
+     *  This is the variable, not the type: `TYPEDESC->name` is "S_PLANT" where
+     *  this is "PLANT". A struct MEMBER's name lives in `MemberDesc::name`. */
+    const char* NAME = nullptr;
+    /** The argument's declared IEC type name: "INT", "STRING", "S_PLANT",
+     *  "ARRAY OF INT". Filled for every argument.
+     *
+     *  TYPECLASS already distinguishes the classes, but it cannot name a
+     *  user-defined type, and it reports every array as TYPE_ARRAY. Together
+     *  with NAME this is the half of CODESYS's `__SYSTEM.VAR_INFO` a block
+     *  actually reaches for; `__VARINFO` itself is not implemented. */
+    const char* TYPENAME = nullptr;
 
     /** Elements, 1 for a scalar and 0 for an unwired pin. */
     int32_t count() const { return DICOUNT; }

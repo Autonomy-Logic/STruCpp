@@ -46,6 +46,7 @@ import {
   ELEMENTARY_TYPES,
   getBitAccessWidth,
   isAnyDescriptorType,
+  isVarInfoType,
   isDeclarableGenericType,
   isStandardPartialAccessType,
   parsePartialAccess,
@@ -2715,6 +2716,7 @@ export class SemanticAnalyzer {
       !expr.functionName.includes(".")
     ) {
       this.checkStdFunctionArgs(expr);
+      this.checkVarInfoArg(expr, varTypeMap);
     }
 
     // Recurse into sub-expressions
@@ -2855,6 +2857,50 @@ export class SemanticAnalyzer {
           expr.sourceSpan.file,
         );
       }
+    }
+  }
+
+  /**
+   * `__VARINFO(x)` describes a VARIABLE, so the argument has to be one.
+   *
+   * Checked here rather than left to codegen: an argument codegen cannot
+   * describe used to fall through to a literal `__VARINFO(X)` in the generated
+   * C++ — a call to a function that does not exist. The ST compiled clean and
+   * the failure surfaced as an unreadable C++ error in a file the engineer did
+   * not write.
+   */
+  private checkVarInfoArg(
+    expr: FunctionCallExpression,
+    varTypeMap: Map<string, string>,
+  ): void {
+    if (expr.functionName.toUpperCase() !== "__VARINFO") return;
+    const arg = stripEnEno(expr.arguments)[0]?.value;
+    if (!arg) return;
+
+    if (arg.kind !== "VariableExpression") {
+      this.addError(
+        "Only a variable may be passed to __VARINFO — it describes where a " +
+          "variable lives, and a literal or an expression has no storage to describe",
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
+      return;
+    }
+
+    // A descriptor describes another variable; describing the descriptor
+    // itself is almost certainly a mistake, and nothing downstream can render
+    // one as a TYPE_CLASS.
+    const typeName = varTypeMap.get(arg.name.toUpperCase());
+    if (typeName === undefined) return;
+    if (isAnyDescriptorType(typeName) || isVarInfoType(typeName)) {
+      this.addError(
+        `'${typeName}' cannot be passed to __VARINFO: it already describes a ` +
+          "variable rather than being one",
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
     }
   }
 

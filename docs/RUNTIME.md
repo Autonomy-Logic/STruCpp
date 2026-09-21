@@ -220,6 +220,157 @@ Variadic functions (ADD, MUL, MIN, MAX) accept 2+ arguments via template paramet
 
 The interactive REPL binary uses [isocline](https://github.com/daanx/isocline) (MIT licensed) for line editing with syntax highlighting, tab completion, and command history. `iec_repl.hpp` provides the STruC++ REPL harness that wraps compiled programs with an interactive shell for variable inspection, function invocation, and time advancement for FB testing.
 
+## Generic Parameters and Struct Layout (`iec_any.hpp`, `iec_typedesc.hpp`)
+
+A `VAR_INPUT` declared `ANY` (or `ANY_INT`, `ANY_BIT`, …) is not passed by
+value. Codegen replaces it with an `IEC_ANY` descriptor and passes the argument
+by reference, which is why only a variable may be supplied — a literal has no
+address to take.
+
+`IEC_ANY`'s first three fields are CODESYS's `__SYSTEM.AnyType` field for field
+(`TYPECLASS`, `PVALUE`, `DISIZE`), so an imported CODESYS POU reading them by
+position still works. OpenPLC appends to that, never reorders it: `DICOUNT`,
+`DISTRIDE`, `ELEMCLASS`, and now `TYPEDESC`.
+
+`PVALUE` addresses the payload rather than the `IECVar<T>` wrapper around it,
+and the descriptor *aliases* its operand — so writing `*(T*)any.PVALUE` writes
+what the caller passed, which is how a block sends setpoints back.
+
+A STRUCT reaches an `ANY` pin as `TYPE_USERDEF`, but a pointer and a byte count
+describe nothing a block can act on: a structure is heterogeneous, so unlike an
+array it cannot be walked from a base and a stride. `TYPEDESC` closes that —
+a `const TypeDesc` emitted beside the generated struct, naming every member
+with its payload offset, kind, elementary tag and capacity:
+
+```cpp
+const strucpp::TypeDesc* d = any.TYPEDESC;
+for (uint16_t i = 0; i < d->MEMBERCOUNT; ++i) {
+    const strucpp::MemberDesc& m = d->MEMBERS[i];
+    publish(m.NAME, any.PVALUE + m.BYTEOFFSET, m.TYPECLASS);  // "SPEEDRPM", &value, TYPE_REAL
+}
+```
+
+`TypeDesc` and `MemberDesc` use **CODESYS's `VAR_INFO` vocabulary** —
+`TYPECLASS`, `BASETYPECLASS`, `BYTEOFFSET`, `NUMELEMENTS`, `BITSIZE`,
+`ELEMBITSIZE`, `TYPENAME` — and the same `TYPE_CLASS` enumeration
+`IEC_ANY::TYPECLASS` uses, so a block never has to learn a second set of type
+constants. `NAME`, `NESTED`, `STRIDE` and `CAP` are additions `VAR_INFO` has no
+need for; `TYPENAME` is a `const char*` rather than `STRING(79)` so the tables
+stay constant-initialised in flash instead of landing in `.bss` with a startup
+constructor.
+
+Because the fields are spelled as CODESYS spells them, a C++ POU must not name
+one of its own pins after one — the editor binds a POU's Variables Table with
+`#define <NAME> (*(vars-><NAME>))`. That has always been true of `IEC_ANY`'s
+`TYPECLASS` and `PVALUE`; the answer is the same, rename the pin.
+
+`BYTEOFFSET` addresses the member's **payload**, not the wrapper — each wrapper's
+`value_field_offset()` is added in, and pinned at 0 by `static_assert`. A block
+reading the wrapper instead would get the forcing flag back as data.
+
+A STRING member's payload is the characters, with no header in front. The
+length is cached in a field *after* them, so a block that writes a string
+member must have it recomputed; codegen emits
+`strucpp::sync_strings(&v, &T__TYPEDESC)` after any call that passes a struct
+holding one. Nested structs and arrays of structs carry `NESTED`. `member_info(m, base)` converts one member into a real `VAR_INFO`.
+
+### Naming the argument
+
+`TYPEDESC` names a struct's *type* and its *members*. Neither is the name of
+the variable the caller wired up, and a scalar has no `TYPEDESC` at all — so
+`NAME` and `TYPENAME` are filled for **every** argument:
+
+| argument | `NAME` | `TYPENAME` | `TYPEDESC` |
+|---|---|---|---|
+| `setpoint : REAL` | `SETPOINT` | `REAL` | null |
+| `myText : STRING(20)` | `MYTEXT` | `STRING` | null |
+| `mode : E` (enum) | `MODE` | `E` | null |
+| `trend : ARRAY[0..2] OF INT` | `TREND` | `ARRAY OF INT` | null |
+| `trend[2]` | `TREND[2]` | `INT` | null |
+| `plant : S_PLANT` | `PLANT` | `S_PLANT` | `&S_PLANT__TYPEDESC` |
+| `plant.speedRpm` | `PLANT.SPEEDRPM` | `INT` | null |
+
+So `plant/line3/<NAME>` works for a scalar pin, and
+`plant/line3/<TYPEDESC member name>` for each member of a struct pin. Both are
+null only on an unwired pin.
+
+### `__VARINFO` — a separate feature
+
+`__VARINFO(x)` is implemented and yields `__SYSTEM.VAR_INFO` — CODESYS's
+structure field for field: `ByteAddress`, `ByteOffset`, `Area`, `BitNr`,
+`BitSize`, `BitAddress`, `TypeClass`, `TypeName`, `NumElements`,
+`BaseTypeClass`, `ElemBitSize`.
+
+```iecst
+VAR
+    iCounter : INT;
+    info : __SYSTEM.VAR_INFO;
+END_VAR
+info := __VARINFO(iCounter);     (* info.TypeClass = TYPE_INT, info.BitSize = 16 *)
+```
+
+It describes **one variable named in source**, resolved at compile time. It has
+nothing to do with `TYPEDESC` above and cannot substitute for it: `VAR_INFO`
+carries no member list. The struct descriptors borrow its field names so a
+codebase using both has one vocabulary, and that is the whole of the
+relationship.
+
+`__VARINFO` covers every declared type: the elementary types, an alias or
+subrange (reported as the elementary type it derives from, per IEC 61131-3
+§6.4.3 rule 1), an enumeration, a DUT, a function block instance, an array —
+inline or declared as its own TYPE — and a `POINTER TO` / `REFERENCE TO`
+(`TYPE_POINTER` / `TYPE_REFERENCE`, not the type pointed at). `__XWORD` has no
+fixed enumerator, so its class is chosen by the target's pointer width.
+
+It refuses two things, as ST errors rather than as broken C++: a literal or
+expression, which has no storage to describe, and a `__SYSTEM.AnyType` or
+`__SYSTEM.VAR_INFO`, which already describes a variable rather than being one.
+
+An `__SYSTEM.VAR_INFO` variable is not a debug-map leaf, so the online debugger
+cannot watch `info.TypeClass` directly — only values a POU derives from it. The
+same is true of `__SYSTEM.AnyType`.
+
+Two honest deviations: `Area` is always -1 and `BitAddress` always 0, because
+OpenPLC has no device-dependent memory-area numbering and CODESYS documents -1
+as "not global in memory, but relative to an instance or on the stack" — true
+of every variable here. `ByteAddress` is platform-width rather than `DWORD`,
+because a 32-bit field truncates a 64-bit address on the OpenPLC Runtime.
+
+**Descriptions are not available.** The OpenPLC Editor holds a `documentation`
+string per variable in `project.json`, but it is not emitted into the generated
+ST, so the compiler never sees it and no runtime field can carry it.
+
+A STRUCT that cannot be laid out gets **no** table rather than a partial one —
+a block trusts `MEMBERCOUNT`, so a short table reads as a struct missing the
+member the engineer wired up. That is reported as a compiler **warning** naming
+the struct, the member and the reason, because the symptom otherwise is a topic
+that never appears with nothing to point at. A `POINTER TO` or `REFERENCE TO`
+member is refused (the descriptor cannot vouch for what it addresses or how
+long that lives), as is a function block instance member and an `__XWORD`.
+
+`TYPEDESC` is null for an elementary type, an enumeration, an array of
+elementary types, and a function block instance. IEC 61131-3 §6.4.3 scopes
+`ANY_DERIVED` to the user-defined *data* types of Table 11 (a function block is
+a POU, not one of those), CODESYS documents only elementary arguments, and a
+generated FB class may carry a vptr or an `EXTENDS` base where `offsetof` is
+not answerable.
+
+IEC 61131-3 defines no reflection at all, and §6.4.3 puts generic parameters in
+user-declared POUs beyond the standard's scope to begin with. This is an
+OpenPLC extension in the CODESYS family, declared as one — the same footing as
+`__XWORD`, `ADR` and `SIZEOF`.
+
+CODESYS's nearest equivalent is **`IecVarAccess3`**, which does enumerate
+members at runtime (`VarAccBrowseGetRoot2`, then `VarAccBrowseDown3` /
+`VarAccBrowseGetChildByIndex2`). It is not usable here: its category is
+`Intern|SymbolConfiguration`, so it browses the symbol list an engineer
+populates in the IDE; it addresses `IBaseTreeNode`s reached from a root, so
+there is no route from the pointer an `ANY` pin carries back to a node; and it
+is a runtime component with handles and init/exit lifetimes rather than a
+language feature. `TYPEDESC` is the same type information resolved at compile
+time into `const` data — zero configuration and zero allocation, at the cost of
+not being able to browse a variable the compiler never saw.
+
 ## Header Summary
 
 | Header | Purpose |
@@ -243,4 +394,8 @@ The interactive REPL binary uses [isocline](https://github.com/daanx/isocline) (
 | `iec_ptr.hpp` | REF_TO, REFERENCE_TO, and ADR support |
 | `iec_retain.hpp` | RETAIN variable tracking |
 | `iec_memory.hpp` | Dynamic allocation (__NEW/__DELETE) |
+| `iec_any.hpp` | Generic (`ANY`) parameter descriptor — CODESYS `__SYSTEM.AnyType` |
+| `iec_type_class.hpp` | `__SYSTEM.TYPE_CLASS`, shared by `IEC_ANY`, `VAR_INFO` and `MemberDesc` |
+| `iec_typedesc.hpp` | STRUCT member layout tables reached through `IEC_ANY::TYPEDESC` |
+| `iec_varinfo.hpp` | `__SYSTEM.VAR_INFO`, what `__VARINFO(x)` yields |
 | `iec_std_lib.hpp` | Standard function implementations |

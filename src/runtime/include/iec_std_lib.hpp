@@ -25,6 +25,9 @@
 #include "iec_retain.hpp"
 #include "iec_ptr.hpp"
 #include "iec_any.hpp"
+// `__VARINFO(x)` yields one of these; codegen emits a single
+// `#include "iec_std_lib.hpp"`, so it can only be found through this chain.
+#include "iec_varinfo.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
 // Enumerated types, for the same reason as the temporal headers below: codegen

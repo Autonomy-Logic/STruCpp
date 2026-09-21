@@ -176,6 +176,19 @@ export function arrayElementTypeName(typeName: string): string | undefined {
   return vla?.[1];
 }
 
+/**
+ * CODESYS's `__SYSTEM.VAR_INFO`, what `__VARINFO(x)` yields.
+ *
+ * Declarable in its own right, like `__SYSTEM.AnyType`: a POU stores one in a
+ * VAR and reads its members.
+ */
+export const VAR_INFO_TYPE = "__SYSTEM.VAR_INFO";
+
+/** Whether a written type name is CODESYS's `__SYSTEM.VAR_INFO`. */
+export function isVarInfoType(name: string): boolean {
+  return name.toUpperCase() === VAR_INFO_TYPE;
+}
+
 /** Whether a written type name is CODESYS's `__SYSTEM.AnyType`. */
 export function isAnyDescriptorType(name: string): boolean {
   return name.toUpperCase() === ANY_DESCRIPTOR_TYPE;

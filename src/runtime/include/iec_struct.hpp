@@ -14,14 +14,29 @@
 
 #pragma once
 
+#include "iec_string.hpp"
+#include "iec_typedesc.hpp"
+#include "iec_varinfo.hpp"
 #include "iec_var.hpp"
+#include "iec_wstring.hpp"
 
 namespace strucpp {
 
 /**
- * Base class for generated IEC structures.
- * Provides a common base for RTTI and potential reflection support.
- * Generated structures inherit from this class.
+ * Base class for hand-written IEC structures.
+ *
+ * NOT what codegen emits. `generateStructType` (backend/type-codegen.ts) emits
+ * a plain aggregate with no base, no constructor and no virtual anything, so
+ * that a generated STRUCT stays standard-layout — which is what lets
+ * `offsetof` describe its members in a `TypeDesc` (iec_typedesc.hpp) and what
+ * keeps `IEC_ANY::DISIZE` an honest byte count rather than a footprint with a
+ * vptr in it. `is_iec_struct<T>` is therefore false for every generated
+ * struct; it answers only for the hand-written structures in the runtime's own
+ * tests.
+ *
+ * Kept because those tests use it, and because a user writing a C++ structure
+ * by hand may want a common base. Deriving a type you then pass on an `ANY`
+ * pin will cost you the descriptor, not just the layout.
  */
 class IEC_STRUCT_Base {
 public:
@@ -56,84 +71,103 @@ inline T iec_struct_init(Setter&& setter) {
     return value;
 }
 
-/*
- * Example generated structure:
+/**
+ * Re-cache the length of every STRING and WSTRING beneath `base`.
  *
- * ST Source:
- *   TYPE Point : STRUCT
- *       x : REAL;
- *       y : REAL;
- *   END_STRUCT;
- *   END_TYPE
+ * `IECString` stores its length in a field that trails the characters, and
+ * caches it rather than deriving it on read. A block handed a STRUCT on an
+ * `ANY` pin writes a member's characters through `MemberDesc::OFFSET` and has
+ * no way to reach that field, so without this the ST side keeps reading the
+ * old length: assign a four-character name over a nine-character one and the
+ * program still sees nine, five of them stale.
  *
- * Generated C++:
- *   struct Point : public IEC_STRUCT_Base {
- *       IECVar<REAL_t> x;
- *       IECVar<REAL_t> y;
- *       
- *       Point() noexcept : x{}, y{} {}
- *       
- *       const char* type_name() const noexcept override { return "Point"; }
- *   };
+ * Codegen emits one call to this after a call that passes a struct carrying
+ * string members to a generic parameter — the same job the post-call
+ * `sync_length()` already does for a whole STRING on an `ANY` pin. One call
+ * whatever the struct holds, so a member declared `ARRAY[1..1000] OF STRING`
+ * costs a line of generated code rather than a thousand.
  *
- * Usage:
- *   Point p;
- *   p.x = 10.5f;
- *   p.y = 20.5f;
- *   
- *   // Force individual field
- *   p.x.force(100.0f);
- *   p.x = 0.0f;  // Ignored while forced
- *   assert(p.x.get() == 100.0f);
+ * Walks nested structures and arrays. Does nothing when `desc` is null, so a
+ * caller need not check first.
  */
+inline void sync_strings(void* base, const TypeDesc* desc) {
+    if (base == nullptr || desc == nullptr) return;
+    uint8_t* const bytes = static_cast<uint8_t*>(base);
 
-/*
- * Example nested structure:
- *
- * ST Source:
- *   TYPE Rectangle : STRUCT
- *       topLeft : Point;
- *       bottomRight : Point;
- *   END_STRUCT;
- *   END_TYPE
- *
- * Generated C++:
- *   struct Rectangle : public IEC_STRUCT_Base {
- *       Point topLeft;
- *       Point bottomRight;
- *       
- *       Rectangle() noexcept : topLeft{}, bottomRight{} {}
- *       
- *       const char* type_name() const noexcept override { return "Rectangle"; }
- *   };
- *
- * Usage:
- *   Rectangle rect;
- *   rect.topLeft.x = 0.0f;
- *   rect.topLeft.y = 0.0f;
- *   rect.bottomRight.x = 100.0f;
- *   rect.bottomRight.y = 50.0f;
- */
+    for (uint16_t i = 0; i < desc->MEMBERCOUNT; ++i) {
+        const MemberDesc& m = desc->MEMBERS[i];
+        // STRIDE is the wrapper's width, so one loop steps correctly over a
+        // scalar (NUMELEMENTS 1) and over an array alike.
+        for (uint32_t e = 0; e < m.NUMELEMENTS; ++e) {
+            uint8_t* const at = bytes + m.BYTEOFFSET + (size_t)e * (size_t)m.STRIDE;
 
-/*
- * Example structure with array:
+            // A nested STRUCT, or an array of them, recurses. BASETYPECLASS is
+            // what says which, since an array reports TYPE_ARRAY either way.
+            if (m.TYPECLASS == TYPE_USERDEF ||
+                (m.TYPECLASS == TYPE_ARRAY && m.BASETYPECLASS == TYPE_USERDEF)) {
+                sync_strings(at, m.NESTED);
+                continue;
+            }
+
+            const TYPE_CLASS leaf =
+                (m.TYPECLASS == TYPE_ARRAY) ? m.BASETYPECLASS : m.TYPECLASS;
+            if (leaf != TYPE_STRING && leaf != TYPE_WSTRING) continue;
+
+            // BYTEOFFSET addresses the characters, which are at offset 0 of the
+            // wrapper — pinned by value_field_offset() — so `at` is also the
+            // wrapper's base, and the cached length sits a capacity-dependent
+            // distance along it. Located by capacity rather than by casting to
+            // an IECStringVar<N>: the walker is not a template, and casting to
+            // the wrong N would write the length past the end of a short
+            // member.
+            const size_t cap = m.CAP;
+            if (leaf == TYPE_WSTRING) {
+                char16_t* const chars = reinterpret_cast<char16_t*>(at);
+                size_t len = 0;
+                while (len < cap && chars[len] != u'\0') ++len;
+                chars[len] = u'\0';
+                *reinterpret_cast<uint16_t*>(at + iec_wstring_len_offset(cap)) =
+                    static_cast<uint16_t>(len);
+            } else {
+                char* const chars = reinterpret_cast<char*>(at);
+                size_t len = 0;
+                while (len < cap && chars[len] != '\0') ++len;
+                chars[len] = '\0';
+                *reinterpret_cast<uint16_t*>(at + iec_string_len_offset(cap)) =
+                    static_cast<uint16_t>(len);
+            }
+        }
+    }
+}
+
+/**
+ * One member as a CODESYS `VAR_INFO`.
  *
- * ST Source:
- *   TYPE Polygon : STRUCT
- *       numPoints : INT;
- *       points : ARRAY[1..10] OF Point;
- *   END_STRUCT;
- *   END_TYPE
+ * The bridge between the two halves of this vocabulary: a block that already
+ * reads `__VARINFO` output can read a struct member the same way, without
+ * learning a second set of field names. `base` is the struct's address — what
+ * `IEC_ANY::PVALUE` holds — so `BYTEADDRESS` comes out as the member's actual
+ * address rather than an offset the caller still has to add.
  *
- * Generated C++:
- *   struct Polygon : public IEC_STRUCT_Base {
- *       IECVar<INT_t> numPoints;
- *       Array1D<Point, 1, 10> points;
- *       
- *       Polygon() noexcept : numPoints{}, points{} {}
- *       
- *       const char* type_name() const noexcept override { return "Polygon"; }
- *   };
+ * `AREA` and `BITADDRESS` keep the values `VAR_INFO` documents for a variable
+ * that is not in a numbered memory area; see iec_varinfo.hpp.
  */
+inline VAR_INFO member_info(const MemberDesc& m, const void* base) {
+    VAR_INFO info;
+    info.BYTEADDRESS = base == nullptr
+                           ? 0
+                           : reinterpret_cast<uintptr_t>(
+                                 static_cast<const uint8_t*>(base) + m.BYTEOFFSET);
+    info.BYTEOFFSET = m.BYTEOFFSET;
+    info.BITSIZE = static_cast<int16_t>(m.BITSIZE);
+    info.TYPECLASS = m.TYPECLASS;
+    info.TYPENAME = IECString<79>(m.TYPENAME == nullptr ? "" : m.TYPENAME);
+    // CODESYS fills NumElements only for an array; MemberDesc carries 1 for a
+    // scalar so one loop walks both, so the CODESYS convention is restored here.
+    info.NUMELEMENTS = (m.TYPECLASS == TYPE_ARRAY) ? m.NUMELEMENTS : 0;
+    info.BASETYPECLASS = m.BASETYPECLASS;
+    info.ELEMBITSIZE = m.ELEMBITSIZE;
+    return info;
+}
 
 }  // namespace strucpp
