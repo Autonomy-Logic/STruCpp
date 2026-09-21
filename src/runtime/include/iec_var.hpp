@@ -204,6 +204,22 @@ public:
      */
     const T* raw_ptr() const noexcept { return &value_; }
 
+    /**
+     * Get a const pointer to the value a READER should see, honouring force.
+     *
+     * Not the same as raw_ptr(). force() writes through to value_, so the two
+     * agree the moment a force is applied — but a located variable is driven by
+     * the PLC program every scan, and the program writes value_ directly through
+     * the image binding, not through set(). raw_ptr() would then show the
+     * program's value while get() still reports the forced one.
+     *
+     * So this is get()'s semantics with get()'s copy removed, which is what an
+     * external reader (the debug dispatch's pointer op, and through it OPC-UA)
+     * needs to serve a value without copying it. Mirrors IECStringVar::c_str(),
+     * which resolves the force the same way.
+     */
+    const T* read_ptr() const noexcept { return forced_ ? &forced_value_ : &value_; }
+
     // =========================================================================
     // Implicit Conversions
     // =========================================================================

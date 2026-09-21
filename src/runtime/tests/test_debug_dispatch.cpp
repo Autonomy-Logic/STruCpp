@@ -267,14 +267,15 @@ TEST(DebugDispatch, PtrScalarGivesPayloadAndFixedWidth) {
     uint16_t len = 0xFFFF;
     const void* p = sd::handle_ptr(0, 1, &len);
     ASSERT_NE(p, nullptr);
-    EXPECT_EQ(p, static_cast<const void*>(t_int.raw_ptr()));
+    EXPECT_EQ(p, static_cast<const void*>(t_int.read_ptr()));
     EXPECT_EQ(len, sizeof(INT_t));
     EXPECT_EQ(*static_cast<const INT_t*>(p), 1234);
 }
 
-TEST(DebugDispatch, PtrScalarYieldsTheForcedValue) {
-    // Same guarantee handle_read gives: force() mirrors into the payload, so a
-    // caller reading through the pointer sees the forced value too.
+TEST(DebugDispatch, PtrScalarAddressesTheForcedObject) {
+    // read_ptr(), not raw_ptr(): while forced it addresses forced_value_, so a
+    // located variable the program writes straight into value_ cannot leak its
+    // value past an active force.
     reset_vars();
     t_int = 10;
     t_int.force(999);
@@ -282,6 +283,18 @@ TEST(DebugDispatch, PtrScalarYieldsTheForcedValue) {
     const void* p = sd::handle_ptr(0, 1, &len);
     ASSERT_NE(p, nullptr);
     EXPECT_EQ(*static_cast<const INT_t*>(p), 999);
+    EXPECT_EQ(p, static_cast<const void*>(t_int.read_ptr()));
+}
+
+TEST(DebugDispatch, PtrStringAddressesTheForcedBuffer) {
+    reset_vars();
+    t_str = IECString<23>("plain");
+    t_str.force(IECString<23>("forced"));
+    uint16_t len = 0;
+    const void* p = sd::handle_ptr(0, 6, &len);
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(len, 6u);
+    EXPECT_EQ(0, std::memcmp(p, "forced", 6));
 }
 
 TEST(DebugDispatch, PtrStringGivesCharactersAndLiveLength) {
@@ -291,11 +304,13 @@ TEST(DebugDispatch, PtrStringGivesCharactersAndLiveLength) {
     const void* p = sd::handle_ptr(0, 6, &len);
     ASSERT_NE(p, nullptr);
     // The LIVE length, not DEBUG_STRING_WIDTH, and not the declared capacity.
+    // Deliberately NOT clamped to DEBUG_STRING_CAP either: that budget belongs
+    // to the Modbus frame, not to a pointer whose caller carries its own length.
     EXPECT_EQ(len, 5u);
     EXPECT_EQ(0, std::memcmp(p, "hello", 5));
     // The characters themselves: a length prefix would put 5 here, not 'h'.
     EXPECT_EQ(*static_cast<const char*>(p), 'h');
-    EXPECT_EQ(p, static_cast<const void*>(t_str.raw_ptr()));
+    EXPECT_EQ(p, static_cast<const void*>(t_str.c_str()));
 }
 
 TEST(DebugDispatch, PtrEmptyStringIsZeroLengthButNotNull) {
@@ -318,7 +333,7 @@ TEST(DebugDispatch, PtrWStringReportsBytesNotCodeUnits) {
     EXPECT_EQ(len, 8u);
     EXPECT_EQ(static_cast<const char16_t*>(p)[0], u'w');
     EXPECT_EQ(static_cast<const char16_t*>(p)[3], u'e');
-    EXPECT_EQ(p, static_cast<const void*>(t_wstr.raw_ptr()));
+    EXPECT_EQ(p, static_cast<const void*>(t_wstr.c_str()));
 }
 
 TEST(DebugDispatch, PtrOutOfBoundsReturnsNullAndZeroLength) {
