@@ -164,3 +164,25 @@ describe('AT with an identifier operand (OpenPLC alias)', () => {
     });
   });
 });
+
+describe('a string literal is not code', () => {
+  // `findUnclosedBlockComment` walked raw characters and skipped `//` comments
+  // but not string literals, so `s : STRING := '(*';` — a valid IEC
+  // declaration — was rejected with "Unclosed block comment" pointing at a line
+  // that has no comment on it. The whole compilation unit went with it.
+  it.each([
+    ['a comment opener', "'(*'"],
+    ['a comment closer', "'*)'"],
+    ['a URL, whose // is not a comment', "'http://example.com'"],
+    ['a semicolon', "'a;b'"],
+    ['an escaped quote', "'it''s'"],
+  ])('accepts a STRING holding %s', (_label, literal) => {
+    const parsed = parse(wrap(`s : STRING := ${literal};`));
+    expect(parsed.errors).toHaveLength(0);
+  });
+
+  it('still reports a genuinely unclosed comment', () => {
+    const parsed = parse('PROGRAM P\n  VAR\n    (* never closed\n    a : INT;\n  END_VAR\nEND_PROGRAM\n');
+    expect(parsed.errors.map((error) => error.message)).toContain('Unclosed block comment');
+  });
+});

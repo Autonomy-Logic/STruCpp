@@ -962,6 +962,39 @@ function findUnclosedBlockComment(
       continue;
     }
 
+    // Skip string literals, for the same reason single-line comments are
+    // skipped: their contents are not code. `s : STRING := '(*';` is a valid
+    // IEC declaration, and without this the `(*` inside the literal opened a
+    // comment that never closed, so the whole compilation unit was rejected
+    // with "Unclosed block comment" pointing at a line with no comment on it.
+    // A doubled quote is IEC's escape for a literal quote and does not end the
+    // string.
+    if ((char === "'" || char === '"') && depth === 0) {
+      const quote = char;
+      i++;
+      column++;
+      while (i < source.length) {
+        if (source.charAt(i) === quote) {
+          if (source.charAt(i + 1) === quote) {
+            i += 2;
+            column += 2;
+            continue;
+          }
+          i++;
+          column++;
+          break;
+        }
+        if (source.charAt(i) === "\n") {
+          line++;
+          column = 1;
+        } else {
+          column++;
+        }
+        i++;
+      }
+      continue;
+    }
+
     // Check for block comment start
     if (char === "(" && nextChar === "*") {
       if (depth === 0) {
