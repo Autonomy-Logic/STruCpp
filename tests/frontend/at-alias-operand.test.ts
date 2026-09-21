@@ -125,6 +125,30 @@ describe('AT with an identifier operand (OpenPLC alias)', () => {
     });
   });
 
+
+  describe('an inline ARRAY type spans the type, not the declaration', () => {
+    // It used to take the parent node's span, so slicing the source by the
+    // type's span returned the whole line. Every other TypeReference spans just
+    // the type, so this was inconsistent with itself as well as wrong — and an
+    // editor reading the type back out got `a : ARRAY [0..3] OF INT;` where it
+    // asked for `ARRAY [0..3] OF INT`.
+    const source = wrap('a : ARRAY [0..3] OF INT;');
+    const lines = source.split('\n');
+
+    it('slices to the type alone', () => {
+      const declaration = firstDeclaration(source);
+      const span = declaration.type.sourceSpan;
+      const sliced = lines[span.startLine - 1]!.slice(span.startCol - 1, span.endCol);
+      expect(sliced).toBe('ARRAY [0..3] OF INT');
+    });
+
+    it('still carries the dimensions and element type', () => {
+      const declaration = firstDeclaration(wrap('a : ARRAY [0..3, 0..2] OF REAL;'));
+      expect(declaration.type.elementTypeName).toBe('REAL');
+      expect(declaration.type.arrayDimensions).toHaveLength(2);
+    });
+  });
+
   describe('a compile still refuses an unresolved alias', () => {
     it('names it as an alias rather than blaming the address format', () => {
       const result = analyze(astOf(wrap('m : BOOL AT Motor_Start;')));

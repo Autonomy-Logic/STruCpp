@@ -1488,7 +1488,7 @@ export class ASTBuilder {
     const arrayTypeNode = getFirstNode(children.arrayType);
     let type: TypeReference;
     if (arrayTypeNode) {
-      type = this.buildInlineArrayTypeReference(arrayTypeNode, node);
+      type = this.buildInlineArrayTypeReference(arrayTypeNode);
     } else {
       // Get type reference from the dataType subrule
       const dataTypeNode = getFirstNode(children.dataType);
@@ -1613,10 +1613,7 @@ export class ASTBuilder {
    * For VLA: ARRAY[*] OF INT → name "__VLA_1D_INT"
    * For fixed: ARRAY[1..10] OF INT → name "__INLINE_ARRAY_INT"
    */
-  private buildInlineArrayTypeReference(
-    arrayTypeNode: CstNode,
-    parentNode: CstNode,
-  ): TypeReference {
+  private buildInlineArrayTypeReference(arrayTypeNode: CstNode): TypeReference {
     const arrayChildren = arrayTypeNode.children as CstChildren;
 
     // Get dimensions to check for variable-length
@@ -1669,7 +1666,12 @@ export class ASTBuilder {
 
     const result: TypeReference = {
       kind: "TypeReference",
-      sourceSpan: nodeToSourceSpan(parentNode),
+      // The ARRAY type's own span, not the declaration's. It used to take the
+      // parent, so `a : ARRAY [0..3] OF INT;` reported a type spanning the
+      // whole line — a caller slicing the source by this span got back the
+      // declaration instead of the type. Every other TypeReference spans just
+      // the type, so this was also inconsistent with itself.
+      sourceSpan: nodeToSourceSpan(arrayTypeNode),
       name,
       isReference: false,
       referenceKind: "none",
