@@ -11,6 +11,7 @@
 #include "debug_dispatch.hpp"
 #include "iec_var.hpp"
 #include "iec_string.hpp"
+#include "iec_wstring.hpp"
 
 namespace sd = strucpp::debug;
 using namespace strucpp;
@@ -28,6 +29,9 @@ static IEC_LREAL t_lreal { 0.0 };
 // A sized string, so the table carries a non-zero `cap`. Every other entry
 // declares 0, which cannot tell a propagated capacity from a dropped one.
 static IECStringVar<23> t_str {};
+// A WSTRING too: `handle_ptr` reports BYTES, so only a UTF-16 entry can tell a
+// correct byte count from a code-unit count.
+static IECWStringVar<16> t_wstr {};
 
 static const sd::Entry g_arr_0[] = {
     //                                 flags, cap
@@ -38,6 +42,7 @@ static const sd::Entry g_arr_0[] = {
     { (void*)&t_real,  sd::TAG_REAL,   0, 0 },
     { (void*)&t_lreal, sd::TAG_LREAL,  0, 0 },
     { (void*)&t_str,   sd::TAG_STRING, 0, 23 },
+    { (void*)&t_wstr,  sd::TAG_WSTRING,0, 16 },
 };
 
 // Definitions for the `extern` declarations in debug_dispatch.hpp.
@@ -245,4 +250,90 @@ TEST(DebugDispatch, SetWithInsufficientDataReturnsError) {
     reset_vars();
     uint8_t bytes[1] = {0};  // need 2 for INT
     EXPECT_EQ(sd::handle_set(0, 1, true, bytes, 1), sd::STATUS_DATA_TOO_LARGE);
+}
+
+// ---------------------------------------------------------------------------
+// handle_ptr — addressing a value in place
+//
+// The editor's Arduino glue calls this to avoid copying a leaf out on a
+// cooperative super-loop. Its contract is narrow and easy to get subtly wrong,
+// so each clause has its own case: the payload rather than the wrapper, the
+// LIVE length rather than the padded wire width, characters rather than a
+// length-prefixed buffer, and bytes rather than code units for a WSTRING.
+// ---------------------------------------------------------------------------
+TEST(DebugDispatch, PtrScalarGivesPayloadAndFixedWidth) {
+    reset_vars();
+    t_int = 1234;
+    uint16_t len = 0xFFFF;
+    const void* p = sd::handle_ptr(0, 1, &len);
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(p, static_cast<const void*>(t_int.raw_ptr()));
+    EXPECT_EQ(len, sizeof(INT_t));
+    EXPECT_EQ(*static_cast<const INT_t*>(p), 1234);
+}
+
+TEST(DebugDispatch, PtrScalarYieldsTheForcedValue) {
+    // Same guarantee handle_read gives: force() mirrors into the payload, so a
+    // caller reading through the pointer sees the forced value too.
+    reset_vars();
+    t_int = 10;
+    t_int.force(999);
+    uint16_t len = 0;
+    const void* p = sd::handle_ptr(0, 1, &len);
+    ASSERT_NE(p, nullptr);
+    EXPECT_EQ(*static_cast<const INT_t*>(p), 999);
+}
+
+TEST(DebugDispatch, PtrStringGivesCharactersAndLiveLength) {
+    reset_vars();
+    t_str = IECString<23>("hello");
+    uint16_t len = 0xFFFF;
+    const void* p = sd::handle_ptr(0, 6, &len);
+    ASSERT_NE(p, nullptr);
+    // The LIVE length, not DEBUG_STRING_WIDTH, and not the declared capacity.
+    EXPECT_EQ(len, 5u);
+    EXPECT_EQ(0, std::memcmp(p, "hello", 5));
+    // The characters themselves: a length prefix would put 5 here, not 'h'.
+    EXPECT_EQ(*static_cast<const char*>(p), 'h');
+    EXPECT_EQ(p, static_cast<const void*>(t_str.raw_ptr()));
+}
+
+TEST(DebugDispatch, PtrEmptyStringIsZeroLengthButNotNull) {
+    reset_vars();
+    t_str = IECString<23>("");
+    uint16_t len = 0xFFFF;
+    const void* p = sd::handle_ptr(0, 6, &len);
+    EXPECT_NE(p, nullptr);
+    EXPECT_EQ(len, 0u);
+}
+
+TEST(DebugDispatch, PtrWStringReportsBytesNotCodeUnits) {
+    reset_vars();
+    t_wstr = IECWString<16>(u"wide");
+    uint16_t len = 0xFFFF;
+    const void* p = sd::handle_ptr(0, 7, &len);
+    ASSERT_NE(p, nullptr);
+    // Four code units, eight bytes. Reporting 4 here would have the caller
+    // read half the string.
+    EXPECT_EQ(len, 8u);
+    EXPECT_EQ(static_cast<const char16_t*>(p)[0], u'w');
+    EXPECT_EQ(static_cast<const char16_t*>(p)[3], u'e');
+    EXPECT_EQ(p, static_cast<const void*>(t_wstr.raw_ptr()));
+}
+
+TEST(DebugDispatch, PtrOutOfBoundsReturnsNullAndZeroLength) {
+    reset_vars();
+    uint16_t len = 0xFFFF;
+    EXPECT_EQ(sd::handle_ptr(5, 0, &len), nullptr);
+    EXPECT_EQ(len, 0u);
+    len = 0xFFFF;
+    EXPECT_EQ(sd::handle_ptr(0, 99, &len), nullptr);
+    EXPECT_EQ(len, 0u);
+}
+
+TEST(DebugDispatch, PtrToleratesNullOutLen) {
+    // The glue always passes one, but a null must not fault.
+    reset_vars();
+    EXPECT_NE(sd::handle_ptr(0, 1, nullptr), nullptr);
+    EXPECT_EQ(sd::handle_ptr(5, 0, nullptr), nullptr);
 }
