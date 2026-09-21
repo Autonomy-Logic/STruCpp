@@ -280,3 +280,85 @@ TEST 'CTU stops at PV, the upper limit for incrementing'
   ASSERT_EQ(cv_extra, 1);
   ASSERT_TRUE(q_at_pv);
 END_TEST
+
+TEST 'CTUD typed variants ignore simultaneous rising edges on CU and CD'
+  VAR
+    c_dint : CTUD_DINT; c_lint : CTUD_LINT; c_udint : CTUD_UDINT; c_ulint : CTUD_ULINT;
+    dint_mid, dint_at_pv, dint_both_mid, dint_both_at_pv : DINT;
+    lint_mid, lint_at_pv, lint_both_mid, lint_both_at_pv : LINT;
+    udint_mid, udint_at_pv, udint_both_mid, udint_both_at_pv : UDINT;
+    ulint_mid, ulint_at_pv, ulint_both_mid, ulint_both_at_pv : ULINT;
+  END_VAR
+  (* Init: R clears CV; CU and CD are FALSE so both edge detectors start low *)
+  c_dint(CU := FALSE, CD := FALSE, R := TRUE, LD := FALSE, PV := 2);
+  c_lint(CU := FALSE, CD := FALSE, R := TRUE, LD := FALSE, PV := 2);
+  c_udint(CU := FALSE, CD := FALSE, R := TRUE, LD := FALSE, PV := 2);
+  c_ulint(CU := FALSE, CD := FALSE, R := TRUE, LD := FALSE, PV := 2);
+  (* One CU edge: CV = 1, mid-range with PV = 2 *)
+  c_dint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_lint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_udint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_ulint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  dint_mid := c_dint.CV;
+  lint_mid := c_lint.CV;
+  udint_mid := c_udint.CV;
+  ulint_mid := c_ulint.CV;
+  (* Drop both low so the next scan is a genuine coincident edge *)
+  c_dint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_lint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_udint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_ulint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  (* Both rise on the same scan, mid-range: CV must not move *)
+  c_dint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  c_lint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  c_udint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  c_ulint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  dint_both_mid := c_dint.CV;
+  lint_both_mid := c_lint.CV;
+  udint_both_mid := c_udint.CV;
+  ulint_both_mid := c_ulint.CV;
+  (* Drop both low, then one CU edge to reach CV = PV *)
+  c_dint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_lint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_udint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_ulint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_dint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_lint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_udint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_ulint(CU := TRUE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  dint_at_pv := c_dint.CV;
+  lint_at_pv := c_lint.CV;
+  udint_at_pv := c_udint.CV;
+  ulint_at_pv := c_ulint.CV;
+  (* Drop both low, then both rise at CV = PV. This is the discriminating
+     case: without the guard the increment is blocked by CV < PV while the
+     decrement still fires, so CV would fall to PV-1 *)
+  c_dint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_lint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_udint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_ulint(CU := FALSE, CD := FALSE, R := FALSE, LD := FALSE, PV := 2);
+  c_dint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  c_lint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  c_udint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  c_ulint(CU := TRUE, CD := TRUE, R := FALSE, LD := FALSE, PV := 2);
+  dint_both_at_pv := c_dint.CV;
+  lint_both_at_pv := c_lint.CV;
+  udint_both_at_pv := c_udint.CV;
+  ulint_both_at_pv := c_ulint.CV;
+  ASSERT_EQ(dint_mid, 1);
+  ASSERT_EQ(lint_mid, 1);
+  ASSERT_EQ(udint_mid, 1);
+  ASSERT_EQ(ulint_mid, 1);
+  ASSERT_EQ(dint_both_mid, 1);
+  ASSERT_EQ(lint_both_mid, 1);
+  ASSERT_EQ(udint_both_mid, 1);
+  ASSERT_EQ(ulint_both_mid, 1);
+  ASSERT_EQ(dint_at_pv, 2);
+  ASSERT_EQ(lint_at_pv, 2);
+  ASSERT_EQ(udint_at_pv, 2);
+  ASSERT_EQ(ulint_at_pv, 2);
+  ASSERT_EQ(dint_both_at_pv, 2);
+  ASSERT_EQ(lint_both_at_pv, 2);
+  ASSERT_EQ(udint_both_at_pv, 2);
+  ASSERT_EQ(ulint_both_at_pv, 2);
+END_TEST
