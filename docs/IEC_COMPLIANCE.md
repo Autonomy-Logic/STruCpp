@@ -163,6 +163,20 @@ Bundled as a compiled `.stlib` library (`libs/iec-standard-fb.stlib`):
 | SR | Set-dominant bistable |
 | RS | Reset-dominant bistable |
 
+Both counting inputs are sampled on the rising edge, as IEC 61131-3 declares them
+(`CU : BOOL R_EDGE`, `CD : BOOL R_EDGE`). A count is registered on the scan where
+the input goes FALSE to TRUE, for `CD` exactly as for `CU`.
+
+The counting range follows CODESYS rather than the standard's `PVmin`/`PVmax`:
+counting up stops at `PV`, which CODESYS documents as the "upper limit for
+incrementing", and counting down stops at 0, which it decrements towards "as long
+as `CV` is greater than 0". CODESYS reaches that range by typing `CV` and `PV` as
+`WORD`, a deviation from IEC that it documents; these blocks keep the IEC types
+and express the same range through the `PV` and 0 guards.
+
+`CTUD` keeps the standard's `IF NOT (CU AND CD)` guard, so simultaneous rising
+edges on `CU` and `CD` leave `CV` unchanged. CODESYS does not document that case.
+
 ## Project Structure
 
 | Feature | Status | Notes |
