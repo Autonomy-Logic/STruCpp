@@ -734,6 +734,22 @@ export class SemanticAnalyzer {
                     scopeName,
                     declaration: decl,
                   });
+                } else if (decl.addressKind === "alias") {
+                  // The parser accepts `AT Motor_Start` so the OpenPLC Editor
+                  // can read its own declarations with this parser. A compile
+                  // is a different matter: an alias names an I/O channel the
+                  // editor knows about and the compiler does not, so it has to
+                  // have been resolved to a real address before we get here.
+                  // Saying "invalid address format" would send the user looking
+                  // for a typo in something that is spelled correctly.
+                  this.addError(
+                    `'${decl.address}' is an I/O alias, not an address, and it was not resolved before compiling. ` +
+                      `Check that '${decl.address}' still names a channel in the device configuration; ` +
+                      `a variable bound to an alias that no longer exists is left unlocated.`,
+                    decl.sourceSpan.startLine,
+                    decl.sourceSpan.startCol,
+                    decl.sourceSpan.file,
+                  );
                 } else {
                   this.addError(
                     `Invalid address format: ${decl.address}`,

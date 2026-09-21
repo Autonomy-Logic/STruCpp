@@ -264,6 +264,23 @@ function getAllIdentifierOrKeywordImages(
 }
 
 /**
+ * Span of every `identifierOrKeyword` node, positionally matching
+ * {@link getAllIdentifierOrKeywordImages}.
+ *
+ * The lexer folds identifier case, so the AST's name is not the spelling the
+ * user typed. A consumer that writes the declaration back out — the OpenPLC
+ * Editor does — needs the span to read the original from the source.
+ */
+function getAllIdentifierOrKeywordSpans(
+  items: (CstNode | IToken)[] | undefined,
+): SourceSpan[] {
+  if (!items) return [];
+  return items
+    .filter((item): item is CstNode => "children" in item)
+    .map(nodeToSourceSpan);
+}
+
+/**
  * Upper bound on an array repetition count (`[N(value)]`).
  *
  * Repetition groups are expanded element by element, so the count directly sizes
@@ -1460,6 +1477,9 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
     // Variable names come from identifierOrKeyword subrule nodes (allows SET, ON, etc. as names)
     const names = getAllIdentifierOrKeywordImages(children.identifierOrKeyword);
+    const nameSpans = getAllIdentifierOrKeywordSpans(
+      children.identifierOrKeyword,
+    );
 
     // Check for POINTER TO prefix at varDeclaration level (handles POINTER TO ARRAY[...] OF T)
     const hasPointerTo = !!children.POINTER;
@@ -1497,13 +1517,31 @@ export class ASTBuilder {
       getFirstNode(children.initializerExpression),
     );
 
-    // Get address if present (AT %IX0.0)
+    // Get address if present (AT %IX0.0, or AT Motor_Start for an editor alias)
     let address: string | undefined;
+    let addressKind: "direct" | "alias" | undefined;
+    let addressSpan: SourceSpan | undefined;
     const atToken = getFirstToken(children.AT);
     if (atToken) {
       const directAddrToken = getFirstToken(children.DirectAddress);
       if (directAddrToken) {
         address = directAddrToken.image;
+        addressKind = "direct";
+        addressSpan = tokenToSourceSpan(directAddrToken);
+      } else {
+        // The alias form. `children.Identifier` also holds the declaration's
+        // own name(s) when they were lexed as plain identifiers, so take the
+        // LAST one: the names are consumed before the AT clause, so the alias
+        // is always the most recent identifier in this rule.
+        const identifierTokens = children.Identifier;
+        if (Array.isArray(identifierTokens) && identifierTokens.length > 0) {
+          const aliasToken = identifierTokens[identifierTokens.length - 1];
+          if (aliasToken && "image" in aliasToken) {
+            address = aliasToken.image;
+            addressKind = "alias";
+            addressSpan = tokenToSourceSpan(aliasToken);
+          }
+        }
       }
     }
 
@@ -1515,6 +1553,9 @@ export class ASTBuilder {
       type,
       ...(initialValue !== undefined ? { initialValue } : {}),
       ...(address !== undefined ? { address } : {}),
+      ...(addressKind !== undefined ? { addressKind } : {}),
+      ...(addressSpan !== undefined ? { addressSpan } : {}),
+      ...(nameSpans.length > 0 ? { nameSpans } : {}),
     };
   }
 
