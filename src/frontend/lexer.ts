@@ -962,6 +962,57 @@ function findUnclosedBlockComment(
       continue;
     }
 
+    // Skip string literals, for the same reason single-line comments are
+    // skipped: their contents are not code. `s : STRING := '(*';` is a valid
+    // IEC declaration, and without this the `(*` inside the literal opened a
+    // comment that never closed, so the whole compilation unit was rejected
+    // with "Unclosed block comment" pointing at a line with no comment on it.
+    // A doubled quote is IEC's escape for a literal quote and does not end the
+    // string; neither does one written `$'`, which is the form `StringLiteral`
+    // itself accepts. Missing that ended the string early, and from there every
+    // quote in the file paired the wrong way: `'It$'s (*';` was reported as an
+    // unclosed block comment, and a genuinely unclosed `(*` further down could
+    // land inside a phantom string and lose its diagnostic altogether.
+    if ((char === "'" || char === '"') && depth === 0) {
+      const quote = char;
+      i++;
+      column++;
+      while (i < source.length) {
+        if (source.charAt(i) === "$") {
+          // `$` escapes whatever follows it — `$'`, `$$`, `$R`, `$0D`. Only the
+          // one character after it matters here: a hex escape's digits are
+          // ordinary characters that end nothing.
+          const escaped = source.charAt(i + 1);
+          if (escaped === "\n") {
+            line++;
+            column = 1;
+          } else {
+            column += 2;
+          }
+          i += 2;
+          continue;
+        }
+        if (source.charAt(i) === quote) {
+          if (source.charAt(i + 1) === quote) {
+            i += 2;
+            column += 2;
+            continue;
+          }
+          i++;
+          column++;
+          break;
+        }
+        if (source.charAt(i) === "\n") {
+          line++;
+          column = 1;
+        } else {
+          column++;
+        }
+        i++;
+      }
+      continue;
+    }
+
     // Check for block comment start
     if (char === "(" && nextChar === "*") {
       if (depth === 0) {

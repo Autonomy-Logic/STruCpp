@@ -1,4 +1,5 @@
 (* IEC 61131-3 Standard Function Blocks: Counters *)
+(* Edge semantics and the CODESYS alignment: docs/IEC_COMPLIANCE.md, Standard Function Blocks *)
 
 FUNCTION_BLOCK CTU
   VAR_INPUT
@@ -33,7 +34,7 @@ FUNCTION_BLOCK CTD
     CV : INT;
   END_VAR
   VAR
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CD_T(CLK := CD);
   IF LD THEN
@@ -59,7 +60,7 @@ FUNCTION_BLOCK CTUD
   END_VAR
   VAR
     CU_T : R_TRIG;
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CU_T(CLK := CU);
   CD_T(CLK := CD);
@@ -67,11 +68,10 @@ FUNCTION_BLOCK CTUD
     CV := 0;
   ELSIF LD THEN
     CV := PV;
-  ELSE
+  ELSIF NOT (CU_T.Q AND CD_T.Q) THEN
     IF CU_T.Q AND (CV < PV) THEN
       CV := CV + 1;
-    END_IF;
-    IF CD_T.Q AND (CV > 0) THEN
+    ELSIF CD_T.Q AND (CV > 0) THEN
       CV := CV - 1;
     END_IF;
   END_IF;
@@ -178,7 +178,7 @@ FUNCTION_BLOCK CTD_DINT
     CV : DINT;
   END_VAR
   VAR
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CD_T(CLK := CD);
   IF LD THEN
@@ -200,7 +200,7 @@ FUNCTION_BLOCK CTD_LINT
     CV : LINT;
   END_VAR
   VAR
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CD_T(CLK := CD);
   IF LD THEN
@@ -222,7 +222,7 @@ FUNCTION_BLOCK CTD_UDINT
     CV : UDINT;
   END_VAR
   VAR
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CD_T(CLK := CD);
   IF LD THEN
@@ -244,7 +244,7 @@ FUNCTION_BLOCK CTD_ULINT
     CV : ULINT;
   END_VAR
   VAR
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CD_T(CLK := CD);
   IF LD THEN
@@ -270,7 +270,7 @@ FUNCTION_BLOCK CTUD_DINT
   END_VAR
   VAR
     CU_T : R_TRIG;
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CU_T(CLK := CU);
   CD_T(CLK := CD);
@@ -278,11 +278,10 @@ FUNCTION_BLOCK CTUD_DINT
     CV := 0;
   ELSIF LD THEN
     CV := PV;
-  ELSE
+  ELSIF NOT (CU_T.Q AND CD_T.Q) THEN
     IF CU_T.Q AND (CV < PV) THEN
       CV := CV + 1;
-    END_IF;
-    IF CD_T.Q AND (CV > 0) THEN
+    ELSIF CD_T.Q AND (CV > 0) THEN
       CV := CV - 1;
     END_IF;
   END_IF;
@@ -305,7 +304,7 @@ FUNCTION_BLOCK CTUD_LINT
   END_VAR
   VAR
     CU_T : R_TRIG;
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CU_T(CLK := CU);
   CD_T(CLK := CD);
@@ -313,11 +312,10 @@ FUNCTION_BLOCK CTUD_LINT
     CV := 0;
   ELSIF LD THEN
     CV := PV;
-  ELSE
+  ELSIF NOT (CU_T.Q AND CD_T.Q) THEN
     IF CU_T.Q AND (CV < PV) THEN
       CV := CV + 1;
-    END_IF;
-    IF CD_T.Q AND (CV > 0) THEN
+    ELSIF CD_T.Q AND (CV > 0) THEN
       CV := CV - 1;
     END_IF;
   END_IF;
@@ -340,7 +338,7 @@ FUNCTION_BLOCK CTUD_UDINT
   END_VAR
   VAR
     CU_T : R_TRIG;
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CU_T(CLK := CU);
   CD_T(CLK := CD);
@@ -348,11 +346,10 @@ FUNCTION_BLOCK CTUD_UDINT
     CV := 0;
   ELSIF LD THEN
     CV := PV;
-  ELSE
+  ELSIF NOT (CU_T.Q AND CD_T.Q) THEN
     IF CU_T.Q AND (CV < PV) THEN
       CV := CV + 1;
-    END_IF;
-    IF CD_T.Q AND (CV > 0) THEN
+    ELSIF CD_T.Q AND (CV > 0) THEN
       CV := CV - 1;
     END_IF;
   END_IF;
@@ -375,7 +372,7 @@ FUNCTION_BLOCK CTUD_ULINT
   END_VAR
   VAR
     CU_T : R_TRIG;
-    CD_T : F_TRIG;
+    CD_T : R_TRIG;
   END_VAR
   CU_T(CLK := CU);
   CD_T(CLK := CD);
@@ -383,11 +380,10 @@ FUNCTION_BLOCK CTUD_ULINT
     CV := 0;
   ELSIF LD THEN
     CV := PV;
-  ELSE
+  ELSIF NOT (CU_T.Q AND CD_T.Q) THEN
     IF CU_T.Q AND (CV < PV) THEN
       CV := CV + 1;
-    END_IF;
-    IF CD_T.Q AND (CV > 0) THEN
+    ELSIF CD_T.Q AND (CV > 0) THEN
       CV := CV - 1;
     END_IF;
   END_IF;

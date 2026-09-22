@@ -270,6 +270,31 @@ export interface SemanticAnalysisResult {
  * 3. Semantic validation - Check IEC semantic rules
  */
 /**
+ * Why an `AT` operand cannot be compiled, in the words the user needs.
+ *
+ * Every place that reads an `AT` operand — POU-local `VAR`, top-level
+ * `VAR_GLOBAL`, `CONFIGURATION VAR_GLOBAL` — reaches the same two dead ends, so
+ * the wording lives here rather than three times over. An alias reported as an
+ * "invalid address format" sends the user looking for a typo in something that
+ * is spelled correctly, and that is exactly what happened in the CONFIGURATION
+ * path while the POU path had already been taught better.
+ */
+export function unusableAddressMessage(decl: VarDeclaration): string {
+  if (decl.addressKind === "alias") {
+    // The parser accepts `AT Motor_Start` so the OpenPLC Editor can read its own
+    // declarations with this parser. A compile is a different matter: an alias
+    // names an I/O channel the editor knows about and the compiler does not, so
+    // it has to have been resolved to a real address before we get here.
+    return (
+      `'${decl.address}' is an I/O alias, not an address, and it was not resolved before compiling. ` +
+      `Check that '${decl.address}' still names a channel in the device configuration; ` +
+      `a variable bound to an alias that no longer exists is left unlocated.`
+    );
+  }
+  return `Invalid address format: ${decl.address}`;
+}
+
+/**
  * Information about a located variable for validation.
  */
 interface LocatedVarInfo {
@@ -618,6 +643,40 @@ export class SemanticAnalyzer {
     // Register global variable declarations
     for (const block of ast.globalVarBlocks) {
       for (const decl of block.declarations) {
+        // An `AT` operand on a TOP-LEVEL global is checked here, per
+        // declaration, because nothing downstream looks at it: codegen emits
+        // these as plain `inline` storage and only CONFIGURATION VAR_GLOBALs
+        // reach `locatedVars[]` / `locatedGlobals[]`.
+        //
+        // The two cases part company on whether the source can be compiled at
+        // all. An unresolved alias cannot: no address exists for it, so it is
+        // an error, exactly as it is in a POU — left unchecked it compiled
+        // clean and produced an unlocated variable, the silent failure the
+        // alias diagnostic exists to prevent, newly reachable because this
+        // grammar now accepts an identifier wherever it accepts an address. A
+        // well-formed `%` address is a compilable program whose address this
+        // compiler cannot bind, so it warns and carries on: the variable is
+        // built, unlocated, and the user is told where to move it rather than
+        // having a build refused over something that used to pass.
+        if (decl.address) {
+          if (parseAddress(decl.address)) {
+            this.addWarning(
+              `Located variable '${decl.names[0] ?? ""}' at ${decl.address} is declared in a top-level VAR_GLOBAL, ` +
+                `where the compiler cannot bind it, so the address is ignored. ` +
+                `Move it to CONFIGURATION VAR_GLOBAL to have it located.`,
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
+            );
+          } else {
+            this.addError(
+              unusableAddressMessage(decl),
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
+            );
+          }
+        }
         for (const name of decl.names) {
           try {
             const varType = this.resolveVarType(decl.type.name);
@@ -736,7 +795,7 @@ export class SemanticAnalyzer {
                   });
                 } else {
                   this.addError(
-                    `Invalid address format: ${decl.address}`,
+                    unusableAddressMessage(decl),
                     decl.sourceSpan.startLine,
                     decl.sourceSpan.startCol,
                     decl.sourceSpan.file,
@@ -1316,7 +1375,7 @@ export class SemanticAnalyzer {
             const parsed = parseAddress(decl.address);
             if (!parsed) {
               this.addError(
-                `Invalid address format: ${decl.address}`,
+                unusableAddressMessage(decl),
                 decl.sourceSpan.startLine,
                 decl.sourceSpan.startCol,
                 decl.sourceSpan.file,
