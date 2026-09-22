@@ -258,7 +258,33 @@ export interface VarDeclaration extends ASTNode {
   names: string[];
   type: TypeReference;
   initialValue?: Expression;
+  /** The `AT` operand verbatim: a `%` location, or an OpenPLC alias name. */
   address?: string;
+  /**
+   * Which form {@link address} took.
+   *
+   * `"direct"` is an IEC `%` location. `"alias"` is a bare identifier, which
+   * the OpenPLC Editor uses as a symbolic name for an I/O channel and resolves
+   * to a real address before compiling. Absent when there is no address.
+   *
+   * Consumers that need a compilable location must check this: an alias is
+   * accepted by the parser for the editor's benefit, never by a compile.
+   */
+  addressKind?: "direct" | "alias";
+  /**
+   * Span of the `AT` operand itself, so a caller can read it back from the
+   * original source. The lexer upper-cases identifiers, so {@link address}
+   * loses the spelling the user typed — an editor that writes the declaration
+   * back to disk has to slice the source to keep `Motor_Start` from becoming
+   * `MOTOR_START`. Absent when there is no address.
+   */
+  addressSpan?: SourceSpan;
+  /**
+   * Span of each declared name, positionally matching {@link names}, for the
+   * same reason as {@link addressSpan}: the AST holds the folded-case name and
+   * only the source holds the user's spelling.
+   */
+  nameSpans?: SourceSpan[];
 }
 
 // =============================================================================

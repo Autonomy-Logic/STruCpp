@@ -437,6 +437,19 @@ export class STParser extends CstParser {
    * after the type instead (`v : BOOL AT %QX0.0;`).  Accept both
    * forms so the parser doesn't bail on the second form and skip
    * every subsequent declaration in the VAR block.
+   *
+   * The operand may also be a plain identifier (`v AT Motor_Start :
+   * BOOL;`).  That is not IEC: it is an OpenPLC Editor *alias*, a
+   * symbolic name for an I/O channel that the editor resolves to a
+   * real `%` address before it ever asks for a compile.  The parser
+   * accepts it so the editor can use this parser as its single source
+   * of truth for reading declarations — it previously had to keep a
+   * second, hand-written parser alive purely because this one refused
+   * the alias form, and the two drifted apart.
+   *
+   * Accepting it here does NOT make it compilable: `analyzer.ts`
+   * rejects an address that is not a well-formed `%` location, so an
+   * alias that reaches a real compile is still an error, and says so.
    */
   public varDeclaration = this.RULE("varDeclaration", () => {
     this.AT_LEAST_ONE_SEP({
@@ -445,7 +458,10 @@ export class STParser extends CstParser {
     });
     this.OPTION(() => {
       this.CONSUME(tokens.AT);
-      this.CONSUME(tokens.DirectAddress);
+      this.OR2([
+        { ALT: () => this.CONSUME(tokens.DirectAddress) },
+        { ALT: () => this.CONSUME(tokens.Identifier) },
+      ]);
     });
     this.CONSUME(tokens.Colon);
     // Optional POINTER TO prefix (for POINTER TO ARRAY[...] OF REAL etc.)
@@ -463,7 +479,10 @@ export class STParser extends CstParser {
     // Non-standard but widely-used: AT directive after the type.
     this.OPTION3(() => {
       this.CONSUME2(tokens.AT);
-      this.CONSUME2(tokens.DirectAddress);
+      this.OR3([
+        { ALT: () => this.CONSUME2(tokens.DirectAddress) },
+        { ALT: () => this.CONSUME2(tokens.Identifier) },
+      ]);
     });
     this.OPTION2(() => {
       this.CONSUME(tokens.Assign);
