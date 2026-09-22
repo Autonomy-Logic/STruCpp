@@ -255,23 +255,40 @@ describe('an unresolved alias is named wherever it is declared', () => {
  *
  * Only CONFIGURATION globals reach `locatedVars[]` / `locatedGlobals[]`; codegen
  * emits a top-level global as plain `inline` storage, so an address written
- * there was dropped without a word. Naming it is the honest answer — binding it
- * would mean wiring a scope the runtime contract does not cover.
+ * there was dropped without a word. It is said out loud now — but as a warning,
+ * because the program still compiles: binding the address would mean wiring a
+ * scope the runtime contract does not cover, and refusing the build would fail
+ * sources that used to pass.
  */
-describe('a located top-level VAR_GLOBAL is refused rather than dropped', () => {
+describe('a located top-level VAR_GLOBAL warns rather than being dropped', () => {
   const program = 'PROGRAM Main\n  VAR\n    x : BOOL;\n  END_VAR\n  ;\nEND_PROGRAM\n';
+  const located = analyze(astOf(`VAR_GLOBAL\n  g AT %QX0.0 : BOOL;\nEND_VAR\n${program}`));
 
-  it('names a well-formed address it cannot bind', () => {
-    const messages = analyze(astOf(`VAR_GLOBAL\n  g AT %QX0.0 : BOOL;\nEND_VAR\n${program}`)).errors.map(
-      (error) => error.message,
-    );
+  it('names the address it cannot bind', () => {
+    const messages = located.warnings.map((warning) => warning.message);
     expect(messages.some((m) => m.includes('top-level VAR_GLOBAL') && m.includes('CONFIGURATION VAR_GLOBAL'))).toBe(
       true,
     );
   });
 
+  it('does not fail the build over it', () => {
+    expect(located.errors.map((error) => error.message)).toEqual([]);
+    expect(located.success).toBe(true);
+  });
+
+  it('marks it as a warning', () => {
+    const warning = located.warnings.find((candidate) => candidate.message.includes('top-level VAR_GLOBAL'));
+    expect(warning?.severity).toBe('warning');
+  });
+
   it('leaves an unlocated global alone', () => {
     const result = analyze(astOf(`VAR_GLOBAL\n  g : BOOL;\nEND_VAR\n${program}`));
     expect(result.errors.map((error) => error.message)).toEqual([]);
+    expect(result.warnings.map((warning) => warning.message)).toEqual([]);
+  });
+
+  it('still errors on an unresolved alias, which has no address to ignore', () => {
+    const result = analyze(astOf(`VAR_GLOBAL\n  g AT Motor_Start : BOOL;\nEND_VAR\n${program}`));
+    expect(result.errors.some((error) => error.message.includes('is an I/O alias, not an address'))).toBe(true);
   });
 });

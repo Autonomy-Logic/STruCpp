@@ -646,23 +646,36 @@ export class SemanticAnalyzer {
         // An `AT` operand on a TOP-LEVEL global is checked here, per
         // declaration, because nothing downstream looks at it: codegen emits
         // these as plain `inline` storage and only CONFIGURATION VAR_GLOBALs
-        // reach `locatedVars[]` / `locatedGlobals[]`. Left unchecked, an
-        // unresolved alias — which this grammar now accepts everywhere an
-        // address is accepted — compiled clean and produced an unlocated
-        // variable, which is the silent failure the alias diagnostic exists to
-        // prevent. A well-formed `%` address is no better off: it is dropped
-        // just the same, so it is named rather than honoured, since honouring
-        // it means wiring a whole scope the runtime contract does not cover.
+        // reach `locatedVars[]` / `locatedGlobals[]`.
+        //
+        // The two cases part company on whether the source can be compiled at
+        // all. An unresolved alias cannot: no address exists for it, so it is
+        // an error, exactly as it is in a POU — left unchecked it compiled
+        // clean and produced an unlocated variable, the silent failure the
+        // alias diagnostic exists to prevent, newly reachable because this
+        // grammar now accepts an identifier wherever it accepts an address. A
+        // well-formed `%` address is a compilable program whose address this
+        // compiler cannot bind, so it warns and carries on: the variable is
+        // built, unlocated, and the user is told where to move it rather than
+        // having a build refused over something that used to pass.
         if (decl.address) {
-          this.addError(
-            parseAddress(decl.address)
-              ? `Located variable '${decl.names[0] ?? ""}' at ${decl.address} is declared in a top-level VAR_GLOBAL, ` +
-                  `where the compiler cannot bind it. Move it to CONFIGURATION VAR_GLOBAL.`
-              : unusableAddressMessage(decl),
-            decl.sourceSpan.startLine,
-            decl.sourceSpan.startCol,
-            decl.sourceSpan.file,
-          );
+          if (parseAddress(decl.address)) {
+            this.addWarning(
+              `Located variable '${decl.names[0] ?? ""}' at ${decl.address} is declared in a top-level VAR_GLOBAL, ` +
+                `where the compiler cannot bind it, so the address is ignored. ` +
+                `Move it to CONFIGURATION VAR_GLOBAL to have it located.`,
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
+            );
+          } else {
+            this.addError(
+              unusableAddressMessage(decl),
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
+            );
+          }
         }
         for (const name of decl.names) {
           try {
