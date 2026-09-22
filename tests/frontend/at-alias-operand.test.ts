@@ -185,4 +185,93 @@ describe('a string literal is not code', () => {
     const parsed = parse('PROGRAM P\n  VAR\n    (* never closed\n    a : INT;\n  END_VAR\nEND_PROGRAM\n');
     expect(parsed.errors.map((error) => error.message)).toContain('Unclosed block comment');
   });
+
+  // `StringLiteral` accepts `$'` as an escaped quote, but the scanner counted
+  // only a doubled quote, so it ended the string at the `$'` and every quote
+  // after that paired the wrong way.
+  it.each([
+    ['a dollar-escaped quote', "'it$'s'"],
+    ['a dollar-escaped quote before a comment opener', "'it$'s (*'"],
+    ['a dollar-escaped dollar', "'100$$'"],
+    ['a dollar-escaped hex byte', "'a$0Db'"],
+    ['a dollar-escaped quote in a wide string', '"it$"s (*"'],
+  ])('accepts a STRING holding %s', (_label, literal) => {
+    const parsed = parse(wrap(`s : STRING := ${literal};`));
+    expect(parsed.errors).toHaveLength(0);
+  });
+
+  it('reports an unclosed comment that follows a dollar-escaped quote', () => {
+    // With the quotes out of step the real `(*` landed inside a phantom string
+    // and lost its diagnostic: the parse failed further down with
+    // "Expected `END_PROGRAM`, found `(`".
+    const parsed = parse(
+      "PROGRAM P\n  VAR\n    a : STRING := 'x$'y';\n    b : STRING := 'z';\n  END_VAR\n  (* never closed\n  ;\nEND_PROGRAM\n",
+    );
+    expect(parsed.errors.map((error) => error.message)).toContain('Unclosed block comment');
+  });
+});
+
+/**
+ * The same `AT` operand, in each of the three places a declaration can hold one.
+ *
+ * The alias diagnostic was taught to the POU path only. A CONFIGURATION global —
+ * which is where the editor puts every I/O binding it emits — still reported
+ * "Invalid address format", and a top-level global reported nothing at all and
+ * compiled to an unlocated variable.
+ */
+describe('an unresolved alias is named wherever it is declared', () => {
+  const program = 'PROGRAM Main\n  VAR\n    x : BOOL;\n  END_VAR\n  ;\nEND_PROGRAM\n';
+
+  const messagesFor = (source: string) =>
+    analyze(astOf(source)).errors.map((error) => error.message);
+
+  const sources = {
+    'a POU VAR block': `PROGRAM Main\n  VAR\n    g AT Motor_Start : BOOL;\n  END_VAR\n  ;\nEND_PROGRAM\n`,
+    'a top-level VAR_GLOBAL': `VAR_GLOBAL\n  g AT Motor_Start : BOOL;\nEND_VAR\n${program}`,
+    'a CONFIGURATION VAR_GLOBAL':
+      `${program}CONFIGURATION C\nVAR_GLOBAL\n  g AT Motor_Start : BOOL;\nEND_VAR\n` +
+      `  RESOURCE R ON PLC\n    TASK T(INTERVAL := T#20ms, PRIORITY := 1);\n` +
+      `    PROGRAM P WITH T : Main;\n  END_RESOURCE\nEND_CONFIGURATION\n`,
+  };
+
+  it.each(Object.entries(sources))('%s', (_label, source) => {
+    const messages = messagesFor(source);
+    expect(messages.some((m) => m.includes("'MOTOR_START' is an I/O alias, not an address"))).toBe(true);
+    expect(messages.some((m) => m.startsWith('Invalid address format'))).toBe(false);
+  });
+
+  it('still blames the format when the address really is malformed', () => {
+    const messages = messagesFor(
+      `${program}CONFIGURATION C\nVAR_GLOBAL\n  g AT %QX0.0.0.0 : BOOL;\nEND_VAR\n` +
+        `  RESOURCE R ON PLC\n    TASK T(INTERVAL := T#20ms, PRIORITY := 1);\n` +
+        `    PROGRAM P WITH T : Main;\n  END_RESOURCE\nEND_CONFIGURATION\n`,
+    );
+    expect(messages.some((m) => m.startsWith('Invalid address format'))).toBe(true);
+  });
+});
+
+/**
+ * A top-level `VAR_GLOBAL` cannot hold a location at all.
+ *
+ * Only CONFIGURATION globals reach `locatedVars[]` / `locatedGlobals[]`; codegen
+ * emits a top-level global as plain `inline` storage, so an address written
+ * there was dropped without a word. Naming it is the honest answer — binding it
+ * would mean wiring a scope the runtime contract does not cover.
+ */
+describe('a located top-level VAR_GLOBAL is refused rather than dropped', () => {
+  const program = 'PROGRAM Main\n  VAR\n    x : BOOL;\n  END_VAR\n  ;\nEND_PROGRAM\n';
+
+  it('names a well-formed address it cannot bind', () => {
+    const messages = analyze(astOf(`VAR_GLOBAL\n  g AT %QX0.0 : BOOL;\nEND_VAR\n${program}`)).errors.map(
+      (error) => error.message,
+    );
+    expect(messages.some((m) => m.includes('top-level VAR_GLOBAL') && m.includes('CONFIGURATION VAR_GLOBAL'))).toBe(
+      true,
+    );
+  });
+
+  it('leaves an unlocated global alone', () => {
+    const result = analyze(astOf(`VAR_GLOBAL\n  g : BOOL;\nEND_VAR\n${program}`));
+    expect(result.errors.map((error) => error.message)).toEqual([]);
+  });
 });

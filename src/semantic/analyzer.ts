@@ -270,6 +270,31 @@ export interface SemanticAnalysisResult {
  * 3. Semantic validation - Check IEC semantic rules
  */
 /**
+ * Why an `AT` operand cannot be compiled, in the words the user needs.
+ *
+ * Every place that reads an `AT` operand — POU-local `VAR`, top-level
+ * `VAR_GLOBAL`, `CONFIGURATION VAR_GLOBAL` — reaches the same two dead ends, so
+ * the wording lives here rather than three times over. An alias reported as an
+ * "invalid address format" sends the user looking for a typo in something that
+ * is spelled correctly, and that is exactly what happened in the CONFIGURATION
+ * path while the POU path had already been taught better.
+ */
+export function unusableAddressMessage(decl: VarDeclaration): string {
+  if (decl.addressKind === "alias") {
+    // The parser accepts `AT Motor_Start` so the OpenPLC Editor can read its own
+    // declarations with this parser. A compile is a different matter: an alias
+    // names an I/O channel the editor knows about and the compiler does not, so
+    // it has to have been resolved to a real address before we get here.
+    return (
+      `'${decl.address}' is an I/O alias, not an address, and it was not resolved before compiling. ` +
+      `Check that '${decl.address}' still names a channel in the device configuration; ` +
+      `a variable bound to an alias that no longer exists is left unlocated.`
+    );
+  }
+  return `Invalid address format: ${decl.address}`;
+}
+
+/**
  * Information about a located variable for validation.
  */
 interface LocatedVarInfo {
@@ -618,6 +643,27 @@ export class SemanticAnalyzer {
     // Register global variable declarations
     for (const block of ast.globalVarBlocks) {
       for (const decl of block.declarations) {
+        // An `AT` operand on a TOP-LEVEL global is checked here, per
+        // declaration, because nothing downstream looks at it: codegen emits
+        // these as plain `inline` storage and only CONFIGURATION VAR_GLOBALs
+        // reach `locatedVars[]` / `locatedGlobals[]`. Left unchecked, an
+        // unresolved alias — which this grammar now accepts everywhere an
+        // address is accepted — compiled clean and produced an unlocated
+        // variable, which is the silent failure the alias diagnostic exists to
+        // prevent. A well-formed `%` address is no better off: it is dropped
+        // just the same, so it is named rather than honoured, since honouring
+        // it means wiring a whole scope the runtime contract does not cover.
+        if (decl.address) {
+          this.addError(
+            parseAddress(decl.address)
+              ? `Located variable '${decl.names[0] ?? ""}' at ${decl.address} is declared in a top-level VAR_GLOBAL, ` +
+                  `where the compiler cannot bind it. Move it to CONFIGURATION VAR_GLOBAL.`
+              : unusableAddressMessage(decl),
+            decl.sourceSpan.startLine,
+            decl.sourceSpan.startCol,
+            decl.sourceSpan.file,
+          );
+        }
         for (const name of decl.names) {
           try {
             const varType = this.resolveVarType(decl.type.name);
@@ -734,25 +780,9 @@ export class SemanticAnalyzer {
                     scopeName,
                     declaration: decl,
                   });
-                } else if (decl.addressKind === "alias") {
-                  // The parser accepts `AT Motor_Start` so the OpenPLC Editor
-                  // can read its own declarations with this parser. A compile
-                  // is a different matter: an alias names an I/O channel the
-                  // editor knows about and the compiler does not, so it has to
-                  // have been resolved to a real address before we get here.
-                  // Saying "invalid address format" would send the user looking
-                  // for a typo in something that is spelled correctly.
-                  this.addError(
-                    `'${decl.address}' is an I/O alias, not an address, and it was not resolved before compiling. ` +
-                      `Check that '${decl.address}' still names a channel in the device configuration; ` +
-                      `a variable bound to an alias that no longer exists is left unlocated.`,
-                    decl.sourceSpan.startLine,
-                    decl.sourceSpan.startCol,
-                    decl.sourceSpan.file,
-                  );
                 } else {
                   this.addError(
-                    `Invalid address format: ${decl.address}`,
+                    unusableAddressMessage(decl),
                     decl.sourceSpan.startLine,
                     decl.sourceSpan.startCol,
                     decl.sourceSpan.file,
@@ -1332,7 +1362,7 @@ export class SemanticAnalyzer {
             const parsed = parseAddress(decl.address);
             if (!parsed) {
               this.addError(
-                `Invalid address format: ${decl.address}`,
+                unusableAddressMessage(decl),
                 decl.sourceSpan.startLine,
                 decl.sourceSpan.startCol,
                 decl.sourceSpan.file,
