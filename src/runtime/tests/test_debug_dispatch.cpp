@@ -82,11 +82,10 @@ TEST(DebugDispatch, HandleElemCount) {
 // ---------------------------------------------------------------------------
 // Entry layout and capacity propagation.
 //
-// read_entry cannot copy an Entry out of PROGMEM as a struct on AVR; those
-// branches read each member at a byte offset. Both of them once read `ptr` and
-// `tag` and stopped, leaving `cap` at 0, so every sized STRING was treated as
-// the 254 default and the string ops computed their forced-value offsets past
-// the end of the object. These pin the arithmetic and the propagation.
+// read_entry cannot copy an Entry out of PROGMEM as a struct on AVR, so those
+// branches read each member at a byte offset. Leaving `cap` at 0 treats every
+// sized STRING as the 254 default and computes offsets past the end of the
+// object. These pin the arithmetic and the propagation.
 // ---------------------------------------------------------------------------
 TEST(DebugDispatch, EntryLayoutMatchesTheByteOffsetsAvrReadsAt) {
     const sd::Entry e{ (void*)&t_str, sd::TAG_STRING, 0, 23 };
@@ -255,11 +254,10 @@ TEST(DebugDispatch, SetWithInsufficientDataReturnsError) {
 // ---------------------------------------------------------------------------
 // handle_ptr — addressing a value in place
 //
-// The editor's Arduino glue calls this to avoid copying a leaf out on a
-// cooperative super-loop. Its contract is narrow and easy to get subtly wrong,
-// so each clause has its own case: the payload rather than the wrapper, the
-// LIVE length rather than the padded wire width, characters rather than a
-// length-prefixed buffer, and bytes rather than code units for a WSTRING.
+// Called by the Arduino glue to avoid copying a leaf out on a cooperative
+// super-loop. Each clause of its contract gets its own case: the payload not
+// the wrapper, the LIVE length not the padded wire width, characters not a
+// length-prefixed buffer, bytes not code units for a WSTRING.
 // ---------------------------------------------------------------------------
 TEST(DebugDispatch, PtrScalarGivesPayloadAndFixedWidth) {
     reset_vars();

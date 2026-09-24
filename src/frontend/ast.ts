@@ -256,6 +256,15 @@ export interface VarBlock extends ASTNode {
 export interface VarDeclaration extends ASTNode {
   kind: "VarDeclaration";
   names: string[];
+  /**
+   * The same names, spelled as they were declared.
+   *
+   * `names` is folded (IEC 61131-3 §6.1.2) and everything that resolves,
+   * checks or mangles keeps using it. This is for the strings a descriptor
+   * reports, where `spPressureAlt` must not become `SPPRESSUREALT`. Parallel
+   * to `names`; absent on declarations not built from source.
+   */
+  declaredNames?: string[];
   type: TypeReference;
   initialValue?: Expression;
   address?: string;
@@ -271,6 +280,8 @@ export interface VarDeclaration extends ASTNode {
 export interface TypeDeclaration extends ASTNode {
   kind: "TypeDeclaration";
   name: string;
+  /** `name` as the engineer spelled it — see `VarDeclaration.declaredNames`. */
+  declaredName?: string;
   definition: TypeDefinition;
   /**
    * Default value attached to the type itself

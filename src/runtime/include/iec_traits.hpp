@@ -196,24 +196,17 @@ template<> struct is_any_elementary<int64_t> : std::true_type {};
 // The fundamental integer types <cstdint> did NOT alias on this target
 // -----------------------------------------------------------------------------
 //
-// Everything above specialises on the fixed-width aliases, and which C++
-// fundamental type each one names is target-specific. On x86-64 Linux
-// `int32_t` is `int`, so a plain `int` picks up every trait above for free.
-// On xtensa (ESP32), ARM and AVR `int32_t` is `long int`, so a plain `int` has
-// no entry at all and satisfies none of the constraints.
+// Everything above specialises on the fixed-width aliases, and which
+// fundamental type each names is target-specific. On x86-64 `int32_t` is
+// `int`; on xtensa, ARM and AVR it is `long int`, leaving a plain `int` with no
+// traits at all. A generated `ADD(0, 0)` then compiles on the host and fails to
+// resolve on the board — invisible to a host test suite.
 //
-// That divergence is invisible to a host test suite and fatal on a board: a
-// generated call like `ADD(0, 0)`, whose literals are plain `int`, compiles on
-// the host and fails to resolve on the board with "no matching function for
-// call to ADD(int, int)". Every host test can pass while the firmware will not
-// build.
-//
-// So each fundamental integer type is registered under the traits its WIDTH
-// and SIGNEDNESS earn it — but only where it is not already one of the aliases
-// above, since specialising the same type twice is an error. `iec_distinct`
-// maps an already-covered type to a private placeholder nothing ever has, so
-// the specialisation below is written once and is a no-op on targets that do
-// not need it.
+// So each fundamental integer is registered under the traits its width and
+// signedness earn it, but only where it is not already an alias above, since
+// specialising one type twice is an error. `iec_distinct` maps an already
+// covered type to a private placeholder, so the specialisation below is written
+// once and is a no-op where it is not needed.
 namespace detail {
 
 /** A type nothing can ever be, one per T so two placeholders never collide. */
@@ -404,8 +397,8 @@ struct iec_bit_size<IECVar<T>> : iec_bit_size<T> {};
 
 // The same fundamental integer types registered above, for the shift and
 // rotate functions, which size their operand through this trait. A target
-// where `int32_t` is `long int` would otherwise have no width for a plain
-// `int` and fail to resolve SHL/SHR/ROL/ROR.
+// where `int32_t` is `long int` would otherwise fail to resolve SHL/SHR/
+// ROL/ROR for a plain `int`.
 #define IEC_REGISTER_FUNDAMENTAL_WIDTH(T)                       \
     template<> struct iec_bit_size<detail::iec_distinct<T>>     \
         : std::integral_constant<size_t, sizeof(T) * 8> {};

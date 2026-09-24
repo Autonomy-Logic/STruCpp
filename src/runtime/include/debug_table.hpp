@@ -134,20 +134,18 @@ struct Entry {
     uint8_t flags;
 
     /**
-     * Declared capacity of a `STRING(n)` / `WSTRING(n)`; 0 for every other type,
-     * and for an unqualified string, where it means the 254 default.
-     *
-     * The string ops need it: `IECStringVar<23>` and `IECStringVar<254>` are
-     * different types, while `type_ops[]` has one row per TypeTag. See
-     * `debug_dispatch.hpp`.
+     * Declared capacity of a `STRING(n)` / `WSTRING(n)`; 0 for any other type
+     * and for an unqualified string, where it means the 254 default. The
+     * string ops need it — `type_ops[]` has one row per TypeTag while
+     * `IECStringVar<23>` and `<254>` are distinct types.
      */
     uint8_t cap;
 };
 
 // The AVR branches of `read_entry` cannot copy an `Entry` out of PROGMEM as a
-// struct; they read each member by offset. These pin the offsets that
-// arithmetic assumes, on every target, so a member added or reordered here is a
-// compile error rather than an out-of-bounds string access on an ATmega.
+// struct; they read each member by offset. These pin those offsets on every
+// target, so a member added or reordered here is a compile error rather than
+// an out-of-bounds read on an ATmega.
 static_assert(offsetof(Entry, ptr) == 0, "Entry::ptr must be first");
 static_assert(offsetof(Entry, tag) == sizeof(void*), "Entry::tag follows ptr");
 static_assert(offsetof(Entry, flags) == sizeof(void*) + 1, "Entry::flags follows tag");

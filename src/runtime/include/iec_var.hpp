@@ -376,10 +376,9 @@ public:
     /**
      * Byte offset of the payload, which must stay 0.
      *
-     * `ADR(x)` lowers to `&(x)` — the wrapper's address — and every consumer
-     * reads it as a `T*`: `IEC_Ptr<T>` casts it, a driver writes through it, an
-     * `ANY` descriptor's `pvalue` is `raw_ptr()`. All correct only while
-     * `value_` is the first member, which the static_asserts below pin.
+     * `ADR(x)` lowers to `&(x)`, the wrapper's address, and every consumer
+     * reads it as a `T*`. Correct only while `value_` is the first member,
+     * which the static_asserts below pin.
      */
     static constexpr std::size_t value_field_offset() noexcept { return offsetof(IECVar, value_); }
 

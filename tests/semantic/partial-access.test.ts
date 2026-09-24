@@ -3,16 +3,13 @@
 /**
  * Partial access: one part of a bit-field variable.
  *
- * `X`/`B`/`W`/`D` is the part's width and the index counts from the least
- * significant end, so `Do.%B3` is a DWORD's most significant byte. `%X` is
- * optional for bits, which is why `Wo.3` and `Wo.%X3` are the same access.
+ * `X`/`B`/`W`/`D` is the width and the index counts from the least significant
+ * end, so `Do.%B3` is a DWORD's most significant byte. `%X` is optional, so
+ * `Wo.3` and `Wo.%X3` are one access.
  *
- * A part exists only where it is strictly narrower than the variable: bits of
- * BYTE/WORD/DWORD/LWORD, bytes of WORD/DWORD/LWORD, words of DWORD/LWORD, and
- * a dword of LWORD. There is no `WORD.%W0`, because a WORD has no word inside
- * it.
- *
- * The integer types are accepted too, and warn — see BIT_ACCESSIBLE_TYPES.
+ * A part exists only where it is strictly narrower than the variable: there is
+ * no `WORD.%W0`. The integer types are accepted too, and warn — see
+ * BIT_ACCESSIBLE_TYPES.
  */
 
 import { describe, expect, it } from "vitest";

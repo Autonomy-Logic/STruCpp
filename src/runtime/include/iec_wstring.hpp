@@ -482,11 +482,9 @@ public:
 
 
     /**
-     * Pointer to the underlying character storage — the counterpart of
-     * `IECVar::raw_ptr()`. NUL-terminated, `capacity() + 1` code units long.
-     *
-     * A caller writing through this owns the terminator and must call
-     * `sync_length()` afterwards: the length is cached, not derived on read.
+     * Pointer to the character storage — the counterpart of
+     * `IECVar::raw_ptr()`. NUL-terminated, `capacity() + 1` code units. A
+     * caller writing through it owns the terminator and must `sync_length()`.
      */
     char16_t* raw_ptr() noexcept { return value_.data(); }
 
@@ -507,12 +505,9 @@ public:
 
     /**
      * Byte offset of the payload, which must stay 0 — the counterpart of
-     * `IECVar::value_field_offset()`.
-     *
-     * A STRUCT member's `MemberDesc::OFFSET` is built from this
-     * (iec_typedesc.hpp). If the characters ever stopped being first, a block
-     * walking a struct would read the forcing flag where it expected the start
-     * of a string.
+     * `IECVar::value_field_offset()`. A STRUCT member's `MemberDesc::OFFSET`
+     * builds on it (iec_typedesc.hpp); were the characters to stop being
+     * first, a walk would read the forcing flag as the start of a string.
      */
     static constexpr size_t value_field_offset() noexcept { return offsetof(IECWStringVar, value_); }
 
@@ -535,11 +530,9 @@ using WSTRING_VAR = IECWStringVar<254>;
 using IEC_WSTRING = IECWStringVar<254>;
 
 // ---------------------------------------------------------------------------
-// Type-erased access, for the debugger only. The counterpart of the block in
-// `iec_string.hpp`, and there for the same reason: the debug dispatch table has
-// one row per TypeTag, so its ops meet a `WSTRING(8)` as `void*` plus the
-// capacity recorded beside the pointer. Code units are `char16_t`, so every
-// offset here is in bytes and already 2-aligned.
+// Type-erased access, for the debugger only — the counterpart of the block in
+// `iec_string.hpp` and there for the same reason. Code units are `char16_t`,
+// so every offset here is in bytes and already 2-aligned.
 // ---------------------------------------------------------------------------
 
 /** Offset of `IECWString<cap>::length_`: `char16_t[cap + 1]` is already aligned. */
@@ -556,10 +549,8 @@ constexpr size_t iec_wstringvar_forced_offset(size_t cap) noexcept { return iec_
 /**
  * Offset of `IECWStringVar<cap>::forced_value_`: after `forced_`, realigned.
  *
- * The realignment is the class's own, not a fixed 2 -- AVR byte-aligns every
- * type, so there the bool is followed immediately rather than padded past.
- * `length_` needs no such rounding: `char16_t[cap + 1]` is a whole number of
- * 16-bit units either way.
+ * The realignment is the class's own, not a fixed 2 — AVR byte-aligns every
+ * type. `length_` needs none: `char16_t[cap + 1]` is a whole number of units.
  */
 constexpr size_t iec_wstringvar_forced_value_offset(size_t cap) noexcept {
     constexpr size_t align = alignof(IECWString<1>);

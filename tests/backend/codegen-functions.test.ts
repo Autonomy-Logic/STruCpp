@@ -233,11 +233,10 @@ describe("Codegen - Function Calls", () => {
     });
 
     it("adds no unit call for the 64-bit temporals, which are nanoseconds already", () => {
-      // LTIME, LTOD and LDT are declarable now, so the L half of
-      // TEMPORAL_CONVERSION_UNITS is reachable. Those three carry no unit
-      // call by design: the table holds `undefined` for them because the
-      // runtime already stores them in the nanoseconds the conversion wants,
-      // so scaling would double-apply.
+      // LTIME, LTOD and LDT are declarable, so the L half of
+      // TEMPORAL_CONVERSION_UNITS is reachable. They carry no unit call: the
+      // runtime already stores them in nanoseconds, so scaling would
+      // double-apply.
       for (const type of ["LTIME", "LTOD", "LDT"]) {
         const result = compileAndCheck(`
           PROGRAM Main
@@ -251,10 +250,9 @@ describe("Codegen - Function Calls", () => {
     });
 
     it("leaves the LDATE row unreachable, because the type is not declarable", () => {
-      // The one L row that does carry a unit call — LDATE is stored in days
-      // like DATE, so it would need DATE_TO_NS. The type is not in the
-      // registry, so that row stays dead and cannot be covered. This fails the
-      // day LDATE is added, which is when the row needs a real test.
+      // The one L row that does carry a unit call: LDATE is stored in days
+      // like DATE. The type is not in the registry, so the row stays dead —
+      // this fails the day LDATE is added, when it needs a real test.
       const result = compile(
         "PROGRAM Main\n VAR v : LDATE; END_VAR\nEND_PROGRAM",
         { headerFileName: "generated.hpp" },

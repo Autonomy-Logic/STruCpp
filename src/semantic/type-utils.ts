@@ -92,14 +92,9 @@ export type TypeCategory =
 
 /**
  * The generic type names that may be written in a declaration — CODESYS's
- * seven, and only those.
- *
- * `ANY_ELEMENTARY`, `ANY_MAGNITUDE` and `ANY_DERIVED` are in `TypeCategory`
- * because the hierarchy classifies by them, but neither CODESYS nor this
- * compiler lets you declare a parameter of one.
- *
- * A CODESYS-compatible extension, not a conformance feature — the same footing
- * as `__XWORD`, `ADR` and `SIZEOF`.
+ * seven, and only those. `ANY_ELEMENTARY`, `ANY_MAGNITUDE` and `ANY_DERIVED`
+ * are in `TypeCategory` because the hierarchy classifies by them, but neither
+ * CODESYS nor this compiler lets a parameter be declared of one.
  */
 export const DECLARABLE_GENERIC_TYPES: readonly TypeCategory[] = [
   "ANY",
@@ -114,11 +109,9 @@ export const DECLARABLE_GENERIC_TYPES: readonly TypeCategory[] = [
 /**
  * `__SYSTEM.TYPE_CLASS` enumerator for each elementary type, by IEC name.
  *
- * What codegen stamps into an `IEC_ANY` descriptor's `typeclass`. Keyed on the
- * IEC name, not the C++ payload: `BYTE_t` and `USINT_t` are both `uint8_t`, as
- * are `WORD_t`/`UINT_t`, `DWORD_t`/`UDINT_t` and `LWORD_t`/`ULINT_t`.
- *
- * `__XWORD` is absent: CODESYS does not list it as acceptable to a generic.
+ * Keyed on the IEC name, not the C++ payload: `BYTE_t`/`USINT_t`,
+ * `WORD_t`/`UINT_t`, `DWORD_t`/`UDINT_t` and `LWORD_t`/`ULINT_t` are one type
+ * apiece. `__XWORD` is absent — CODESYS does not admit it to a generic.
  */
 export const TYPE_CLASS_BY_IEC_TYPE: Readonly<Record<string, string>> = {
   BOOL: "TYPE_BOOL",
@@ -156,11 +149,9 @@ export const TYPE_CLASS_BY_IEC_TYPE: Readonly<Record<string, string>> = {
 /**
  * The descriptor type behind a generic parameter, as CODESYS names it.
  *
- * `ANY` cannot be a variable: the descriptor is filled by the caller, and a
- * local has none. CODESYS offers the structure itself instead, so a block can
- * keep what it was handed — `saved : __SYSTEM.AnyType;`.
- *
- * An ordinary concrete type, declarable anywhere, unlike the generics.
+ * `ANY` cannot be a variable — the caller fills the descriptor and a local has
+ * no caller — so CODESYS offers the structure itself: `saved :
+ * __SYSTEM.AnyType;`. An ordinary concrete type, declarable anywhere.
  */
 export const ANY_DESCRIPTOR_TYPE = "__SYSTEM.ANYTYPE";
 
@@ -290,9 +281,8 @@ export function getTypeBits(name: string): number | undefined {
 /**
  * One part of a bit-field variable: `Do.%B3`, `Wo.%X15`.
  *
- * `X`/`B`/`W`/`D` is the part's width, and the index counts from the least
- * significant end — so `Do.%B3` is the most significant byte of a DWORD. `%X`
- * is optional for bits, so a bare `Wo.3` parses to the same thing.
+ * `X`/`B`/`W`/`D` is the width and the index counts from the least significant
+ * end, so `Do.%B3` is a DWORD's most significant byte. `%X` is optional.
  */
 export interface PartialAccess {
   /** Width of the addressed part, in bits: 1, 8, 16 or 32. */
@@ -319,11 +309,9 @@ const PARTIAL_ACCESS_WIDTHS: Record<PartialAccess["resultType"], number> = {
 
 /**
  * Parse one field-access step as a partial access, or undefined if it is an
- * ordinary struct member.
- *
- * Accepts the bare bit form (`3`) and the prefixed forms (`%X3`, `%B1`, `%W0`,
- * `%D1`). Single-sourced because the analyzer, the type checker and both
- * codegen paths all have to agree on what a step means.
+ * ordinary struct member. Accepts `3` and `%X3` / `%B1` / `%W0` / `%D1`.
+ * Single-sourced: the analyzer, the type checker and both codegen paths have
+ * to agree on what a step means.
  */
 export function parsePartialAccess(field: string): PartialAccess | undefined {
   if (/^\d+$/.test(field)) {
@@ -342,16 +330,11 @@ export function parsePartialAccess(field: string): PartialAccess | undefined {
 /**
  * Types a part may be taken of, and their widths.
  *
- * The bit-field types are the strict set. The integers and BOOL are accepted
- * as well — a VFD control word arrives as an INT as often as a WORD, and
- * refusing `iStatus.6` would reject working programs. `isStandardPartialAccessType`
- * is what separates the two, so the analyzer can warn on the wider set.
- *
- * REAL and LREAL are absent: a part of a float is meaningless.
- *
- * A direct variable cannot take a part, by construction rather than by check —
- * `%IB10` is not an expression operand, so `%IB10.%X0` cannot be written. A
- * variable declared `AT %IB10` is symbolic and may.
+ * The bit-field types are the strict set; integers and BOOL are accepted too,
+ * since a control word arrives as an INT as often as a WORD.
+ * `isStandardPartialAccessType` separates the two so the analyzer can warn.
+ * REAL and LREAL are absent. A direct variable cannot take a part by
+ * construction: `%IB10` is not an expression operand.
  */
 const BIT_ACCESSIBLE_TYPES: Record<string, number> = {
   BOOL: 1,
@@ -981,10 +964,10 @@ export function buildEnumMemberMap(
   enumTypes: Iterable<{ name: string; members: string[] }>,
 ): Map<string, EnumMemberEntry> {
   const map = new Map<string, EnumMemberEntry>();
-  // One enum may be described twice — a library compiling against a dependency
-  // archive that re-exports its own types sees each of them from both sides.
-  // The same type named twice is one type, not a conflict; without this every
-  // member of it reads as ambiguous with itself.
+  // One enum may be described twice: a library compiling against a dependency
+  // that re-exports its types sees each from both sides. The same type named
+  // twice is one type, not a conflict — otherwise every member of it reads as
+  // ambiguous with itself.
   const seenTypes = new Set<string>();
   for (const enumType of enumTypes) {
     const typeKey = enumType.name.toUpperCase();

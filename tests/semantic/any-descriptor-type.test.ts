@@ -3,17 +3,15 @@
 /**
  * `__SYSTEM.AnyType`, the descriptor behind a generic parameter.
  *
- * `ANY` itself cannot be a variable — the caller fills the descriptor, and a
- * local has no caller — so the structure is offered as an ordinary
- * concrete type. That is what lets a block keep what it was handed, and what
- * makes `ARRAY [*] OF __SYSTEM.AnyType` the way to carry several arguments of
- * mixed type: a variable-length array is VAR_IN_OUT-only and `ANY` is
- * VAR_INPUT-only, so `ARRAY [*] OF ANY` cannot be written.
+ * `ANY` cannot be a variable — the caller fills the descriptor and a local has
+ * no caller — so the structure is offered as an ordinary concrete type. That
+ * makes `ARRAY [*] OF __SYSTEM.AnyType` the way to carry mixed arguments:
+ * `ARRAY [*] OF ANY` cannot be written, since a variable-length array is
+ * VAR_IN_OUT-only and `ANY` VAR_INPUT-only.
  *
  * It is the only qualified type name the parser admits, and the qualifier has
- * to survive into the element type of an array: taking the first Identifier
- * alone yields `__SYSTEM`, which fails a fixed-bound declaration outright and,
- * worse, passes a variable-length one and emits an undeclared C++ type.
+ * to survive into an array's element type: the first Identifier alone yields
+ * `__SYSTEM`, which emits an undeclared C++ type.
  */
 
 import { describe, expect, it } from "vitest";

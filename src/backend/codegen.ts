@@ -481,6 +481,12 @@ export class CodeGenerator {
    *  used e.g. to pick the correct lowering for a REF= rebind. */
   protected currentScopeVarRefKinds: Map<string, string> = new Map();
 
+  /** UPPER(name) -> the spelling the declaration used, for the scope being
+   *  generated. Everything else matches on the folded name; this exists for
+   *  the descriptor strings a callee reads back — `IEC_ANY::NAME` and
+   *  `TYPENAME` — which report the name as declared. */
+  protected currentScopeDeclaredNames: Map<string, string> = new Map();
+
   /** Parent class name of current FB (for SUPER resolution) */
   private currentFBExtends: string | undefined;
 
@@ -549,20 +555,14 @@ export class CodeGenerator {
    *  Used to resolve positional arguments in FB invocations. */
   private fbInputParams: Map<string, string[]> = new Map();
 
-  /** Map of UPPER(fbTypeName) → UPPER(paramName) → the generic type it was
-   *  declared with (`ANY`, `ANY_INT`, …).
-   *
-   *  A generic parameter takes an `IEC_ANY` descriptor built at the call site,
-   *  not the argument's value. Covers FBs declared here and FBs from a library
-   *  archive alike. */
+  /** UPPER(fbTypeName) → UPPER(paramName) → its generic type (`ANY`,
+   *  `ANY_INT`, …). Such a parameter takes an `IEC_ANY` built at the call
+   *  site, not the argument's value. Local and library FBs alike. */
   private fbGenericParams: Map<string, Map<string, string>> = new Map();
 
-  /** Map of UPPER(fbTypeName) → the VAR_IN_OUT parameters declared
-   *  `ARRAY [*] OF …`.
-   *
-   *  A variable-length parameter is an `ArrayView`, which already addresses the
-   *  caller's array — so unlike every other in-out it needs no copy back, and
-   *  cannot have one: the view and the concrete array are different types. */
+  /** UPPER(fbTypeName) → its VAR_IN_OUT parameters declared `ARRAY [*] OF …`.
+   *  Such a parameter is an `ArrayView` onto the caller's array, so it needs
+   *  no copy back and cannot have one: view and array are distinct types. */
   private fbVlaInoutParams: Map<string, Set<string>> = new Map();
 
   /** Map of UPPER(fbTypeName) → VAR_IN_OUT parameters whose type is a function
@@ -604,14 +604,10 @@ export class CodeGenerator {
    *  so a positional argument can be matched to the parameter it fills. */
   private functionParamOrder: Map<string, string[]> = new Map();
 
-  /** Statements that re-cache a string length after this statement handed a
-   *  STRING, WSTRING, or a STRUCT containing one, to a generic parameter.
-   *
-   *  `raw_ptr()` gives the callee the characters but not the cached length, so
-   *  a callee that writes them leaves `length()` stale. Flushed after the call
-   *  — see {@link flushStringSyncs}. Whole statements rather than names,
-   *  because a struct resyncs through `sync_strings()` and a scalar through
-   *  its own `sync_length()`. */
+  /** Statements re-caching a string length after this one handed a STRING,
+   *  WSTRING or a STRUCT holding one to a generic parameter. `raw_ptr()` gives
+   *  the characters, not the cached length. Whole statements, because a struct
+   *  syncs via `sync_strings()` and a scalar via `sync_length()`. */
   private pendingStringSyncs: string[] = [];
 
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
@@ -654,13 +650,10 @@ export class CodeGenerator {
     typeName: string,
     maxLength?: number | string,
   ): string {
-    // Every generic family, and the descriptor type itself, is one `IEC_ANY` at
-    // the ABI: the family constrains what the caller may pass, checked at the
-    // call site, not what the parameter is made of.
-    //
-    // Spelled out rather than left to the `IEC_<NAME>` rule below, which is
-    // right for `ANY` and wrong for the rest — `IEC_ANY_INT` does not exist.
-    // `__SYSTEM.AnyType` needs it too: a dot is not a C++ name.
+    // Every generic family is one `IEC_ANY` at the ABI; the family only
+    // constrains what the call site may pass. Listed rather than left to the
+    // `IEC_<NAME>` rule below: `IEC_ANY_INT` does not exist, and a dot is not
+    // a C++ name.
     if (isDeclarableGenericType(typeName) || isAnyDescriptorType(typeName)) {
       return "IEC_ANY";
     }
@@ -767,11 +760,8 @@ export class CodeGenerator {
    * The C++ type of a `VAR_EXTERNAL`, which is a POINTER to the canonical
    * `GlobalVar<V>` rather than a parameter.
    *
-   * Not `toParamTypeRef`: that widens a `STRING(n)` to the unqualified type,
-   * which a parameter may do and a pointer may not —
-   * `GlobalVar<IECStringVar<23>>*` and `GlobalVar<IEC_STRING>*` are unrelated.
-   *
-   * All three emission sites go through this, so they agree by construction.
+   * Not `toParamTypeRef`: that widens `STRING(n)`, which a parameter may do
+   * and a pointer may not. All three emission sites use this.
    */
   private externalTypeRefCpp(ext: {
     typeName: string;
@@ -1576,10 +1566,9 @@ export class CodeGenerator {
     this.emitPouForwardDeclarations(ast);
 
     // Generate user-defined types (Phase 2.2). A structure is held back when
-    // it names something the library section has not declared yet: a function
-    // block instance, which waits for that block's class (see
-    // emitFbBearingTypes), or a library-declared type, which only has to
-    // follow the library section and so is released at the first flush.
+    // it names something the library section has not declared yet: an FB
+    // instance (see emitFbBearingTypes), or a library type, released at the
+    // first flush.
     const heldBack = (td: CompilationUnit["types"][number]): boolean =>
       this.fbBearingTypeDeps.has(td.name.toUpperCase()) ||
       this.libraryTypeBearingTypes.has(td.name.toUpperCase());
@@ -3451,13 +3440,10 @@ export class CodeGenerator {
         isCompound = true;
         break;
       case "ContinueStatement": {
-        // A plain `continue` is correct here, where EXIT needs a goto: `break`
-        // inside the switch an ST CASE compiles to would break the SWITCH, but
-        // `continue` is never captured by a switch and always reaches the
-        // innermost enclosing loop — which is exactly ST's rule.
-        //
-        // It lands in the right place for each loop form too: a FOR still runs
-        // its increment, and a WHILE or REPEAT re-tests its condition.
+        // `continue` is correct where EXIT needs a goto: a switch captures
+        // `break` but never `continue`, so it always reaches the innermost
+        // loop — ST's rule. A FOR still runs its increment, a WHILE or REPEAT
+        // re-tests its condition.
         if (this.loopExitLabelStack.length > 0) {
           this.emit(`${indent}continue;`);
         } else {
@@ -3511,12 +3497,8 @@ export class CodeGenerator {
    * Emit `sync_length()` for each STRING or WSTRING variable this statement
    * handed to a generic parameter.
    *
-   * The descriptor's `PVALUE` is `raw_ptr()`, the character buffer. Unlike
-   * CODESYS, where a STRING is a plain NUL-terminated array, the length is
-   * cached beside the characters and must be recomputed after the call.
-   *
-   * Emitted after the statement, since an expression has nowhere to put one.
-   * Duplicates are dropped: two parameters may name the same variable.
+   * `PVALUE` is `raw_ptr()`, the characters only, so the cached length must be
+   * recomputed after the call. Emitted after the statement; duplicates dropped.
    */
   private flushStringSyncs(indent: string): void {
     if (this.pendingStringSyncs.length === 0) return;
@@ -4145,18 +4127,11 @@ export class CodeGenerator {
    * An operand as an LVALUE naming the storage itself, for anything that
    * aliases it rather than reading it.
    *
-   * The read paths for a shared global hand back a COPY — `read()` for a
-   * scalar external, `with_lock(...)` for a composite one. Aliasing that copy
-   * gives a pointer to a temporary that dies at the end of the full
-   * expression, so both are reached at their canonical storage instead.
-   *
-   * Naming the storage also keeps the operand a plain lvalue rather than a
-   * `with_lock` lambda, which matters wherever the caller puts it in an
-   * unevaluated context: a lambda inside `sizeof` / `IEC_SIZEOF` is C++20 and
-   * this compiler targets C++17.
-   *
-   * Anything that is not a shared global is already its own storage, so it
-   * falls through to the ordinary expression.
+   * A shared global's read paths hand back a COPY (`read()`, `with_lock`), so
+   * aliasing one points at a temporary that dies with the full expression.
+   * The storage is named instead, which also keeps the operand a plain lvalue
+   * — a `with_lock` lambda inside `sizeof` is C++20, and this targets C++17.
+   * Anything else is already its own storage.
    */
   private generateAliasLvalue(expr: Expression): string {
     if (expr.kind === "VariableExpression" && !expr.isDereference) {
@@ -4589,9 +4564,9 @@ export class CodeGenerator {
    * Arguments for a method call, with a descriptor built for any parameter
    * declared generic.
    *
-   * Shared because a method call reaches codegen in two shapes: a
-   * `MethodCallExpression`, and a `FunctionCallExpression` whose name carries
-   * the dot (`inst.Method`) — which is the one `x := inst.Method(y)` uses.
+   * Shared because a method call arrives as either a `MethodCallExpression`
+   * or a `FunctionCallExpression` whose name carries the dot (`inst.Method`),
+   * which is what `x := inst.Method(y)` produces.
    */
   private generateCallArguments(
     ownerType: string | undefined,
@@ -5651,10 +5626,9 @@ export class CodeGenerator {
 
   /**
    * The right-hand side of a partial-access write: the whole variable with one
-   * part replaced. Clears the part's bits, then ORs the value in, masked to the
-   * part's width so a wider value cannot corrupt its neighbours.
-   *
-   * A bit keeps its `value ? 1 : 0` form, since the source is a BOOL.
+   * part replaced. Clears the part's bits, then ORs the value in masked to the
+   * part's width, so a wider value cannot corrupt its neighbours. A bit keeps
+   * `value ? 1 : 0`.
    */
   private partialAccessWrite(
     base: string,
@@ -5709,14 +5683,19 @@ export class CodeGenerator {
   ): void {
     this.currentScopeVarTypes.clear();
     this.currentScopeVarRefKinds.clear();
+    this.currentScopeDeclaredNames.clear();
     this.memberMangledNames.clear();
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
         const cppType = this.isUserDefinedType(decl.type.name)
           ? decl.type.name
           : `IEC_${decl.type.name}`;
-        for (const name of decl.names) {
+        decl.names.forEach((name, i) => {
           this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
+          const declared = decl.declaredNames?.[i];
+          if (declared !== undefined) {
+            this.currentScopeDeclaredNames.set(name.toUpperCase(), declared);
+          }
           if (
             decl.type.referenceKind !== undefined &&
             decl.type.referenceKind !== "none"
@@ -5737,7 +5716,7 @@ export class CodeGenerator {
           if (this.currentFBInterfaceMethods.has(name.toUpperCase())) {
             this.memberMangledNames.set(name.toUpperCase(), `${name}_`);
           }
-        }
+        });
       }
     }
   }
@@ -5747,6 +5726,7 @@ export class CodeGenerator {
    */
   private exitScope(): void {
     this.currentScopeVarTypes.clear();
+    this.currentScopeDeclaredNames.clear();
   }
 
   /** Write out a set of user-defined type declarations. */
@@ -5767,8 +5747,8 @@ export class CodeGenerator {
       this.describedStructTypes.add(t);
     // A struct with no layout table is not an error — it compiles and runs, and
     // a program that never puts it on a generic pin is unaffected. It IS worth
-    // saying, because the symptom otherwise is an MQTT topic that never appears
-    // and nothing anywhere to explain it.
+    // saying, because the symptom otherwise is a null `TYPEDESC` at run time
+    // with nothing anywhere to explain it.
     for (const u of typeCodeGen.undescribedTypes) {
       this.codegenWarnings.push({
         message:
@@ -5799,29 +5779,19 @@ export class CodeGenerator {
    * Structures that reach a type a LIBRARY declares — an enumeration or a
    * structure out of a `.stlib`.
    *
-   * The library chunks are injected after the user's types, so a structure
-   * naming one of them was emitted before the declaration it needs and the
-   * C++ compiler reported the type as undeclared. A global variable list is an
-   * ordinary structure here, so this is what a `TP_QUALITY` or `UIO_RESULT`
-   * member of one used to run into.
-   *
-   * A structure holding a library FUNCTION BLOCK never hit it, because
-   * `collectFbBearingTypes` already defers that one — which is why a list
-   * holding a `NODE` worked while the same list holding a `TP_QUALITY` did
-   * not.
-   *
-   * Unlike the function-block case there is nothing to wait for beyond the
-   * library section itself, so these carry no dependency set and the first
-   * flush releases them.
+   * Library chunks are injected after the user's types, so a structure naming
+   * one was emitted before its declaration and C++ reported it undeclared. A
+   * structure holding a library FUNCTION BLOCK never hit this —
+   * `collectFbBearingTypes` already defers that one. Nothing to wait for
+   * beyond the library section, so these carry no dependency set.
    */
   private collectLibraryTypeBearingTypes(ast: CompilationUnit): Set<string> {
     if (this.libraryTypeNames.size === 0) return new Set();
 
-    // Every kind of definition can name a library type, not just a structure:
-    // an alias IS a type reference (`TYPE Mode : LibMode;`), a top-level array
-    // names its element, and a subrange or a typed enum names its base. Each
-    // one is emitted as its own declaration, so each one can land ahead of the
-    // library section.
+    // Every definition kind can name a library type, not just a structure: an
+    // alias IS a type reference, an array names its element, a subrange or
+    // typed enum names its base. Each is its own declaration, so each can land
+    // ahead of the library section.
     const referenced = new Map<string, string[]>();
     for (const td of ast.types) {
       const names: string[] = [];
@@ -6253,10 +6223,9 @@ export class CodeGenerator {
         if (!paramName) continue;
         const upper = paramName.toUpperCase();
         // A variable-length parameter is a view onto the caller's own array,
-        // so the callee's writes already landed there. Copying back would mean
-        // assigning an ArrayView to the concrete array it points at — which is
-        // not a conversion that exists, and would be a self-assignment if it
-        // were.
+        // so the callee's writes already landed there. Copying back would
+        // assign an ArrayView to the array it points at: no such conversion,
+        // and a self-assignment if there were.
         if (vlaInouts?.has(upper)) continue;
         // A function-block inout is a pointer at the caller's own instance, so
         // the callee wrote there directly.
@@ -6469,11 +6438,11 @@ export class CodeGenerator {
 
   /**
    * Emit the call line for a POU (FB or program) invocation.
-   * Subclasses can override to change the call pattern (e.g., ".run()" for programs).
+   * Subclasses can override the call pattern (e.g. ".run()" for programs).
    */
   /**
-   * What to assign to one FB input member: the argument itself, or — when the
-   * parameter was declared generic — a descriptor addressing it.
+   * What to assign to one FB input member: the argument itself, or a
+   * descriptor addressing it when the parameter was declared generic.
    */
   private generateArgumentValue(
     paramName: string,
@@ -6529,18 +6498,10 @@ export class CodeGenerator {
   /**
    * `__VARINFO(x)` — CODESYS's `__SYSTEM.VAR_INFO` for one named variable.
    *
-   * Resolved here, at the call site, for the same reason the `ANY` descriptor
-   * is: the IEC type name is known to codegen and to nothing downstream. A
-   * trait keyed on the C++ payload could not tell `BYTE` from `USINT`.
-   *
-   * `AREA` stays -1 and `BITADDRESS` 0 — CODESYS documents -1 as "not global in
-   * memory, but relative to an instance or on the stack", which is true of
-   * every variable here, and OpenPLC has no device-dependent area numbering to
-   * report. `BITNR` stays -1 for the same reason CODESYS gives it for a
-   * non-integer: there is no bit access to describe. `BYTEOFFSET` is 0 because
-   * the address is absolute in `BYTEADDRESS`; reporting a stack- or
-   * instance-relative offset would mean inventing a base nothing else agrees
-   * on. See iec_varinfo.hpp.
+   * Resolved at the call site, like the `ANY` descriptor: only codegen knows
+   * the IEC type name, and a trait keyed on the C++ payload could not tell
+   * `BYTE` from `USINT`. `AREA` -1, `BITADDRESS` 0, `BITNR` -1, `BYTEOFFSET`
+   * 0 — see iec_varinfo.hpp.
    */
   private generateVarInfo(expr: Expression): string | undefined {
     const declaredType = this.inferExprType(expr);
@@ -6552,9 +6513,8 @@ export class CodeGenerator {
     );
 
     // A POINTER TO / REF_TO / REFERENCE TO variable is an ADDRESS, not a value
-    // of the type it points at. `inferExprType` reports the target, so without
-    // this a `POINTER TO INT` claimed to be a TYPE_INT — the class said two
-    // bytes of integer where the storage is a pointer.
+    // of the type it points at. `inferExprType` reports the target, so a
+    // `POINTER TO INT` claimed TYPE_INT without this.
     const refKind =
       expr.kind === "VariableExpression"
         ? this.currentScopeVarRefKinds.get(expr.name.toUpperCase())
@@ -6615,10 +6575,9 @@ export class CodeGenerator {
       );
     }
 
-    // The address comes from `&`, not `raw_ptr()`. An alias or subrange
-    // variable in a POU is declared RAW (`INT_t A;`, not `IEC_INT`) and has no
-    // `raw_ptr()` at all; for the wrapped types `iec_var.hpp` pins `&x` and
-    // `x.raw_ptr()` to the same address, so one spelling serves both.
+    // The address comes from `&`, not `raw_ptr()`: an alias or subrange in a
+    // POU is declared RAW (`INT_t A;`) and has no `raw_ptr()`. iec_var.hpp
+    // pins `&x` and `x.raw_ptr()` to one address, so `&` serves both.
     const resolved = this.typeClassifier.classify(declaredType);
     if (resolved !== undefined && resolved.nestedStruct === undefined) {
       // An elementary type, an alias or subrange of one, or an enumeration:
@@ -6649,25 +6608,17 @@ export class CodeGenerator {
   /**
    * `&<TYPE>__TYPEDESC` for a struct that has a layout table, else `nullptr`.
    *
-   * Only a STRUCT gets one. A function block instance reaches an `ANY` pin
-   * today, but neither IEC 61131-3 §6.4.3 — which scopes ANY_DERIVED to the
-   * user-defined DATA types of Table 11, and a function block is a POU — nor
-   * CODESYS sanctions that, and a generated FB class may carry a vptr or an
-   * EXTENDS base subobject, where `offsetof` is not answerable. Describing one
-   * would mean publishing member offsets that are wrong on exactly the FBs
-   * that use inheritance.
+   * Only a STRUCT gets one. IEC 61131-3 §6.4.3 scopes ANY_DERIVED to the DATA
+   * types of Table 11 and an FB is a POU, and a generated FB class may carry a
+   * vptr or an EXTENDS base subobject, where `offsetof` is unanswerable.
    */
   /**
    * Queue a `sync_strings()` for a struct that carries a string member.
    *
-   * Same failure as the scalar case one branch up, one level deeper: a block
-   * writing a STRING MEMBER through the descriptor writes characters, and the
-   * length cached beside them stays as it was. Assign a four-character name
-   * over a nine-character one and the program keeps reading nine, five of them
-   * whatever the member held before.
-   *
-   * Skipped when the struct holds no strings, so the ordinary case pays
-   * nothing. One call whatever the struct holds — the walk is the runtime's.
+   * The scalar case one branch up, one level deeper: writing a STRING MEMBER
+   * through the descriptor writes characters and leaves the cached length as
+   * it was. Skipped when the struct holds no strings; one call however many it
+   * holds, since the walk is the runtime's.
    */
   private noteStructStringSync(value: string, typeName: string): void {
     if (!this.structHoldsString(typeName)) return;
@@ -6698,29 +6649,48 @@ export class CodeGenerator {
   }
 
   /**
-   * The argument as the caller wrote it, upper-cased: "PLANT",
-   * "MOTOR.SPEEDRPM", "PROFILE[2]".
+   * The argument as declared: "Plant", "motor.speedRpm", "profile[2]".
    *
-   * Rebuilt from the AST rather than sliced out of the source text, because a
-   * slice would carry whatever the caller wrote between the tokens — a
-   * comment, a line break, the spacing around a subscript — and a block
-   * publishing this as an MQTT topic would put it on the wire.
-   *
-   * A non-constant subscript has no name at this point, so it is rendered as
-   * `[*]`: the alternative is emitting the C++ index expression, which names
-   * a generated temporary and would be worse than saying nothing.
+   * Rebuilt from the AST, not sliced from the source, which would carry
+   * whatever sat between the tokens. A non-constant subscript renders `[*]`.
    */
   private argumentSourceName(expr: Expression): string | undefined {
     if (expr.kind !== "VariableExpression") return undefined;
     const v = expr;
-    let text = v.name.toUpperCase();
+    // The DECLARATION's spelling, not the call site's. `Plant.spPressureAlt`
+    // and `PLANT.SPPRESSUREALT` are one variable to IEC 61131-3 §6.1.2, so
+    // taking the call site would report one variable under two spellings
+    // depending on how the pin happened to be typed.
+    let cursorType = this.currentScopeVarTypes.get(v.name.toUpperCase());
+    let text =
+      this.currentScopeDeclaredNames.get(v.name.toUpperCase()) ??
+      v.name.toUpperCase();
 
     const renderIndex = (e: Expression): string =>
       e.kind === "LiteralExpression" ? String(e.value) : "*";
 
+    /** Step into a member, returning its declared spelling and its type. */
+    const field = (name: string): string => {
+      const def =
+        cursorType === undefined
+          ? undefined
+          : this.structDefs.get(cursorType.toUpperCase());
+      const upper = name.toUpperCase();
+      for (const decl of def?.fields ?? []) {
+        const i = decl.names.findIndex((n) => n.toUpperCase() === upper);
+        if (i === -1) continue;
+        cursorType = decl.type.name;
+        return decl.declaredNames?.[i] ?? decl.names[i]!;
+      }
+      // A function block member, or a type this pass never saw laid out.
+      // Folded is the only spelling on hand, and it still names the member.
+      cursorType = undefined;
+      return upper;
+    };
+
     if (v.accessChain !== undefined && v.accessChain.length > 0) {
       for (const step of v.accessChain) {
-        if (step.kind === "field") text += `.${step.name.toUpperCase()}`;
+        if (step.kind === "field") text += `.${field(step.name)}`;
         else if (step.kind === "subscript") {
           text += `[${step.indices.map(renderIndex).join(",")}]`;
         } else text += "^";
@@ -6732,7 +6702,7 @@ export class CodeGenerator {
     if (v.subscripts.length > 0) {
       text += `[${v.subscripts.map(renderIndex).join(",")}]`;
     }
-    for (const f of v.fieldAccess) text += `.${f.toUpperCase()}`;
+    for (const f of v.fieldAccess) text += `.${field(f)}`;
     return text;
   }
 
@@ -6759,16 +6729,19 @@ export class CodeGenerator {
   /**
    * The declared type as an engineer would write it.
    *
-   * An inline or variable-length array carries a synthetic type name —
-   * `__INLINE_ARRAY_INT`, `__VLA_1D_WORD` — which is a compiler-internal
-   * spelling. A block publishing TYPENAME as a topic segment or a log line
-   * would put that on the wire, so it is rendered back into `ARRAY OF INT`.
+   * An inline or variable-length array carries a synthetic name
+   * (`__INLINE_ARRAY_INT`, `__VLA_1D_WORD`) that means nothing to a callee
+   * reading `TYPENAME`, so it renders back into `ARRAY OF INT`.
    */
   private declaredTypeDisplayName(declaredType: string): string {
     const element = arrayElementTypeName(declaredType);
-    return element === undefined
-      ? declaredType.toUpperCase()
-      : `ARRAY OF ${element.toUpperCase()}`;
+    const name = element ?? declaredType;
+    const declared = this.typeClassifier.declaredTypeName(name);
+    // `declaredTypeName` returns its argument untouched for a name with no
+    // TYPE declaration — an elementary type, a word of the standard's grammar
+    // (IEC 61131-3 Table 10). Those stay folded, as CODESYS reports them.
+    const shown = declared === name ? name.toUpperCase() : declared;
+    return element === undefined ? shown : `ARRAY OF ${shown}`;
   }
 
   private typeDescriptorArg(typeName: string | undefined): string {
@@ -6782,16 +6755,10 @@ export class CodeGenerator {
   /**
    * The `IEC_ANY` descriptor for an argument bound to a generic parameter.
    *
-   * Three fields, as CODESYS defines them:
-   *
-   *   - `typeclass` from the DECLARED type: the C++ payload cannot tell `BYTE`
-   *     from `USINT`;
-   *   - `pvalue` from `raw_ptr()`, the payload rather than the forcing wrapper,
-   *     and the one `force()` keeps current;
-   *   - `diSize` from `IEC_SIZEOF`, the logical IEC width.
-   *
-   * Undefined when the argument's type is not one a generic accepts; the
-   * analyzer already rejects that.
+   * Three fields, as CODESYS defines them: `typeclass` from the DECLARED type
+   * (the C++ payload cannot tell `BYTE` from `USINT`), `pvalue` from
+   * `raw_ptr()` (the payload, which `force()` keeps current), `diSize` from
+   * `IEC_SIZEOF`. Undefined for a type no generic accepts.
    */
   private generateAnyDescriptor(expr: Expression): string | undefined {
     const declaredType = this.inferExprType(expr);

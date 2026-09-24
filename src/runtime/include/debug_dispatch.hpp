@@ -182,11 +182,10 @@ constexpr uint8_t DEBUG_WSTRING_WIDTH = 1 + DEBUG_STRING_CAP * 2;     // 253 byt
 
 // --- STRING (IECStringVar<N>) -----------------------------------------
 //
-// `cap` is the declared capacity from the debug table: `STRING(23)` records 23,
-// an unqualified `STRING` records 0 and means the 254 default. Casting every
-// string to `IECStringVar<254>` would read the length from the wrong offset and
-// copy past the end of a smaller object, so the views below locate each field
-// from the capacity — see the layout block in `iec_string.hpp`.
+// `cap` is the declared capacity from the debug table: `STRING(23)` records
+// 23, unqualified records 0 and means the 254 default. Casting every string to
+// `IECStringVar<254>` would read the length from the wrong offset, so the views
+// below locate each field from the capacity — see `iec_string.hpp`.
 
 /** Declared capacity, or the unqualified default when the table records none. */
 constexpr size_t debug_capacity(uint8_t cap) noexcept { return cap == 0 ? size_t{254} : size_t{cap}; }
@@ -347,10 +346,10 @@ inline void unforce_wstring(void* p, uint8_t cap) noexcept {
 // by force/read (for strings: reserved, handled specially).
 // ---------------------------------------------------------------------------
 struct TypeOps {
-    // Every op takes the declared capacity the debug table records beside the
-    // pointer. Scalars ignore it; a STRING(23) needs it, since
-    // `IECStringVar<23>` and `IECStringVar<254>` are different types and this
-    // table has one row per TypeTag. 0 means unqualified, the 254 default.
+    // Every op takes the declared capacity recorded beside the pointer.
+    // Scalars ignore it; a STRING(23) needs it, since `IECStringVar<23>` and
+    // `IECStringVar<254>` are different types and this table has one row per
+    // TypeTag. 0 means unqualified, the 254 default.
     void (*force)  (void*, const uint8_t*, uint8_t);
     void (*unforce)(void*, uint8_t);
     void (*read)   (const void*, uint8_t*, uint8_t);

@@ -5,17 +5,9 @@
 /**
  * STruC++ Runtime — `__SYSTEM.TYPE_CLASS`.
  *
- * Extracted from `iec_any.hpp` so that everything describing a variable can
- * share ONE type enumeration. Three surfaces need it: `IEC_ANY` (a generic
- * parameter), `VAR_INFO` (CODESYS's `__VARINFO`), and `MemberDesc` (a STRUCT's
- * layout). When the struct descriptors first carried `debug::TypeTag` instead,
- * a block reading `any.TYPECLASS` and `member.TYPECLASS` had to know two
- * different enumerations for the same question — and `debug::TypeTag` is the
- * debugger's dense index into `type_ops[]`, with no enumerator for an array,
- * an enumeration or a structure at all.
- *
- * `iec_any.hpp` still includes this, so anything that reached `TYPE_CLASS`
- * through it keeps compiling.
+ * Extracted from `iec_any.hpp` so `IEC_ANY`, `VAR_INFO` and `MemberDesc` share
+ * ONE enumeration. `debug::TypeTag` will not serve: it is the debugger's dense
+ * index into `type_ops[]`, with no enumerator for a composite.
  */
 
 #pragma once
@@ -25,21 +17,15 @@
 namespace strucpp {
 
 /**
- * `__SYSTEM.TYPE_CLASS` — what `IEC_ANY::typeclass` holds.
+ * `__SYSTEM.TYPE_CLASS` — what `IEC_ANY::TYPECLASS` holds.
  *
- * The values are CODESYS's own and are part of the ABI: imported code compares
- * against them by name, and any renumbering silently changes what a block
- * thinks it was handed. Underlying type is `uint32_t` because CODESYS declares
- * the enumeration over `DWORD`.
+ * The values are CODESYS's and part of the ABI: renumbering silently changes
+ * what a callee thinks it was handed. `uint32_t` because CODESYS declares the
+ * enumeration over `DWORD`, and unscoped because there an enumeration converts
+ * to its base type, so `dwClass := any.typeclass` is ordinary ST.
  *
- * Unscoped, also to match CODESYS: there an enumeration converts to its base
- * type, so `dwClass := any.typeclass` is ordinary ST. A scoped `enum class`
- * would refuse that assignment and make reading the field awkward for no gain
- * — `TYPE_CLASS::TYPE_INT` still qualifies either way.
- *
- * The whole enumeration is defined even though only the elementary members are
- * reachable from a declarable generic, so that a comparison written against
- * CODESYS documentation resolves rather than failing to compile.
+ * Every enumerator is defined, not just those a declarable generic can reach,
+ * so a comparison written against CODESYS documentation resolves.
  */
 enum TYPE_CLASS : uint32_t {
     TYPE_BOOL = 0,

@@ -535,23 +535,19 @@ inline IEC_BOOL EQ(A a, B b) noexcept {
 // EQ and NE on an enumerated data type — IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38
 // -----------------------------------------------------------------------------
 //
-// An enumeration is ANY_DERIVED (§6.4.3 rule 3), not ANY_ELEMENTARY, so it does
-// not satisfy the comparison constraint above and never could — Table 33's
-// inputs are ANY_ELEMENTARY. Table 38 is the separate provision that admits it,
-// and it admits exactly four functions: SEL, MUX, EQ and NE.
+// An enumeration is ANY_DERIVED (§6.4.3 rule 3), so it cannot satisfy the
+// comparison constraint above, whose inputs are ANY_ELEMENTARY (Table 33).
+// Table 38 is the separate provision that admits it, for four functions only:
+// SEL, MUX, EQ and NE.
 //
-// Without these overloads the two spellings of the SAME Table 38 function
-// disagree: `q = GOOD` compiles, because codegen emits `==` on the enum
-// directly, while `EQ(q, GOOD)` does not. A ladder or FBD box has no symbol
-// form — the box IS the name form — so an enumeration could not be compared in
-// a graphical language at all, which §8.1.2 requires ("All supported data types
-// shall be accessible as operands or parameters in the graphical languages").
+// Without these overloads the two spellings of one Table 38 function disagree:
+// `q = GOOD` compiles, `EQ(q, GOOD)` does not. An FBD box has no symbol form,
+// so an enumeration could not be compared graphically at all, which §8.1.2
+// requires.
 //
-// GT, GE, LT and LE are deliberately absent. Table 38 does not list them, an
-// enumeration has no defined order, and §6.4.4.2 warns that two enumerations
-// may share enumerator names — so an ordering would be over the declaration
-// order of one particular type and mean nothing. They keep failing to compile,
-// which is the correct answer.
+// GT, GE, LT and LE are deliberately absent: Table 38 omits them, and §6.4.4.2
+// lets two enumerations share enumerator names, so an ordering would mean
+// nothing. They keep failing to compile.
 template<typename A, typename B>
 using enable_if_two_same_enum = std::enable_if_t<is_same_iec_enum_v<A, B>, int>;
 
@@ -781,15 +777,11 @@ inline T ROR(T in, N n) noexcept {
 // =============================================================================
 
 /**
- * Round to nearest, ties to even — the rule IEC 61131-3 gives for a REAL/LREAL
- * to integer conversion. 2.5 gives 2, 3.5 gives 4, -2.5 gives -2.
+ * Round to nearest, ties to even — IEC 61131-3's rule for REAL/LREAL to
+ * integer. 2.5 gives 2, 3.5 gives 4, -2.5 gives -2.
  *
- * `std::round` rounds halves away from zero, and `std::nearbyint` follows the
- * current FP rounding mode and is absent from avr-libc, so this is written out
- * with `floor` and `fmod`.
- *
- * Distinct from `ROUND()` above, a CODESYS extension that documents its own
- * half-away-from-zero choice.
+ * `std::round` rounds halves away from zero; `std::nearbyint` follows the FP
+ * mode and is absent from avr-libc. Distinct from `ROUND()` above.
  */
 template<typename T>
 inline double iec_round_half_even(T value) noexcept {
@@ -1566,12 +1558,9 @@ inline IEC_UDINT IEC_SIZEOF(const T&) noexcept {
 /**
  * STRING / WSTRING: the character buffer, not the forcing wrapper.
  *
- * `IECStringVar` is not an `IECVar`, so without these it falls to the generic
- * overload and reports the whole wrapper — 518 bytes for the default STRING,
- * where CODESYS reports 255.
- *
- * `capacity + 1` for the terminator, matching CODESYS; a WSTRING is UCS-2, so
- * the same count doubled.
+ * `IECStringVar` is not an `IECVar`, so without these the generic overload
+ * reports 518 bytes for the default STRING where CODESYS reports 255.
+ * `capacity + 1` for the terminator; a WSTRING is UCS-2, so doubled.
  */
 template<size_t MaxLen>
 inline IEC_UDINT IEC_SIZEOF(const IECStringVar<MaxLen>&) noexcept {

@@ -18,11 +18,8 @@
 namespace strucpp {
 
 // CHAR and WCHAR variables are `IECVar<CHAR_t>` / `IECVar<WCHAR_t>`, spelled
-// `IEC_CHAR` and `IEC_WCHAR` in iec_var.hpp. There is deliberately no separate
-// character wrapper: forcing lives in `IECVar` alone, and debug_dispatch.hpp's
-// force_impl/read_impl reach every variable through `IECVar<T>`.
-//
-// The functions below take the raw CHAR_t / WCHAR_t payload.
+// `IEC_CHAR` and `IEC_WCHAR` in iec_var.hpp. No separate character wrapper:
+// forcing lives in `IECVar` alone. The functions below take the raw payload.
 
 inline constexpr CHAR_t CHAR_FROM_INT(int32_t code) noexcept {
     return static_cast<CHAR_t>(code & 0xFF);

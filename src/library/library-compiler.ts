@@ -693,9 +693,15 @@ export function compileLibrary(
       const entry: {
         name: string;
         kind: typeof kind;
-        fields?: Array<{ name: string; type: string }>;
+        declaredName?: string;
+        fields?: Array<{ name: string; type: string; declaredName?: string }>;
         members?: string[];
       } = { name: t.name, kind };
+      // Only when it says something the folded name does not, so an all-caps
+      // library adds nothing to its manifest.
+      if (t.declaredName !== undefined && t.declaredName !== t.name) {
+        entry.declaredName = t.declaredName;
+      }
       // Export the enumerators, so a consumer can name one. The C++ chunk has
       // them, but the symbol table is built from the manifest.
       if (t.definition.kind === "EnumDefinition") {
@@ -705,7 +711,16 @@ export function compileLibrary(
       // on a dependency struct.
       if (t.definition.kind === "StructDefinition") {
         entry.fields = t.definition.fields.flatMap((decl) =>
-          decl.names.map((name) => ({ name, type: decl.type.name })),
+          decl.names.map((name, i) => {
+            const declared = decl.declaredNames?.[i];
+            return {
+              name,
+              type: decl.type.name,
+              ...(declared !== undefined && declared !== name
+                ? { declaredName: declared }
+                : {}),
+            };
+          }),
         );
       }
       return tagDocumentation(tagCategory(entry, catByName), docByName);
@@ -732,17 +747,11 @@ export function compileLibrary(
     sourceFiles: sources.map((s) => s.fileName),
   };
 
-  // The native headers compile LAST, and see this library's own ST symbols as
-  // a dependency.
-  //
-  // The two passes are separate compiles, so with the native pass first a native
-  // block could not name a structure, enumeration or function block its own
-  // library declares, though it could across a real dependency.
-  //
-  // The ST half is handed over in the shape a dependency already takes. The
-  // chunks are empty: this pass exists for its AST and discards its codegen, so
-  // symbol-table entries are the whole contribution, as for a synthetic archive
-  // like `iec-std-functions`.
+  // The native headers compile LAST and see this library's own ST symbols as a
+  // dependency. The two passes are separate compiles, so with the native pass
+  // first a native block could not name a type its own library declares,
+  // though it could across a real dependency. The chunks are empty: this pass
+  // exists for its AST and discards its codegen.
   const selfArchive: StlibArchive = {
     formatVersion: 1,
     manifest: stManifest,

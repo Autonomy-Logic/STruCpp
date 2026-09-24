@@ -67,6 +67,7 @@ import type {
   BinaryOperator,
   UnaryOperator,
 } from "./ast.js";
+import { declaredImageOf } from "./lexer.js";
 import { applyTypeDefaults } from "./type-defaults.js";
 import type { SourceSpan } from "../types.js";
 
@@ -243,29 +244,44 @@ function getNodeStartOffset(node: CstNode): number {
  * The node contains either an Identifier token or one of the contextual keyword tokens
  * (SET, GET, ON, OVERRIDE, ABSTRACT, FINAL).
  */
-function getIdentifierOrKeywordImage(node: CstNode): string {
+/** The token types an `identifierOrKeyword` node can hold, in check order. */
+const IDENTIFIER_OR_KEYWORD_TOKENS = [
+  "Identifier", // by far the most common, so checked first
+  "SET",
+  "GET",
+  "ON",
+  "OVERRIDE",
+  "ABSTRACT",
+  "FINAL",
+  "AND",
+  "OR",
+  "XOR",
+  "NOT",
+  "MOD",
+] as const;
+
+/** The token an `identifierOrKeyword` node holds, or undefined if malformed. */
+function getIdentifierOrKeywordToken(node: CstNode): IToken | undefined {
   const children = node.children as CstChildren;
-  // Check Identifier first (most common case)
-  const identToken = getFirstToken(children.Identifier);
-  if (identToken) return identToken.image;
-  // Check each contextual keyword token
-  for (const key of [
-    "SET",
-    "GET",
-    "ON",
-    "OVERRIDE",
-    "ABSTRACT",
-    "FINAL",
-    "AND",
-    "OR",
-    "XOR",
-    "NOT",
-    "MOD",
-  ]) {
-    const kwToken = getFirstToken(children[key]);
-    if (kwToken) return kwToken.image;
+  for (const key of IDENTIFIER_OR_KEYWORD_TOKENS) {
+    const token = getFirstToken(children[key]);
+    if (token) return token;
   }
-  return "";
+  return undefined;
+}
+
+function getIdentifierOrKeywordImage(node: CstNode): string {
+  return getIdentifierOrKeywordToken(node)?.image ?? "";
+}
+
+/**
+ * The spelling this identifier was given in source. Every name the compiler
+ * matches on is folded (IEC 61131-3 §6.1.2); this is kept alongside for the
+ * descriptor strings in `iec_typedesc.hpp`, which report a declared name.
+ */
+function getIdentifierOrKeywordDeclared(node: CstNode): string {
+  const token = getIdentifierOrKeywordToken(node);
+  return token ? declaredImageOf(token) : "";
 }
 
 /**
@@ -277,6 +293,15 @@ function getAllIdentifierOrKeywordImages(
   if (!items) return [];
   const nodes = items.filter((item): item is CstNode => "children" in item);
   return nodes.map(getIdentifierOrKeywordImage);
+}
+
+/** As `getAllIdentifierOrKeywordImages`, but keeping the declared spelling. */
+function getAllIdentifierOrKeywordDeclared(
+  items: (CstNode | IToken)[] | undefined,
+): string[] {
+  if (!items) return [];
+  const nodes = items.filter((item): item is CstNode => "children" in item);
+  return nodes.map(getIdentifierOrKeywordDeclared);
 }
 
 /**
@@ -872,6 +897,7 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
     const nameToken = getAllTokens(children.Identifier)[0];
     const name = nameToken?.image ?? "";
+    const declaredName = nameToken ? declaredImageOf(nameToken) : "";
 
     const definition = this.buildTypeDefinition(node);
 
@@ -887,6 +913,7 @@ export class ASTBuilder {
       kind: "TypeDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
+      declaredName,
       definition,
       ...(defaultValue !== undefined ? { defaultValue } : {}),
     };
@@ -1486,6 +1513,9 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
     // Variable names come from identifierOrKeyword subrule nodes (allows SET, ON, etc. as names)
     const names = getAllIdentifierOrKeywordImages(children.identifierOrKeyword);
+    const declaredNames = getAllIdentifierOrKeywordDeclared(
+      children.identifierOrKeyword,
+    );
 
     // Check for POINTER TO prefix at varDeclaration level (handles POINTER TO ARRAY[...] OF T)
     const hasPointerTo = !!children.POINTER;
@@ -1538,6 +1568,7 @@ export class ASTBuilder {
       kind: "VarDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       names,
+      declaredNames,
       type,
       ...(initialValue !== undefined ? { initialValue } : {}),
       ...(address !== undefined ? { address } : {}),
@@ -2935,11 +2966,10 @@ export class ASTBuilder {
     // Check for dereference operator (^)
     const isDereference = !!children.Caret;
 
-    // Field access steps after the base name. Three token kinds reach here:
-    // struct members, bare bit indices (`var.31`), and partial access
-    // (`var.%B3`). Sorted by source offset so a mixed chain like
-    // `s.field.%B1` keeps its written order — appending each kind in turn would
-    // group them by kind instead.
+    // Field access steps after the base name: struct members, bare bit
+    // indices (`var.31`) and partial access (`var.%B3`). Sorted by source
+    // offset so `s.field.%B1` keeps its written order; appending each kind in
+    // turn would group by kind.
     const fieldAccess: string[] = [
       ...idOrKwNodes.slice(1).map((node) => ({
         offset: getNodeStartOffset(node),

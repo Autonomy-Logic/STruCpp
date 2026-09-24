@@ -3,16 +3,11 @@
 /**
  * A user structure that names a type a library declares.
  *
- * The library's chunks are injected into the header AFTER the user's types, so
- * a structure with a library-typed member was emitted before the declaration it
- * needs and the C++ compiler reported the type as undeclared:
- *
- *     generated.hpp:113:5: error: 'UIO_RESULT' does not name a type
- *
- * A global variable list is an ordinary structure here, so this is what a list
- * holding a library enumeration ran into. A list holding a library FUNCTION
- * BLOCK always worked, because `collectFbBearingTypes` already defers that
- * one to wait for the class — which is the asymmetry these tests pin.
+ * Library chunks are injected into the header AFTER the user's types, so a
+ * structure with a library-typed member was emitted before the declaration it
+ * needs: `error: 'UIO_RESULT' does not name a type`. A list holding a library
+ * FUNCTION BLOCK always worked, because `collectFbBearingTypes` defers that
+ * one — the asymmetry these tests pin.
  */
 
 import { describe, expect, it } from "vitest";
@@ -185,10 +180,9 @@ describe("a global list holding a library-declared type", () => {
 });
 
 describe("a type declaration that is not a structure", () => {
-  // Every kind of TYPE is emitted as its own declaration, so every kind can
-  // land ahead of the library section. A structure was only the first one
-  // found: an alias emitted `using MYMODE = LIBMODE;` above the enum it names,
-  // which is the same "does not name a type" error one line earlier.
+  // Every kind of TYPE is its own declaration, so every kind can land ahead of
+  // the library section. A structure was only the first found: an alias
+  // emitted `using MYMODE = LIBMODE;` above the enum it names.
 
   it("holds back an alias of a library enumeration", () => {
     const header = headerForTypes(

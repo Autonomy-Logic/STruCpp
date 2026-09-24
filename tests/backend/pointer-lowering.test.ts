@@ -3,16 +3,9 @@
 /**
  * `POINTER TO` lowers to `IEC_Ptr<T>` wherever it is written.
  *
- * `ADR` yields an address assignable to
- * `DWORD | LWORD | POINTER TO <basis data type> | __XWORD` — the address is
- * untyped, which is what lets its own `AnyType.pvalue : POINTER TO BYTE`
- * address a variable of any type. `IEC_Ptr<T>` carries those semantics; a raw
- * `T*` does not.
- *
- * Struct elements and type aliases used to append a `*` to the wrapped type
- * instead, giving `IEC_BYTE*`. That type-checked here and then failed in C++
- * on the assignment, which is the silent-until-g++ shape these tests exist to
- * close.
+ * `ADR` yields an address assignable to `DWORD | LWORD | POINTER TO <basis
+ * data type> | __XWORD`, which `IEC_Ptr<T>` carries and a raw `T*` does not.
+ * Struct elements and aliases used to emit `IEC_BYTE*` instead.
  */
 
 import { describe, expect, it } from "vitest";

@@ -3,15 +3,10 @@
 /**
  * Generic types (CODESYS `ANY`, `ANY_<type>`).
  *
- * Generics in user-declared POUs are outside IEC 61131-3, so these follow
- * CODESYS, as STruC++ already does for `__XWORD`, `ADR`, `SIZEOF` and
- * `MEMCPY`. The contract under test:
- *
- *   - seven declarable names, on a VAR_INPUT of a FUNCTION, FUNCTION_BLOCK or
- *     METHOD and nowhere else;
- *   - the argument is passed by reference, so only a variable may be supplied;
- *   - its type must be one the declared generic accepts;
- *   - the parameter becomes a `{ typeclass, pvalue, diSize }` descriptor.
+ * Outside IEC 61131-3 for user-declared POUs, so these follow CODESYS. The
+ * contract: seven declarable names, on a VAR_INPUT of a FUNCTION,
+ * FUNCTION_BLOCK or METHOD only; the argument passed by reference, so only a
+ * variable, of a type the generic accepts.
  */
 
 import { describe, expect, it } from "vitest";
@@ -425,12 +420,9 @@ END_PROGRAM`;
 
 describe("a generic parameter on a METHOD", () => {
   // METHOD is one of the three scopes CODESYS declares generics in, so a
-  // method call has to build the same descriptor a function block call does.
-  //
-  // It reaches codegen in two shapes: a MethodCallExpression, and — for
-  // `x := inst.Method(y)`, which is how it is normally written — a
-  // FunctionCallExpression whose name carries the dot. Handling only the first
-  // changed nothing, and the second is the one that matters.
+  // method call builds the same descriptor an FB call does. It reaches codegen
+  // as a MethodCallExpression or — for `x := inst.Method(y)` — a
+  // FunctionCallExpression whose name carries the dot.
   const SRC = (call: string) => `
 FUNCTION_BLOCK SENSOR
 VAR_OUTPUT
@@ -582,11 +574,10 @@ END_PROGRAM`;
 });
 
 describe("a STRING handed to a generic parameter", () => {
-  // A STRING is a plain NUL-terminated array in CODESYS, so a callee writing
-  // through `pvalue` has written the whole variable. Here the length is cached
-  // beside the characters (`IECString::length_`), so a write through
-  // `raw_ptr()` leaves `LEN()` stale. `sync_length()` is the runtime's repair
-  // and codegen has to call it — nothing else can.
+  // A STRING is a plain NUL-terminated array in CODESYS, so writing through
+  // `pvalue` writes the whole variable. Here the length is cached beside the
+  // characters, so a write through `raw_ptr()` leaves `LEN()` stale.
+  // `sync_length()` is the repair, and only codegen can call it.
   const SRC = (decl: string, call: string) => `
 FUNCTION_BLOCK FB_ANY VAR_INPUT P : ANY; END_VAR ; END_FUNCTION_BLOCK
 PROGRAM main
@@ -667,11 +658,10 @@ END_PROGRAM`;
 /**
  * An array element and a struct member on a generic parameter.
  *
- * CODESYS accepts any addressable operand on an `ANY`. Both of these parse as a
- * `VariableExpression` — the same node kind as a plain variable, carrying
- * `subscripts` / `fieldAccess` — so they passed the "only a variable may be
- * passed" guard and then failed the type check, which read the type from the
- * VARIABLE's name and so reported the array or the struct.
+ * CODESYS accepts any addressable operand on an `ANY`. Both parse as a
+ * `VariableExpression`, the same node kind as a plain variable, so they passed
+ * the "only a variable" guard and then failed the type check, which read the
+ * type from the VARIABLE's name.
  */
 describe("an array element or struct member on a generic parameter", () => {
   const SRC = (body: string) => `

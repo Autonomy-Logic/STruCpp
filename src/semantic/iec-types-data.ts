@@ -329,10 +329,10 @@ export const IEC_BASE_TYPES: readonly IECTypeMetadata[] = [
     xml: { elementName: "DT", plcopenStandard: true },
     literalDisplay: "DT#YYYY-MM-DD-HH:MM:SS",
   },
-  // The long time types: signed 64-bit nanoseconds, which is how TIME, TOD and
-  // DT are already stored, so each shares its short form's representation.
-  // LDATE is absent because it wants nanoseconds where DATE_t holds whole days.
-  // No PLCopen element exists for any of them, hence plcopenStandard: false.
+  // The long time types: signed 64-bit nanoseconds, how TIME, TOD and DT are
+  // already stored, so each shares its short form's representation. LDATE is
+  // absent — it wants nanoseconds where DATE_t holds whole days. No PLCopen
+  // element exists for any, hence plcopenStandard: false.
   {
     name: "LTIME",
     aliases: [],

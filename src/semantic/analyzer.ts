@@ -1629,9 +1629,9 @@ export class SemanticAnalyzer {
     }
 
     // The callee writes back through the caller's own storage, so both sides
-    // have to be the same type — nothing is widened on the way in or out.
-    // Only a whole elementary variable is compared; an element or a field
-    // would need its type resolved through the chain first.
+    // must be the same type — nothing is widened either way. Only a whole
+    // elementary variable is compared; an element or field would need its type
+    // resolved through the chain first.
     if (
       value.subscripts.length > 0 ||
       value.fieldAccess.length > 0 ||
@@ -2762,18 +2762,11 @@ export class SemanticAnalyzer {
    * declared signature. Strip them before counting against the registry.
    */
   /**
-   * Check arguments passed to a generic parameter.
-   *
-   * Two rules, both CODESYS's:
-   *
-   *   - the argument must be a variable: the parameter is an address, and a
-   *     literal, constant or expression result has none;
-   *   - its type must be one the declared generic accepts, per the hierarchy.
-   *
-   * Concrete parameters are left to C++, which refuses a bad assignment. A
-   * generic accepts every elementary type, so a REAL handed to an ANY_INT still
-   * produces valid C++ — a descriptor stamped TYPE_REAL the block was never
-   * written for — which makes this check the only one guarding it.
+   * Check arguments passed to a generic parameter. Two rules, both CODESYS's:
+   * the argument must be a variable, since the parameter is an address; and
+   * its type must be one the declared generic accepts. Concrete parameters are
+   * left to C++, but a REAL handed to an ANY_INT still produces valid C++ —
+   * a descriptor stamped TYPE_REAL — so this check is the only guard.
    */
   private checkGenericArgs(
     expr: FunctionCallExpression,
@@ -2821,16 +2814,11 @@ export class SemanticAnalyzer {
         continue;
       }
 
-      // The type of the ARGUMENT, not of the variable it starts from.
-      //
-      // `aTemps[i]` and `sMotor.speedRpm` are `VariableExpression`s carrying
-      // `subscripts` / `fieldAccess`, so a lookup keyed on the variable's name
-      // reports the array or the struct and refuses the element, though CODESYS
-      // admits any addressable operand.
-      //
-      // The type checker has already walked the access chain, so prefer its
-      // answer; the map is the fallback for a plain variable. A whole array or
-      // struct falls through to the map and is refused below.
+      // The type of the ARGUMENT, not of the variable it starts from:
+      // `aTemps[i]` is a VariableExpression carrying subscripts, so a lookup
+      // keyed on the name reports the array and refuses the element, which
+      // CODESYS admits. The type checker has already walked the chain, so
+      // prefer its answer; the map is the fallback for a plain variable.
       const resolved = arg.value.resolvedType;
       const argType =
         resolved?.typeKind === "elementary"
@@ -2866,11 +2854,8 @@ export class SemanticAnalyzer {
   /**
    * `__VARINFO(x)` describes a VARIABLE, so the argument has to be one.
    *
-   * Checked here rather than left to codegen: an argument codegen cannot
-   * describe used to fall through to a literal `__VARINFO(X)` in the generated
-   * C++ — a call to a function that does not exist. The ST compiled clean and
-   * the failure surfaced as an unreadable C++ error in a file the engineer did
-   * not write.
+   * Checked here, not left to codegen: an argument codegen cannot describe
+   * used to reach the generated C++ as a call to a nonexistent function.
    */
   private checkVarInfoArg(
     expr: FunctionCallExpression,
@@ -3710,14 +3695,9 @@ export class SemanticAnalyzer {
 
     // A generic names a family rather than a layout, so it can only be a
     // parameter the caller supplies a concrete argument for. `permitted`
-    // defaults false — a return type, local, output, structure field and global
-    // all reach here through call sites that pass nothing — and VAR_INPUT opts
-    // in.
-    //
-    // ARRAY [*] OF ANY cannot be written at all: a variable-length array is
-    // VAR_IN_OUT only on a function block, while a generic is VAR_INPUT only.
-    // A fixed-length ARRAY OF ANY is refused on the same grounds as any
-    // composite — see checkGenericArgs.
+    // defaults false and VAR_INPUT opts in. `ARRAY [*] OF ANY` cannot be
+    // written at all: a variable-length array is VAR_IN_OUT only, a generic
+    // VAR_INPUT only.
     if (isDeclarableGenericType(nameToCheck)) {
       const asArrayElement = typeRef.elementTypeName !== undefined;
       if (!genericsPermitted || asArrayElement) {

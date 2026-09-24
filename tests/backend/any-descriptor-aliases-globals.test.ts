@@ -3,21 +3,12 @@
 /**
  * A generic parameter given a shared global must alias the global.
  *
- * `ANY` is passed by reference — the descriptor hands the callee a pointer and
- * the callee keeps it, which is why a literal and an expression are refused:
- * there would be nothing to point at.
- *
- * The read paths for a shared global hand back a COPY: `read()` for a scalar
- * external, `with_lock(...)` for a composite one. Building the descriptor out
- * of either gives a pointer to a temporary that dies at the end of the full
- * expression, and the callee then writes into freed stack. So the descriptor
- * names the canonical storage instead.
- *
- * Naming the storage also keeps the operand a plain lvalue. The descriptor
- * puts it inside `sizeof` and `IEC_SIZEOF`, which are unevaluated contexts,
- * and a lambda there is C++20 — this compiler targets C++17, so a `with_lock`
- * operand did not merely bind the wrong thing, it failed to build at all for
- * an Arduino target.
+ * `ANY` is passed by reference, so a literal or expression is refused: there
+ * would be nothing to point at. A shared global's read paths hand back a COPY
+ * (`read()`, `with_lock`), so a descriptor built from one points at a temporary
+ * that dies with the full expression. The canonical storage is named instead,
+ * which also keeps the operand a plain lvalue — a `with_lock` lambda inside
+ * `sizeof` is C++20, and this targets C++17.
  */
 
 import { describe, expect, it } from "vitest";

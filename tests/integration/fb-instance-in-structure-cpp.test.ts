@@ -1,20 +1,14 @@
 /**
  * A function block instance held by a structure, and called through it.
  *
- * Two POUs can only share one instance through a global, and the editor models
- * a Global Variable List as a structure type plus one global of it — so the
- * shared instance is a structure member, reached as `NET.node(...)`.
+ * Two POUs share an instance through a global, and the editor models a Global
+ * Variable List as a structure type plus one global of it — so the instance is
+ * a structure member, reached as `NET.node(...)`.
  *
- * Both halves were broken and neither showed up in the generated text:
- *
- *   - a dotted call was emitted as a method call on the structure, dropping the
- *     named arguments;
- *   - the structure was emitted ahead of the class it holds, so the member had
- *     an incomplete type.
- *
- * These run end to end through g++ for the same reason DOPE-613's do: ST → C++
- * translation reported success throughout, so a codegen-string assertion would
- * have stayed green.
+ * Both halves were broken: a dotted call was emitted as a method call on the
+ * structure, dropping the named arguments, and the structure was emitted ahead
+ * of the class it holds. ST → C++ reported success throughout, so these run
+ * through g++ rather than asserting on the generated text.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";

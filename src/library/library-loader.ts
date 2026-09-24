@@ -83,6 +83,7 @@ function buildLibraryTypeDefinition(
         kind: "VarDeclaration" as const,
         sourceSpan: createDefaultSourceSpan(),
         names: [f.name],
+        declaredNames: [f.declaredName ?? f.name],
         type: {
           kind: "TypeReference" as const,
           sourceSpan: createDefaultSourceSpan(),
@@ -429,6 +430,7 @@ export function registerLibrarySymbols(
           kind: "TypeDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           name: t.name,
+          declaredName: t.declaredName ?? t.name,
           // A struct with exported fields gets a REAL StructDefinition, not the
           // self-referential alias the other kinds fall back to.
           //

@@ -138,12 +138,10 @@ public:
     static constexpr size_t length() noexcept { return size; }
 
     /**
-     * The elements in memory order, and how many.
-     *
-     * What a generic argument's descriptor is built from: the address of the
-     * first element whatever the declared lower bound, and a count that does
-     * not depend on the rank. Bounds-checked access is `at()`; this is for
-     * describing the storage, not reaching into it.
+     * The elements in memory order, and how many — the address of element
+     * zero whatever the declared lower bound, and a rank-independent count.
+     * A generic argument's descriptor is built from these. Bounds-checked
+     * access is `at()`.
      */
     element_type* elements() noexcept { return data_.data(); }
     const element_type* elements() const noexcept { return data_.data(); }
@@ -151,13 +149,10 @@ public:
 
     /**
      * Byte offset of the first element's payload, which must stay 0 — the
-     * counterpart of `IECVar::value_field_offset()`.
-     *
-     * A STRUCT member that is an array takes its `MemberDesc::OFFSET` from
-     * this (iec_typedesc.hpp): the member's own offset plus the container's
-     * offset to element zero, plus the element wrapper's own payload offset.
-     * Were the storage ever to move behind a bookkeeping field, a block
-     * walking the struct would read that field as the first element.
+     * counterpart of `IECVar::value_field_offset()`. A STRUCT member that is
+     * an array adds this to its own offset (iec_typedesc.hpp); were the
+     * storage to move behind a bookkeeping field, a walk would read that
+     * field as element zero.
      */
     static constexpr size_t elements_field_offset() noexcept {
         return offsetof(IEC_ARRAY_1D, data_);
@@ -279,12 +274,10 @@ public:
     auto end() const noexcept { return data_.end(); }
 
     /**
-     * The elements in memory order, and how many.
-     *
-     * What a generic argument's descriptor is built from: the address of the
-     * first element whatever the declared lower bound, and a count that does
-     * not depend on the rank. Bounds-checked access is `at()`; this is for
-     * describing the storage, not reaching into it.
+     * The elements in memory order, and how many — the address of element
+     * zero whatever the declared lower bound, and a rank-independent count.
+     * A generic argument's descriptor is built from these. Bounds-checked
+     * access is `at()`.
      */
     element_type* elements() noexcept { return data_.data(); }
     const element_type* elements() const noexcept { return data_.data(); }
@@ -292,13 +285,10 @@ public:
 
     /**
      * Byte offset of the first element's payload, which must stay 0 — the
-     * counterpart of `IECVar::value_field_offset()`.
-     *
-     * A STRUCT member that is an array takes its `MemberDesc::OFFSET` from
-     * this (iec_typedesc.hpp): the member's own offset plus the container's
-     * offset to element zero, plus the element wrapper's own payload offset.
-     * Were the storage ever to move behind a bookkeeping field, a block
-     * walking the struct would read that field as the first element.
+     * counterpart of `IECVar::value_field_offset()`. A STRUCT member that is
+     * an array adds this to its own offset (iec_typedesc.hpp); were the
+     * storage to move behind a bookkeeping field, a walk would read that
+     * field as element zero.
      */
     static constexpr size_t elements_field_offset() noexcept {
         return offsetof(IEC_ARRAY_2D, data_);
@@ -431,12 +421,10 @@ public:
     auto end() const noexcept { return data_.end(); }
 
     /**
-     * The elements in memory order, and how many.
-     *
-     * What a generic argument's descriptor is built from: the address of the
-     * first element whatever the declared lower bound, and a count that does
-     * not depend on the rank. Bounds-checked access is `at()`; this is for
-     * describing the storage, not reaching into it.
+     * The elements in memory order, and how many — the address of element
+     * zero whatever the declared lower bound, and a rank-independent count.
+     * A generic argument's descriptor is built from these. Bounds-checked
+     * access is `at()`.
      */
     element_type* elements() noexcept { return data_.data(); }
     const element_type* elements() const noexcept { return data_.data(); }
@@ -444,13 +432,10 @@ public:
 
     /**
      * Byte offset of the first element's payload, which must stay 0 — the
-     * counterpart of `IECVar::value_field_offset()`.
-     *
-     * A STRUCT member that is an array takes its `MemberDesc::OFFSET` from
-     * this (iec_typedesc.hpp): the member's own offset plus the container's
-     * offset to element zero, plus the element wrapper's own payload offset.
-     * Were the storage ever to move behind a bookkeeping field, a block
-     * walking the struct would read that field as the first element.
+     * counterpart of `IECVar::value_field_offset()`. A STRUCT member that is
+     * an array adds this to its own offset (iec_typedesc.hpp); were the
+     * storage to move behind a bookkeeping field, a walk would read that
+     * field as element zero.
      */
     static constexpr size_t elements_field_offset() noexcept {
         return offsetof(IEC_ARRAY_3D, data_);
@@ -494,12 +479,10 @@ class ArrayView1D {
 
 public:
     /**
-     * Unbound view — no array, and an empty range.
-     *
-     * A function block stores its VAR_IN_OUT parameters as members and binds
-     * them at the call, so the member exists before there is an array to point
-     * at. `upper < lower` makes the range empty rather than zero-based, so a
-     * loop over the bounds runs no iterations and `at()` faults on any index.
+     * Unbound view — no array, and an empty range. An FB holds its VAR_IN_OUT
+     * parameters as members bound at the call, so the member exists before
+     * there is an array. `upper < lower` is empty rather than zero-based, so a
+     * loop runs no iterations and `at()` faults on any index.
      */
     ArrayView1D() noexcept : data_(nullptr), lower_(0), upper_(-1) {}
 
@@ -557,12 +540,10 @@ class ArrayView2D {
 
 public:
     /**
-     * Unbound view — no array, and an empty range.
-     *
-     * A function block stores its VAR_IN_OUT parameters as members and binds
-     * them at the call, so the member exists before there is an array to point
-     * at. `upper < lower` makes the range empty rather than zero-based, so a
-     * loop over the bounds runs no iterations and `at()` faults on any index.
+     * Unbound view — no array, and an empty range. An FB holds its VAR_IN_OUT
+     * parameters as members bound at the call, so the member exists before
+     * there is an array. `upper < lower` is empty rather than zero-based, so a
+     * loop runs no iterations and `at()` faults on any index.
      */
     ArrayView2D() noexcept
         : data_(nullptr)
@@ -615,16 +596,10 @@ public:
 /**
  * `SIZEOF` on a variable-length array parameter — the data, not the view.
  *
- * A view is a descriptor (pointer plus bounds) of a size that has nothing to
- * do with what it addresses, so without these it falls to the generic
- * `IEC_SIZEOF(const T&)` and reports `sizeof(ArrayView1D<T>)` — the same
- * number for every element type and every length.
- *
- * The count comes from the bounds the caller passed, so this reports what a
- * fixed-bound array of the same shape reports: the physical footprint, which
- * is what `MEMCPY` needs and what `SIZEOF` on a whole array already gives.
- * That also makes `SIZEOF(a) / count` the element stride on any target,
- * without a table of types and sizes to keep in sync.
+ * Without these it falls to the generic `IEC_SIZEOF(const T&)` and reports
+ * `sizeof(ArrayView1D<T>)`: one number for every element type and length.
+ * Counting from the caller's bounds instead reports the physical footprint, as
+ * a fixed-bound array of the same shape does.
  */
 template <typename T>
 inline uint32_t IEC_SIZEOF(const ArrayView1D<T>& v) noexcept {

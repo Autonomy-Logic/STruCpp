@@ -19,33 +19,24 @@
  *     BaseTypeClass : __SYSTEM.TYPE_CLASS;
  *     ElemBitSize   : UDINT;
  *
- * `__VARINFO` is an extension of IEC 61131-3, as CODESYS says on its own
- * documentation page for it. It describes ONE variable, named in source at
- * compile time — `__VARINFO(iCounter)`.
+ * An extension of IEC 61131-3, as CODESYS documents, describing ONE variable
+ * named in source at compile time. NOT the mechanism behind
+ * `IEC_ANY::TYPEDESC`, which needs a member list this has not got;
+ * `iec_typedesc.hpp` only borrows its field names.
+ */
+
+/*
+ * Members are upper-case for the same reason `IEC_ANY`'s are: the compiler
+ * normalises ST identifiers, so `info.ByteOffset` resolves here.
  *
- * It is a feature in its own right and is NOT the mechanism behind
- * `IEC_ANY::TYPEDESC`: it has no member list, so it cannot walk a structure
- * whose type the callee does not know. The struct descriptors in
- * `iec_typedesc.hpp` borrow this structure's field names so that a codebase
- * using both has one vocabulary, and that is the whole of the relationship.
+ * Deviations from CODESYS:
  *
- * Members are spelled upper-case for the same reason `IEC_ANY`'s are: ST
- * identifiers are case-insensitive and the compiler normalises them, so a POU
- * written against CODESYS documentation saying `info.ByteOffset` resolves here.
- *
- * Deviations from CODESYS, and why:
- *
- *   - `AREA` is always -1 and `BITADDRESS` always 0. CODESYS numbers memory
- *     areas per device and fills `BitAddress` only for a variable located in
- *     %I/%Q/%M. OpenPLC has no such area numbering, and CODESYS documents -1 as
- *     meaning "not global in memory, but relative to an instance or the stack"
- *     — which is true of every variable here. Reporting a plausible-looking
- *     number instead would invite arithmetic on it.
- *   - `BYTEADDRESS` is `uintptr_t`, not `DWORD`. A 32-bit field silently
- *     truncates a 64-bit address, and the OpenPLC Runtime is a 64-bit process:
- *     a block doing `ADR` arithmetic off a truncated address would read another
- *     variable, or fault. `__XWORD` already sets the precedent for a
- *     platform-width word here.
+ *   - `AREA` is always -1 and `BITADDRESS` 0. OpenPLC has no per-device area
+ *     numbering, and CODESYS documents -1 as "not global in memory, but
+ *     relative to an instance or the stack" — true of every variable here.
+ *   - `BYTEADDRESS` is `uintptr_t`, not `DWORD`: the Runtime is a 64-bit
+ *     process, and a truncated address used for `ADR` arithmetic would read
+ *     another variable or fault. `__XWORD` sets the precedent.
  */
 
 #pragma once

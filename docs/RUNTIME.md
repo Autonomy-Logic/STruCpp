@@ -250,11 +250,11 @@ position still works. OpenPLC appends to that, never reorders it: `DICOUNT`,
 
 `PVALUE` addresses the payload rather than the `IECVar<T>` wrapper around it,
 and the descriptor *aliases* its operand — so writing `*(T*)any.PVALUE` writes
-what the caller passed, which is how a block sends setpoints back.
+what the caller passed, which is how a callee writes values back.
 
 A STRUCT reaches an `ANY` pin as `TYPE_USERDEF`, but a pointer and a byte count
-describe nothing a block can act on: a structure is heterogeneous, so unlike an
-array it cannot be walked from a base and a stride. `TYPEDESC` closes that —
+describe nothing a callee can act on: a structure is heterogeneous, so unlike
+an array it cannot be walked from a base and a stride. `TYPEDESC` closes that —
 a `const TypeDesc` emitted beside the generated struct, naming every member
 with its payload offset, kind, elementary tag and capacity:
 
@@ -262,7 +262,7 @@ with its payload offset, kind, elementary tag and capacity:
 const strucpp::TypeDesc* d = any.TYPEDESC;
 for (uint16_t i = 0; i < d->MEMBERCOUNT; ++i) {
     const strucpp::MemberDesc& m = d->MEMBERS[i];
-    publish(m.NAME, any.PVALUE + m.BYTEOFFSET, m.TYPECLASS);  // "SPEEDRPM", &value, TYPE_REAL
+    handle(m.NAME, any.PVALUE + m.BYTEOFFSET, m.TYPECLASS);  // "speedRpm", &value, TYPE_REAL
 }
 ```
 
@@ -298,17 +298,41 @@ the variable the caller wired up, and a scalar has no `TYPEDESC` at all — so
 
 | argument | `NAME` | `TYPENAME` | `TYPEDESC` |
 |---|---|---|---|
-| `setpoint : REAL` | `SETPOINT` | `REAL` | null |
-| `myText : STRING(20)` | `MYTEXT` | `STRING` | null |
-| `mode : E` (enum) | `MODE` | `E` | null |
-| `trend : ARRAY[0..2] OF INT` | `TREND` | `ARRAY OF INT` | null |
-| `trend[2]` | `TREND[2]` | `INT` | null |
-| `plant : S_PLANT` | `PLANT` | `S_PLANT` | `&S_PLANT__TYPEDESC` |
-| `plant.speedRpm` | `PLANT.SPEEDRPM` | `INT` | null |
+| `setpoint : REAL` | `setpoint` | `REAL` | null |
+| `myText : STRING(20)` | `myText` | `STRING` | null |
+| `mode : E` (enum) | `mode` | `E` | null |
+| `trend : ARRAY[0..2] OF INT` | `trend` | `ARRAY OF INT` | null |
+| `trend[2]` | `trend[2]` | `INT` | null |
+| `plant : S_Plant` | `plant` | `S_Plant` | `&S_PLANT__TYPEDESC` |
+| `plant.speedRpm` | `plant.speedRpm` | `INT` | null |
 
-So `plant/line3/<NAME>` works for a scalar pin, and
-`plant/line3/<TYPEDESC member name>` for each member of a struct pin. Both are
-null only on an unwired pin.
+So a callee can name a scalar pin from `NAME`, and each member of a struct pin
+from the member's own name. Both are null only on an unwired pin.
+
+#### Case
+
+Every name in a descriptor — `MemberDesc::NAME`, `TypeDesc::NAME`,
+`IEC_ANY::NAME` and `IEC_ANY::TYPENAME` for a user-defined type — carries the
+spelling its **declaration** used. `spPressureAlt` stays `spPressureAlt`.
+
+IEC 61131-3 §6.1.2 makes identifiers case-insensitive, so the compiler folds
+every name it resolves on, and debug-map paths — an internal address table —
+stay folded with it. Descriptor strings are reported rather than resolved on,
+and the declared spelling is the only form they can still be recovered from.
+
+Two consequences for a callee:
+
+- Compare case-**insensitively** against anything an engineer typed, because ST
+  resolution does. Read the string as it stands.
+- The spelling is the declaration's, not the call site's. `Plant` declared and
+  `PLANT` wired to the pin is one variable, and reports `Plant` either way —
+  otherwise one variable would be reported under two spellings depending on
+  how the pin happened to be typed.
+
+The generated C++ *symbols* stay folded: `S_PLANT__TYPEDESC` is a name only
+generated code uses. Elementary type names (`INT`, `STRING`) stay upper
+case because they are words of the standard's grammar rather than names anyone
+chose — which is how CODESYS reports them in `VAR_INFO.TypeName` too.
 
 ### `__VARINFO` — a separate feature
 
@@ -357,10 +381,10 @@ string per variable in `project.json`, but it is not emitted into the generated
 ST, so the compiler never sees it and no runtime field can carry it.
 
 A STRUCT that cannot be laid out gets **no** table rather than a partial one —
-a block trusts `MEMBERCOUNT`, so a short table reads as a struct missing the
-member the engineer wired up. That is reported as a compiler **warning** naming
-the struct, the member and the reason, because the symptom otherwise is a topic
-that never appears with nothing to point at. A `POINTER TO` or `REFERENCE TO`
+a callee trusts `MEMBERCOUNT`, so a short table reads as a struct missing the
+member. That is reported as a compiler **warning** naming the struct, the
+member and the reason, because the symptom otherwise is a member that is simply
+absent at run time with nothing to point at. A `POINTER TO` or `REFERENCE TO`
 member is refused (the descriptor cannot vouch for what it addresses or how
 long that lives), as is a function block instance member and an `__XWORD`.
 

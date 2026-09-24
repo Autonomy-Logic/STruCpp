@@ -23,20 +23,13 @@
 namespace strucpp {
 
 /**
- * Base class for hand-written IEC structures.
+ * Base class for hand-written IEC structures. NOT what codegen emits.
  *
- * NOT what codegen emits. `generateStructType` (backend/type-codegen.ts) emits
- * a plain aggregate with no base, no constructor and no virtual anything, so
- * that a generated STRUCT stays standard-layout — which is what lets
- * `offsetof` describe its members in a `TypeDesc` (iec_typedesc.hpp) and what
- * keeps `IEC_ANY::DISIZE` an honest byte count rather than a footprint with a
- * vptr in it. `is_iec_struct<T>` is therefore false for every generated
- * struct; it answers only for the hand-written structures in the runtime's own
- * tests.
- *
- * Kept because those tests use it, and because a user writing a C++ structure
- * by hand may want a common base. Deriving a type you then pass on an `ANY`
- * pin will cost you the descriptor, not just the layout.
+ * `generateStructType` emits a plain aggregate with no base and nothing
+ * virtual, so a generated STRUCT stays standard-layout — which is what lets
+ * `offsetof` describe it in a `TypeDesc`. `is_iec_struct<T>` is therefore
+ * false for every generated struct. Deriving a type you then pass on an `ANY`
+ * pin costs you the descriptor, not just the layout.
  */
 class IEC_STRUCT_Base {
 public:
@@ -74,21 +67,12 @@ inline T iec_struct_init(Setter&& setter) {
 /**
  * Re-cache the length of every STRING and WSTRING beneath `base`.
  *
- * `IECString` stores its length in a field that trails the characters, and
- * caches it rather than deriving it on read. A block handed a STRUCT on an
- * `ANY` pin writes a member's characters through `MemberDesc::OFFSET` and has
- * no way to reach that field, so without this the ST side keeps reading the
- * old length: assign a four-character name over a nine-character one and the
- * program still sees nine, five of them stale.
- *
- * Codegen emits one call to this after a call that passes a struct carrying
- * string members to a generic parameter — the same job the post-call
- * `sync_length()` already does for a whole STRING on an `ANY` pin. One call
- * whatever the struct holds, so a member declared `ARRAY[1..1000] OF STRING`
- * costs a line of generated code rather than a thousand.
- *
- * Walks nested structures and arrays. Does nothing when `desc` is null, so a
- * caller need not check first.
+ * `IECString` caches its length in a field trailing the characters. A callee
+ * writing a member through `MemberDesc::BYTEOFFSET` cannot reach that field,
+ * so without this the ST side keeps reading the old length. Codegen emits one
+ * call after passing such a struct to a generic parameter — one call whatever
+ * the struct holds. Walks nested structures and arrays; null `desc` is a
+ * no-op.
  */
 inline void sync_strings(void* base, const TypeDesc* desc) {
     if (base == nullptr || desc == nullptr) return;
@@ -113,13 +97,11 @@ inline void sync_strings(void* base, const TypeDesc* desc) {
                 (m.TYPECLASS == TYPE_ARRAY) ? m.BASETYPECLASS : m.TYPECLASS;
             if (leaf != TYPE_STRING && leaf != TYPE_WSTRING) continue;
 
-            // BYTEOFFSET addresses the characters, which are at offset 0 of the
-            // wrapper — pinned by value_field_offset() — so `at` is also the
-            // wrapper's base, and the cached length sits a capacity-dependent
-            // distance along it. Located by capacity rather than by casting to
-            // an IECStringVar<N>: the walker is not a template, and casting to
-            // the wrong N would write the length past the end of a short
-            // member.
+            // BYTEOFFSET addresses the characters, which value_field_offset()
+            // pins at 0, so `at` is also the wrapper's base and the cached
+            // length sits a capacity-dependent distance along it. Located by
+            // capacity, not by casting to IECStringVar<N>: the walker is not a
+            // template, and the wrong N would write past a short member.
             const size_t cap = m.CAP;
             if (leaf == TYPE_WSTRING) {
                 char16_t* const chars = reinterpret_cast<char16_t*>(at);
@@ -141,16 +123,10 @@ inline void sync_strings(void* base, const TypeDesc* desc) {
 }
 
 /**
- * One member as a CODESYS `VAR_INFO`.
- *
- * The bridge between the two halves of this vocabulary: a block that already
- * reads `__VARINFO` output can read a struct member the same way, without
- * learning a second set of field names. `base` is the struct's address — what
- * `IEC_ANY::PVALUE` holds — so `BYTEADDRESS` comes out as the member's actual
- * address rather than an offset the caller still has to add.
- *
- * `AREA` and `BITADDRESS` keep the values `VAR_INFO` documents for a variable
- * that is not in a numbered memory area; see iec_varinfo.hpp.
+ * One member as a CODESYS `VAR_INFO`, so a callee reading `__VARINFO` output
+ * can read a struct member the same way. `base` is the struct's address — what
+ * `IEC_ANY::PVALUE` holds — so `BYTEADDRESS` is the member's actual address.
+ * `AREA` and `BITADDRESS` keep `VAR_INFO`'s values; see iec_varinfo.hpp.
  */
 inline VAR_INFO member_info(const MemberDesc& m, const void* base) {
     VAR_INFO info;

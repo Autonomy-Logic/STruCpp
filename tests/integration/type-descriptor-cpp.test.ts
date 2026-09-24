@@ -3,22 +3,20 @@
 /**
  * A native C++ block walking a STRUCT handed to it on an `ANY` pin.
  *
- * `tests/backend/type-descriptor.test.ts` checks the SHAPE of the emitted
- * tables. It cannot check the arithmetic: every offset is a C++ constant
- * expression, because only the target compiler knows its own padding and
- * because a struct member is a WRAPPER whose payload the descriptor has to
- * address. So this compiles the generated code and runs it.
- *
+ * `tests/backend/type-descriptor.test.ts` checks the tables' SHAPE. It cannot
+ * check the arithmetic, so this compiles the generated code and runs it.
+ */
+
+/*
  * The three things that would silently ship wrong data if they broke:
  *
  *   1. An offset addressing the WRAPPER rather than the payload. `IECVar` puts
- *      the forcing flag straight after the value, so a block reading a forced
- *      member would get a bool back as its data with nothing able to tell.
- *   2. A STRING member's payload being anything but the characters. PLCnext
- *      ships a documented foot-gun here — raw STRING payloads with header
- *      bytes in front — and this asserts STruC++ does not.
- *   3. A STRING member written through the descriptor leaving the cached
- *      length stale, so the ST side keeps reading the old one.
+ *      the forcing flag straight after the value, so a forced member would
+ *      read back as a bool with nothing able to tell.
+ *   2. A STRING member's payload being anything but the characters — PLCnext
+ *      documents a foot-gun here; this asserts STruC++ has none.
+ *   3. A STRING written through the descriptor leaving the cached length
+ *      stale, so the ST side keeps reading the old one.
  */
 
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
@@ -47,14 +45,14 @@ TYPE STATION : STRUCT
   POINTS : ARRAY[0..2] OF INNER;
 END_STRUCT END_TYPE
 
-FUNCTION_BLOCK PUBLISHER
+FUNCTION_BLOCK SINK
 VAR_INPUT PAYLOAD : ANY; END_VAR
 END_FUNCTION_BLOCK
 
 PROGRAM MAIN
 VAR
   ST : STATION;
-  P : PUBLISHER;
+  P : SINK;
 END_VAR
   P(PAYLOAD := ST);
 END_PROGRAM
@@ -285,15 +283,11 @@ ${body}
   });
 
   it("shadows a descriptor field exactly as IEC_ANY already does", () => {
-    // The descriptor's fields are spelled as CODESYS spells VAR_INFO's, which
-    // means a C++ POU must not name one of its own pins after one: the editor
-    // binds a POU's Variables Table with `#define <NAME> (*(vars-><NAME>))`,
-    // and codegen upper-cases every ST identifier.
-    //
-    // This is not a NEW hazard introduced by the descriptor — IEC_ANY's
-    // TYPECLASS and PVALUE have always behaved this way. The test pins that
-    // equivalence, so the rule stays one rule ("rename the pin") rather than
-    // becoming a special case somebody has to learn separately.
+    // The descriptor's fields are spelled as CODESYS spells VAR_INFO's, so a
+    // C++ POU must not name a pin after one: the editor binds a Variables
+    // Table with `#define <NAME> (*(vars-><NAME>))`. Not a new hazard —
+    // IEC_ANY's TYPECLASS and PVALUE always behaved this way, and this pins
+    // the equivalence so the rule stays one rule.
     const probe = (field: string, expr: string) => {
       try {
         run(
@@ -363,5 +357,150 @@ ${body}
     expect(cppCode).toContain(
       "strucpp::sync_strings(&ST, &STATION__TYPEDESC);",
     );
+  });
+});
+
+/**
+ * The declared spelling of a name, arriving intact in the generated tables.
+ *
+ * Everything the compiler resolves on is folded (IEC 61131-3 §6.1.2). A
+ * descriptor name is reported rather than resolved on, and nothing downstream
+ * can put the case back once the compiler has taken it out.
+ */
+describeIfGpp("declared case in the emitted tables", () => {
+  const MIXED = `
+TYPE Sensor : STRUCT
+  tagName : STRING(8);
+  rawCount : INT;
+END_STRUCT END_TYPE
+
+TYPE PlantTags : STRUCT
+  spPressureAlt : REAL;
+  Flow_Rate : REAL;
+  ALARM : BOOL;
+  inlet : Sensor;
+END_STRUCT END_TYPE
+
+FUNCTION_BLOCK SINK
+VAR_INPUT PAYLOAD : ANY; END_VAR
+END_FUNCTION_BLOCK
+
+PROGRAM MAIN
+VAR
+  Plant : PlantTags;
+  P : SINK;
+END_VAR
+  P(PAYLOAD := Plant);
+END_PROGRAM
+`;
+
+  let tempDir = "";
+  let pchPath = "";
+  let headerCode = "";
+  let cppCode = "";
+
+  beforeAll(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-typedesc-case-"));
+    pchPath = createPCH(tempDir);
+    const result = compile(MIXED, { programName: "MAIN" });
+    expect(result.success, JSON.stringify(result.errors)).toBe(true);
+    headerCode = result.headerCode ?? "";
+    cppCode = result.cppCode ?? "";
+  });
+
+  afterAll(() => {
+    if (tempDir && fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  const run = (body: string, testName: string) =>
+    compileAndRunStandalone({
+      tempDir,
+      pchPath,
+      headerCode,
+      cppCode,
+      testName,
+      mainCode: `
+#include "generated.hpp"
+#include <cstdio>
+#include <cstring>
+using namespace strucpp;
+int main() {
+${body}
+  std::printf("DONE\\n");
+  return 0;
+}
+`,
+    });
+
+  it("names each member in the spelling the DUT declared", () => {
+    const out = run(
+      `
+  const TypeDesc* d = &PLANTTAGS__TYPEDESC;
+  for (uint16_t i = 0; i < d->MEMBERCOUNT; ++i) {
+    std::printf("%s/%s\\n", d->NAME, d->MEMBERS[i].NAME);
+  }
+`,
+      "typedesc_case_names",
+    );
+    expect(out).toContain("PlantTags/spPressureAlt");
+    expect(out).toContain("PlantTags/Flow_Rate");
+    expect(out).toContain("PlantTags/ALARM");
+    expect(out).toContain("PlantTags/inlet");
+    expect(out).not.toContain("SPPRESSUREALT");
+    expect(out).not.toContain("FLOW_RATE");
+  });
+
+  it("keeps the case at every depth, so a nested path is not half folded", () => {
+    const out = run(
+      `
+  const MemberDesc& inlet = PLANTTAGS__TYPEDESC.MEMBERS[3];
+  for (uint16_t i = 0; i < inlet.NESTED->MEMBERCOUNT; ++i) {
+    std::printf("%s.%s:%s\\n", inlet.NAME, inlet.NESTED->MEMBERS[i].NAME,
+                inlet.NESTED->NAME);
+  }
+`,
+      "typedesc_case_nested",
+    );
+    expect(out).toContain("inlet.tagName:Sensor");
+    expect(out).toContain("inlet.rawCount:Sensor");
+  });
+
+  it("names the wired variable as DECLARED, not as the pin was typed", () => {
+    // `Plant` is what the VAR block says; the descriptor takes that rather
+    // than the call site, so one variable cannot be reported under two
+    // spellings depending on which was wired to the pin.
+    expect(cppCode).toContain('"Plant", "PlantTags"');
+    expect(cppCode).toContain("&PLANTTAGS__TYPEDESC");
+    // The C++ SYMBOL stays folded — it is a name only generated code uses.
+    expect(cppCode).not.toContain("PlantTags__TYPEDESC");
+  });
+
+  it("still matches case-insensitively, because ST resolution does", () => {
+    // A callee comparing a member name against something an engineer typed
+    // must fold both sides. This is the contract MemberDesc::NAME documents,
+    // and it is why preserving the case costs a consumer nothing.
+    const out = run(
+      `
+  const TypeDesc* d = &PLANTTAGS__TYPEDESC;
+  const char* want = "SPPRESSUREALT";
+  int found = -1;
+  for (uint16_t i = 0; i < d->MEMBERCOUNT; ++i) {
+    const char* a = d->MEMBERS[i].NAME;
+    const char* b = want;
+    while (*a && *b) {
+      char ca = (*a >= 'a' && *a <= 'z') ? (char)(*a - 32) : *a;
+      char cb = (*b >= 'a' && *b <= 'z') ? (char)(*b - 32) : *b;
+      if (ca != cb) break;
+      ++a; ++b;
+    }
+    if (!*a && !*b) { found = (int)i; break; }
+  }
+  std::printf("found=%d as=%s\\n", found, found < 0 ? "-" : d->MEMBERS[found].NAME);
+`,
+      "typedesc_case_insensitive_match",
+    );
+    expect(out).toContain("found=0 as=spPressureAlt");
   });
 });

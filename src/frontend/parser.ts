@@ -781,10 +781,9 @@ export class STParser extends CstParser {
       ]);
     });
     const typeNameTok = this.CONSUME(tokens.Identifier);
-    // CODESYS spells its built-in descriptor type `__SYSTEM.AnyType`, so a type
-    // name may carry that one qualifier. Gated on the namespace rather than
-    // opened up to dotted names generally: anywhere else a dot after a type is
-    // a mistake, and reporting it as one is more use than parsing it.
+    // CODESYS spells its descriptor type `__SYSTEM.AnyType`, so a type name
+    // may carry that one qualifier. Gated on the namespace rather than opened
+    // to dotted names: elsewhere a dot after a type is a mistake.
     this.OPTION3({
       GATE: () =>
         typeNameTok.image.toUpperCase() === "__SYSTEM" &&

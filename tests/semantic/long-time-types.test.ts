@@ -3,16 +3,9 @@
 /**
  * The long time types: LTIME, LTOD and LDT.
  *
- * Each is a signed 64-bit integer of nanoseconds — LTOD since midnight, LDT
- * since 1970-01-01-00:00:00 — which is how TIME, TOD and DT are already
- * stored, so each shares its short form's representation.
- *
- * LDATE is deliberately absent: it needs nanoseconds while `DATE_t` holds
- * whole days, so registering it would misreport every value by 86400e9.
- *
- * Literal prefixes: T/LT/TIME/LTIME, TOD/LTIME_OF_DAY, DT/LDATE_AND_TIME.
- *
- * Assignment widens one way only — TIME→LTIME, TOD→LTOD, DT→LDT.
+ * Each is a signed 64-bit count of nanoseconds, how TIME, TOD and DT are
+ * already stored, so each shares its short form's representation. LDATE is
+ * absent: it needs nanoseconds where `DATE_t` holds whole days.
  */
 
 import { describe, expect, it } from "vitest";

@@ -837,8 +837,6 @@ TEST(IECPointerTest, Pointer_Reassignment) {
 // REF_TO carries no forcing of its own: a reference is a binding, with
 // assignment, NULL comparison, REF() and ^ and nothing else. Forcing applies
 // to the variable it refers to, through that variable's own IECVar.
-// The two tests that stood here called REF_TO::force()/unforce()/is_forced(),
-// which have never existed.
 
 TEST(IECPointerTest, Pointer_Comparison) {
     IEC_INT target1(100);

@@ -538,12 +538,10 @@ export function generateDebugTable(
       return;
     }
 
-    // A generic parameter and its descriptor are not values: `pvalue` addresses
-    // another variable the debugger already lists, and the type class and size
-    // describe that one. `__SYSTEM.VAR_INFO` is the same thing for a named
-    // variable — `ByteAddress` points at a leaf the debugger already has.
-    // Skipped by name rather than as an unsupported kind, so the reason says
-    // why rather than reading as a hole in the walker.
+    // A generic parameter and its descriptor are not values: `pvalue`
+    // addresses a variable the debugger already lists, and `VAR_INFO` is the
+    // same for a named one. Skipped by name rather than as an unsupported
+    // kind, so the reason reads as a decision, not a hole in the walker.
     if (
       isDeclarableGenericType(name) ||
       isAnyDescriptorType(name) ||
@@ -725,12 +723,10 @@ export function generateDebugTable(
           }
         }
       } else {
-        // Walk the EXTENDS chain: an inherited member is a real member of the
-        // instance, resolvable in ST and present in C++.
-        //
-        // `owner` is the type that DECLARES each member. `memberCppName` mangles
-        // against the owner's interface methods, so passing the derived name for
-        // a base member would spell it wrong.
+        // Walk the EXTENDS chain: an inherited member is a real member of
+        // the instance. `owner` is the type that DECLARES each one —
+        // `memberCppName` mangles against the owner's interface methods, so
+        // the derived name would spell a base member wrong.
         const chain: Array<{ owner: string; blocks: VarBlock[] }> = [];
         const visited = new Set<string>();
         let cursor: typeof fbSym | undefined = fbSym;

@@ -512,11 +512,9 @@ public:
     }
 
     /**
-     * Pointer to the underlying character storage — the counterpart of
-     * `IECVar::raw_ptr()`. NUL-terminated, `capacity() + 1` bytes long.
-     *
-     * A caller writing through this owns the terminator and must call
-     * `sync_length()` afterwards: the length is cached, not derived on read.
+     * Pointer to the character storage — the counterpart of
+     * `IECVar::raw_ptr()`. NUL-terminated, `capacity() + 1` bytes. A caller
+     * writing through it owns the terminator and must call `sync_length()`.
      */
     char* raw_ptr() noexcept { return value_.data(); }
 
@@ -537,12 +535,9 @@ public:
 
     /**
      * Byte offset of the payload, which must stay 0 — the counterpart of
-     * `IECVar::value_field_offset()`.
-     *
-     * A STRUCT member's `MemberDesc::OFFSET` is built from this
-     * (iec_typedesc.hpp). If the characters ever stopped being first, a block
-     * walking a struct would read the forcing flag where it expected the start
-     * of a string.
+     * `IECVar::value_field_offset()`. A STRUCT member's `MemberDesc::OFFSET`
+     * builds on it (iec_typedesc.hpp); were the characters to stop being
+     * first, a walk would read the forcing flag as the start of a string.
      */
     static constexpr size_t value_field_offset() noexcept { return offsetof(IECStringVar, value_); }
 
@@ -684,28 +679,20 @@ using IEC_STRING = IECStringVar<254>;
 // ---------------------------------------------------------------------------
 // Type-erased access, for the debugger only.
 //
-// `STRING(23)` compiles to `IECStringVar<23>`, a different type from
-// `IECStringVar<254>`, but the debug dispatch table has one row per TypeTag, so
-// its ops take `void*` plus the capacity recorded beside the pointer.
-//
-// Casting a `IECStringVar<23>` to `IECStringVar<254>` reads the length from the
-// wrong offset and copies past the end of the object, so the offsets are
-// derived from the capacity and checked against the real layout below.
-//
-// A function-pointer set per capacity in each entry would cost four bytes per
-// debug variable in flash, which is the budget a sized declaration protects.
+// `STRING(23)` is `IECStringVar<23>`, a different type from
+// `IECStringVar<254>`, but the dispatch table has one row per TypeTag — so its
+// ops take `void*` plus the capacity recorded beside the pointer. Casting
+// between the two would read the length from the wrong offset, so the offsets
+// are derived from the capacity and checked against the layout below. A
+// function-pointer set per capacity would cost four bytes per debug variable.
 // ---------------------------------------------------------------------------
 
 /**
  * Round `bytes` up to the alignment `IECString` itself has.
  *
- * Taken from the class rather than written as a number, because it is not the
- * same everywhere: a target that needs a 16-bit load on an even address gives
- * it 2, and AVR byte-aligns every type and gives it 1. Assuming 2 put the
- * length two bytes past where an 8-bit build actually keeps it.
- *
- * The alignment does not depend on the capacity, so any instantiation answers
- * for all of them.
+ * Taken from the class, not written as a number: a target needing a 16-bit
+ * load on an even address gives 2, AVR byte-aligns everything and gives 1.
+ * The alignment does not depend on the capacity.
  */
 constexpr size_t iec_string_align_up(size_t bytes) noexcept {
     constexpr size_t align = alignof(IECString<1>);
@@ -831,11 +818,8 @@ template<size_t MaxLen>
 inline IECString<MaxLen> INSERT(const IECString<MaxLen>& s1, const IECString<MaxLen>& s2, size_t pos) noexcept {
     IECString<MaxLen> result(s1);
     // INSERT places IN2 AFTER the P-th character: INSERT('ABC','XY',2) is
-    // 'ABXYC'. `pos - 1` would insert before it and answer 'AXYBC'.
-    //
-    // DELETE_STR below keeps its `pos - 1`, and correctly: it begins AT the
-    // P-th character, which is the 0-based index. One counts the gap after a
-    // character, the other the character itself.
+    // 'ABXYC'; `pos - 1` would answer 'AXYBC'. DELETE_STR below keeps its
+    // `pos - 1` correctly — it begins AT the P-th character.
     result.insert(pos, s2.c_str());
     return result;
 }

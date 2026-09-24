@@ -3,17 +3,10 @@
 /**
  * Layout descriptors for STRUCT types reaching a generic parameter.
  *
- * `IEC_ANY` gives a callee a pointer and a byte count, which for a STRUCT is
- * an opaque run of bytes. The tables checked here are what let a block name a
- * member, find it, and tell an INT from a REAL — see
- * `runtime/include/iec_typedesc.hpp`.
- *
- * The offsets are C++ constant expressions rather than numbers, because only
- * the target compiler knows its own padding, and because a member is a WRAPPER
- * whose payload the descriptor must address rather than the wrapper itself.
- * So the assertions here are on the SHAPE of what is emitted; that the
- * arithmetic comes out right is proved by compiling and running it, in
- * `tests/integration/type-descriptor-cpp.test.ts`.
+ * The tables checked here name each member of a STRUCT reaching a generic pin
+ * — see `runtime/include/iec_typedesc.hpp`. Offsets are C++ constant
+ * expressions, so these assert the SHAPE of what is emitted; the arithmetic is
+ * proved in `tests/integration/type-descriptor-cpp.test.ts`.
  */
 
 import { describe, expect, it } from "vitest";
@@ -85,16 +78,65 @@ describe("the table emitted beside a struct", () => {
     ]);
   });
 
-  it("carries the ST name upper-cased, not the mangled C++ name", () => {
-    // The name is what a block publishes as a topic, so it has to match what
-    // the engineer typed rather than whatever C++ had to be called.
+  it("carries the ST name as declared, not the mangled C++ name", () => {
+    // The name is what a callee reads back, so it has to match what the
+    // engineer typed rather than whatever C++ had to be called.
     const rows = memberRows(
       `TYPE T : STRUCT speedRpm : INT; END_STRUCT END_TYPE\n`,
       "v : T;",
       "v",
       "T",
     );
-    expect(rows[0]).toContain('"SPEEDRPM"');
+    expect(rows[0]).toContain('"speedRpm"');
+  });
+
+  it("keeps the declared case of every member", () => {
+    // Every name the compiler resolves on is folded upper case, because
+    // IEC 61131-3 §6.1.2 makes identifiers case-insensitive. This one is
+    // reported rather than resolved on, and the declared spelling is the only
+    // form it can still be recovered from.
+    const rows = memberRows(
+      `TYPE Tags : STRUCT
+  spPressureAlt : REAL;
+  Flow_Rate : REAL;
+  ALARM : BOOL;
+END_STRUCT END_TYPE\n`,
+      "v : Tags;",
+      "v",
+      "TAGS",
+    );
+    expect(rows.map((r) => r.split('"')[1])).toEqual([
+      "spPressureAlt",
+      "Flow_Rate",
+      "ALARM",
+    ]);
+  });
+
+  it("gives the TYPE its declared case too", () => {
+    // The C++ SYMBOL stays folded — `TAGS__TYPEDESC` is a name only the
+    // generated code uses. The string inside it is the reported one.
+    const header =
+      build(
+        `TYPE Tags : STRUCT spPressureAlt : REAL; END_STRUCT END_TYPE\n`,
+        "v : Tags;",
+        "v",
+      ).headerCode ?? "";
+    expect(header).toContain("const strucpp::TypeDesc TAGS__TYPEDESC = {");
+    expect(header.slice(header.indexOf("TAGS__TYPEDESC = {"))).toContain(
+      '"Tags", TAGS__MEMBERS',
+    );
+  });
+
+  it("folds nothing and resolves everything, however the pin is typed", () => {
+    // `Tags` declared, `TAGS` on the pin: one type to IEC 61131-3 §6.1.2, so
+    // the descriptor still has to be found AND still has to report "Tags".
+    const rows = memberRows(
+      `TYPE Tags : STRUCT spPressureAlt : REAL; END_STRUCT END_TYPE\n`,
+      "v : TAGS;",
+      "v",
+      "TAGS",
+    );
+    expect(rows[0]).toContain('"spPressureAlt"');
   });
 
   it("addresses each member's payload, not the wrapper around it", () => {
@@ -160,10 +202,9 @@ describe("the table emitted beside a struct", () => {
   });
 
   it("emits no table at all when a member defies description", () => {
-    // A partial table is worse than none: a block trusts MEMBERCOUNT, so a
-    // silently short one reads as a struct that lacks the member the engineer
-    // wired up, and the fault shows as a missing topic rather than a build
-    // error.
+    // A partial table is worse than none: a callee trusts MEMBERCOUNT, so a
+    // silently short one reads as a struct that lacks the member, and the fault
+    // shows at run time rather than as a build error.
     const rows = memberRows(
       `TYPE T : STRUCT P : POINTER TO INT; N : INT; END_STRUCT END_TYPE\n`,
       "v : T;",
@@ -198,12 +239,10 @@ describe("what the call site hands the callee", () => {
   });
 
   it("keeps an elementary argument's initialiser short of the full field list", () => {
-    // Not tidiness — this is the compatibility claim under test. TYPEDESC was
-    // APPENDED and defaulted, so an initialiser written before it existed must
-    // still compile. Keeping one such initialiser in the generated output
-    // means a future reordering of IEC_ANY's fields fails here and in the C++
-    // build, rather than silently handing an imported CODESYS POU the wrong
-    // field.
+    // The compatibility claim under test, not tidiness: TYPEDESC was APPENDED
+    // and defaulted, so an initialiser written before it existed must still
+    // compile. Reordering IEC_ANY's fields then fails here rather than handing
+    // an imported CODESYS POU the wrong field.
     const line = descriptorLine("", "v : INT;", "v");
     const inner = line.slice(line.indexOf("{") + 1, line.lastIndexOf("}"));
     let depth = 0;
@@ -219,25 +258,22 @@ describe("what the call site hands the callee", () => {
   });
 
   it("leaves a function block instance with no layout", () => {
-    // Neither IEC 61131-3 §6.4.3 — which scopes ANY_DERIVED to the Table 11
-    // user-defined DATA types, and a function block is a POU — nor CODESYS
-    // sanctions an FB here, and a generated FB class may carry a vptr or an
-    // EXTENDS base, where offsetof is not answerable. The call keeps working;
-    // it just is not described.
+    // IEC 61131-3 §6.4.3 scopes ANY_DERIVED to the Table 11 DATA types and an
+    // FB is a POU, and a generated FB class may carry a vptr or an EXTENDS
+    // base, where offsetof is unanswerable. The call still works.
     const types = `FUNCTION_BLOCK INNERFB VAR_INPUT X : INT; END_VAR ; END_FUNCTION_BLOCK\n`;
     const line = descriptorLine(types, "t : INNERFB;", "t");
     expect(line).toContain("TYPE_CLASS::TYPE_USERDEF");
     // No layout, but still named — see the identity tests below.
     expect(line).not.toContain("__TYPEDESC");
-    expect(line).toContain('nullptr, "T", "INNERFB"');
+    expect(line).toContain('nullptr, "t", "INNERFB"');
   });
 });
 
 describe("a struct that cannot be described says so", () => {
-  // Emitting nothing was the original behaviour and it was silent: an engineer
-  // added a POINTER to a DUT and every MQTT topic vanished, with no diagnostic
-  // anywhere. It is a warning, not an error — the program still compiles and
-  // runs, and one that never puts the struct on a generic pin is unaffected.
+  // Emitting nothing was silent: adding a POINTER to a DUT dropped the whole
+  // table with no diagnostic. A warning, not an error — the program still
+  // compiles, and one that never puts the struct on a generic pin is fine.
   const warningsFor = (types: string, vars: string, arg: string) =>
     compile(PROGRAM(types, vars, arg), { programName: "main" })
       .warnings.map((w) => w.message)
@@ -270,8 +306,8 @@ describe("a struct that cannot be described says so", () => {
 describe("the argument's own name and type", () => {
   // TYPEDESC names a struct's TYPE and its members. Neither names the variable
   // the caller wired up, and for a scalar there is no TYPEDESC at all — so
-  // without these two fields a block handed `SETPOINT : REAL` has nothing to
-  // call it, and cannot build a topic, a log line or a column heading.
+  // without these two fields a callee handed `SETPOINT : REAL` has nothing to
+  // call it.
   const identityOf = (types: string, vars: string, arg: string) => {
     const line = descriptorLine(types, vars, arg);
     const inner = line.slice(line.indexOf("{") + 1, line.lastIndexOf("}"));
@@ -293,10 +329,10 @@ describe("the argument's own name and type", () => {
   const ENUM = `TYPE E : (A, B); END_TYPE\n`;
 
   it.each([
-    ["a scalar", "", "setpoint : REAL;", "setpoint", '"SETPOINT"', '"REAL"'],
-    ["a string", "", "myText : STRING(20);", "myText", '"MYTEXT"', '"STRING"'],
-    ["an enumeration", ENUM, "mode : E;", "mode", '"MODE"', '"E"'],
-    ["a struct", STATION, "plant : STATION;", "plant", '"PLANT"', '"STATION"'],
+    ["a scalar", "", "setpoint : REAL;", "setpoint", '"setpoint"', '"REAL"'],
+    ["a string", "", "myText : STRING(20);", "myText", '"myText"', '"STRING"'],
+    ["an enumeration", ENUM, "mode : E;", "mode", '"mode"', '"E"'],
+    ["a struct", STATION, "plant : STATION;", "plant", '"plant"', '"STATION"'],
   ])(
     "names %s by the variable, not the type",
     (_l, types, vars, arg, name, typeName) => {
@@ -306,16 +342,26 @@ describe("the argument's own name and type", () => {
 
   it("keeps the access path, so a member or element is not reported as its root", () => {
     expect(identityOf(STATION, "plant : STATION;", "plant.SPEEDRPM").name).toBe(
-      '"PLANT.SPEEDRPM"',
+      '"plant.SPEEDRPM"',
     );
     expect(identityOf("", "trend : ARRAY[0..2] OF INT;", "trend[2]").name).toBe(
-      '"TREND[2]"',
+      '"trend[2]"',
     );
   });
 
+  it("reports the DECLARATION's case, not the call site's", () => {
+    // `Plant` and `PLANT` are one variable (IEC 61131-3 §6.1.2). Taking the
+    // call site would report one variable under two spellings depending on
+    // which the pin happened to be wired with.
+    const types = `TYPE Tags : STRUCT spPressureAlt : REAL; END_STRUCT END_TYPE\n`;
+    expect(
+      identityOf(types, "Plant : Tags;", "PLANT.SPPRESSUREALT"),
+    ).toEqual({ name: '"Plant.spPressureAlt"', typeName: '"REAL"' });
+  });
+
   it("spells an array type the way an engineer would, not the synthetic name", () => {
-    // `__INLINE_ARRAY_INT` is a compiler-internal spelling; a block publishing
-    // TYPENAME as a topic segment would otherwise put it on the wire.
+    // `__INLINE_ARRAY_INT` is a compiler-internal spelling with no meaning to
+    // a callee reading TYPENAME.
     const id = identityOf("", "trend : ARRAY[0..2] OF INT;", "trend");
     expect(id.typeName).toBe('"ARRAY OF INT"');
     expect(id.typeName).not.toContain("__INLINE_ARRAY");
@@ -324,7 +370,7 @@ describe("the argument's own name and type", () => {
   it("names a function block instance too, though it has no layout", () => {
     const types = `FUNCTION_BLOCK INNERFB VAR_INPUT X : INT; END_VAR ; END_FUNCTION_BLOCK\n`;
     expect(identityOf(types, "t : INNERFB;", "t")).toEqual({
-      name: '"T"',
+      name: '"t"',
       typeName: '"INNERFB"',
     });
   });

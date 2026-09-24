@@ -3,15 +3,13 @@
 /**
  * `__VARINFO(x)` and `__SYSTEM.VAR_INFO` — CODESYS's variable information.
  *
- * An extension of IEC 61131-3, as CODESYS says on its own page for it. It
- * describes ONE variable named in source, resolved at compile time. It is NOT
- * the mechanism behind `IEC_ANY::TYPEDESC`, and could not be: `VAR_INFO` has
- * no member list, and inside a POU with a generic pin there is no name to hand
- * it. The two share a vocabulary (`TYPE_CLASS`, `BYTEOFFSET`, `NUMELEMENTS`,
- * `BASETYPECLASS`) and nothing else.
+ * An extension of IEC 61131-3 describing ONE variable named in source at
+ * compile time. NOT the mechanism behind `IEC_ANY::TYPEDESC`: `VAR_INFO` has
+ * no member list, and a POU with a generic pin has no name to hand it. They
+ * share a vocabulary and nothing else.
  *
- * The values below were checked against CODESYS's own documented example,
- * which reports `NumElements = 8` and `BaseTypeClass = TYPE_INT` for
+ * Values checked against CODESYS's documented example, which reports
+ * `NumElements = 8` and `BaseTypeClass = TYPE_INT` for
  * `arrA : ARRAY [1..2,1..2,1..2] OF INT`.
  */
 

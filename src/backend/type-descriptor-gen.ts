@@ -3,36 +3,19 @@
 /**
  * Layout descriptors for generated STRUCT types.
  *
- * `IEC_ANY` hands a callee a pointer and a byte count. For a STRUCT that is an
- * opaque run of bytes — a structure is heterogeneous, so unlike an array it
- * cannot be walked from a base and a stride. A block handed a user's STRUCT on
- * an `ANY` pin can copy it and nothing else: it cannot name a member, find one,
- * or tell an INT from a REAL.
- *
- * This emits, beside each generated struct, a `const` table naming every member
- * with its payload offset, kind and elementary tag, so that such a block can
- * walk what it was handed. See `runtime/include/iec_typedesc.hpp` for the
- * record shapes and for why this is an OpenPLC extension rather than anything
- * IEC 61131-3 or CODESYS defines.
+ * Emits a `const` table beside each generated struct, naming every member with
+ * its payload offset, kind and elementary tag, so a callee handed the struct
+ * on an `ANY` pin can walk it. Record shapes and rationale are in
+ * `runtime/include/iec_typedesc.hpp`.
  *
  * Offsets are emitted as C++ constant expressions — `offsetof` plus the
- * wrapper's own `value_field_offset()` — rather than computed here. Two
- * reasons, and the second is the important one:
+ * wrapper's own `value_field_offset()` — not computed here. Only the C++
+ * compiler knows the target's padding, and a member is a WRAPPER whose PAYLOAD
+ * the descriptor must address; asking the wrapper keeps the two in step.
  *
- *   1. Only the C++ compiler knows the target's alignment and padding.
- *   2. A struct member is a WRAPPER (`IECVar<T>`, `IECStringVar<N>`,
- *      `IEC_ENUM_Var<E>`, `Array1D<…>`), and the descriptor must address the
- *      PAYLOAD inside it. Asking each wrapper for its own payload offset means
- *      a future layout change moves the descriptor with it. Were the offset
- *      hard-coded to the wrapper instead, a block reading a forced member would
- *      get the forcing flag back as data, with nothing downstream able to tell.
- *
- * The tables are `const` at namespace scope, which in C++ (unlike C) is
- * internal linkage — so emitting them into the header gives every translation
- * unit its own copy with no ODR question, and no ownership rule about which
- * generated .cpp defines a shared type. The cost is one copy per including TU;
- * `-fdata-sections -Wl,--gc-sections` (which the Arduino cores enable) drops
- * the ones nothing references.
+ * The tables are `const` at namespace scope, so internal linkage: each
+ * including TU gets its own copy, with no ODR question and no rule about which
+ * .cpp owns a shared type. `--gc-sections` drops the unreferenced ones.
  */
 
 import type {
@@ -59,11 +42,9 @@ const DEFAULT_STRING_CAP = 254;
 /**
  * What a declared type resolved to, once aliases and subranges are followed.
  *
- * Exported because `__VARINFO` must give the SAME answer as a struct member's
- * descriptor for the same declared type. They were separate once, and they
- * disagreed: a subrange came back `TYPE_INT` from one and `TYPE_USERDEF` from
- * the other, so a block reading `info.TypeClass` and `member.TYPECLASS` was
- * told two different things about one variable.
+ * Exported because `__VARINFO` must answer identically to a struct member's
+ * descriptor for the same type. Separate implementations disagreed: a subrange
+ * was `TYPE_INT` from one and `TYPE_USERDEF` from the other.
  */
 export interface ResolvedMember {
   /** `TYPE_CLASS` enumerator name, e.g. "TYPE_INT", "TYPE_USERDEF". */
@@ -84,7 +65,7 @@ export interface TypeDescriptorContext {
   types: readonly TypeDeclaration[];
   /** The C++ spelling of a struct field's declared type — the SAME function
    *  `generateStructType` uses, so the descriptor describes what was actually
-   *  emitted rather than what we think was emitted. */
+   *  emitted rather than a second, independent guess at it. */
   mapStructFieldTypeToCpp: (
     typeName: string,
     maxLength?: number | string,
@@ -109,10 +90,9 @@ function membersSymbol(typeName: string): string {
 /**
  * A C++ string literal for an ST identifier.
  *
- * ST identifiers are letters, digits and underscores, so nothing here needs
- * escaping today. Escaped anyway: a name reaching this unescaped would not be
- * a compile error, it would be a generated file that silently fails to parse
- * three thousand lines further on.
+ * Nothing needs escaping today — ST identifiers are letters, digits and
+ * underscores. Escaped anyway: an unescaped name would not fail here, it would
+ * produce a generated file that fails to parse much further on.
  */
 function cppStringLiteral(text: string): string {
   return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
@@ -121,22 +101,22 @@ function cppStringLiteral(text: string): string {
 /**
  * Classifies a declared type name into CODESYS's `TYPE_CLASS`.
  *
- * One implementation, deliberately: `__VARINFO(x)` and a struct member's
- * descriptor must answer identically for the same declared type. They were
- * written separately once and disagreed — a subrange came back `TYPE_INT` from
- * the descriptor and `TYPE_USERDEF` from `__VARINFO`, so a block reading
- * `info.TypeClass` and `member.TYPECLASS` was told two different things about
- * one variable.
+ * One implementation deliberately: `__VARINFO(x)` and a struct member's
+ * descriptor must answer identically for the same type. Written separately,
+ * they disagreed on a subrange — see {@link ResolvedMember}.
  */
 export class TypeClassifier {
   private structs = new Map<string, StructDefinition>();
   private enums = new Map<string, EnumDefinition>();
   private arrays = new Map<string, ArrayDefinition>();
   private aliases = new Map<string, TypeReference>();
+  /** Folded type name -> the spelling its TYPE declaration used. */
+  private declaredNames = new Map<string, string>();
 
   constructor(types: readonly TypeDeclaration[]) {
     for (const type of types) {
       const upper = type.name.toUpperCase();
+      this.declaredNames.set(upper, type.declaredName ?? type.name);
       const def = type.definition;
       switch (def.kind) {
         case "StructDefinition":
@@ -158,6 +138,17 @@ export class TypeClassifier {
           break;
       }
     }
+  }
+
+  /**
+   * A user-defined type's name as its TYPE declaration spelled it.
+   *
+   * Only for names an engineer chose. An elementary type keeps its upper-case
+   * spelling — `INT` is a word of the standard's grammar (Table 10), and
+   * CODESYS reports it that way in `VAR_INFO.TypeName`.
+   */
+  declaredTypeName(typeName: string): string {
+    return this.declaredNames.get(typeName.toUpperCase()) ?? typeName;
   }
 
   isStruct(typeName: string): boolean {
@@ -182,9 +173,9 @@ export class TypeClassifier {
   /**
    * The element type of an array named by a declared TYPE, or undefined.
    *
-   * `__VARINFO(v)` where `v : ARRT` only knows the name "ARRT", so the named
-   * case has to be reachable without a TypeReference. Without this an
-   * `ARRAY` declared as a TYPE reported `TYPE_USERDEF` and no element count.
+   * `__VARINFO(v)` where `v : ARRT` knows only the name, so this has to be
+   * reachable without a TypeReference; without it an ARRAY declared as a TYPE
+   * reported `TYPE_USERDEF` and no element count.
    */
   namedArrayElement(
     typeName: string,
@@ -212,7 +203,7 @@ export class TypeClassifier {
     if (this.structs.has(upper)) {
       return {
         typeClass: "TYPE_USERDEF",
-        typeName: resolvedName.toUpperCase(),
+        typeName: this.declaredTypeName(resolvedName),
         cap: 0,
         nestedStruct: resolvedName,
       };
@@ -226,7 +217,7 @@ export class TypeClassifier {
       if (TYPE_CLASS_BY_IEC_TYPE[baseName] === undefined) return undefined;
       return {
         typeClass: "TYPE_ENUM",
-        typeName: resolvedName.toUpperCase(),
+        typeName: this.declaredTypeName(resolvedName),
         cap: 0,
       };
     }
@@ -263,8 +254,8 @@ export class TypeDescriptorGenerator {
   private readonly types: TypeClassifier;
 
   /** Structs that got no descriptor, and the member that prevented it.
-   *  Reported as a warning: a silently undescribed struct shows up as an MQTT
-   *  topic that never appears, with nothing to point at. */
+   *  Reported as a warning: `IEC_ANY::TYPEDESC` is simply null for such a
+   *  struct, so a callee sees no members and has nothing to point at. */
   readonly skipped: Array<{
     typeName: string;
     member: string;
@@ -283,21 +274,24 @@ export class TypeDescriptorGenerator {
   /**
    * The descriptor tables for one STRUCT, as lines of C++.
    *
-   * Empty when any member cannot be described. A partial table is worse than
-   * none: a block trusts `MEMBERCOUNT`, so a silently short table reads as a
-   * struct that simply does not have the member the engineer wired up, and the
-   * fault surfaces as a missing MQTT topic rather than as a build error.
+   * Empty when any member cannot be described: a callee trusts `MEMBERCOUNT`,
+   * so a short table reads as a struct that simply lacks the member.
    */
   generate(typeName: string, def: StructDefinition): string[] {
     const rows: string[] = [];
 
     for (const field of def.fields) {
-      for (const fieldName of field.names) {
-        const row = this.memberRow(typeName, fieldName, field);
+      for (let i = 0; i < field.names.length; i++) {
+        const fieldName = field.names[i]!;
+        // `declaredNames` runs parallel to `names`. It is absent only on a
+        // declaration the AST builder did not read from source, where the
+        // folded name is the only spelling there has ever been.
+        const declaredName = field.declaredNames?.[i] ?? fieldName;
+        const row = this.memberRow(typeName, fieldName, declaredName, field);
         if (row === undefined) {
           this.skipped.push({
             typeName,
-            member: fieldName.toUpperCase(),
+            member: declaredName,
             reason: this.refusalReason(field.type),
           });
           return [];
@@ -321,7 +315,7 @@ export class TypeDescriptorGenerator {
     lines.push(
       "};",
       `const strucpp::TypeDesc ${typeDescSymbol(typeName)} = {`,
-      `${ind}${cppStringLiteral(typeName.toUpperCase())}, ${membersSymbol(typeName)},`,
+      `${ind}${cppStringLiteral(this.types.declaredTypeName(typeName))}, ${membersSymbol(typeName)},`,
       `${ind}static_cast<uint32_t>(sizeof(${typeName})),`,
       `${ind}static_cast<uint16_t>(${rows.length}),`,
       "};",
@@ -357,6 +351,7 @@ export class TypeDescriptorGenerator {
   private memberRow(
     structName: string,
     fieldName: string,
+    declaredName: string,
     field: VarDeclaration,
   ): string | undefined {
     const typeRef = field.type;
@@ -393,7 +388,7 @@ export class TypeDescriptorGenerator {
         : `${memberExpr} + ${cppType}::elements_field_offset() + ${elemCpp}::value_field_offset()`;
       const count = `${cppType}::element_count()`;
       return this.row({
-        name: fieldName,
+        name: declaredName,
         typeName: `ARRAY OF ${elem.typeName}`,
         nested: elem.nestedStruct,
         offset,
@@ -418,7 +413,7 @@ export class TypeDescriptorGenerator {
         : `${memberExpr} + ${cppType}::value_field_offset()`;
 
     return this.row({
-      name: fieldName,
+      name: declaredName,
       typeName: resolved.typeName,
       nested: resolved.nestedStruct,
       offset,
@@ -450,7 +445,7 @@ export class TypeDescriptorGenerator {
     const nested =
       f.nested === undefined ? "nullptr" : `&${typeDescSymbol(f.nested)}`;
     return (
-      `{ ${cppStringLiteral(f.name.toUpperCase())}, ` +
+      `{ ${cppStringLiteral(f.name)}, ` +
       `${cppStringLiteral(f.typeName)}, ${nested}, ` +
       `static_cast<uint32_t>(${f.offset}), ` +
       `static_cast<uint32_t>(${f.count}), ` +

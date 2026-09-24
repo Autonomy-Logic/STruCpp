@@ -39,13 +39,9 @@ function parseAST(source: string) {
 describe("type-utils", () => {
   describe("ELEMENTARY_TYPES", () => {
     it("should define all 29 types (25 canonical + 4 aliases)", () => {
-      // 25 canonical = 21 standard elementary types, __XWORD (platform-width
-      // address type), and the three long time types LTIME, LTOD and LDT.
-      // LDATE is deliberately absent: it needs nanoseconds where DATE_t holds
-      // whole days.
-      //
-      // 4 aliases = TOD/TIME_OF_DAY, DT/DATE_AND_TIME, and the long forms
-      // LTOD/LTIME_OF_DAY, LDT/LDATE_AND_TIME.
+      // 25 canonical = 21 standard elementary types, __XWORD, and LTIME/LTOD/
+      // LDT. LDATE is absent: it needs nanoseconds where DATE_t holds days.
+      // 4 aliases = TOD, DT and the long forms LTOD and LDT.
       expect(Object.keys(ELEMENTARY_TYPES)).toHaveLength(29);
     });
 
@@ -472,10 +468,9 @@ describe("type-utils", () => {
     });
 
     it("treats one enum described twice as one enum, not a conflict", () => {
-      // A library compiling against a dependency archive that re-exports its
-      // own types sees each of them from both sides. Counting that as a clash
-      // made every member of such an enum ambiguous with itself, which broke
-      // the bundled SoftMotion library on `SMC_NO_ERROR`.
+      // A library compiling against a dependency that re-exports its types
+      // sees each from both sides. Counting that as a clash made every member
+      // ambiguous with itself, which broke SoftMotion on `SMC_NO_ERROR`.
       const map = buildEnumMemberMap([
         { name: "SMC_ERROR", members: ["SMC_NO_ERROR", "SMC_DI_AXIS_ERROR"] },
         { name: "SMC_ERROR", members: ["SMC_NO_ERROR", "SMC_DI_AXIS_ERROR"] },

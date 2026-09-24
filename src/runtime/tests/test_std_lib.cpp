@@ -422,11 +422,9 @@ TEST(StringVarTest, Forcing) {
 // SIZEOF on a variable-length array parameter
 // ---------------------------------------------------------------------------
 //
-// A view is a descriptor — a pointer plus bounds — whose own size says nothing
-// about what it addresses. Without an overload it fell to the generic
-// `IEC_SIZEOF(const T&)` and reported `sizeof(ArrayView1D<T>)`: the same number
-// for every element type and every length, so `SIZEOF(a) / count` produced a
-// stride that was right only by coincidence.
+// A view is a pointer plus bounds, whose own size says nothing about what it
+// addresses. Without an overload it reported `sizeof(ArrayView1D<T>)` — one
+// number for every element type and length.
 
 TEST(SizeofViewTest, ReportsTheDataNotTheDescriptor) {
     IEC_ARRAY_1D<IEC_INT, ArrayBounds<0, 3>> ints;
@@ -482,14 +480,10 @@ TEST(SizeofViewTest, EmptyViewIsZero) {
 // The stride idiom, across every elementary type
 // ---------------------------------------------------------------------------
 //
-// `SIZEOF(a) / count` is how a block walks an array it did not declare. It has
-// to hold for every element type, not just the one that was tried first: an
-// earlier version divided the view descriptor's own size, which happened to
-// give the right answer for a 4-element INT array and nothing else.
-//
-// Two things are checked per type. The quotient must equal the real element
-// stride, and walking at that stride must land exactly on each element — the
-// second is what catches padding the first would miss.
+// `SIZEOF(a) / count` is how a block walks an array it did not declare, so it
+// has to hold for every element type. Two checks per type: the quotient equals
+// the real element stride, and walking at that stride lands on each element —
+// the second catches padding the first would miss.
 
 template <typename VarT>
 static void ExpectStrideWalksElements(const char* name) {
@@ -578,11 +572,9 @@ TEST(SizeofViewTest, ElementSizeIsThePayloadWidth) {
 // The generic descriptor's defaults
 // ---------------------------------------------------------------------------
 //
-// A generic input pin left unwired keeps these, which is how a block tells it
-// was given nothing. As a function block member with no initialisers the
-// members were default-initialised — indeterminate — so a block testing
-// `DISIZE > 0` read whatever happened to be on the stack and treated an
-// unwired pin as a live argument.
+// An unwired generic pin keeps these, which is how a block tells it was given
+// nothing. Without the initialisers an FB member started indeterminate, so
+// `DISIZE > 0` read stack garbage as a live argument.
 
 // Zeroed, not a sentinel class: an unwired pin reads typeclass 0, diSize 0,
 // pvalue NULL. TYPE_BOOL is also 0, so PVALUE and DISIZE are what separate

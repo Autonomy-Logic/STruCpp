@@ -124,11 +124,9 @@ public:
     IEC_ENUM_Var(value_type val) noexcept
         : value_{val}, forced_{false}, forced_value_{} {}
     
-    // Same contract as IECVar, which debug_dispatch.hpp's force_impl/read_impl
-    // reach this class through: a fresh instance starts unforced, and assigning
+    // Same contract as IECVar: a fresh instance starts unforced, and assigning
     // FROM another goes through set() so the destination's force survives. A
-    // memberwise copy would carry the source's force state across and silently
-    // unforce what the debugger is holding, every scan cycle.
+    // memberwise copy would unforce what the debugger holds, every cycle.
     IEC_ENUM_Var(const IEC_ENUM_Var& other) noexcept
         : value_{other.get()}, forced_{false}, forced_value_{} {}
     IEC_ENUM_Var(IEC_ENUM_Var&& other) noexcept
@@ -169,13 +167,9 @@ public:
 
     /**
      * Byte offset of the payload, which must stay 0 — the counterpart of
-     * `IECVar::value_field_offset()`.
-     *
-     * A STRUCT member's `MemberDesc::OFFSET` is built from this
-     * (iec_typedesc.hpp). If the enumerand ever stopped being first, a block
-     * walking a struct would read the forcing flag as the enumerand's value —
-     * which for most enumerations is a legal-looking member, so nothing
-     * downstream could tell it had been handed nonsense.
+     * `IECVar::value_field_offset()`. A STRUCT member's `MemberDesc::OFFSET`
+     * builds on it (iec_typedesc.hpp); were the enumerand to stop being first,
+     * a walk would read the forcing flag as a legal-looking enumerator.
      */
     static constexpr size_t value_field_offset() noexcept {
         return offsetof(IEC_ENUM_Var, value_);
@@ -278,18 +272,15 @@ static_assert(IEC_ENUM_Var<detail::EnumOffsetProbeWide>::value_field_offset() ==
 // Enumeration traits — which enumeration an operand belongs to
 // =============================================================================
 //
-// IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38 lets SEL, MUX, EQ and NE be applied to
-// inputs of an enumerated data type. Those four and no others: an enumeration
-// has no defined order, so GT/GE/LT/LE, MIN/MAX and LIMIT are NOT in the table
-// and must keep failing to compile. Nor is there a standard conversion to an
-// integer — TO_INT takes ANY_ELEMENTARY (Table 33), and §6.4.3 rule 3 puts an
-// enumeration in ANY_DERIVED, which is a sibling of ANY_ELEMENTARY, not a
-// member of it.
+// IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38 admits SEL, MUX, EQ and NE on an
+// enumerated data type, and those four only: an enumeration has no defined
+// order, so GT/GE/LT/LE, MIN/MAX and LIMIT must keep failing to compile, and
+// TO_INT with them — it takes ANY_ELEMENTARY (Table 33) while §6.4.3 rule 3
+// puts an enumeration in the sibling ANY_DERIVED.
 //
-// An operand reaches a comparison in one of three spellings, so all three have
-// to be recognised: a variable (`IEC_ENUM_Var<E>`), the value a variable
-// converts to (`IEC_ENUM_Value<E>`), and a literal, which codegen emits as the
-// bare scoped enum `E`.
+// An operand arrives in three spellings, so all three are recognised:
+// `IEC_ENUM_Var<E>`, `IEC_ENUM_Value<E>`, and the bare scoped enum `E` that
+// codegen emits for a literal.
 
 /** The enumeration `T` belongs to, or no `type` member if it is not one. */
 template<typename T, typename = void>
@@ -307,10 +298,9 @@ struct iec_enum_of<E, std::enable_if_t<std::is_enum<E>::value>> { using type = E
 template<typename T>
 using iec_enum_of_t = typename iec_enum_of<T>::type;
 
-// Distinct from iec_traits.hpp's `is_iec_enum`, which answers "is this one of
-// the enumeration wrapper classes" and deliberately excludes the bare scoped
-// enum. A comparison OPERAND can be the bare enum — that is what codegen emits
-// for a literal like `GOOD` — so this predicate is the wider one.
+// Distinct from iec_traits.hpp's `is_iec_enum`, which asks whether this is one
+// of the wrapper classes and excludes the bare scoped enum. A comparison
+// OPERAND can be the bare enum, so this predicate is the wider one.
 template<typename T, typename = void>
 struct is_iec_enum_operand : std::false_type {};
 
@@ -320,16 +310,12 @@ struct is_iec_enum_operand<T, std::void_t<typename iec_enum_of<T>::type>> : std:
 template<typename T>
 constexpr bool is_iec_enum_operand_v = is_iec_enum_operand<T>::value;
 
-/** Two operands of the SAME enumeration.
- *
- *  Same, not merely both enumerations: §6.4.4.2 says "Different enumerated data
- *  types may use the same identifiers for enumerated values", so comparing
- *  across two of them would compare names that only look alike. */
-//  Written as a specialised struct rather than one `&&` expression on purpose.
-//  `&&` does not short-circuit at the type level: naming `iec_enum_of_t<A>`
-//  beside the test for whether A IS an enumeration instantiates it either way,
-//  and for a non-enumeration that is a HARD error, not a substitution failure.
-//  It would take every EQ on two plain numbers down with it.
+/** Two operands of the SAME enumeration. Same, not merely both enumerations:
+ *  §6.4.4.2 lets different enumerated types reuse identifiers, so comparing
+ *  across two would compare names that only look alike. */
+//  A specialised struct, not one `&&`: `&&` does not short-circuit at the type
+//  level, so naming `iec_enum_of_t<A>` beside the test instantiates it either
+//  way — a hard error for a non-enumeration, not a substitution failure.
 template<typename A, typename B, typename = void>
 struct is_same_iec_enum : std::false_type {};
 
@@ -406,13 +392,9 @@ inline std::ostream& operator<<(std::ostream& os, const IEC_ENUM_Var<EnumType>& 
 /**
  * `SIZEOF` on an enumeration — the value, not the wrapper.
  *
- * Without this it falls to the generic `IEC_SIZEOF(const T&)` and reports the
- * whole wrapper, forced state included — twelve bytes rather than the width of
- * the enumeration's own base type. Same shape as the STRING and
- * variable-length-array overloads, and for the same reason.
- *
- * Declared here rather than beside those: `iec_std_lib.hpp` includes this
- * header, so the dependency only runs one way.
+ * Without this the generic `IEC_SIZEOF(const T&)` reports the whole wrapper,
+ * forced state included. Declared here, not beside the STRING overloads, so
+ * the `iec_std_lib.hpp` dependency runs one way.
  */
 template <typename EnumType>
 inline uint32_t IEC_SIZEOF(const IEC_ENUM_Var<EnumType>&) noexcept {

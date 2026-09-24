@@ -205,12 +205,9 @@ export class TypeChecker {
   }
 
   /**
-   * Find a method by name on a function block or anything it EXTENDS.
-   *
-   * Walks the inheritance chain base-last, so an override on the derived type
-   * is found before the one it overrides. `seen` breaks a cycle in a malformed
-   * EXTENDS chain, which the analyzer reports separately — this must not hang
-   * while it does.
+   * Find a method by name on a function block or anything it EXTENDS. Walks
+   * base-last, so an override is found before what it overrides. `seen` breaks
+   * a cycle in a malformed EXTENDS chain, which the analyzer reports.
    */
   private findMethodInChain(
     fbName: string | undefined,
@@ -786,10 +783,9 @@ export class TypeChecker {
     // type's body and yields no value.
     if (nameUpper === "SUPER") return undefined;
 
-    // A method of the enclosing type, called by bare name from another of its
-    // methods or from the body. Resolved here rather than left alone: the C++
-    // this-> lookup would accept it either way, so a misspelling reaches the
-    // C++ compiler and is reported against generated code the user never wrote.
+    // A method of the enclosing type, called by bare name. Resolved here
+    // rather than left to C++ this-> lookup, which accepts it either way — so
+    // a misspelling would be reported against generated code.
     const ownMethod = this.findMethodInChain(
       this.currentFb?.name,
       expr.functionName,
@@ -800,10 +796,9 @@ export class TypeChecker {
       return retType;
     }
 
-    // A registry entry is proof the function exists, even when the checks above
-    // could not narrow its result. SEL and LIMIT take their result from a later
-    // parameter rather than the first, so they reach here with no return type
-    // resolved and must not be mistaken for undeclared names.
+    // A registry entry proves the function exists even when the checks above
+    // could not narrow its result. SEL and LIMIT take theirs from a later
+    // parameter, so they arrive unresolved and are not undeclared names.
     if (
       this.stdRegistry?.lookup(nameUpper) ??
       this.stdRegistry?.resolveConversion(nameUpper)

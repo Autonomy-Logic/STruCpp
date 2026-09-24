@@ -262,12 +262,10 @@ describe("compileLibrary with native sources", () => {
 });
 
 describe("a native block and its own library's ST", () => {
-  // The native headers and the ST sources are two separate compiles. The
-  // native one used to run first, so a native block could not name a type its
-  // own library declared — while the same type reached through a dependency
-  // resolved fine. Compiling ST first and handing it to the native pass as a
-  // synthetic archive removes the difference: where a symbol is declared stops
-  // deciding whether it can be seen.
+  // The native headers and the ST sources are separate compiles. With the
+  // native pass first, a block could not name a type its own library declared,
+  // though the same type through a dependency resolved. Compiling ST first and
+  // handing it over as a synthetic archive removes the difference.
   const TYPES_ST = `
 TYPE PROBE_SPACE : (COIL, REGISTER); END_TYPE
 TYPE PROBE_SETTINGS : STRUCT
@@ -482,12 +480,10 @@ describe("duplicate exports", () => {
 });
 
 describe("an enum a library exports", () => {
-  // A consuming program names an enumerator bare — `MB_HOLDING_REGISTER`, not
-  // `MB_SPACE#MB_HOLDING_REGISTER`, which this dialect does not lex. Resolving
-  // it needs the members, and the manifest carried only the type's name: the
-  // consumer knew PROBE_SPACE was an enum, which is enough to spell a variable
-  // `IEC_PROBE_SPACE`, but not what may be written into one. Every enumerator
-  // read as an undeclared identifier.
+  // A consuming program names an enumerator bare, and this dialect does not
+  // lex `MB_SPACE#MB_HOLDING_REGISTER`. Resolving it needs the members, and
+  // the manifest carried only the type's name — enough to spell a variable,
+  // not to know what may be written into one.
   const ENUM_ST = `TYPE PROBE_SPACE : (PROBE_FIRST, PROBE_SECOND, PROBE_THIRD); END_TYPE`;
 
   const archive = () =>
@@ -566,10 +562,9 @@ END_PROGRAM`;
 });
 
 describe("every kind of data type a library exports", () => {
-  // A consuming project may put any of the three on a native block's pin. The
-  // bridge spells each `IEC_<NAME>`, which strucpp aliases — identity for a
-  // structure or an array, `IEC_ENUM<>` for an enumeration — so all three have
-  // to reach the consumer's symbol table, not the enumerations alone.
+  // Any of the three may go on a native block's pin. The bridge spells each
+  // `IEC_<NAME>`, which strucpp aliases — identity for a structure or array,
+  // `IEC_ENUM<>` for an enumeration — so all three must reach the consumer.
   const TYPES_ST = `
 TYPE PROBE_SPACE : (PROBE_FIRST, PROBE_SECOND); END_TYPE
 TYPE PROBE_TREND : ARRAY [0..3] OF INT; END_TYPE

@@ -3,17 +3,14 @@
 /**
  * Calls to names that do not resolve.
  *
- * A compiler has to report the
- * errors it can detect. A call to a function nothing declares is detectable
- * while checking, and used not to be reported: it was emitted verbatim and
- * failed in the C++ compiler, against generated code the user never wrote —
- * or worse, was rescued by C++ name lookup and never failed at all.
+ * A call to a function nothing declares used to be emitted verbatim and fail
+ * in the C++ compiler, against generated code — or be rescued by C++ name
+ * lookup and never fail at all.
  *
- * The contract under test is that a name is reported only when every route has
- * been tried: user and library functions, the standard registry (including a
- * descriptor whose result type cannot be narrowed here), the legacy
- * `<TYPE>_TO_<TYPE>` conversions, function block instances, and the methods of
- * the enclosing type and anything it extends.
+ * The contract: a name is reported only once every route has been tried — user
+ * and library functions, the standard registry, the legacy
+ * `<TYPE>_TO_<TYPE>` conversions, FB instances, and the methods of the
+ * enclosing type and anything it extends.
  */
 
 import { describe, expect, it } from "vitest";
@@ -98,12 +95,9 @@ PROGRAM main VAR f : FB; i : INT; END_VAR i := f.Run(); END_PROGRAM`;
   });
 
   it("reports a misspelled sibling method", () => {
-    // Without this the emitted `HELPERR(1)` is offered to C++ member lookup
-    // against a name that does not exist, and the diagnostic lands on
-    // generated code instead of on the ST line that is wrong.
-    //
-    // The name is reported as the AST normalised it. ST identifiers are
-    // case-insensitive and every other diagnostic here does the same.
+    // Without this the emitted `HELPERR(1)` reaches C++ member lookup and the
+    // diagnostic lands on generated code instead of the ST line. The name is
+    // reported as the AST normalised it, as every other diagnostic does.
     expect(errorText(FB("Helperr(1)"))).toContain("Unknown function 'HELPERR'");
   });
 

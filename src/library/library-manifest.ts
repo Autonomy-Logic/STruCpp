@@ -165,6 +165,11 @@ export interface LibraryFBEntry {
 export interface LibraryTypeEntry {
   /** Type name */
   name: string;
+  /** The type name as its TYPE declaration spelled it, when that differs from
+   *  the folded `name` — so a consumer's descriptors emit `S_Plant`, not
+   *  `S_PLANT`. See `MemberDesc::NAME`. Optional: an older archive has only
+   *  the folded name. */
+  declaredName?: string;
   /** Type kind (struct, enum, alias) */
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
@@ -172,15 +177,11 @@ export interface LibraryTypeEntry {
   /** Struct member fields (name + declared type), so a consuming compilation
    *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
    *  for `kind: "struct"`; optional for backward compatibility. */
-  fields?: Array<{ name: string; type: string }>;
-  /** Enumerator names, in declaration order, so a consuming compilation can
-   *  resolve a bare member (`MB_HOLDING_REGISTER`) to this type and qualify it
-   *  as `MB_SPACE::MB_HOLDING_REGISTER`. Only set for `kind: "enum"`.
-   *
-   *  Without it the consumer knows the type IS an enum — enough to spell a
-   *  variable `IEC_MB_SPACE` — but not what may be written into one, so every
-   *  enumerator read as an undeclared identifier. Optional, because an archive
-   *  built before this field existed carries none. */
+  fields?: Array<{ name: string; type: string; declaredName?: string }>;
+  /** Enumerator names in declaration order, so a consumer can resolve a bare
+   *  member to this type and qualify it. Only for `kind: "enum"`. Without it
+   *  the consumer knows the type is an enum but not what may be written into
+   *  one, so every enumerator reads as undeclared. Optional. */
   members?: string[];
   /** Type-level help text — same lifecycle as `LibraryFBEntry.documentation`,
    *  populated automatically from the structured doc-block slot in CODESYS

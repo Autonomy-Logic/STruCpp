@@ -3,14 +3,9 @@
 /**
  * Composites on a generic parameter.
  *
- * A generic parameter takes an array, a structure or an enumeration as well as
- * an elementary type. The class numbers below were measured against a running
- * toolchain rather than read from a table.
- *
- * Every array is `TYPE_ARRAY` (26) whatever its elements — the class carries
- * no element type, no count and no rank. A structure is `TYPE_USERDEF` (28),
- * an enumeration `TYPE_ENUM` (25). `diSize` is the payload packed, so three
- * WORDs are 6 and `ARRAY[1..3]` reports the same as `ARRAY[0..2]`.
+ * A generic parameter takes a composite as well as an elementary type. Every
+ * array is `TYPE_ARRAY` (26) whatever its elements, a structure
+ * `TYPE_USERDEF` (28), an enumeration `TYPE_ENUM` (25).
  */
 
 import { describe, expect, it } from "vitest";
@@ -38,10 +33,9 @@ const emitted = (vars: string, arg: string) => {
 /**
  * The ELEMCLASS field of the emitted descriptor.
  *
- * Read by position rather than by matching the text up to the closing brace:
- * `IEC_ANY` grows by appending, and an assertion that spells the last field as
- * "the one before the `}`" fails the next time one is added, reporting a
- * layout change as if the element's class had gone wrong.
+ * Read by position, not by matching up to the closing brace: `IEC_ANY` grows
+ * by appending, so "the field before the `}`" would fail the next time one is
+ * added and report a layout change as a wrong element class.
  */
 const elemClassOf = (vars: string, arg: string) => {
   const line = emitted(vars, arg);

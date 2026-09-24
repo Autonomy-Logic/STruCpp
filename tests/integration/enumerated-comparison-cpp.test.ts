@@ -1,32 +1,29 @@
 /**
  * EQ and NE on an enumerated data type, and the fundamental-integer traits.
  *
- * Two faults that only a board could see, fixed together because the second is
- * why the first was mis-diagnosed for so long.
+ * Two faults only a board could see, fixed together because the second is why
+ * the first was mis-diagnosed.
+ */
+
+/*
+ * 1. IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38 admits SEL, MUX, EQ and NE on an
+ *    enumerated data type. SEL and MUX worked; EQ and NE did not, because the
+ *    comparison templates constrain on ANY_ELEMENTARY while §6.4.3 rule 3 puts
+ *    an enumeration in ANY_DERIVED. So `q = GOOD` compiled and `EQ(q, GOOD)`
+ *    did not, and an FBD box has no symbol form — leaving §8.1.2 unmet.
  *
- * 1. IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38 lets SEL, MUX, EQ and NE be applied
- *    to inputs of an enumerated data type. SEL and MUX worked; EQ and NE did
- *    not, because the comparison templates constrain on ANY_ELEMENTARY and
- *    §6.4.3 rule 3 puts an enumeration in ANY_DERIVED. So `q = GOOD` compiled
- *    (codegen emits `==` directly) while `EQ(q, GOOD)` did not — the two
- *    spellings of the same Table 38 function disagreed. A ladder or FBD box
- *    has no symbol form, so an enumeration could not be compared in a
- *    graphical language at all, which §8.1.2 requires.
- *
- *    Table 38 lists four functions and no more. GT, GE, LT, LE, MIN, MAX and
- *    LIMIT must keep failing: an enumeration has no defined order. TO_INT must
- *    keep failing too — it takes ANY_ELEMENTARY. Those are asserted here so a
- *    later "fix" cannot quietly widen them.
+ *    Table 38 lists four functions and no more, so GT/GE/LT/LE, MIN, MAX,
+ *    LIMIT and TO_INT must keep failing. Asserted here so a later "fix"
+ *    cannot quietly widen them.
  *
  * 2. `is_any_elementary` and friends specialise on the fixed-width aliases,
  *    and which fundamental type each names is target-specific. On x86-64
  *    `int32_t` is `int`; on xtensa/ARM/AVR it is `long int`, leaving a plain
- *    `int` with no traits at all. A generated `ADD(0, 0)` therefore compiled
- *    on the host and failed on an ESP32 with "no matching function for call to
- *    ADD(int, int)" — a whole class of defect no host test could ever see.
+ *    `int` with no traits. A generated `ADD(0, 0)` then compiled on the host
+ *    and failed on an ESP32 — a defect class no host test could see.
  *
- *    `long long` is distinct from `int64_t` on this host, so it exercises the
- *    same mechanism here that `int` exercises on a board.
+ *    `long long` is distinct from `int64_t` here, so it exercises the same
+ *    mechanism that `int` exercises on a board.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";

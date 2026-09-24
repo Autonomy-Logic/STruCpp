@@ -7,7 +7,7 @@
  * This module defines all tokens used by the ST grammar.
  */
 
-import { createToken, Lexer } from "chevrotain";
+import { createToken, Lexer, type IToken } from "chevrotain";
 
 // =============================================================================
 // Token Categories
@@ -614,13 +614,10 @@ export const Power = createToken({ name: "Power", pattern: /\*\*/ });
 export const Caret = createToken({ name: "Caret", pattern: /\^/ });
 export const Ampersand = createToken({ name: "Ampersand", pattern: /&/ });
 
-// Partial access to part of a bit-field variable: `Wo.%X15`, `Do.%B3`,
-// `Lo.%W3`, `Lo.%D1`. X/B/W/D is the part's width and the index counts from
-// the least significant part.
-//
-// Unambiguous against DirectAddress below, which requires an I/Q/M area letter
-// straight after the `%`; none of X/B/W/D is one. Must be listed BEFORE
-// DirectAddress all the same, so `%X0` is never offered to it.
+// Partial access to a bit-field variable: `Wo.%X15`, `Do.%B3`, `Lo.%W3`,
+// `Lo.%D1`. X/B/W/D is the width, the index counts from the least significant
+// part. Unambiguous against DirectAddress, which needs an I/Q/M letter after
+// the `%`, but must still be listed BEFORE it.
 export const PartialAccess = createToken({
   name: "PartialAccess",
   pattern: /%[XBWD][0-9]+/i,
@@ -1217,6 +1214,72 @@ export function uppercaseSource(source: string): string {
 }
 
 /**
+ * Token types whose image is a name the engineer chose rather than a word of
+ * the grammar. Only these carry a declared spelling. The contextual keywords
+ * are here because the grammar also accepts each as an ordinary identifier, so
+ * `VAR mod : INT;` must report `mod`.
+ */
+const NAMED_TOKEN_TYPES = new Set<string>([
+  "Identifier",
+  "SET",
+  "GET",
+  "ON",
+  "OVERRIDE",
+  "ABSTRACT",
+  "FINAL",
+  "AND",
+  "OR",
+  "XOR",
+  "NOT",
+  "MOD",
+]);
+
+/** A token that remembers how its name was spelled before case folding. */
+interface TokenWithDeclaredImage extends IToken {
+  declaredImage?: string;
+}
+
+/**
+ * The spelling a name was given in source, before case folding.
+ *
+ * Everything downstream matches on `image`, which is folded: IEC 61131-3
+ * §6.1.2 makes identifiers case-insensitive. The declared spelling is kept
+ * beside it for the generated strings that report a name rather than resolve
+ * one — see `iec_typedesc.hpp`.
+ */
+export function declaredImageOf(token: IToken): string {
+  return (token as TokenWithDeclaredImage).declaredImage ?? token.image;
+}
+
+/**
+ * Record each name token's original spelling. Safe because `uppercaseSource`
+ * writes one output character per input character, so a token's offsets index
+ * the original source unchanged; the guard below pins that.
+ */
+function attachDeclaredImages(
+  tokens: IToken[],
+  source: string,
+  upperSource: string,
+): void {
+  // If folding ever stops being length-preserving, every offset past the first
+  // difference is wrong. Falling back to the folded image loses the spelling;
+  // slicing anyway would put one name's characters under another name.
+  if (upperSource.length !== source.length) return;
+  for (const token of tokens) {
+    if (!NAMED_TOKEN_TYPES.has(token.tokenType.name)) continue;
+    const start = token.startOffset;
+    const end = token.endOffset;
+    if (start === undefined || end === undefined) continue;
+    const declared = source.slice(start, end + 1);
+    // Equal already for an all-caps name, which is the common case in ST; not
+    // storing it there keeps the usual file free of extra strings.
+    if (declared !== token.image) {
+      (token as TokenWithDeclaredImage).declaredImage = declared;
+    }
+  }
+}
+
+/**
  * Tokenize ST source code.
  *
  * @param source - The ST source code to tokenize
@@ -1230,6 +1293,7 @@ export function tokenize(source: string): ReturnType<typeof STLexer.tokenize> {
   const unclosedComment = findUnclosedBlockComment(upperSource);
 
   const result = STLexer.tokenize(upperSource);
+  attachDeclaredImages(result.tokens, source, upperSource);
 
   if (unclosedComment) {
     result.errors.push({
@@ -1260,6 +1324,7 @@ export function tokenizeTest(
   const unclosedComment = findUnclosedBlockComment(upperSource);
 
   const result = TestLexer.tokenize(upperSource);
+  attachDeclaredImages(result.tokens, source, upperSource);
 
   if (unclosedComment) {
     result.errors.push({
