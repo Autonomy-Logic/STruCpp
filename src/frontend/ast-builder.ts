@@ -305,6 +305,23 @@ function getAllIdentifierOrKeywordDeclared(
 }
 
 /**
+ * Span of every `identifierOrKeyword` node, positionally matching
+ * {@link getAllIdentifierOrKeywordImages}.
+ *
+ * The lexer folds identifier case, so the AST's name is not the spelling the
+ * user typed. A consumer that writes the declaration back out — the OpenPLC
+ * Editor does — needs the span to read the original from the source.
+ */
+function getAllIdentifierOrKeywordSpans(
+  items: (CstNode | IToken)[] | undefined,
+): SourceSpan[] {
+  if (!items) return [];
+  return items
+    .filter((item): item is CstNode => "children" in item)
+    .map(nodeToSourceSpan);
+}
+
+/**
  * Upper bound on an array repetition count (`[N(value)]`).
  *
  * Repetition groups are expanded element by element, so the count directly sizes
@@ -1516,6 +1533,9 @@ export class ASTBuilder {
     const declaredNames = getAllIdentifierOrKeywordDeclared(
       children.identifierOrKeyword,
     );
+    const nameSpans = getAllIdentifierOrKeywordSpans(
+      children.identifierOrKeyword,
+    );
 
     // Check for POINTER TO prefix at varDeclaration level (handles POINTER TO ARRAY[...] OF T)
     const hasPointerTo = !!children.POINTER;
@@ -1524,7 +1544,7 @@ export class ASTBuilder {
     const arrayTypeNode = getFirstNode(children.arrayType);
     let type: TypeReference;
     if (arrayTypeNode) {
-      type = this.buildInlineArrayTypeReference(arrayTypeNode, node);
+      type = this.buildInlineArrayTypeReference(arrayTypeNode);
     } else {
       // Get type reference from the dataType subrule
       const dataTypeNode = getFirstNode(children.dataType);
@@ -1553,13 +1573,31 @@ export class ASTBuilder {
       getFirstNode(children.initializerExpression),
     );
 
-    // Get address if present (AT %IX0.0)
+    // Get address if present (AT %IX0.0, or AT Motor_Start for an editor alias)
     let address: string | undefined;
+    let addressKind: "direct" | "alias" | undefined;
+    let addressSpan: SourceSpan | undefined;
     const atToken = getFirstToken(children.AT);
     if (atToken) {
       const directAddrToken = getFirstToken(children.DirectAddress);
       if (directAddrToken) {
         address = directAddrToken.image;
+        addressKind = "direct";
+        addressSpan = tokenToSourceSpan(directAddrToken);
+      } else {
+        // The alias form. `children.Identifier` also holds the declaration's
+        // own name(s) when they were lexed as plain identifiers, so take the
+        // LAST one: the names are consumed before the AT clause, so the alias
+        // is always the most recent identifier in this rule.
+        const identifierTokens = children.Identifier;
+        if (Array.isArray(identifierTokens) && identifierTokens.length > 0) {
+          const aliasToken = identifierTokens[identifierTokens.length - 1];
+          if (aliasToken && "image" in aliasToken) {
+            address = aliasToken.image;
+            addressKind = "alias";
+            addressSpan = tokenToSourceSpan(aliasToken);
+          }
+        }
       }
     }
 
@@ -1572,6 +1610,9 @@ export class ASTBuilder {
       type,
       ...(initialValue !== undefined ? { initialValue } : {}),
       ...(address !== undefined ? { address } : {}),
+      ...(addressKind !== undefined ? { addressKind } : {}),
+      ...(addressSpan !== undefined ? { addressSpan } : {}),
+      ...(nameSpans.length > 0 ? { nameSpans } : {}),
     };
   }
 
@@ -1638,10 +1679,7 @@ export class ASTBuilder {
    * For VLA: ARRAY[*] OF INT → name "__VLA_1D_INT"
    * For fixed: ARRAY[1..10] OF INT → name "__INLINE_ARRAY_INT"
    */
-  private buildInlineArrayTypeReference(
-    arrayTypeNode: CstNode,
-    parentNode: CstNode,
-  ): TypeReference {
+  private buildInlineArrayTypeReference(arrayTypeNode: CstNode): TypeReference {
     const arrayChildren = arrayTypeNode.children as CstChildren;
 
     // Get dimensions to check for variable-length
@@ -1701,7 +1739,12 @@ export class ASTBuilder {
 
     const result: TypeReference = {
       kind: "TypeReference",
-      sourceSpan: nodeToSourceSpan(parentNode),
+      // The ARRAY type's own span, not the declaration's. It used to take the
+      // parent, so `a : ARRAY [0..3] OF INT;` reported a type spanning the
+      // whole line — a caller slicing the source by this span got back the
+      // declaration instead of the type. Every other TypeReference spans just
+      // the type, so this was also inconsistent with itself.
+      sourceSpan: nodeToSourceSpan(arrayTypeNode),
       name,
       isReference: false,
       referenceKind: "none",
