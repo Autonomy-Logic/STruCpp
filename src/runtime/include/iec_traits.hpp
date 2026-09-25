@@ -44,6 +44,14 @@
 #include <cstddef>
 #include "iec_types.hpp"
 
+// <concepts> must be included at file scope: the concept declarations that use
+// it live inside `namespace strucpp`, and including a standard header from
+// there would nest the whole of `std` under it. Guarded because the runtime
+// targets C++14 and only some cores compile the sketch at C++20 or above.
+#if __cplusplus >= 202002L
+#include <concepts>
+#endif
+
 namespace strucpp {
 
 // Forward declarations
@@ -532,8 +540,6 @@ using enable_if_iec_pointer = std::enable_if_t<is_iec_pointer_v<T>, int>;
 // =============================================================================
 
 #if __cplusplus >= 202002L
-
-#include <concepts>
 
 /** Concept for IEC types */
 template<typename T>

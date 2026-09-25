@@ -42,6 +42,14 @@
 #include <cstdint>
 #include <cstddef>
 
+// <concepts> must be included at file scope: the concept declarations that use
+// it live inside `namespace strucpp`, and including a standard header from
+// there would nest the whole of `std` under it. Guarded because the runtime
+// targets C++14 and only some cores compile the sketch at C++20 or above.
+#if __cplusplus >= 202002L
+#include <concepts>
+#endif
+
 namespace strucpp {
 
 // =============================================================================
@@ -253,8 +261,6 @@ template<> struct IECTypeCategory<char16_t> { using type = AnyStringTag; };
 // =============================================================================
 
 #if __cplusplus >= 202002L
-
-#include <concepts>
 
 /** Concept for ANY_BIT types */
 template<typename T>
