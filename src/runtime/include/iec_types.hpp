@@ -18,7 +18,7 @@
 //
 // In this header (and anything it includes) do NOT use C++17/20 features
 // unguarded. In particular:
-//   * `std::trait_v<T>`               -> `std::trait<T>::value`
+//   * `std::trait_v<T>`                -> `std::trait<T>::value`
 //   * `if constexpr`                  -> SFINAE / tag dispatch
 //   * inline variables / `inline constexpr`
 //   * `auto` non-type template params -> typed NTTPs
@@ -41,6 +41,14 @@
 
 #include <cstdint>
 #include <cstddef>
+
+// <concepts> must be included at file scope: the concept declarations that use
+// it live inside `namespace strucpp`, and including a standard header from
+// there would nest the whole of `std` under it. Guarded because the runtime
+// targets C++14 and only some cores compile the sketch at C++20 or above.
+#if __cplusplus >= 202002L
+#include <concepts>
+#endif
 
 namespace strucpp {
 
@@ -132,8 +140,8 @@ using LREAL_t = double;
  * the conversion helpers now convert BETWEEN those types, a divergence would
  * produce wrong values rather than merely duplicated text.
  */
-inline constexpr int64_t IEC_SECONDS_PER_DAY = 24LL * 60LL * 60LL;
-inline constexpr int64_t IEC_NS_PER_DAY = IEC_SECONDS_PER_DAY * 1000000000LL;
+constexpr int64_t IEC_SECONDS_PER_DAY = 24LL * 60LL * 60LL;
+constexpr int64_t IEC_NS_PER_DAY = IEC_SECONDS_PER_DAY * 1000000000LL;
 
 /** IEC TIME - Duration in nanoseconds */
 using TIME_t = int64_t;
@@ -254,19 +262,17 @@ template<> struct IECTypeCategory<char16_t> { using type = AnyStringTag; };
 
 #if __cplusplus >= 202002L
 
-#include <concepts>
-
 /** Concept for ANY_BIT types */
 template<typename T>
-concept IECAnyBit = std::is_same_v<typename IECTypeCategory<T>::type, AnyBitTag>;
+concept IECAnyBit = std::is_same<typename IECTypeCategory<T>::type, AnyBitTag>::value;
 
 /** Concept for ANY_INT types */
 template<typename T>
-concept IECAnyInt = std::is_same_v<typename IECTypeCategory<T>::type, AnyIntTag>;
+concept IECAnyInt = std::is_same<typename IECTypeCategory<T>::type, AnyIntTag>::value;
 
 /** Concept for ANY_REAL types */
 template<typename T>
-concept IECAnyReal = std::is_same_v<typename IECTypeCategory<T>::type, AnyRealTag>;
+concept IECAnyReal = std::is_same<typename IECTypeCategory<T>::type, AnyRealTag>::value;
 
 /** Concept for ANY_NUM types */
 template<typename T>
@@ -274,7 +280,7 @@ concept IECAnyNum = IECAnyInt<T> || IECAnyReal<T>;
 
 /** Concept for ANY_DATE types */
 template<typename T>
-concept IECAnyDate = std::is_same_v<typename IECTypeCategory<T>::type, AnyDateTag>;
+concept IECAnyDate = std::is_same<typename IECTypeCategory<T>::type, AnyDateTag>::value;
 
 #endif // C++20
 

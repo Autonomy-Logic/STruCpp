@@ -37,12 +37,12 @@ namespace strucpp {
 // import them for arithmetic that mixes literal scalars with TIME values
 // (e.g. `MUL_TIME(t, 60)` for a 1-minute multiplier without recomputing the
 // constant).
-inline constexpr int64_t NS_PER_US = 1000LL;
-inline constexpr int64_t NS_PER_MS = 1000000LL;
-inline constexpr int64_t NS_PER_S = 1000000000LL;
-inline constexpr int64_t NS_PER_M = 60LL * NS_PER_S;
-inline constexpr int64_t NS_PER_H = 60LL * NS_PER_M;
-inline constexpr int64_t NS_PER_D = 24LL * NS_PER_H;
+constexpr int64_t NS_PER_US = 1000LL;
+constexpr int64_t NS_PER_MS = 1000000LL;
+constexpr int64_t NS_PER_S = 1000000000LL;
+constexpr int64_t NS_PER_M = 60LL * NS_PER_S;
+constexpr int64_t NS_PER_H = 60LL * NS_PER_M;
+constexpr int64_t NS_PER_D = 24LL * NS_PER_H;
 
 // ---------------------------------------------------------------------------
 // Conversion: TIME → integer count of the requested unit (truncated)

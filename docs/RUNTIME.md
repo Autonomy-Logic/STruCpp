@@ -1,6 +1,6 @@
 # C++ Runtime Library
 
-The STruC++ runtime is a header-only C++17 library in `src/runtime/include/`. Every compiled ST program includes these headers. The runtime provides IEC 61131-3 type wrappers, variable forcing, and standard function implementations.
+The STruC++ runtime is a header-only C++14 library in `src/runtime/include/`. Every compiled ST program includes these headers. The runtime provides IEC 61131-3 type wrappers, variable forcing, and standard function implementations.
 
 ## Type Definitions (`iec_types.hpp`)
 

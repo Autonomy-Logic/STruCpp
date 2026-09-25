@@ -151,7 +151,7 @@ Programs without an explicit interval default to 20ms.
 
 The `--build` flag requires:
 
-- `g++` with C++17 support (customizable with `--gpp <path>`)
+- `g++` with C++14 support (customizable with `--gpp <path>`)
 - A C compiler (`cc` or `gcc`, customizable with `--cc <path>`)
 
 Both are used during the build step only -- the resulting binary is standalone.

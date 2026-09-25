@@ -7,7 +7,7 @@ This directory contains the C++ runtime library for STruC++, providing IEC 61131
 ### Prerequisites
 
 - CMake 3.14 or higher
-- C++17 compatible compiler (GCC 7+, Clang 5+, MSVC 2017+)
+- C++14 compatible compiler (GCC 5+, Clang 3.4+, MSVC 2015+)
 - Google Test (automatically downloaded by CMake)
 
 ### Build Instructions

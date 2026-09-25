@@ -43,7 +43,7 @@ namespace strucpp {
 // self-contained.  Duplicate inline-constexpr declarations at namespace
 // scope are legal as long as the value matches; clients including both
 // headers see one definition.
-inline constexpr int64_t TOD_NS_PER_DAY = IEC_NS_PER_DAY;
+constexpr int64_t TOD_NS_PER_DAY = IEC_NS_PER_DAY;
 
 // Normalise a signed nanosecond count into the canonical [0, 24h) TOD
 // range.  Negative inputs roll over from "before midnight today" to

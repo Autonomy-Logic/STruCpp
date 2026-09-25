@@ -27,10 +27,11 @@
 #include <sstream>
 #include <type_traits>
 
-namespace strucpp {
+// The scan-cycle time slot lives in iec_std_lib.hpp. Included rather than
+// forward-declared: it is no longer a plain object a declaration can restate.
+#include "iec_std_lib.hpp"
 
-// Forward declaration of scan-cycle time global (defined in iec_std_lib.hpp)
-extern int64_t __CURRENT_TIME_NS;
+namespace strucpp {
 
 // ============================================================================
 // Value formatting
