@@ -232,27 +232,35 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toContain("TO_UDINT(DATE_TO_SECONDS(");
     });
 
-    it("has no declarable L variants yet, so their unit rows are unreachable", () => {
-      // TEMPORAL_CONVERSION_UNITS carries LTIME / LTOD / LDT / LDATE rows and
-      // codegen has always branched on those names, but the frontend does not
-      // accept them as types — `VAR v : LDT;` is "Undefined type 'LDT'", and
-      // they appear nowhere in ELEMENTARY_TYPE_NAMES or the type registry. So
-      // that half of the table is correct-in-principle and dead in practice.
-      //
-      // This test pins that, and is meant to FAIL the day the types are added
-      // — at which point the L rows become reachable and need the coverage
-      // that cannot be written today. CODESYS makes all four nanoseconds,
-      // which is already what the table says.
-      for (const type of ["LTIME", "LTOD", "LDT", "LDATE"]) {
-        const result = compile(
-          `PROGRAM Main\n VAR v : ${type}; END_VAR\nEND_PROGRAM`,
-          { headerFileName: "generated.hpp" },
-        );
-        expect(
-          result.errors.some((e) => /Undefined type/i.test(e.message)),
-          `${type} unexpectedly compiles — the L unit rows are now reachable and need real tests`,
-        ).toBe(true);
+    it("adds no unit call for the 64-bit temporals, which are nanoseconds already", () => {
+      // LTIME, LTOD and LDT are declarable, so the L half of
+      // TEMPORAL_CONVERSION_UNITS is reachable. They carry no unit call: the
+      // runtime already stores them in nanoseconds, so scaling would
+      // double-apply.
+      for (const type of ["LTIME", "LTOD", "LDT"]) {
+        const result = compileAndCheck(`
+          PROGRAM Main
+            VAR v : ${type}; l : LINT; END_VAR
+            l := TO_LINT(v);
+          END_PROGRAM
+        `);
+        expect(result.cppCode).toContain("TO_LINT(V)");
+        expect(result.cppCode).not.toMatch(/TO_LINT\(\w+_TO_(MS|SECONDS|NS)\(/);
       }
+    });
+
+    it("leaves the LDATE row unreachable, because the type is not declarable", () => {
+      // The one L row that does carry a unit call: LDATE is stored in days
+      // like DATE. The type is not in the registry, so the row stays dead —
+      // this fails the day LDATE is added, when it needs a real test.
+      const result = compile(
+        "PROGRAM Main\n VAR v : LDATE; END_VAR\nEND_PROGRAM",
+        { headerFileName: "generated.hpp" },
+      );
+      expect(
+        result.errors.some((e) => /Undefined type/i.test(e.message)),
+        "LDATE compiles now — its DATE_TO_NS row is reachable and needs a real test",
+      ).toBe(true);
     });
 
     it("scales a numeric source INTO a temporal target, in codegen", () => {

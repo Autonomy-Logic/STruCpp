@@ -13,6 +13,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>   // offsetof, used by elements_field_offset()
 #include <cstdint>
 #include <initializer_list>
 #include "iec_fault.hpp"
@@ -135,6 +136,27 @@ public:
     
     // Size information
     static constexpr size_t length() noexcept { return size; }
+
+    /**
+     * The elements in memory order, and how many — the address of element
+     * zero whatever the declared lower bound, and a rank-independent count.
+     * A generic argument's descriptor is built from these. Bounds-checked
+     * access is `at()`.
+     */
+    element_type* elements() noexcept { return data_.data(); }
+    const element_type* elements() const noexcept { return data_.data(); }
+    static constexpr size_t element_count() noexcept { return size; }
+
+    /**
+     * Byte offset of the first element's payload, which must stay 0 — the
+     * counterpart of `IECVar::value_field_offset()`. A STRUCT member that is
+     * an array adds this to its own offset (iec_typedesc.hpp); were the
+     * storage to move behind a bookkeeping field, a walk would read that
+     * field as element zero.
+     */
+    static constexpr size_t elements_field_offset() noexcept {
+        return offsetof(IEC_ARRAY_1D, data_);
+    }
     static constexpr int64_t lower_bound(int = 1) noexcept { return Bounds::lower; }
     static constexpr int64_t upper_bound(int = 1) noexcept { return Bounds::upper; }
     
@@ -250,6 +272,27 @@ public:
     auto end() noexcept { return data_.end(); }
     auto begin() const noexcept { return data_.begin(); }
     auto end() const noexcept { return data_.end(); }
+
+    /**
+     * The elements in memory order, and how many — the address of element
+     * zero whatever the declared lower bound, and a rank-independent count.
+     * A generic argument's descriptor is built from these. Bounds-checked
+     * access is `at()`.
+     */
+    element_type* elements() noexcept { return data_.data(); }
+    const element_type* elements() const noexcept { return data_.data(); }
+    static constexpr size_t element_count() noexcept { return total_size; }
+
+    /**
+     * Byte offset of the first element's payload, which must stay 0 — the
+     * counterpart of `IECVar::value_field_offset()`. A STRUCT member that is
+     * an array adds this to its own offset (iec_typedesc.hpp); were the
+     * storage to move behind a bookkeeping field, a walk would read that
+     * field as element zero.
+     */
+    static constexpr size_t elements_field_offset() noexcept {
+        return offsetof(IEC_ARRAY_2D, data_);
+    }
 };
 
 // Multi-dimensional array (3D)
@@ -376,6 +419,27 @@ public:
     auto end() noexcept { return data_.end(); }
     auto begin() const noexcept { return data_.begin(); }
     auto end() const noexcept { return data_.end(); }
+
+    /**
+     * The elements in memory order, and how many — the address of element
+     * zero whatever the declared lower bound, and a rank-independent count.
+     * A generic argument's descriptor is built from these. Bounds-checked
+     * access is `at()`.
+     */
+    element_type* elements() noexcept { return data_.data(); }
+    const element_type* elements() const noexcept { return data_.data(); }
+    static constexpr size_t element_count() noexcept { return total_size; }
+
+    /**
+     * Byte offset of the first element's payload, which must stay 0 — the
+     * counterpart of `IECVar::value_field_offset()`. A STRUCT member that is
+     * an array adds this to its own offset (iec_typedesc.hpp); were the
+     * storage to move behind a bookkeeping field, a walk would read that
+     * field as element zero.
+     */
+    static constexpr size_t elements_field_offset() noexcept {
+        return offsetof(IEC_ARRAY_3D, data_);
+    }
 };
 
 // Convenience type aliases
@@ -391,6 +455,16 @@ using Array2D = IEC_ARRAY_2D<T, ArrayBounds<L1, U1>, ArrayBounds<L2, U2>>;
 template<typename T, int64_t L1, int64_t U1, int64_t L2, int64_t U2, int64_t L3, int64_t U3>
 using Array3D = IEC_ARRAY_3D<T, ArrayBounds<L1, U1>, ArrayBounds<L2, U2>, ArrayBounds<L3, U3>>;
 
+// A struct member's array payload offset is built from these — see
+// iec_typedesc.hpp. Checked over a wrapped element and a bare composite
+// element, the two forms codegen emits.
+static_assert(Array1D<IECVar<int16_t>, 1, 10>::elements_field_offset() == 0,
+              "Array1D storage must be first");
+static_assert(Array2D<IECVar<int16_t>, 1, 3, 1, 4>::elements_field_offset() == 0,
+              "Array2D storage must be first");
+static_assert(Array3D<IECVar<int16_t>, 1, 2, 1, 2, 1, 2>::elements_field_offset() == 0,
+              "Array3D storage must be first");
+
 // =============================================================================
 // Variable-Length Array Views (Phase 3.4)
 // Type-erased array views for ARRAY[*] parameters in VAR_IN_OUT
@@ -404,6 +478,14 @@ class ArrayView1D {
     int64_t upper_;
 
 public:
+    /**
+     * Unbound view — no array, and an empty range. An FB holds its VAR_IN_OUT
+     * parameters as members bound at the call, so the member exists before
+     * there is an array. `upper < lower` is empty rather than zero-based, so a
+     * loop runs no iterations and `at()` faults on any index.
+     */
+    ArrayView1D() noexcept : data_(nullptr), lower_(0), upper_(-1) {}
+
     // Construct from any IEC_ARRAY_1D with matching element type
     template<typename Bounds>
     ArrayView1D(IEC_ARRAY_1D<T, Bounds>& arr)
@@ -457,6 +539,18 @@ class ArrayView2D {
     int64_t dim2_;
 
 public:
+    /**
+     * Unbound view — no array, and an empty range. An FB holds its VAR_IN_OUT
+     * parameters as members bound at the call, so the member exists before
+     * there is an array. `upper < lower` is empty rather than zero-based, so a
+     * loop runs no iterations and `at()` faults on any index.
+     */
+    ArrayView2D() noexcept
+        : data_(nullptr)
+        , lower1_(0), upper1_(-1)
+        , lower2_(0), upper2_(-1)
+        , dim2_(0) {}
+
     template<typename Bounds1, typename Bounds2>
     ArrayView2D(IEC_ARRAY_2D<T, Bounds1, Bounds2>& arr)
         : data_(arr.data())
@@ -498,5 +592,27 @@ public:
     int64_t lower_bound(int dim) const noexcept { return dim == 1 ? lower1_ : lower2_; }
     int64_t upper_bound(int dim) const noexcept { return dim == 1 ? upper1_ : upper2_; }
 };
+
+/**
+ * `SIZEOF` on a variable-length array parameter — the data, not the view.
+ *
+ * Without these it falls to the generic `IEC_SIZEOF(const T&)` and reports
+ * `sizeof(ArrayView1D<T>)`: one number for every element type and length.
+ * Counting from the caller's bounds instead reports the physical footprint, as
+ * a fixed-bound array of the same shape does.
+ */
+template <typename T>
+inline uint32_t IEC_SIZEOF(const ArrayView1D<T>& v) noexcept {
+    const int64_t n = v.length();
+    return static_cast<uint32_t>((n > 0 ? n : 0) * static_cast<int64_t>(sizeof(T)));
+}
+
+template <typename T>
+inline uint32_t IEC_SIZEOF(const ArrayView2D<T>& v) noexcept {
+    const int64_t d1 = v.upper_bound(1) - v.lower_bound(1) + 1;
+    const int64_t d2 = v.upper_bound(2) - v.lower_bound(2) + 1;
+    const int64_t n = (d1 > 0 && d2 > 0) ? d1 * d2 : 0;
+    return static_cast<uint32_t>(n * static_cast<int64_t>(sizeof(T)));
+}
 
 }  // namespace strucpp

@@ -124,39 +124,75 @@ public:
     IEC_ENUM_Var(value_type val) noexcept
         : value_{val}, forced_{false}, forced_value_{} {}
     
-    IEC_ENUM_Var(const IEC_ENUM_Var&) = default;
-    IEC_ENUM_Var(IEC_ENUM_Var&&) = default;
-    IEC_ENUM_Var& operator=(const IEC_ENUM_Var&) = default;
-    IEC_ENUM_Var& operator=(IEC_ENUM_Var&&) = default;
+    // Same contract as IECVar: a fresh instance starts unforced, and assigning
+    // FROM another goes through set() so the destination's force survives. A
+    // memberwise copy would unforce what the debugger holds, every cycle.
+    IEC_ENUM_Var(const IEC_ENUM_Var& other) noexcept
+        : value_{other.get()}, forced_{false}, forced_value_{} {}
+    IEC_ENUM_Var(IEC_ENUM_Var&& other) noexcept
+        : value_{other.get()}, forced_{false}, forced_value_{} {}
+    IEC_ENUM_Var& operator=(const IEC_ENUM_Var& other) noexcept {
+        set(other.get());
+        return *this;
+    }
+    IEC_ENUM_Var& operator=(IEC_ENUM_Var&& other) noexcept {
+        set(other.get());
+        return *this;
+    }
     
     // Get current value (returns forced value if forced)
     value_type get() const noexcept {
         return forced_ ? forced_value_ : value_;
     }
     
-    // Set value (ignored if forced)
+    // Ignored while forced, so a force stays authoritative against the
+    // program's own writes — the same guard IECVar::set carries.
     void set(value_type v) noexcept {
-        value_ = v;
+        if (!forced_) { value_ = v; }
     }
     
     void set(EnumType v) noexcept {
-        value_ = v;
+        if (!forced_) { value_ = v; }
     }
     
+    /**
+     * The payload, for a reader outside the class.
+     *
+     * Same contract as `IECVar::raw_ptr()`: `force()` mirrors into the raw
+     * slot, so what this addresses is the forced value while a force stands.
+     * A generic argument's descriptor is filled from here.
+     */
+    value_type* raw_ptr() noexcept { return &value_; }
+    const value_type* raw_ptr() const noexcept { return &value_; }
+
+    /**
+     * Byte offset of the payload, which must stay 0 — the counterpart of
+     * `IECVar::value_field_offset()`. A STRUCT member's `MemberDesc::OFFSET`
+     * builds on it (iec_typedesc.hpp); were the enumerand to stop being first,
+     * a walk would read the forcing flag as a legal-looking enumerator.
+     */
+    static constexpr size_t value_field_offset() noexcept {
+        return offsetof(IEC_ENUM_Var, value_);
+    }
+
     // Get underlying value (ignoring forcing)
     value_type get_underlying() const noexcept {
         return value_;
     }
     
-    // Force to a specific value
+    // The raw value follows the force, so external readers reaching the
+    // storage directly — a driver, or an ANY descriptor's pvalue — see the
+    // forced value too. IECVar::force does the same.
     void force(value_type v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;
     }
     
     void force(EnumType v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;
     }
     
     // Remove forcing
@@ -220,6 +256,84 @@ public:
 template<typename EnumType>
 using IEC_ENUM = IEC_ENUM_Var<EnumType>;
 
+// A struct member's payload offset is `offsetof(member) + value_field_offset()`
+// — see iec_typedesc.hpp. Checked over both underlying widths codegen emits, so
+// an enumeration that outgrows a byte is covered too.
+namespace detail {
+enum class EnumOffsetProbeSmall : uint8_t { A };
+enum class EnumOffsetProbeWide : int32_t { A };
+} // namespace detail
+static_assert(IEC_ENUM_Var<detail::EnumOffsetProbeSmall>::value_field_offset() == 0,
+              "IEC_ENUM_Var payload must be first");
+static_assert(IEC_ENUM_Var<detail::EnumOffsetProbeWide>::value_field_offset() == 0,
+              "IEC_ENUM_Var payload must be first");
+
+// =============================================================================
+// Enumeration traits — which enumeration an operand belongs to
+// =============================================================================
+//
+// IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38 admits SEL, MUX, EQ and NE on an
+// enumerated data type, and those four only: an enumeration has no defined
+// order, so GT/GE/LT/LE, MIN/MAX and LIMIT must keep failing to compile, and
+// TO_INT with them — it takes ANY_ELEMENTARY (Table 33) while §6.4.3 rule 3
+// puts an enumeration in the sibling ANY_DERIVED.
+//
+// An operand arrives in three spellings, so all three are recognised:
+// `IEC_ENUM_Var<E>`, `IEC_ENUM_Value<E>`, and the bare scoped enum `E` that
+// codegen emits for a literal.
+
+/** The enumeration `T` belongs to, or no `type` member if it is not one. */
+template<typename T, typename = void>
+struct iec_enum_of {};
+
+template<typename E>
+struct iec_enum_of<IEC_ENUM_Var<E>, void> { using type = E; };
+
+template<typename E>
+struct iec_enum_of<IEC_ENUM_Value<E>, void> { using type = E; };
+
+template<typename E>
+struct iec_enum_of<E, std::enable_if_t<std::is_enum<E>::value>> { using type = E; };
+
+template<typename T>
+using iec_enum_of_t = typename iec_enum_of<T>::type;
+
+// Distinct from iec_traits.hpp's `is_iec_enum`, which asks whether this is one
+// of the wrapper classes and excludes the bare scoped enum. A comparison
+// OPERAND can be the bare enum, so this predicate is the wider one.
+template<typename T, typename = void>
+struct is_iec_enum_operand : std::false_type {};
+
+template<typename T>
+struct is_iec_enum_operand<T, std::void_t<typename iec_enum_of<T>::type>> : std::true_type {};
+
+template<typename T>
+constexpr bool is_iec_enum_operand_v = is_iec_enum_operand<T>::value;
+
+/** Two operands of the SAME enumeration. Same, not merely both enumerations:
+ *  §6.4.4.2 lets different enumerated types reuse identifiers, so comparing
+ *  across two would compare names that only look alike. */
+//  A specialised struct, not one `&&`: `&&` does not short-circuit at the type
+//  level, so naming `iec_enum_of_t<A>` beside the test instantiates it either
+//  way — a hard error for a non-enumeration, not a substitution failure.
+template<typename A, typename B, typename = void>
+struct is_same_iec_enum : std::false_type {};
+
+template<typename A, typename B>
+struct is_same_iec_enum<A, B,
+    std::enable_if_t<is_iec_enum_operand_v<std::decay_t<A>> &&
+                     is_iec_enum_operand_v<std::decay_t<B>>>>
+    : std::is_same<iec_enum_of_t<std::decay_t<A>>, iec_enum_of_t<std::decay_t<B>>> {};
+
+template<typename A, typename B>
+constexpr bool is_same_iec_enum_v = is_same_iec_enum<A, B>::value;
+
+/** The enumerator itself, whichever of the three spellings arrived. */
+template<typename T>
+constexpr iec_enum_of_t<std::decay_t<T>> iec_enum_value(const T& v) noexcept {
+    return static_cast<iec_enum_of_t<std::decay_t<T>>>(v);
+}
+
 #ifndef __AVR__
 // Stream output for IEC_ENUM_Var — outputs underlying integer value
 template<typename EnumType>
@@ -273,5 +387,18 @@ inline std::ostream& operator<<(std::ostream& os, const IEC_ENUM_Var<EnumType>& 
  *   using Status_Value = IEC_ENUM_Value<Status>;
  *   using Status_Var = IEC_ENUM_Var<Status>;
  */
+
+
+/**
+ * `SIZEOF` on an enumeration — the value, not the wrapper.
+ *
+ * Without this the generic `IEC_SIZEOF(const T&)` reports the whole wrapper,
+ * forced state included. Declared here, not beside the STRING overloads, so
+ * the `iec_std_lib.hpp` dependency runs one way.
+ */
+template <typename EnumType>
+inline uint32_t IEC_SIZEOF(const IEC_ENUM_Var<EnumType>&) noexcept {
+    return static_cast<uint32_t>(sizeof(IEC_ENUM_Value<EnumType>));
+}
 
 }  // namespace strucpp

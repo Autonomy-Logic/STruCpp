@@ -354,6 +354,9 @@ public:
 
     static constexpr size_t npos = static_cast<size_t>(-1);
 
+    /** Offset of the cached length — see `IECString::length_field_offset()`. */
+    static constexpr size_t length_field_offset() noexcept { return offsetof(IECWString, length_); }
+
 private:
     char16_t data_[MaxLen + 1];
     uint16_t length_;
@@ -402,7 +405,7 @@ public:
     // Cross-size assignment (IEC 61131-3: WSTRING types are interoperable, truncation on overflow)
     template<size_t OtherLen>
     IECWStringVar& operator=(const IECWStringVar<OtherLen>& other) noexcept {
-        value_ = IECWString<MaxLen>(other.get().c_str());
+        set(IECWString<MaxLen>(other.get().c_str()));
         return *this;
     }
 
@@ -410,12 +413,13 @@ public:
         return forced_ ? forced_value_ : value_;
     }
 
+    // Ignored while forced, mirroring IECStringVar and IECVar.
     void set(const value_type& v) noexcept {
-        value_ = v;
+        if (!forced_) { value_ = v; }
     }
 
     void set(const char16_t* str) noexcept {
-        value_ = str;
+        if (!forced_) { value_ = str; }
     }
 
     value_type get_underlying() const noexcept {
@@ -425,11 +429,13 @@ public:
     void force(const value_type& v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;  // Update raw value so external readers (raw_ptr) see forced value
     }
 
     void force(const char16_t* str) noexcept {
         forced_ = true;
         forced_value_ = str;
+        value_ = str;  // Update raw value so external readers (raw_ptr) see forced value
     }
 
     void unforce() noexcept {
@@ -474,17 +480,128 @@ public:
         return (forced_ ? forced_value_ : value_)[index];
     }
 
+
+    /**
+     * Pointer to the character storage — the counterpart of
+     * `IECVar::raw_ptr()`. NUL-terminated, `capacity() + 1` code units. A
+     * caller writing through it owns the terminator and must `sync_length()`.
+     */
+    char16_t* raw_ptr() noexcept { return value_.data(); }
+
+    /** Const form of `raw_ptr()`. */
+    const char16_t* raw_ptr() const noexcept { return value_.data(); }
+
+    /**
+     * Recompute the cached length from the NUL terminator, after something
+     * outside this class has written through `raw_ptr()`.
+     */
+    void sync_length() noexcept { value_ = IECWString<MaxLen>(value_.data()); }
+
+    /** Byte offsets of the force state — see `IECString::length_field_offset()`. */
+    static constexpr size_t forced_field_offset() noexcept { return offsetof(IECWStringVar, forced_); }
+    static constexpr size_t forced_value_field_offset() noexcept {
+        return offsetof(IECWStringVar, forced_value_);
+    }
+
+    /**
+     * Byte offset of the payload, which must stay 0 — the counterpart of
+     * `IECVar::value_field_offset()`. A STRUCT member's `MemberDesc::OFFSET`
+     * builds on it (iec_typedesc.hpp); were the characters to stop being
+     * first, a walk would read the forcing flag as the start of a string.
+     */
+    static constexpr size_t value_field_offset() noexcept { return offsetof(IECWStringVar, value_); }
+
 private:
     value_type value_;
     bool forced_;
     value_type forced_value_;
 };
 
+// See the matching asserts in iec_string.hpp — the padding before `length_`
+// differs with `MaxLen`, so a spread of capacities is checked.
+static_assert(IECWStringVar<1>::value_field_offset() == 0, "IECWStringVar<1> payload must be first");
+static_assert(IECWStringVar<20>::value_field_offset() == 0, "IECWStringVar<20> payload must be first");
+static_assert(IECWStringVar<254>::value_field_offset() == 0, "IECWStringVar<254> payload must be first");
+
 using WSTRING_VAR = IECWStringVar<254>;
 
 // Non-template alias for codegen: IEC_WSTRING = IECWStringVar<254>
 // For parameterized WSTRING(N), codegen emits IECWStringVar<N> directly
 using IEC_WSTRING = IECWStringVar<254>;
+
+// ---------------------------------------------------------------------------
+// Type-erased access, for the debugger only — the counterpart of the block in
+// `iec_string.hpp` and there for the same reason. Code units are `char16_t`,
+// so every offset here is in bytes and already 2-aligned.
+// ---------------------------------------------------------------------------
+
+/** Offset of `IECWString<cap>::length_`: `char16_t[cap + 1]` is already aligned. */
+constexpr size_t iec_wstring_len_offset(size_t cap) noexcept { return (cap + 1) * sizeof(char16_t); }
+
+/** `sizeof(IECWString<cap>)`. */
+constexpr size_t iec_wstring_bytes(size_t cap) noexcept {
+    return iec_wstring_len_offset(cap) + sizeof(uint16_t);
+}
+
+/** Offset of `IECWStringVar<cap>::forced_`, which follows `value_`. */
+constexpr size_t iec_wstringvar_forced_offset(size_t cap) noexcept { return iec_wstring_bytes(cap); }
+
+/**
+ * Offset of `IECWStringVar<cap>::forced_value_`: after `forced_`, realigned.
+ *
+ * The realignment is the class's own, not a fixed 2 — AVR byte-aligns every
+ * type. `length_` needs none: `char16_t[cap + 1]` is a whole number of units.
+ */
+constexpr size_t iec_wstringvar_forced_value_offset(size_t cap) noexcept {
+    constexpr size_t align = alignof(IECWString<1>);
+    return (iec_wstring_bytes(cap) + sizeof(bool) + align - 1) & ~(align - 1);
+}
+
+static_assert(IECWString<1>::length_field_offset() == iec_wstring_len_offset(1), "IECWString<1> layout");
+static_assert(IECWString<8>::length_field_offset() == iec_wstring_len_offset(8), "IECWString<8> layout");
+static_assert(IECWString<254>::length_field_offset() == iec_wstring_len_offset(254), "IECWString<254> layout");
+static_assert(sizeof(IECWString<8>) == iec_wstring_bytes(8), "IECWString<8> size");
+static_assert(sizeof(IECWString<254>) == iec_wstring_bytes(254), "IECWString<254> size");
+static_assert(IECWStringVar<8>::forced_field_offset() == iec_wstringvar_forced_offset(8),
+              "IECWStringVar<8> force flag");
+static_assert(IECWStringVar<254>::forced_field_offset() == iec_wstringvar_forced_offset(254),
+              "IECWStringVar<254> force flag");
+static_assert(IECWStringVar<8>::forced_value_field_offset() == iec_wstringvar_forced_value_offset(8),
+              "IECWStringVar<8> forced value");
+static_assert(IECWStringVar<254>::forced_value_field_offset() == iec_wstringvar_forced_value_offset(254),
+              "IECWStringVar<254> forced value");
+
+/** The parts of an `IECWStringVar<cap>` the debugger touches. */
+struct IECWStringView {
+    char16_t* data;
+    uint16_t* length;
+    bool*     forced;
+    char16_t* forced_data;
+    uint16_t* forced_length;
+    uint16_t  capacity;
+};
+
+inline IECWStringView iec_wstring_view(void* p, size_t cap) noexcept {
+    auto* base = static_cast<unsigned char*>(p);
+    unsigned char* forcedValue = base + iec_wstringvar_forced_value_offset(cap);
+    return IECWStringView{
+        reinterpret_cast<char16_t*>(base),
+        reinterpret_cast<uint16_t*>(base + iec_wstring_len_offset(cap)),
+        reinterpret_cast<bool*>(base + iec_wstringvar_forced_offset(cap)),
+        reinterpret_cast<char16_t*>(forcedValue),
+        reinterpret_cast<uint16_t*>(forcedValue + iec_wstring_len_offset(cap)),
+        static_cast<uint16_t>(cap),
+    };
+}
+
+/** Store `len` code units into one `IECWString<cap>` slot, truncating to fit. */
+inline void iec_wstring_store(char16_t* data, uint16_t* length, size_t cap, const char16_t* src,
+                              size_t len) noexcept {
+    if (len > cap) len = cap;
+    for (size_t i = 0; i < len; ++i) data[i] = src[i];
+    data[len] = u'\0';
+    *length = static_cast<uint16_t>(len);
+}
 
 template<size_t MaxLen>
 inline size_t WLEN(const IECWString<MaxLen>& s) noexcept {
@@ -520,8 +637,9 @@ WCONCAT(const IECWString<MaxLen1>& s1, const IECWString<MaxLen2>& s2) noexcept {
 template<size_t MaxLen>
 inline IECWString<MaxLen> WINSERT(const IECWString<MaxLen>& s1, const IECWString<MaxLen>& s2, size_t pos) noexcept {
     IECWString<MaxLen> result(s1);
-    if (pos == 0) pos = 1;
-    result.insert(pos - 1, s2.c_str());
+    // As the STRING form: INSERT places IN2 after the P-th character, while
+    // DELETE begins at it and keeps `pos - 1`.
+    result.insert(pos, s2.c_str());
     return result;
 }
 

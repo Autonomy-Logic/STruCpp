@@ -42,18 +42,27 @@ TEST(IECVarTest, Forcing) {
     EXPECT_EQ(var.get(), 10);
     EXPECT_FALSE(var.is_forced());
     
+    // force() mirrors into the raw slot as well, so an external reader that
+    // reaches the storage directly — a driver, or an ANY descriptor's pvalue —
+    // sees the forced value too.
     var.force(99);
     EXPECT_TRUE(var.is_forced());
     EXPECT_EQ(var.get(), 99);
-    EXPECT_EQ(var.get_underlying(), 10);
+    EXPECT_EQ(var.get_underlying(), 99);
     EXPECT_EQ(var.get_forced_value(), 99);
     
+    // set() is ignored while forced, so the force stays authoritative against
+    // the program's own writes.
     var.set(20);
     EXPECT_EQ(var.get(), 99);
-    EXPECT_EQ(var.get_underlying(), 20);
+    EXPECT_EQ(var.get_underlying(), 99);
     
+    // unforce() clears the flag only; the variable keeps the value it was
+    // forced to until the program next writes it.
     var.unforce();
     EXPECT_FALSE(var.is_forced());
+    EXPECT_EQ(var.get(), 99);
+    var.set(20);
     EXPECT_EQ(var.get(), 20);
 }
 
@@ -157,9 +166,11 @@ TEST(IECVarTest, ForcingWithArithmetic) {
     IEC_INT var(10);
     var.force(50);
     
+    // `+=` reads through get() and writes through set(), so it is ignored
+    // while forced rather than accumulating behind the force.
     var += 5;
     EXPECT_EQ(var.get(), 50);
-    EXPECT_EQ(var.get_underlying(), 55);
+    EXPECT_EQ(var.get_underlying(), 50);
 }
 
 TEST(IECVarTest, RealTypes) {

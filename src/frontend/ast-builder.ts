@@ -61,11 +61,13 @@ import type {
   CaseElement,
   CaseLabel,
   ExitStatement,
+  ContinueStatement,
   ReturnStatement,
   ExternalCodePragma,
   BinaryOperator,
   UnaryOperator,
 } from "./ast.js";
+import { declaredImageOf } from "./lexer.js";
 import { applyTypeDefaults } from "./type-defaults.js";
 import type { SourceSpan } from "../types.js";
 
@@ -200,6 +202,21 @@ function getAllTokens(items: (CstNode | IToken)[] | undefined): IToken[] {
 }
 
 /**
+ * The written name of a `dataType` node, keeping the one qualifier the parser
+ * admits — `__SYSTEM.AnyType`. Gated on `__SYSTEM` so a second Identifier from
+ * anywhere else, like the length in `STRING(MAX_LEN)`, is left alone.
+ */
+function getDataTypeName(children: CstChildren): string | undefined {
+  const names = getAllTokens(children.Identifier);
+  const first = names[0];
+  if (!first) return undefined;
+  const qualifier = names[1];
+  return qualifier && first.image.toUpperCase() === "__SYSTEM"
+    ? `${first.image}.${qualifier.image}`
+    : first.image;
+}
+
+/**
  * Get the start offset of a CST node by finding its earliest token.
  */
 function getNodeStartOffset(node: CstNode): number {
@@ -227,29 +244,44 @@ function getNodeStartOffset(node: CstNode): number {
  * The node contains either an Identifier token or one of the contextual keyword tokens
  * (SET, GET, ON, OVERRIDE, ABSTRACT, FINAL).
  */
-function getIdentifierOrKeywordImage(node: CstNode): string {
+/** The token types an `identifierOrKeyword` node can hold, in check order. */
+const IDENTIFIER_OR_KEYWORD_TOKENS = [
+  "Identifier", // by far the most common, so checked first
+  "SET",
+  "GET",
+  "ON",
+  "OVERRIDE",
+  "ABSTRACT",
+  "FINAL",
+  "AND",
+  "OR",
+  "XOR",
+  "NOT",
+  "MOD",
+] as const;
+
+/** The token an `identifierOrKeyword` node holds, or undefined if malformed. */
+function getIdentifierOrKeywordToken(node: CstNode): IToken | undefined {
   const children = node.children as CstChildren;
-  // Check Identifier first (most common case)
-  const identToken = getFirstToken(children.Identifier);
-  if (identToken) return identToken.image;
-  // Check each contextual keyword token
-  for (const key of [
-    "SET",
-    "GET",
-    "ON",
-    "OVERRIDE",
-    "ABSTRACT",
-    "FINAL",
-    "AND",
-    "OR",
-    "XOR",
-    "NOT",
-    "MOD",
-  ]) {
-    const kwToken = getFirstToken(children[key]);
-    if (kwToken) return kwToken.image;
+  for (const key of IDENTIFIER_OR_KEYWORD_TOKENS) {
+    const token = getFirstToken(children[key]);
+    if (token) return token;
   }
-  return "";
+  return undefined;
+}
+
+function getIdentifierOrKeywordImage(node: CstNode): string {
+  return getIdentifierOrKeywordToken(node)?.image ?? "";
+}
+
+/**
+ * The spelling this identifier was given in source. Every name the compiler
+ * matches on is folded (IEC 61131-3 §6.1.2); this is kept alongside for the
+ * descriptor strings in `iec_typedesc.hpp`, which report a declared name.
+ */
+function getIdentifierOrKeywordDeclared(node: CstNode): string {
+  const token = getIdentifierOrKeywordToken(node);
+  return token ? declaredImageOf(token) : "";
 }
 
 /**
@@ -261,6 +293,15 @@ function getAllIdentifierOrKeywordImages(
   if (!items) return [];
   const nodes = items.filter((item): item is CstNode => "children" in item);
   return nodes.map(getIdentifierOrKeywordImage);
+}
+
+/** As `getAllIdentifierOrKeywordImages`, but keeping the declared spelling. */
+function getAllIdentifierOrKeywordDeclared(
+  items: (CstNode | IToken)[] | undefined,
+): string[] {
+  if (!items) return [];
+  const nodes = items.filter((item): item is CstNode => "children" in item);
+  return nodes.map(getIdentifierOrKeywordDeclared);
 }
 
 /**
@@ -873,6 +914,7 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
     const nameToken = getAllTokens(children.Identifier)[0];
     const name = nameToken?.image ?? "";
+    const declaredName = nameToken ? declaredImageOf(nameToken) : "";
 
     const definition = this.buildTypeDefinition(node);
 
@@ -888,6 +930,7 @@ export class ASTBuilder {
       kind: "TypeDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
+      declaredName,
       definition,
       ...(defaultValue !== undefined ? { defaultValue } : {}),
     };
@@ -1081,11 +1124,18 @@ export class ASTBuilder {
     // Get element type from nested dataType
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
+    let elementMaxLength: number | undefined;
     if (elementTypeNode) {
       const elemChildren = elementTypeNode.children as CstChildren;
-      const elemNameToken = getFirstToken(elemChildren.Identifier);
-      if (elemNameToken) {
-        elementTypeName = elemNameToken.image;
+      const elemName = getDataTypeName(elemChildren);
+      if (elemName) {
+        elementTypeName = elemName;
+      }
+      // The element's own declared length — `STRING(23)` in
+      // `ARRAY [0..3] OF STRING(23)`. The array's bounds are a different node.
+      const elemLenToken = getFirstToken(elemChildren.IntegerLiteral);
+      if (elemLenToken) {
+        elementMaxLength = parseInt(elemLenToken.image, 10);
       }
     }
 
@@ -1114,6 +1164,9 @@ export class ASTBuilder {
     if (arrayDimensions.length > 0) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
+      if (elementMaxLength !== undefined) {
+        result.elementMaxLength = elementMaxLength;
+      }
     }
     return result;
   }
@@ -1477,6 +1530,9 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
     // Variable names come from identifierOrKeyword subrule nodes (allows SET, ON, etc. as names)
     const names = getAllIdentifierOrKeywordImages(children.identifierOrKeyword);
+    const declaredNames = getAllIdentifierOrKeywordDeclared(
+      children.identifierOrKeyword,
+    );
     const nameSpans = getAllIdentifierOrKeywordSpans(
       children.identifierOrKeyword,
     );
@@ -1550,6 +1606,7 @@ export class ASTBuilder {
       kind: "VarDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       names,
+      declaredNames,
       type,
       ...(initialValue !== undefined ? { initialValue } : {}),
       ...(address !== undefined ? { address } : {}),
@@ -1566,7 +1623,16 @@ export class ASTBuilder {
     const children = node.children as CstChildren;
 
     const nameToken = getFirstToken(children.Identifier);
-    const name = nameToken?.image ?? "INT";
+    // `__SYSTEM.AnyType` arrives as two identifiers around a Dot; everything
+    // else is a single one. The Dot is what tells them apart — the second
+    // identifier slot is otherwise a STRING's length constant.
+    const qualifiedIdents = children.Dot
+      ? getAllTokens(children.Identifier)
+      : [];
+    const name =
+      qualifiedIdents.length > 1
+        ? `${qualifiedIdents[0]!.image}.${qualifiedIdents[1]!.image}`
+        : (nameToken?.image ?? "INT");
     const isRefTo = !!children.REF_TO;
     const isReferenceTo = !!children.REFERENCE_TO;
     const isPointerTo = !!children.POINTER;
@@ -1589,7 +1655,7 @@ export class ASTBuilder {
     } else {
       // Check for identifier-based length (STRING(CONSTANT_NAME))
       // Note: children.Identifier[0] is the type name itself; [1] would be the length constant
-      const allIdents = getAllTokens(children.Identifier);
+      const allIdents = children.Dot ? [] : getAllTokens(children.Identifier);
       if (allIdents.length > 1) {
         maxLength = allIdents[1]!.image;
       }
@@ -1630,11 +1696,18 @@ export class ASTBuilder {
     // Get element type from nested dataType
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
+    let elementMaxLength: number | undefined;
     if (elementTypeNode) {
       const elemChildren = elementTypeNode.children as CstChildren;
-      const elemNameToken = getFirstToken(elemChildren.Identifier);
-      if (elemNameToken) {
-        elementTypeName = elemNameToken.image;
+      const elemName = getDataTypeName(elemChildren);
+      if (elemName) {
+        elementTypeName = elemName;
+      }
+      // The element's own declared length — `STRING(23)` in
+      // `ARRAY [0..3] OF STRING(23)`. The array's bounds are a different node.
+      const elemLenToken = getFirstToken(elemChildren.IntegerLiteral);
+      if (elemLenToken) {
+        elementMaxLength = parseInt(elemLenToken.image, 10);
       }
     }
 
@@ -1679,6 +1752,9 @@ export class ASTBuilder {
     if (arrayDimensions) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
+      if (elementMaxLength !== undefined) {
+        result.elementMaxLength = elementMaxLength;
+      }
     }
     return result;
   }
@@ -1720,6 +1796,11 @@ export class ASTBuilder {
     }
     if (children.exitStatement) {
       return this.buildExitStatement(getFirstNode(children.exitStatement)!);
+    }
+    if (children.continueStatement) {
+      return this.buildContinueStatement(
+        getFirstNode(children.continueStatement)!,
+      );
     }
     if (children.returnStatement) {
       return this.buildReturnStatement(getFirstNode(children.returnStatement)!);
@@ -2050,6 +2131,16 @@ export class ASTBuilder {
   buildExitStatement(node: CstNode): ExitStatement {
     return {
       kind: "ExitStatement",
+      sourceSpan: nodeToSourceSpan(node),
+    };
+  }
+
+  /**
+   * Build a ContinueStatement from a CST node.
+   */
+  buildContinueStatement(node: CstNode): ContinueStatement {
+    return {
+      kind: "ContinueStatement",
       sourceSpan: nodeToSourceSpan(node),
     };
   }
@@ -2918,18 +3009,26 @@ export class ASTBuilder {
     // Check for dereference operator (^)
     const isDereference = !!children.Caret;
 
-    // Get additional field access from identifierOrKeyword nodes (index 1+)
-    // Also include IntegerLiteral tokens for bit access (var.0, var.31)
-    const allIntLiterals = getAllTokens(children.IntegerLiteral);
-    const fieldAccess: string[] = [];
-    for (let i = 1; i < idOrKwNodes.length; i++) {
-      const node = idOrKwNodes[i];
-      if (node) fieldAccess.push(getIdentifierOrKeywordImage(node));
-    }
-    // Bit access indices appear as IntegerLiteral tokens after Dot
-    for (const intToken of allIntLiterals) {
-      fieldAccess.push(intToken.image);
-    }
+    // Field access steps after the base name: struct members, bare bit
+    // indices (`var.31`) and partial access (`var.%B3`). Sorted by source
+    // offset so `s.field.%B1` keeps its written order; appending each kind in
+    // turn would group by kind.
+    const fieldAccess: string[] = [
+      ...idOrKwNodes.slice(1).map((node) => ({
+        offset: getNodeStartOffset(node),
+        image: getIdentifierOrKeywordImage(node),
+      })),
+      ...getAllTokens(children.IntegerLiteral).map((t) => ({
+        offset: t.startOffset,
+        image: t.image,
+      })),
+      ...getAllTokens(children.PartialAccess).map((t) => ({
+        offset: t.startOffset,
+        image: t.image,
+      })),
+    ]
+      .sort((a, b) => a.offset - b.offset)
+      .map((step) => step.image);
 
     // Extract subscript expressions from array access: arr[i], arr[i,j], etc.
     const subscripts: Expression[] = [];
@@ -2984,6 +3083,10 @@ export class ASTBuilder {
       });
     }
     for (const t of intLiteralTokens) {
+      fieldTargets.push({ offset: t.startOffset, name: t.image });
+    }
+    // Partial access steps (`var.%B3`) are field targets too.
+    for (const t of getAllTokens(children.PartialAccess)) {
       fieldTargets.push({ offset: t.startOffset, name: t.image });
     }
     fieldTargets.sort((a, b) => a.offset - b.offset);

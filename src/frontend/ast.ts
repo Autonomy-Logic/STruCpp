@@ -256,6 +256,15 @@ export interface VarBlock extends ASTNode {
 export interface VarDeclaration extends ASTNode {
   kind: "VarDeclaration";
   names: string[];
+  /**
+   * The same names, spelled as they were declared.
+   *
+   * `names` is folded (IEC 61131-3 §6.1.2) and everything that resolves,
+   * checks or mangles keeps using it. This is for the strings a descriptor
+   * reports, where `spPressureAlt` must not become `SPPRESSUREALT`. Parallel
+   * to `names`; absent on declarations not built from source.
+   */
+  declaredNames?: string[];
   type: TypeReference;
   initialValue?: Expression;
   /** The `AT` operand verbatim: a `%` location, or an OpenPLC alias name. */
@@ -297,6 +306,8 @@ export interface VarDeclaration extends ASTNode {
 export interface TypeDeclaration extends ASTNode {
   kind: "TypeDeclaration";
   name: string;
+  /** `name` as the engineer spelled it — see `VarDeclaration.declaredNames`. */
+  declaredName?: string;
   definition: TypeDefinition;
   /**
    * Default value attached to the type itself
@@ -397,6 +408,12 @@ export interface TypeReference extends ASTNode {
   maxLength?: number | string; // For STRING(n) / WSTRING(n) parameterized length; string for constant names
   arrayDimensions?: Array<{ start: number; end: number }>; // For __INLINE_ARRAY_* types
   elementTypeName?: string; // Element type for inline arrays (e.g. "BYTE" for ARRAY[0..7] OF BYTE)
+  /**
+   * Declared length of the ELEMENT of an inline array —
+   * `ARRAY [0..3] OF STRING(23)`. Separate from `maxLength`, which belongs to
+   * the type itself: on an inline array the TypeReference describes the array.
+   */
+  elementMaxLength?: number;
 }
 
 // =============================================================================
@@ -459,6 +476,7 @@ export type Statement =
   | WhileStatement
   | RepeatStatement
   | ExitStatement
+  | ContinueStatement
   | ReturnStatement
   | FunctionCallStatement
   | ExternalCodePragma
@@ -566,6 +584,11 @@ export interface RepeatStatement extends ASTNode {
  */
 export interface ExitStatement extends ASTNode {
   kind: "ExitStatement";
+}
+
+/** CONTINUE statement — skips to the next iteration of the enclosing loop. */
+export interface ContinueStatement extends ASTNode {
+  kind: "ContinueStatement";
 }
 
 /**

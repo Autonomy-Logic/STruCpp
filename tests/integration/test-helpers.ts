@@ -30,6 +30,10 @@ export const PCH_INCLUDES = `#pragma once
 #include "iec_std_lib.hpp"
 #include "iec_enum.hpp"
 #include "iec_struct.hpp"
+#include "iec_type_class.hpp"
+#include "iec_typedesc.hpp"
+#include "iec_varinfo.hpp"
+#include "iec_any.hpp"
 #include "iec_memory.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
@@ -314,13 +318,13 @@ export function runE2ETestPipeline(
     const gppCommand = [
       'g++',
       '-std=c++17',
-      `-I${RUNTIME_INCLUDE_PATH}`,
-      `-I${TEST_RUNTIME_PATH}`,
-      `-I${tempDir}`,
-      path.join(tempDir, 'test_main.cpp'),
-      path.join(tempDir, 'generated.cpp'),
+      `-I"${RUNTIME_INCLUDE_PATH}"`,
+      `-I"${TEST_RUNTIME_PATH}"`,
+      `-I"${tempDir}"`,
+      `"${path.join(tempDir, 'test_main.cpp')}"`,
+      `"${path.join(tempDir, 'generated.cpp')}"`,
       '-o',
-      binaryPath,
+      `"${binaryPath}"`,
     ].join(' ');
 
     try {
