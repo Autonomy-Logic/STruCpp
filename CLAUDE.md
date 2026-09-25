@@ -1,5 +1,22 @@
 # CLAUDE.md
 
+## Process entry point
+
+For tracked features, bugs, investigations, implementation, tests, and pull requests, start with
+`/autonomy:mister`. Mister verifies the Jira task and current documentation, reconciles process
+drift, checks the applicable gates, and routes the work to the right skill.
+If Mister or a required connected service is unavailable, report the missing dependency; do not invent
+Jira, Confluence, approval, or branch state.
+
+This file owns only STruC++ commands, architecture, and repository conventions. The current Mister
+plugin and Confluence templates are the source of truth for company process. Do not reuse assumptions
+from an earlier conversation. During implementation, use the approved implementation plan as the
+primary context and load the Requirements Gathering or risk assessment only for a cited constraint or
+an ambiguity.
+
+Use `feature/RTOP-<number>-slug` for demands and `bugfix/RTOP-<number>-slug` for bugs, branching from
+`development`.
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
