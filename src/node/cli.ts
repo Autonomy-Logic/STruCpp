@@ -747,7 +747,7 @@ function runTestMode(options: CLIOptions): void {
       execFileSync(
         options.gpp,
         [
-          "-std=c++17",
+          "-std=c++14",
           `-I${runtimeIncludeDir}`,
           `-I${testRuntimeDir}`,
           `-I${tempDir}`,
@@ -1168,7 +1168,7 @@ async function main(): Promise<void> {
 
     // Step 2: Compile C++ and link with isocline.o (uses execFileSync to avoid shell injection)
     const gppArgs = [
-      "-std=c++17",
+      "-std=c++14",
       `-I${runtimeIncludeDir}`,
       `-I${replDir}`,
       `-I${outputDir}`,

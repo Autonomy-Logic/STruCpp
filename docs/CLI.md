@@ -41,7 +41,7 @@ strucpp/
 
 The `--build` and `--test` modes compile C++ code and require a working toolchain on the host:
 
-- `g++` with C++17 support (GCC 7+ or equivalent)
+- `g++` with C++14 support (GCC 5+ or equivalent)
 - `cc` (any C11 compiler, for the REPL line editor)
 
 The default compile mode (ST to C++) has no external dependencies.
@@ -69,7 +69,7 @@ Compile to C++ and produce an interactive REPL binary (see [REPL.md](REPL.md)):
 strucpp input.st -o output.cpp --build
 ```
 
-Requires `g++` (C++17) and `cc` (C11) on the system. The build process:
+Requires `g++` (C++14) and `cc` (C11) on the system. The build process:
 
 1. Compiles ST to C++ (`.cpp` + `.hpp`)
 2. Generates a REPL `main.cpp` with embedded source, line maps, and program descriptors

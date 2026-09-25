@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-STruC++ is an IEC 61131-3 Structured Text to C++17 compiler written in TypeScript. It targets replacing MatIEC in the OpenPLC toolchain with a cleaner, maintainable architecture.
+STruC++ is an IEC 61131-3 Structured Text to C++14 compiler written in TypeScript. It targets replacing MatIEC in the OpenPLC toolchain with a cleaner, maintainable architecture.
 
 ## Build & Development Commands
 
@@ -30,7 +30,7 @@ npm run test:watch                              # Watch mode
 
 ### C++ Compilation Tests
 
-Tests in `tests/integration/cpp-compile.test.ts` require `g++` with C++17 support. They are auto-skipped if g++ is unavailable.
+Tests in `tests/integration/cpp-compile.test.ts` require `g++` with C++14 support. They are auto-skipped if g++ is unavailable.
 
 ## Architecture
 

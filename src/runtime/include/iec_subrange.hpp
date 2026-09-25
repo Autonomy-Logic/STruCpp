@@ -18,7 +18,7 @@
 // core's `-std` — gnu++14 on every mbed-based core (Nano RP2040 Connect, Nano
 // 33 BLE, Opta, GIGA, Portenta, Edge). To stay safe if/when this header enters
 // that chain, keep it C++14-clean. Do NOT use C++17/20 features unguarded:
-//   * `std::trait_v<T>`               -> `std::trait<T>::value`
+//   * `std::trait_v<T>`                -> `std::trait<T>::value`
 //   * `if constexpr`                  -> SFINAE / tag dispatch
 //   * inline variables / `inline constexpr`
 //   * `auto` non-type template params -> typed NTTPs

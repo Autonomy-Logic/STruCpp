@@ -338,7 +338,7 @@ struct PtrOps {
 // through pgm_read_ptr in the hot path of handle_read / handle_write /
 // handle_set. Worth doing on its own evidence, not as a side effect.
 // ---------------------------------------------------------------------------
-inline constexpr TypeOps type_ops[TAG__COUNT] = {
+constexpr TypeOps type_ops[TAG__COUNT] = {
     /*BOOL    */ { &force_impl<BOOL_t>,  &unforce_impl<BOOL_t>,  &read_impl<BOOL_t>,  &write_impl<BOOL_t>,  sizeof(BOOL_t)      },
     /*SINT    */ { &force_impl<SINT_t>,  &unforce_impl<SINT_t>,  &read_impl<SINT_t>,  &write_impl<SINT_t>,  sizeof(SINT_t)      },
     /*USINT   */ { &force_impl<USINT_t>, &unforce_impl<USINT_t>, &read_impl<USINT_t>, &write_impl<USINT_t>, sizeof(USINT_t)     },
@@ -382,7 +382,7 @@ inline constexpr TypeOps type_ops[TAG__COUNT] = {
 //
 // So the feature now costs what it costs, and only to firmware that uses it.
 // ---------------------------------------------------------------------------
-inline constexpr PtrOps ptr_ops[TAG__COUNT] = {
+constexpr PtrOps ptr_ops[TAG__COUNT] = {
     /*BOOL    */ { &ptr_impl<BOOL_t> },
     /*SINT    */ { &ptr_impl<SINT_t> },
     /*USINT   */ { &ptr_impl<USINT_t> },
