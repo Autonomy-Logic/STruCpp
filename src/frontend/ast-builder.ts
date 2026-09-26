@@ -3199,11 +3199,14 @@ export class ASTBuilder {
       }
     }
 
+    // Keep `^` in the dotted name so codegen emits `->` instead of `.`.
+    const deref = getFirstToken(children.Caret) !== undefined ? "^" : "";
+
     // Build the base method call as a FunctionCallExpression
     let result: FunctionCallExpression | MethodCallExpression = {
       kind: "FunctionCallExpression",
       sourceSpan: nodeToSourceSpan(node),
-      functionName: `${instanceName}.${methodName}`,
+      functionName: `${instanceName}${deref}.${methodName}`,
       arguments: args,
     };
 
@@ -3392,11 +3395,14 @@ export class ASTBuilder {
       }
     }
 
+    // Keep `^` in the dotted name so codegen emits `->` instead of `.`.
+    const deref = getFirstToken(children.Caret) !== undefined ? "^" : "";
+
     // Build the base method call
     let callExpr: FunctionCallExpression | MethodCallExpression = {
       kind: "FunctionCallExpression",
       sourceSpan: nodeToSourceSpan(node),
-      functionName: `${instanceName}.${methodName}`,
+      functionName: `${instanceName}${deref}.${methodName}`,
       arguments: args,
     };
 

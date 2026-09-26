@@ -4564,7 +4564,7 @@ export class CodeGenerator {
   protected generateFunctionCallExpression(
     expr: FunctionCallExpression,
   ): string {
-    // Handle dotted method calls: THIS.method, SUPER.method, instance.method
+    // Handle dotted method calls: THIS.method, SUPER.method, instance.method, pointer^.method
     if (expr.functionName.includes(".")) {
       const dotIdx = expr.functionName.indexOf(".");
       const prefix = expr.functionName.substring(0, dotIdx);
@@ -4583,6 +4583,9 @@ export class CodeGenerator {
         return `this->${resolvedMethod}(${args.join(", ")})`;
       } else if (prefix.toUpperCase() === "SUPER" && this.currentFBExtends) {
         return `${this.currentFBExtends}::${resolvedMethod}(${args.join(", ")})`;
+      } else if (prefix.endsWith("^")) {
+        // pointer^.method() call
+        return `${prefix.substring(0, prefix.length - 1)}->${resolvedMethod}(${args.join(", ")})`;
       } else {
         // instance.method() call
         return `${prefix}.${resolvedMethod}(${args.join(", ")})`;
