@@ -185,4 +185,25 @@ extern const uint16_t  retain_var_count;
 // body edit keeps retained values, a declaration change invalidates them.
 extern const uint32_t  retain_layout_hash;
 
+// Consecutive leaves of one locked global `g`: elements [first, first + count)
+// of debug array `arr`. A threaded build lists them so a runtime can take the
+// global's lock (strucpp_global_lock(g)) around a leaf.
+struct GlobalLeafRun {
+    uint8_t  arr;
+    uint16_t first;
+    uint16_t count;
+    uint32_t g;
+};
+
+// The global leaf (arr, elem) is in, from `n` runs, or -1.
+inline int32_t global_of_leaf(const GlobalLeafRun* runs, uint32_t n, uint8_t arr, uint16_t elem) {
+    for (uint32_t i = 0; i < n; ++i) {
+        const GlobalLeafRun& r = runs[i];
+        if (r.arr == arr && elem >= r.first && elem - r.first < r.count) {
+            return static_cast<int32_t>(r.g);
+        }
+    }
+    return -1;
+}
+
 } } // namespace strucpp::debug

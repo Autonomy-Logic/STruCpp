@@ -182,7 +182,10 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.headerCode).toContain('inline GlobalVar<IEC_INT> COUNTER');
     expect(result.headerCode).toContain('GlobalVar<IEC_INT>* COUNTER');
     expect(result.cppCode).toContain('COUNTER(&');
-    expect(result.cppCode).toContain('COUNTER->write(');
+    // `counter := counter + 1` is one locked read-modify-write.
+    expect(result.cppCode).toContain(
+      'COUNTER->with_lock([&](auto* __glk){ (*__glk) = (*__glk) + 1; });',
+    );
     // The old bug: a plain value member on the FB. Must NOT appear.
     expect(result.headerCode).not.toContain('    IEC_INT COUNTER;');
 
@@ -209,6 +212,72 @@ describeIfGpp('C++ Compilation Tests', () => {
       }
       expect(ok, `g++/run ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
     }
+  });
+
+  it('takes the global locks and IEC time from the platform (STRUCPP_PLATFORM_THREADS)', () => {
+    // A firmware whose toolchain has no <mutex> or real thread_local (the ARM
+    // Arduino cores) supplies both through four C functions. Host stand-ins
+    // here: a recursive mutex per global, and one time slot.
+    const source = `
+      FUNCTION_BLOCK Bumper
+        VAR_EXTERNAL counter : INT; END_VAR
+        counter := counter + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR b : Bumper; t : TIME; END_VAR
+        b();
+        t := TIME();
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL counter : INT := 0; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    fs.writeFileSync(path.join(tempDir, 'generated.hpp'), result.headerCode);
+    const cpp = path.join(tempDir, 'platform_threads.cpp');
+    fs.writeFileSync(
+      cpp,
+      `${result.cppCode}
+
+#include <mutex>
+static int g_locks = 0;
+static int64_t g_time_slot = 0;
+extern "C" void *strucpp_platform_mutex_create(void) { return new std::recursive_mutex(); }
+extern "C" void strucpp_platform_mutex_lock(void *m) { ++g_locks; static_cast<std::recursive_mutex *>(m)->lock(); }
+extern "C" void strucpp_platform_mutex_unlock(void *m) { static_cast<std::recursive_mutex *>(m)->unlock(); }
+extern "C" bool strucpp_platform_mutex_try_lock(void *m) { return static_cast<std::recursive_mutex *>(m)->try_lock(); }
+extern "C" int64_t *strucpp_platform_current_time_slot(void) { return &g_time_slot; }
+
+int main() {
+  strucpp::BUMPER b; b(); b();
+  g_time_slot = 1234;
+  const bool counted = strucpp::COUNTER.read() == 2 && g_locks > 0;
+  const bool timed = strucpp::TIME().get() == 1234;
+  return counted && timed ? 0 : 1;
+}
+`,
+    );
+    const out = path.join(tempDir, 'platform_threads.out');
+    let ok = true;
+    let diag = '';
+    try {
+      execSync(
+        `g++ -std=c++17 -DSTRUCPP_THREADED -DSTRUCPP_PLATFORM_THREADS -I"${runtimeInclude}" "${cpp}" -o "${out}"`,
+        { stdio: 'pipe' },
+      );
+      execSync(`"${out}"`, { stdio: 'pipe' });
+    } catch (e) {
+      ok = false;
+      diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+    }
+    expect(ok, `g++/run with platform threads failed:\n${diag}`).toBe(true);
   });
 
   it('compiles `=>` FB-output capture into a scalar shared global (SoftMotion bridge pattern)', () => {

@@ -1382,9 +1382,19 @@ inline T MOVE(T value) noexcept {
 // for the other tasks. Gated on STRUCPP_THREADED because single-threaded
 // targets (Arduino/bare-metal) may have no TLS runtime — there it stays a plain
 // global, which is correct for a one-thread scan loop.
+#ifdef STRUCPP_PLATFORM_THREADS
+// Where thread_local is missing or shared between threads (arm-none-eabi
+// without gthreads), each thread's time lives on its RTOS; the runtime writes
+// the calling thread's slot at each release.
+extern "C" int64_t *strucpp_platform_current_time_slot(void);
+#define STRUCPP_CURRENT_TIME_NS (*strucpp_platform_current_time_slot())
+#else
 inline thread_local int64_t __CURRENT_TIME_NS = 0;
+#define STRUCPP_CURRENT_TIME_NS (__CURRENT_TIME_NS)
+#endif
 #else
 inline int64_t __CURRENT_TIME_NS = 0;
+#define STRUCPP_CURRENT_TIME_NS (__CURRENT_TIME_NS)
 #endif
 
 /**
@@ -1392,7 +1402,7 @@ inline int64_t __CURRENT_TIME_NS = 0;
  * CODESYS-compatible: TIME() returns the same value for the entire cycle.
  */
 inline IEC_TIME TIME() {
-    return IEC_TIME(static_cast<TIME_t>(__CURRENT_TIME_NS));
+    return IEC_TIME(static_cast<TIME_t>(STRUCPP_CURRENT_TIME_NS));
 }
 
 /**
@@ -1452,7 +1462,7 @@ inline IEC_DT CURRENT_DT() {
     // monotonically as the runtime drives the scan cycle, giving us
     // time-since-boot — meaningful for diffing timestamps even when
     // no RTC is wired up.
-    return IEC_DT(static_cast<DT_t>(__CURRENT_TIME_NS));
+    return IEC_DT(static_cast<DT_t>(STRUCPP_CURRENT_TIME_NS));
 #else
     using namespace std::chrono;
     auto now = system_clock::now();

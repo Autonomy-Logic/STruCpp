@@ -27,7 +27,7 @@ import type {
   StructDefinition,
   VarDeclaration,
 } from "../frontend/ast.js";
-import type { ProjectModel } from "../project-model.js";
+import { lockedGlobals, type ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import { isElementaryType } from "../semantic/type-registry.js";
 import { evalIntConst } from "../semantic/type-utils.js";
@@ -899,6 +899,24 @@ export function generateDebugTable(
   // no configuration-instance prefix (see codegen.ts emitFileScopeGlobals,
   // iec_global.hpp).
   const seenGlobals = new Set<string>();
+  // The index a runtime locks each global by, and the leaves each one holds.
+  const lockIndex = new Map(
+    lockedGlobals(projectModel).map((g, i) => [g.key, i]),
+  );
+  const globalLeaves: Array<{ start: number; end: number; g: number }> = [];
+  const visitGlobal = (
+    key: string,
+    cppExpr: string,
+    type: TypeReference,
+    flags: number,
+  ): void => {
+    const start = leaves.length;
+    visitTypeRef(key, cppExpr, type, flags);
+    const g = lockIndex.get(key);
+    if (g !== undefined && leaves.length > start) {
+      globalLeaves.push({ start, end: leaves.length, g });
+    }
+  };
   for (const config of ast.configurations) {
     for (const block of config.varBlocks) {
       if (block.blockType !== "VAR_GLOBAL") continue;
@@ -909,7 +927,7 @@ export function generateDebugTable(
           const key = varName.toUpperCase();
           if (seenGlobals.has(key)) continue;
           seenGlobals.add(key);
-          visitTypeRef(
+          visitGlobal(
             key,
             `${varName}.value`,
             decl.type,
@@ -965,12 +983,37 @@ export function generateDebugTable(
 
   const configName = projectModel.configurations[0]?.name ?? "CONFIG0";
   const retainLayoutHash = retainLayoutHashOf(retainVars);
+  // Each global's leaves as runs within one array: {array, first, count, g}.
+  const globalRuns: GlobalLeafRun[] = [];
+  for (const { start, end, g } of globalLeaves) {
+    for (let i = start; i < end; i++) {
+      const leaf = leaves[i]!;
+      const last = globalRuns[globalRuns.length - 1];
+      if (
+        i > start &&
+        last !== undefined &&
+        last.arr === leaf.arrayIdx &&
+        last.first + last.count === leaf.elemIdx
+      ) {
+        last.count++;
+      } else {
+        globalRuns.push({
+          arr: leaf.arrayIdx,
+          first: leaf.elemIdx,
+          count: 1,
+          g,
+          path: leaf.path,
+        });
+      }
+    }
+  }
   const debugTableCpp = renderCpp(
     arrays,
     configGlobal,
     configName,
     retainVars,
     retainLayoutHash,
+    globalRuns,
   );
   const debugMap: DebugMapV2 = {
     version: 2,
@@ -1006,12 +1049,23 @@ export function generateDebugTable(
 // C++ rendering
 // ---------------------------------------------------------------------------
 
+/** Consecutive debug leaves of one locked global, within one array. */
+interface GlobalLeafRun {
+  arr: number;
+  first: number;
+  count: number;
+  g: number;
+  /** The first leaf's path, for the comment. */
+  path: string;
+}
+
 function renderCpp(
   arrays: Entry[][],
   configGlobal: string,
   configName: string,
   retainVars: Array<{ arrayIdx: number; elemIdx: number; path: string }>,
   retainLayoutHash: string,
+  globalRuns: GlobalLeafRun[],
 ): string {
   const lines: string[] = [];
   lines.push("// SPDX-License-Identifier: GPL-3.0-or-later");
@@ -1113,6 +1167,39 @@ function renderCpp(
   );
   lines.push("// invalidates them.");
   lines.push(`const uint32_t retain_layout_hash = 0x${retainLayoutHash};`);
+  lines.push("");
+
+  // --- Leaf -> global ------------------------------------------------------
+  //
+  // The index (see the configuration's strucpp_global_lock) of the global a
+  // leaf is in, so a runtime reads or writes it under that global's lock.
+  lines.push("#ifdef STRUCPP_THREADED");
+  lines.push("// The leaves each locked global holds, as runs in one array.");
+  if (globalRuns.length > 0) {
+    lines.push(
+      `static const GlobalLeafRun global_leaf_runs[${globalRuns.length}] = {`,
+    );
+    for (const r of globalRuns) {
+      lines.push(
+        `    { ${r.arr}, ${r.first}, ${r.count}, ${r.g} },  // ${r.path}`,
+      );
+    }
+    lines.push("};");
+  }
+  lines.push("");
+  lines.push(
+    "// The global a debug leaf is in, or -1 when it is in none that is locked.",
+  );
+  lines.push(
+    'extern "C" int32_t strucpp_debug_global_index(uint8_t arr, uint16_t elem) {',
+  );
+  lines.push(
+    globalRuns.length > 0
+      ? `    return global_of_leaf(global_leaf_runs, ${globalRuns.length}, arr, elem);`
+      : "    return global_of_leaf(nullptr, 0, arr, elem);",
+  );
+  lines.push("}");
+  lines.push("#endif  // STRUCPP_THREADED");
   lines.push("");
   lines.push("} } // namespace strucpp::debug");
   return lines.join("\n") + "\n";
