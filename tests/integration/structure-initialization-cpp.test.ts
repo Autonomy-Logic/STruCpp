@@ -1,6 +1,6 @@
 /**
  * End-to-end tests for IEC 61131-3 `structure_initialization` and composite
- * declaration initialisers: the generated C++ must compile with g++ -std=c++17
+ * declaration initialisers: the generated C++ must compile with g++ -std=c++14
  * AND hold the values the ST source asked for.
  *
  * Compiling is not enough on its own here. The lowering has to get three things

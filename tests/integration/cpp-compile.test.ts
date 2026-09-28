@@ -17,6 +17,7 @@ import {
   createPCH,
   compileWithGpp as compileWithGppHelper,
   compileAndRunStandalone as compileAndRunHelper,
+  CXX_STD,
 } from './test-helpers.js';
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
@@ -142,7 +143,7 @@ describeIfGpp('C++ Compilation Tests', () => {
       let ok = true;
       let diag = '';
       try {
-        execSync(`g++ -std=c++17 ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, {
+        execSync(`g++ -std=${CXX_STD} ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, {
           stdio: 'pipe',
         });
       } catch (e) {
@@ -201,7 +202,7 @@ describeIfGpp('C++ Compilation Tests', () => {
       let ok = true;
       let diag = '';
       try {
-        execSync(`g++ -std=c++17 ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, { stdio: 'pipe' });
+        execSync(`g++ -std=${CXX_STD} ${flag} -I"${runtimeInclude}" "${cpp}" -o "${out}"`, { stdio: 'pipe' });
         execSync(`"${out}"`, { stdio: 'pipe' }); // exit 0 ⇒ shared COUNTER == 2
       } catch (e) {
         ok = false;

@@ -40,10 +40,9 @@ namespace strucpp {
 // Constants
 // ---------------------------------------------------------------------------
 // Mirror of iec_time.hpp's NS_PER_X but scoped here too so iec_tod.hpp is
-// self-contained.  Duplicate inline-constexpr declarations at namespace
-// scope are legal as long as the value matches; clients including both
-// headers see one definition.
-inline constexpr int64_t TOD_NS_PER_DAY = IEC_NS_PER_DAY;
+// self-contained.  Plain `constexpr` under C++14, so each header carries
+// its own internal-linkage copy and the values must agree.
+constexpr int64_t TOD_NS_PER_DAY = IEC_NS_PER_DAY;
 
 // Normalise a signed nanosecond count into the canonical [0, 24h) TOD
 // range.  Negative inputs roll over from "before midnight today" to
