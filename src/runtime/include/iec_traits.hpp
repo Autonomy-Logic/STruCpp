@@ -18,7 +18,7 @@
 //
 // In this header (and anything it includes) do NOT use C++17/20 features
 // unguarded. In particular:
-//   * `std::trait_v<T>`               -> `std::trait<T>::value`
+//   * `std::trait_v<T>`                -> `std::trait<T>::value`
 //   * `if constexpr`                  -> SFINAE / tag dispatch
 //   * inline variables / `inline constexpr`
 //   * `auto` non-type template params -> typed NTTPs
@@ -43,6 +43,14 @@
 #include <cstdint>
 #include <cstddef>
 #include "iec_types.hpp"
+
+// <concepts> must be included at file scope: the concept declarations that use
+// it live inside `namespace strucpp`, and including a standard header from
+// there would nest the whole of `std` under it. Guarded because the runtime
+// targets C++14 and only some cores compile the sketch at C++20 or above.
+#if __cplusplus >= 202002L
+#include <concepts>
+#endif
 
 namespace strucpp {
 
@@ -532,8 +540,6 @@ using enable_if_iec_pointer = std::enable_if_t<is_iec_pointer_v<T>, int>;
 // =============================================================================
 
 #if __cplusplus >= 202002L
-
-#include <concepts>
 
 /** Concept for IEC types */
 template<typename T>

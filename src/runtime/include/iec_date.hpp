@@ -82,8 +82,8 @@ inline constexpr int64_t iec_floor_div(int64_t n, int64_t d) noexcept {
     return (n % d != 0 && ((n < 0) != (d < 0))) ? q - 1 : q;
 }
 
-inline constexpr int64_t DATE_SECONDS_PER_DAY = IEC_SECONDS_PER_DAY;
-inline constexpr int64_t DATE_NS_PER_DAY = IEC_NS_PER_DAY;
+constexpr int64_t DATE_SECONDS_PER_DAY = IEC_SECONDS_PER_DAY;
+constexpr int64_t DATE_NS_PER_DAY = IEC_NS_PER_DAY;
 
 inline int64_t DATE_TO_SECONDS(IEC_DATE d) noexcept {
     return iec_unwrap(d) * DATE_SECONDS_PER_DAY;
