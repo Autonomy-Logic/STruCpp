@@ -325,9 +325,9 @@ struct PtrOps {
 
 // ---------------------------------------------------------------------------
 // type_ops[]: one row per TypeTag, in tag order.
-// Kept inline so no separate .cpp is required.
+// Header-scope `constexpr`, so no separate .cpp is required.
 //
-// NOT flash-resident on AVR, whatever "inline constexpr" suggests. The Entry
+// NOT flash-resident on AVR, whatever `constexpr` suggests. The Entry
 // tables carry STRUCPP_DEBUG_FLASH (see debug_table.hpp) and this does not, so
 // on a Harvard target it is const data in .rodata, which the startup code
 // copies into SRAM. Every AVR firmware pays for this table.
