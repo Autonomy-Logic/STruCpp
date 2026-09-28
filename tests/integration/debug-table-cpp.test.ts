@@ -23,7 +23,7 @@ import * as os from "os";
 import { execSync } from "child_process";
 import { compile } from "../../src/index.js";
 import { discoverStlibs } from "../../src/node/library-loader.js";
-import { hasGpp } from "./test-helpers.js";
+import { hasGpp, CXX_STD } from "./test-helpers.js";
 /**
  * Harness for the retained-library-FB round trip. Kept out of the test body so
  * the C++ is readable as C++ rather than as an escaped template literal.
@@ -134,7 +134,7 @@ describeIfGpp("generated debug table compiles", () => {
     for (const target of [programPath, tablePath]) {
       try {
         execSync(
-          `g++ -std=c++17 -fsyntax-only -I"${RUNTIME_INCLUDE}" -I"${dir}" "${target}" 2>&1`,
+          `g++ -std=${CXX_STD} -fsyntax-only -I"${RUNTIME_INCLUDE}" -I"${dir}" "${target}" 2>&1`,
           { encoding: "utf-8" },
         );
       } catch (e) {
@@ -460,7 +460,7 @@ int main() {
 
     const bin = path.join(dir, "gate");
     execSync(
-      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" ` +
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE}" -I"${dir}" ` +
         `-o "${bin}" "${path.join(dir, "main.cpp")}" ` +
         `"${path.join(dir, "generated.cpp")}" "${path.join(dir, "generated_debug.cpp")}"`,
       { encoding: "utf-8" },
@@ -604,7 +604,7 @@ int main() {
 
     const bin2 = path.join(dir, "ptr");
     execSync(
-      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" ` +
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE}" -I"${dir}" ` +
         `-o "${bin2}" "${path.join(dir, "main.cpp")}" ` +
         `"${path.join(dir, "generated.cpp")}" "${path.join(dir, "generated_debug.cpp")}"`,
       { encoding: "utf-8" },
@@ -740,7 +740,7 @@ int main() {
 
     const bin = path.join(dir, "retain");
     execSync(
-      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" -o "${bin}" ` +
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE}" -I"${dir}" -o "${bin}" ` +
         `"${path.join(dir, "main.cpp")}" "${path.join(dir, "generated.cpp")}" ` +
         `"${path.join(dir, "generated_debug.cpp")}"`,
       { encoding: "utf-8" },
@@ -795,7 +795,7 @@ END_CONFIGURATION`,
 
     const bin = path.join(dir, "libfb-retain");
     execSync(
-      `g++ -std=c++17 -I"${RUNTIME_INCLUDE}" -I"${dir}" -o "${bin}" ` +
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE}" -I"${dir}" -o "${bin}" ` +
         `"${path.join(dir, "main.cpp")}" ` +
         `"${path.join(dir, "generated_debug.cpp")}" ${sources.join(" ")}`,
       { encoding: "utf-8" },

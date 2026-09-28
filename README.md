@@ -19,7 +19,7 @@ STruC++ compiles PLC programs written in [Structured Text](https://en.wikipedia.
 
 **Interactive REPL.** Build your ST program into a standalone binary with `--build` and step through it interactively to check correctness. The interactive REPL allows users to print ST and C++ code side-by-side, set inputs, advance cycles, inspect variables, and force values. See the [REPL Guide](docs/REPL.md).
 
-**Zero runtime dependencies.** The compiler is a single binary. The C++ runtime is header-only. Generated code and the runtime compile with any C++14 compiler (g++, clang++, MSVC). C++14 rather than C++17 because the generated code is compiled by the Arduino core's own toolchain, and the mbed-based cores hard-code `-std=gnu++14`. See the [CLI Reference](docs/CLI.md) and [C++ Runtime](docs/RUNTIME.md).
+**Zero runtime dependencies.** The compiler is a single binary. The C++ runtime is header-only. Generated code and the runtime compile at C++14, exercised with g++ 7.3 and newer (avr-g++ 7.3 is the oldest toolchain in the board matrix); clang++ and MSVC are not exercised by CI. C++14 rather than C++17 because the generated code is compiled by the Arduino core's own toolchain, and the mbed-based cores hard-code `-std=gnu++14`. See the [CLI Reference](docs/CLI.md) and [C++ Runtime](docs/RUNTIME.md).
 
 ---
 

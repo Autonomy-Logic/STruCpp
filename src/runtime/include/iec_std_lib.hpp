@@ -1362,10 +1362,11 @@ inline T XOR(T first, T second, Args... rest) noexcept {
  */
 // Three-or-more arguments only; the two-argument base case is defined above.
 // Recursion instead of `if constexpr (sizeof...(rest) > 0)`, which is C++17.
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline T MAX(T first, T second, T third, Args... rest) noexcept {
-    T current_max = iec_unwrap(first) > iec_unwrap(second) ? first : second;
-    return MAX(current_max, third, rest...);
+// `third` keeps its own type so the recursion still reaches the mixed-type
+// two-argument overload — OSCAT passes INT and DINT to the same call.
+template<typename T, typename U, typename... Args, enable_if_any_elementary<T> = 0>
+inline auto MAX(T first, T second, U third, Args... rest) noexcept {
+    return MAX(MAX(first, second), third, rest...);
 }
 
 /**
@@ -1375,10 +1376,11 @@ inline T MAX(T first, T second, T third, Args... rest) noexcept {
  */
 // Three-or-more arguments only; the two-argument base case is defined above.
 // Recursion instead of `if constexpr (sizeof...(rest) > 0)`, which is C++17.
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline T MIN(T first, T second, T third, Args... rest) noexcept {
-    T current_min = iec_unwrap(first) < iec_unwrap(second) ? first : second;
-    return MIN(current_min, third, rest...);
+// `third` keeps its own type so the recursion still reaches the mixed-type
+// two-argument overload — OSCAT passes INT and DINT to the same call.
+template<typename T, typename U, typename... Args, enable_if_any_elementary<T> = 0>
+inline auto MIN(T first, T second, U third, Args... rest) noexcept {
+    return MIN(MIN(first, second), third, rest...);
 }
 
 /**

@@ -1,6 +1,6 @@
 /**
  * End-to-end proof that 64-bit integer literals survive the whole pipeline: the
- * generated C++ must compile with g++ -std=c++17 AND print back the digits the
+ * generated C++ must compile with g++ -std=c++14 AND print back the digits the
  * ST source wrote.
  *
  * Compiling is not sufficient evidence here. `9007199254740993` lowered to
@@ -57,7 +57,13 @@ describeIfGpp("64-bit integer literals — generated C++", () => {
       testName,
       // An unsuffixed `18446744073709551615` is a GCC *extension* that warns
       // rather than fails, so the warning has to be the failure here.
-      extraFlags: ["-pedantic-errors", "-Werror=overflow"],
+      //
+      // `-Wno-c++17-extensions`: codegen emits `inline` variables for
+      // VAR_GLOBAL, which at c++14 is such an extension, and `-pedantic-errors`
+      // aborts on it before reaching the literal this test is about. They cannot
+      // become a static-local — generated_debug.cpp takes their address into
+      // PROGMEM, which needs a constant.
+      extraFlags: ["-pedantic-errors", "-Wno-c++17-extensions", "-Werror=overflow"],
       mainCode: `#include <iostream>\n\nint main() {\n    using namespace strucpp;\n${mainBody}\n    return 0;\n}\n`,
     });
   }

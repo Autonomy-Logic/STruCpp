@@ -189,7 +189,7 @@ struct TestContext {
      * ASSERT_EQ: check actual == expected (mixed types, e.g. IECStringVar vs const char*)
      */
     template<typename T, typename U,
-        std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+        std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
     bool assert_eq(T actual, U expected,
                    const char* actual_expr, const char* expected_expr,
                    int line, const char* msg = "") {
@@ -219,7 +219,7 @@ struct TestContext {
      * ASSERT_NEQ: check actual != expected (mixed types)
      */
     template<typename T, typename U,
-        std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+        std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
     bool assert_neq(T actual, U expected,
                     const char* actual_expr, const char* expected_expr,
                     int line, const char* msg = "") {

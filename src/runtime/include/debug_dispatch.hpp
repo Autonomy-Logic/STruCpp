@@ -337,6 +337,11 @@ struct PtrOps {
 // Moving this one to STRUCPP_DEBUG_FLASH would mean routing every row read
 // through pgm_read_ptr in the hot path of handle_read / handle_write /
 // handle_set. Worth doing on its own evidence, not as a side effect.
+//
+// Plain `constexpr`, not `inline constexpr`, because the runtime is C++14:
+// that gives the table internal linkage, one copy per translation unit.
+// Harmless while a single TU includes this header — include it from a
+// second and an AVR pays for the table twice in SRAM.
 // ---------------------------------------------------------------------------
 constexpr TypeOps type_ops[TAG__COUNT] = {
     /*BOOL    */ { &force_impl<BOOL_t>,  &unforce_impl<BOOL_t>,  &read_impl<BOOL_t>,  &write_impl<BOOL_t>,  sizeof(BOOL_t)      },
