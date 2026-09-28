@@ -3,7 +3,7 @@
 /**
  * STruC++ Structure Initializer Code Generation
  *
- * Lowers IEC 61131-3 `structure_initialization` (Annex B.1.4.3) to C++17.
+ * Lowers IEC 61131-3 `structure_initialization` (Annex B.1.4.3) to C++14.
  *
  *   p : Point := (y := 2.0, x := 1.0);
  *
@@ -11,7 +11,7 @@
  *
  * Elements may be written in any order and may be omitted (an omitted element
  * keeps the default from its own declaration), which rules out a plain braced
- * aggregate initializer — C++17 has no designated initializers. The runtime
+ * aggregate initializer — C++14 has no designated initializers. The runtime
  * helper default-constructs the value and the lambda overwrites exactly the
  * elements the initializer names.
  *

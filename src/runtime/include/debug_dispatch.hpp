@@ -325,9 +325,9 @@ struct PtrOps {
 
 // ---------------------------------------------------------------------------
 // type_ops[]: one row per TypeTag, in tag order.
-// Kept inline so no separate .cpp is required.
+// Header-scope `constexpr`, so no separate .cpp is required.
 //
-// NOT flash-resident on AVR, whatever "inline constexpr" suggests. The Entry
+// NOT flash-resident on AVR, whatever `constexpr` suggests. The Entry
 // tables carry STRUCPP_DEBUG_FLASH (see debug_table.hpp) and this does not, so
 // on a Harvard target it is const data in .rodata, which the startup code
 // copies into SRAM. Every AVR firmware pays for this table.
@@ -337,8 +337,13 @@ struct PtrOps {
 // Moving this one to STRUCPP_DEBUG_FLASH would mean routing every row read
 // through pgm_read_ptr in the hot path of handle_read / handle_write /
 // handle_set. Worth doing on its own evidence, not as a side effect.
+//
+// Plain `constexpr`, not `inline constexpr`, because the runtime is C++14:
+// that gives the table internal linkage, one copy per translation unit.
+// Harmless while a single TU includes this header — include it from a
+// second and an AVR pays for the table twice in SRAM.
 // ---------------------------------------------------------------------------
-inline constexpr TypeOps type_ops[TAG__COUNT] = {
+constexpr TypeOps type_ops[TAG__COUNT] = {
     /*BOOL    */ { &force_impl<BOOL_t>,  &unforce_impl<BOOL_t>,  &read_impl<BOOL_t>,  &write_impl<BOOL_t>,  sizeof(BOOL_t)      },
     /*SINT    */ { &force_impl<SINT_t>,  &unforce_impl<SINT_t>,  &read_impl<SINT_t>,  &write_impl<SINT_t>,  sizeof(SINT_t)      },
     /*USINT   */ { &force_impl<USINT_t>, &unforce_impl<USINT_t>, &read_impl<USINT_t>, &write_impl<USINT_t>, sizeof(USINT_t)     },
@@ -382,7 +387,7 @@ inline constexpr TypeOps type_ops[TAG__COUNT] = {
 //
 // So the feature now costs what it costs, and only to firmware that uses it.
 // ---------------------------------------------------------------------------
-inline constexpr PtrOps ptr_ops[TAG__COUNT] = {
+constexpr PtrOps ptr_ops[TAG__COUNT] = {
     /*BOOL    */ { &ptr_impl<BOOL_t> },
     /*SINT    */ { &ptr_impl<SINT_t> },
     /*USINT   */ { &ptr_impl<USINT_t> },
