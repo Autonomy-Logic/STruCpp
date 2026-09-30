@@ -57,7 +57,7 @@ npm run test:coverage     # Coverage report (75% threshold)
 npm run lint              # Run ESLint
 npm run lint:fix          # Auto-fix lint issues
 npm run format            # Format with Prettier
-npm run format:check      # Prettier check (run in CI)
+npm run format:check      # Prettier check (run in CI on main)
 npm run typecheck         # Type-check without emit
 npm run check:purity      # Fails if src/ outside src/node/ uses Node-only APIs
 ```
@@ -128,6 +128,7 @@ Supported features and known gaps are tracked in `docs/IEC_COMPLIANCE.md`.
 
 ## Testing
 
-- Unit tests: `npm test` (single file: `npx vitest run <path>`). CI runs `npm run test:coverage`.
+- Unit tests: `npm test` (single file: `npx vitest run <path>`).
+- CI (`.github/workflows/ci.yml`) runs only on pushes and PRs to `main`: lint, `format:check`, typecheck, build, `test:coverage`, the `vscode-extension` tests and bundle, and a binary smoke test. A PR into `development` gets no CI, so run `npm run lint`, `npm run format:check`, `npm run typecheck`, `npm run build` and `npm run test:coverage` locally before opening it.
 - End-to-end: a compiled program run end to end. Existing suites compile ST to C++, build it with g++ and run the binary, for example `tests/integration/library-e2e.test.ts` and `tests/integration/xword-pointer-e2e.test.ts`. They require g++.
 - The developer's manual test is required for every demand.
