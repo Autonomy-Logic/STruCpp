@@ -90,6 +90,8 @@ export interface ProjectVarDeclaration {
   elementTypeName?: string;
   /** Pointer/reference qualifier carried through from the AST TypeReference. */
   referenceKind?: string;
+  /** Every reference level, outermost first, when there is more than one. */
+  referenceChain?: string[];
 }
 
 /**
@@ -108,6 +110,7 @@ export interface VarExternalDeclaration {
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
   referenceKind?: string;
+  referenceChain?: string[];
   /** Location of the declaration, so a "no matching VAR_GLOBAL" diagnostic can
    *  point at the offending line instead of being emitted file-less. */
   sourceSpan?: SourceSpan;
@@ -271,6 +274,9 @@ export function toProjectVarDeclaration(
     ...(decl.type.referenceKind !== undefined &&
     decl.type.referenceKind !== "none"
       ? { referenceKind: decl.type.referenceKind }
+      : {}),
+    ...(decl.type.referenceChain !== undefined
+      ? { referenceChain: decl.type.referenceChain }
       : {}),
   };
 }
@@ -926,6 +932,9 @@ export class ProjectModelBuilder {
       ...(decl.type.referenceKind !== undefined &&
       decl.type.referenceKind !== "none"
         ? { referenceKind: decl.type.referenceKind }
+        : {}),
+      ...(decl.type.referenceChain !== undefined
+        ? { referenceChain: decl.type.referenceChain }
         : {}),
     };
   }

@@ -78,6 +78,8 @@ export interface LibraryVarType {
   elementTypeName?: string;
   /** Reference/pointer qualifier ("pointer_to" | "reference_to") */
   referenceKind?: string;
+  /** Every reference level, outermost first, when there is more than one */
+  referenceChain?: string[];
   /**
    * The C++ member name, when it differs from `name`.
    *

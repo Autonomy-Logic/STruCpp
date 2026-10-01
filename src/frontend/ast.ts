@@ -394,6 +394,20 @@ export interface TypeReference extends ASTNode {
   name: string;
   isReference: boolean; // true for REF_TO (for backwards compat)
   referenceKind: ReferenceKind; // more specific: "none", "ref_to", or "reference_to"
+  /**
+   * Every reference level, outermost first, when there is more than one:
+   * `POINTER TO REF_TO INT` is `["pointer_to", "ref_to"]` with `name` "INT".
+   * `referenceKind` is always the first entry. Absent for zero or one level,
+   * so single-level types are unchanged.
+   */
+  referenceChain?: ReferenceKind[];
+  /**
+   * An anonymous type written inside a declaration: `a : (Idle, Running);`
+   * or `a : INT(0..100);`. The AST keeps it where it was written; compile
+   * lowers it to a TYPE declaration (see `lowerInlineTypes`) and points
+   * `name` at that, so it behaves exactly like the declared equivalent.
+   */
+  inlineDefinition?: EnumDefinition | SubrangeDefinition;
   maxLength?: number | string; // For STRING(n) / WSTRING(n) parameterized length; string for constant names
   arrayDimensions?: Array<{ start: number; end: number }>; // For __INLINE_ARRAY_* types
   elementTypeName?: string; // Element type for inline arrays (e.g. "BYTE" for ARRAY[0..7] OF BYTE)

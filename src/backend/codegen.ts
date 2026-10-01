@@ -55,6 +55,7 @@ import {
   parseTodLiteralToNs,
 } from "../project-model.js";
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
+import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
   formatArrayType,
@@ -68,6 +69,7 @@ import {
   getTypeCategory,
   isImplicitlyConvertible,
   resolveFieldType as resolveFieldTypeUtil,
+  resolveMemberAccessDeclaration,
   resolveArrayElementType as resolveArrayElementTypeUtil,
   resolveArrayShapeByName,
   typeName as typeNameUtil,
@@ -444,6 +446,7 @@ export class CodeGenerator {
       arrayDimensions?: Array<{ start: number; end: number }>;
       elementTypeName?: string;
       referenceKind?: string;
+      referenceChain?: string[];
     }
   > = new Map();
 
@@ -611,6 +614,7 @@ export class CodeGenerator {
       name: string;
       maxLength?: number | string;
       referenceKind?: string;
+      referenceChain?: string[];
       arrayDimensions?: Array<{ start: number; end: number }>;
       elementTypeName?: string;
     },
@@ -620,6 +624,7 @@ export class CodeGenerator {
     name: string;
     maxLength?: number | string;
     referenceKind?: string;
+    referenceChain?: string[];
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
   } {
@@ -639,6 +644,9 @@ export class CodeGenerator {
       ...(typeRef.referenceKind !== undefined
         ? { referenceKind: typeRef.referenceKind }
         : {}),
+      ...(typeRef.referenceChain !== undefined
+        ? { referenceChain: typeRef.referenceChain }
+        : {}),
     };
   }
 
@@ -656,10 +664,12 @@ export class CodeGenerator {
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
     referenceKind?: string;
+    referenceChain?: string[];
   }): {
     name: string;
     maxLength?: number | string;
     referenceKind?: string;
+    referenceChain?: string[];
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
   } {
@@ -675,6 +685,9 @@ export class CodeGenerator {
       ...(spec.referenceKind !== undefined
         ? { referenceKind: spec.referenceKind }
         : {}),
+      ...(spec.referenceChain !== undefined
+        ? { referenceChain: spec.referenceChain }
+        : {}),
     };
   }
 
@@ -682,6 +695,7 @@ export class CodeGenerator {
     name: string;
     maxLength?: number | string;
     referenceKind?: string;
+    referenceChain?: string[];
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
   }): string {
@@ -723,19 +737,11 @@ export class CodeGenerator {
         // Primitive type: use raw type mapping (BYTE_t, INT_t, etc.)
         elemType = this.typeCodeGen.mapTypeToCpp(typeRef.name);
       }
-      switch (typeRef.referenceKind) {
-        case "pointer_to":
-          // IEC_Ptr<T> — cross-type assignment, pointer arithmetic,
-          // pointer-to-integer conversion.
-          return `IEC_Ptr<${elemType}>`;
-        case "ref_to":
-          // REF_TO — explicit dereference (^), nullable, rebind via
-          // `:= REF(x)` / `:= ADR(x)`.
-          return `IEC_REF_TO<${elemType}>`;
-        case "reference_to":
-          // REFERENCE TO — implicit dereference, rebind via `REF=`.
-          return `IEC_REFERENCE_TO<${elemType}>`;
-      }
+      // Nested levels (`POINTER TO REF_TO INT`) wrap innermost first.
+      return wrapReferenceChain(
+        typeRef.referenceChain ?? [typeRef.referenceKind],
+        elemType,
+      );
     }
     // For STRING(CONSTANT_NAME), emit template with the constant name
     if (typeof typeRef.maxLength === "string") {
@@ -772,6 +778,7 @@ export class CodeGenerator {
         arrayDimensions?: Array<{ start: number; end: number }>;
         elementTypeName?: string;
         referenceKind?: string;
+        referenceChain?: string[];
       }>;
     }>,
   ): void {
@@ -801,10 +808,12 @@ export class CodeGenerator {
             arrayDimensions?: Array<{ start: number; end: number }>;
             elementTypeName?: string;
             referenceKind?: string;
+            referenceChain?: string[];
           } = {};
           if (f.arrayDimensions) ref.arrayDimensions = f.arrayDimensions;
           if (f.elementTypeName) ref.elementTypeName = f.elementTypeName;
           if (f.referenceKind) ref.referenceKind = f.referenceKind;
+          if (f.referenceChain) ref.referenceChain = f.referenceChain;
           this.libraryFBFieldTypeRefs.set(
             `${fbUpper}.${f.name.toUpperCase()}`,
             ref,
@@ -848,6 +857,7 @@ export class CodeGenerator {
             arrayDimensions?: Array<{ start: number; end: number }>;
             elementTypeName?: string;
             referenceKind?: string;
+            referenceChain?: string[];
           }) => {
             const entry: {
               name: string;
@@ -855,6 +865,7 @@ export class CodeGenerator {
               arrayDimensions?: Array<{ start: number; end: number }>;
               elementTypeName?: string;
               referenceKind?: string;
+              referenceChain?: string[];
             } = {
               name: v.name,
               type: v.type,
@@ -862,6 +873,7 @@ export class CodeGenerator {
             if (v.arrayDimensions) entry.arrayDimensions = v.arrayDimensions;
             if (v.elementTypeName) entry.elementTypeName = v.elementTypeName;
             if (v.referenceKind) entry.referenceKind = v.referenceKind;
+            if (v.referenceChain) entry.referenceChain = v.referenceChain;
             return entry;
           };
           return {
@@ -2444,6 +2456,9 @@ export class CodeGenerator {
           ...(decl.referenceKind !== undefined
             ? { referenceKind: decl.referenceKind }
             : {}),
+          ...(decl.referenceChain !== undefined
+            ? { referenceChain: decl.referenceChain }
+            : {}),
         });
         const memberName = this.mangleMemberIfNeeded(decl.name, decl.typeName);
         // Map variable ST line → header member line
@@ -3304,7 +3319,7 @@ export class CodeGenerator {
     const source = this.generateExpression(stmt.source);
     const targetKind =
       stmt.target.kind === "VariableExpression"
-        ? this.currentScopeVarRefKinds.get(stmt.target.name.toUpperCase())
+        ? this.refAssignTargetKind(stmt.target)
         : undefined;
     if (targetKind === "ref_to") {
       this.emit(`${indent}${target} = REF(${source});`);
@@ -3312,6 +3327,22 @@ export class CodeGenerator {
       // REFERENCE_TO (and the default) rebind via bind().
       this.emit(`${indent}${target}.bind(${source});`);
     }
+  }
+
+  /**
+   * The reference kind of a REF= target: a variable's own, or for a member
+   * (`s.r REF= x`) the member's declared kind.
+   */
+  private refAssignTargetKind(target: VariableExpression): string | undefined {
+    const nameUpper = target.name.toUpperCase();
+    const hasMember =
+      target.fieldAccess.length > 0 ||
+      (target.accessChain !== undefined && target.accessChain.length > 0);
+    if (!hasMember) return this.currentScopeVarRefKinds.get(nameUpper);
+    const baseType = this.currentScopeVarTypes.get(nameUpper);
+    if (baseType === undefined || !this.ast) return undefined;
+    return resolveMemberAccessDeclaration(baseType, target, this.ast)?.type
+      .referenceKind;
   }
 
   /**

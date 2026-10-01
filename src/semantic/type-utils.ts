@@ -21,6 +21,8 @@ import type {
   StructType,
   EnumType,
   FunctionBlockType,
+  VarDeclaration,
+  VariableExpression,
 } from "../frontend/ast.js";
 import type { TypeConstraint } from "./std-function-registry.js";
 import { IEC_BASE_TYPES, lookupBaseType } from "./iec-types-data.js";
@@ -482,6 +484,70 @@ export function getCommonType(a: IECType, b: IECType): IECType | undefined {
 // =============================================================================
 
 /**
+ * The declaration of a struct, FB or program member, looked up in the AST.
+ */
+export function resolveFieldDeclaration(
+  typeName: string,
+  fieldName: string,
+  ast: CompilationUnit,
+): VarDeclaration | undefined {
+  const typeUpper = typeName.toUpperCase();
+  const fieldUpper = fieldName.toUpperCase();
+  const named = (decl: VarDeclaration): boolean =>
+    decl.names.some((name) => name.toUpperCase() === fieldUpper);
+
+  // Struct type definitions
+  for (const td of ast.types) {
+    if (
+      td.name.toUpperCase() === typeUpper &&
+      td.definition.kind === "StructDefinition"
+    ) {
+      const field = td.definition.fields.find(named);
+      if (field) return field;
+    }
+  }
+
+  // FB and program members (instance member access)
+  const pou =
+    ast.functionBlocks.find((fb) => fb.name.toUpperCase() === typeUpper) ??
+    ast.programs.find((prog) => prog.name.toUpperCase() === typeUpper);
+  if (pou) {
+    for (const block of pou.varBlocks) {
+      const decl = block.declarations.find(named);
+      if (decl) return decl;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * The declaration a member access lands on: for `s.inner.r`, starting from the
+ * type of `s`, the declaration of `r`. Undefined when the access is not a
+ * plain chain of fields (subscripts, dereferences) or a step cannot be found.
+ */
+export function resolveMemberAccessDeclaration(
+  baseTypeName: string,
+  expr: VariableExpression,
+  ast: CompilationUnit,
+): VarDeclaration | undefined {
+  const steps: string[] = expr.accessChain
+    ? expr.accessChain.map((step) => (step.kind === "field" ? step.name : ""))
+    : expr.subscripts.length === 0 && !expr.isDereference
+      ? expr.fieldAccess
+      : [""];
+  if (steps.length === 0 || steps.includes("")) return undefined;
+  let typeName = baseTypeName;
+  let decl: VarDeclaration | undefined;
+  for (const field of steps) {
+    decl = resolveFieldDeclaration(typeName, field, ast);
+    if (!decl) return undefined;
+    typeName = decl.type.name;
+  }
+  return decl;
+}
+
+/**
  * Resolve the type of a struct or FB field by looking up the type definition in the AST.
  */
 export function resolveFieldType(
@@ -489,52 +555,7 @@ export function resolveFieldType(
   fieldName: string,
   ast: CompilationUnit,
 ): string | undefined {
-  const typeUpper = typeName.toUpperCase();
-  const fieldUpper = fieldName.toUpperCase();
-
-  // Check struct type definitions
-  for (const td of ast.types) {
-    if (
-      td.name.toUpperCase() === typeUpper &&
-      td.definition.kind === "StructDefinition"
-    ) {
-      for (const field of td.definition.fields) {
-        for (const name of field.names) {
-          if (name.toUpperCase() === fieldUpper) return field.type.name;
-        }
-      }
-    }
-  }
-
-  // Check FB var blocks (FB instance member access)
-  for (const fb of ast.functionBlocks) {
-    if (fb.name.toUpperCase() === typeUpper) {
-      for (const block of fb.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            if (name.toUpperCase() === fieldUpper) return decl.type.name;
-          }
-        }
-      }
-      return undefined;
-    }
-  }
-
-  // Check programs (program instance member access)
-  for (const prog of ast.programs) {
-    if (prog.name.toUpperCase() === typeUpper) {
-      for (const block of prog.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            if (name.toUpperCase() === fieldUpper) return decl.type.name;
-          }
-        }
-      }
-      return undefined;
-    }
-  }
-
-  return undefined;
+  return resolveFieldDeclaration(typeName, fieldName, ast)?.type.name;
 }
 
 /** `__VLA_<rank>D_<ElementType>`, the AST builder's name for an `ARRAY [*]`. */

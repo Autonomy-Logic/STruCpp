@@ -18,6 +18,7 @@ import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
   IECType,
+  ReferenceKind,
   StructDefinition,
   StructType,
   TypeReference,
@@ -55,6 +56,9 @@ function makeTypeRef(v: LibraryVarType): TypeReference {
   };
   if (v.arrayDimensions) ref.arrayDimensions = v.arrayDimensions;
   if (v.elementTypeName) ref.elementTypeName = v.elementTypeName;
+  if (v.referenceChain) {
+    ref.referenceChain = v.referenceChain as ReferenceKind[];
+  }
   return ref;
 }
 

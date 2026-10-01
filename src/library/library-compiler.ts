@@ -97,6 +97,9 @@ function serializeVarType(
   if (typeRef.referenceKind && typeRef.referenceKind !== "none") {
     entry.referenceKind = typeRef.referenceKind;
   }
+  if (typeRef.referenceChain) {
+    entry.referenceChain = typeRef.referenceChain;
+  }
   return entry;
 }
 
