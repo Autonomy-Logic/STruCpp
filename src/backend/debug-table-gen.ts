@@ -74,8 +74,22 @@ export type TagName = keyof typeof TAG;
 // would leak the cleared value into the following sibling.
 // ---------------------------------------------------------------------------
 export const LEAF_FLAG_READONLY = 1 << 0;
+
 /** Mirrors LEAF_FLAG_RETAIN in runtime/include/debug_table.hpp. */
 export const LEAF_FLAG_RETAIN = 1 << 1;
+
+/** How a reference kind reads in a "not debuggable" warning. */
+const REFERENCE_KIND_TEXT: Record<string, string> = {
+  pointer_to: "a POINTER TO",
+  ref_to: "a REF_TO",
+  reference_to: "a REFERENCE TO",
+};
+
+/** Why an array whose elements are pointers or references is left out. */
+function arrayOfReferencesReason(kind: string): string {
+  const text = (REFERENCE_KIND_TEXT[kind] ?? "a reference").replace(/^a /, "");
+  return `an array of ${text} holds addresses, which the debugger cannot show or write.`;
+}
 
 /**
  * Apply one var block's qualifiers to the flags inherited from its container.
@@ -498,8 +512,35 @@ export function generateDebugTable(
     typeRef: TypeReference,
     flags: number,
   ): void => {
+    // A POINTER TO / REF_TO / REFERENCE TO holds an address, not a value of its
+    // element type. Registered as the element type, the debugger read the
+    // pointer's own bytes as the value and a write from it overwrote the
+    // pointer. The table has no per-leaf width, and pointers are 2, 4 or 8
+    // bytes depending on the target, so the variable is left out, with a build
+    // warning, rather than registered wrong. Checked before the array branch:
+    // a POINTER TO ARRAY carries array dimensions too.
+    if (
+      typeRef.referenceKind !== undefined &&
+      typeRef.referenceKind !== "none"
+    ) {
+      skipped.push({
+        path,
+        reason:
+          `${REFERENCE_KIND_TEXT[typeRef.referenceKind] ?? "reference"} holds an ` +
+          `address, which the debugger cannot show or write.`,
+      });
+      return;
+    }
+
     // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
+      if (typeRef.elementReferenceChain) {
+        skipped.push({
+          path,
+          reason: arrayOfReferencesReason(typeRef.elementReferenceChain[0]!),
+        });
+        return;
+      }
       walkArrayDims(
         path,
         cppExpr,
@@ -565,6 +606,11 @@ export function generateDebugTable(
         return;
       }
       if (def.kind === "ArrayDefinition") {
+        const elementKind = def.elementType.referenceKind;
+        if (elementKind !== undefined && elementKind !== "none") {
+          skipped.push({ path, reason: arrayOfReferencesReason(elementKind) });
+          return;
+        }
         // TYPE MyArr: ARRAY[0..9] OF INT; END_TYPE
         const dims = def.dimensions
           .filter((d) => !d.isVariableLength)
