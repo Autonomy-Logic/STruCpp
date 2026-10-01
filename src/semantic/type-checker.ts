@@ -25,6 +25,7 @@ import type {
   CompilationUnit,
   Statement,
   VarBlock,
+  VarDeclaration,
 } from "../frontend/ast.js";
 import type { SymbolTables, Scope } from "./symbol-table.js";
 import type { StdFunctionRegistry } from "./std-function-registry.js";
@@ -42,6 +43,7 @@ import {
   isGenericGroupType,
   canonicalElementaryName,
   resolveMemberAccessDeclaration,
+  resolveFieldDeclaration,
 } from "./type-utils.js";
 import { stripEnEno } from "../ast-utils.js";
 
@@ -837,13 +839,11 @@ export class TypeChecker {
           // resolved is left alone.
           const declared =
             sym?.kind === "variable" && this.hasMemberAccess(stmt.target)
-              ? this.ast
-                ? resolveMemberAccessDeclaration(
-                    sym.declaration.type.name,
-                    stmt.target,
-                    this.ast,
-                  )
-                : undefined
+              ? resolveMemberAccessDeclaration(
+                  sym.declaration.type.name,
+                  stmt.target,
+                  this.lookupMember,
+                )
               : sym?.kind === "variable"
                 ? sym.declaration
                 : undefined;
@@ -1150,21 +1150,41 @@ export class TypeChecker {
     }
     // A member (`s.r`) is shaped by its own declaration.
     const declaration = this.hasMemberAccess(expr)
-      ? this.ast
-        ? resolveMemberAccessDeclaration(
-            sym.declaration.type.name,
-            expr,
-            this.ast,
-          )
-        : undefined
+      ? resolveMemberAccessDeclaration(
+          sym.declaration.type.name,
+          expr,
+          this.lookupMember,
+        )
       : sym.declaration;
     const type = declaration?.type;
     if (!type || type.arrayDimensions) return undefined;
     const chain =
       type.referenceChain ??
-      (type.referenceKind !== "none" ? [type.referenceKind] : []);
+      (type.referenceKind !== undefined && type.referenceKind !== "none"
+        ? [type.referenceKind]
+        : []);
     return { chain, base: type.name };
   }
+
+  /**
+   * One member of a struct, FB or program: from this compile's AST, or from a
+   * library function block, whose members the symbol tables carry.
+   */
+  private readonly lookupMember = (
+    typeName: string,
+    fieldName: string,
+  ): VarDeclaration | undefined => {
+    const local = this.ast
+      ? resolveFieldDeclaration(typeName, fieldName, this.ast)
+      : undefined;
+    if (local) return local;
+    const fb = this.symbolTables.lookupFunctionBlock(typeName);
+    if (!fb) return undefined;
+    const upper = fieldName.toUpperCase();
+    return [...fb.inputs, ...fb.outputs, ...fb.inouts, ...fb.locals].find(
+      (m) => m.name.toUpperCase() === upper,
+    )?.declaration;
+  };
 
   /** The expression reaches into a member: `s.r`, `a[1]`, `p^`. */
   private hasMemberAccess(expr: VariableExpression): boolean {

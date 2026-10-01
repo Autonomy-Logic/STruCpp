@@ -1139,6 +1139,8 @@ export class ASTBuilder {
     if (arrayDimensions.length > 0) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
+      const elementChain = this.elementReferenceChain(elementTypeNode);
+      if (elementChain) result.elementReferenceChain = elementChain;
     }
     return result;
   }
@@ -1787,8 +1789,23 @@ export class ASTBuilder {
     if (arrayDimensions) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
+      const elementChain = this.elementReferenceChain(elementTypeNode);
+      if (elementChain) result.elementReferenceChain = elementChain;
     }
     return result;
+  }
+
+  /**
+   * The reference levels of an array's element type (`POINTER TO INT` in
+   * `ARRAY[0..3] OF POINTER TO INT`), or undefined for a plain element.
+   */
+  private elementReferenceChain(
+    elementTypeNode: CstNode | undefined,
+  ): ReferenceKind[] | undefined {
+    if (!elementTypeNode) return undefined;
+    const element = this.buildTypeReference(elementTypeNode);
+    if (element.referenceKind === "none") return undefined;
+    return element.referenceChain ?? [element.referenceKind];
   }
 
   /**

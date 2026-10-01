@@ -85,6 +85,12 @@ const REFERENCE_KIND_TEXT: Record<string, string> = {
   reference_to: "a REFERENCE TO",
 };
 
+/** Why an array whose elements are pointers or references is left out. */
+function arrayOfReferencesReason(kind: string): string {
+  const text = (REFERENCE_KIND_TEXT[kind] ?? "a reference").replace(/^a /, "");
+  return `an array of ${text} holds addresses, which the debugger cannot show or write.`;
+}
+
 /**
  * Apply one var block's qualifiers to the flags inherited from its container.
  *
@@ -528,6 +534,13 @@ export function generateDebugTable(
 
     // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
+      if (typeRef.elementReferenceChain) {
+        skipped.push({
+          path,
+          reason: arrayOfReferencesReason(typeRef.elementReferenceChain[0]!),
+        });
+        return;
+      }
       walkArrayDims(
         path,
         cppExpr,
@@ -593,6 +606,11 @@ export function generateDebugTable(
         return;
       }
       if (def.kind === "ArrayDefinition") {
+        const elementKind = def.elementType.referenceKind;
+        if (elementKind !== undefined && elementKind !== "none") {
+          skipped.push({ path, reason: arrayOfReferencesReason(elementKind) });
+          return;
+        }
         // TYPE MyArr: ARRAY[0..9] OF INT; END_TYPE
         const dims = def.dimensions
           .filter((d) => !d.isVariableLength)

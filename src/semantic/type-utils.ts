@@ -21,6 +21,7 @@ import type {
   StructType,
   EnumType,
   FunctionBlockType,
+  TypeReference,
   VarDeclaration,
   VariableExpression,
 } from "../frontend/ast.js";
@@ -521,16 +522,24 @@ export function resolveFieldDeclaration(
   return undefined;
 }
 
+/** What a member lookup needs to know about the member it finds. */
+export interface MemberDeclaration {
+  type: Pick<TypeReference, "name" | "referenceKind"> &
+    Partial<Pick<TypeReference, "referenceChain">>;
+}
+
 /**
  * The declaration a member access lands on: for `s.inner.r`, starting from the
- * type of `s`, the declaration of `r`. Undefined when the access is not a
- * plain chain of fields (subscripts, dereferences) or a step cannot be found.
+ * type of `s`, the declaration of `r`. `lookupField` finds one member of one
+ * type; it is a parameter so callers can also see library types, which are
+ * not in the AST. Undefined when the access is not a plain chain of fields
+ * (subscripts, dereferences) or a step cannot be found.
  */
-export function resolveMemberAccessDeclaration(
+export function resolveMemberAccessDeclaration<T extends MemberDeclaration>(
   baseTypeName: string,
   expr: VariableExpression,
-  ast: CompilationUnit,
-): VarDeclaration | undefined {
+  lookupField: (typeName: string, fieldName: string) => T | undefined,
+): T | undefined {
   const steps: string[] = expr.accessChain
     ? expr.accessChain.map((step) => (step.kind === "field" ? step.name : ""))
     : expr.subscripts.length === 0 && !expr.isDereference
@@ -538,9 +547,9 @@ export function resolveMemberAccessDeclaration(
       : [""];
   if (steps.length === 0 || steps.includes("")) return undefined;
   let typeName = baseTypeName;
-  let decl: VarDeclaration | undefined;
+  let decl: T | undefined;
   for (const field of steps) {
-    decl = resolveFieldDeclaration(typeName, field, ast);
+    decl = lookupField(typeName, field);
     if (!decl) return undefined;
     typeName = decl.type.name;
   }

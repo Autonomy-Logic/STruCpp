@@ -76,7 +76,9 @@ export interface LibraryVarType {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type name for inline array types */
   elementTypeName?: string;
-  /** Reference/pointer qualifier ("pointer_to" | "reference_to") */
+  /** Element reference levels for an inline array of pointers or references */
+  elementReferenceChain?: string[];
+  /** Reference/pointer qualifier ("pointer_to" | "ref_to" | "reference_to") */
   referenceKind?: string;
   /** Every reference level, outermost first, when there is more than one */
   referenceChain?: string[];

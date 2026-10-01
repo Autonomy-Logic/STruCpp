@@ -75,3 +75,40 @@ describe("debug table and references", () => {
     expect(result.debugTableCpp).not.toMatch(/\bPX\b|\bPPX\b|\bALIAS_PP\b/);
   });
 });
+
+describe("debug table and arrays of references", () => {
+  const result = compile(`
+TYPE PAT : ARRAY[0..1] OF POINTER TO INT; END_TYPE
+PROGRAM main
+VAR
+  ia : ARRAY[0..1] OF POINTER TO INT;
+  ra : ARRAY[0..1] OF REF_TO INT;
+  ta : PAT;
+  y : ARRAY[0..1] OF INT;
+END_VAR
+END_PROGRAM
+CONFIGURATION c
+RESOURCE r1 ON PLC
+TASK t(INTERVAL := T#10ms, PRIORITY := 1);
+PROGRAM inst WITH t : main;
+END_RESOURCE
+END_CONFIGURATION
+`);
+
+  it("keeps value arrays and leaves arrays of references out", () => {
+    expect(result.errors).toEqual([]);
+    expect(result.debugMap?.leaves.map((l) => l.path)).toEqual([
+      "INST.Y[0]",
+      "INST.Y[1]",
+    ]);
+    expect(
+      result.warnings
+        .map((w) => w.message)
+        .filter((m) => m.includes("is not debuggable")),
+    ).toEqual([
+      "INST.IA is not debuggable: an array of POINTER TO holds addresses, which the debugger cannot show or write.",
+      "INST.RA is not debuggable: an array of REF_TO holds addresses, which the debugger cannot show or write.",
+      "INST.TA is not debuggable: an array of POINTER TO holds addresses, which the debugger cannot show or write.",
+    ]);
+  });
+});

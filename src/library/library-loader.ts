@@ -41,25 +41,35 @@ export class LibraryManifestError extends Error {
  *  reference preserves the metadata downstream consumers (codegen,
  *  debug-table-gen) need to recurse into nested types. */
 function makeTypeRef(v: LibraryVarType): TypeReference {
+  // Every kind the library compiler writes. REF_TO used to be missing here,
+  // so a library FB's REF_TO member read back as its element type: the
+  // debugger registered it as a value, and REF= on it was lowered as if it
+  // were a REFERENCE TO.
+  const referenceKind: ReferenceKind = isReferenceKind(v.referenceKind)
+    ? v.referenceKind
+    : "none";
   const ref: TypeReference = {
     kind: "TypeReference",
     sourceSpan: createDefaultSourceSpan(),
     name: v.type,
-    isReference:
-      v.referenceKind === "pointer_to" || v.referenceKind === "reference_to",
-    referenceKind:
-      v.referenceKind === "pointer_to"
-        ? "pointer_to"
-        : v.referenceKind === "reference_to"
-          ? "reference_to"
-          : "none",
+    isReference: referenceKind !== "none",
+    referenceKind,
   };
   if (v.arrayDimensions) ref.arrayDimensions = v.arrayDimensions;
   if (v.elementTypeName) ref.elementTypeName = v.elementTypeName;
+  if (v.elementReferenceChain) {
+    ref.elementReferenceChain = v.elementReferenceChain.filter(isReferenceKind);
+  }
   if (v.referenceChain) {
-    ref.referenceChain = v.referenceChain as ReferenceKind[];
+    ref.referenceChain = v.referenceChain.filter(isReferenceKind);
   }
   return ref;
+}
+
+function isReferenceKind(
+  kind: string | undefined,
+): kind is "pointer_to" | "ref_to" | "reference_to" {
+  return kind === "pointer_to" || kind === "ref_to" || kind === "reference_to";
 }
 
 /** Create a VariableSymbol from a library variable entry. The synthesized

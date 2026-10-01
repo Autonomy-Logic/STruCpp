@@ -26,6 +26,7 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  ReferenceKind,
   AccessStep,
   ExternalCodePragma,
   MethodDeclaration,
@@ -70,6 +71,7 @@ import {
   isImplicitlyConvertible,
   resolveFieldType as resolveFieldTypeUtil,
   resolveMemberAccessDeclaration,
+  resolveFieldDeclaration as resolveFieldDeclarationUtil,
   resolveArrayElementType as resolveArrayElementTypeUtil,
   resolveArrayShapeByName,
   typeName as typeNameUtil,
@@ -617,6 +619,7 @@ export class CodeGenerator {
       referenceChain?: string[];
       arrayDimensions?: Array<{ start: number; end: number }>;
       elementTypeName?: string;
+      elementReferenceChain?: string[];
     },
   >(
     typeRef: T,
@@ -627,6 +630,7 @@ export class CodeGenerator {
     referenceChain?: string[];
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
+    elementReferenceChain?: string[];
   } {
     const upper = typeRef.name.toUpperCase();
     const isString = upper === "STRING" || upper === "WSTRING";
@@ -640,6 +644,9 @@ export class CodeGenerator {
         : {}),
       ...(typeRef.elementTypeName !== undefined
         ? { elementTypeName: typeRef.elementTypeName }
+        : {}),
+      ...(typeRef.elementReferenceChain !== undefined
+        ? { elementReferenceChain: typeRef.elementReferenceChain }
         : {}),
       ...(typeRef.referenceKind !== undefined
         ? { referenceKind: typeRef.referenceKind }
@@ -663,6 +670,7 @@ export class CodeGenerator {
     maxLength?: number | string;
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
+    elementReferenceChain?: string[];
     referenceKind?: string;
     referenceChain?: string[];
   }): {
@@ -672,6 +680,7 @@ export class CodeGenerator {
     referenceChain?: string[];
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
+    elementReferenceChain?: string[];
   } {
     return {
       name: spec.typeName,
@@ -682,6 +691,9 @@ export class CodeGenerator {
       ...(spec.elementTypeName !== undefined
         ? { elementTypeName: spec.elementTypeName }
         : {}),
+      ...(spec.elementReferenceChain !== undefined
+        ? { elementReferenceChain: spec.elementReferenceChain }
+        : {}),
       ...(spec.referenceKind !== undefined
         ? { referenceKind: spec.referenceKind }
         : {}),
@@ -691,6 +703,20 @@ export class CodeGenerator {
     };
   }
 
+  /**
+   * The type a pointer or reference wraps: the raw struct / FB / program name
+   * for a user type, the raw value type (`INT_t`) for an elementary one. The
+   * wrappers hold an IECVar<T> themselves.
+   */
+  private rawReferencedType(name: string): string {
+    if (this.isUserDefinedType(name)) {
+      return this.knownProgramTypes.has(name.toUpperCase())
+        ? `Program_${name}`
+        : name;
+    }
+    return this.typeCodeGen.mapTypeToCpp(name);
+  }
+
   protected mapTypeRefToCpp(typeRef: {
     name: string;
     maxLength?: number | string;
@@ -698,6 +724,7 @@ export class CodeGenerator {
     referenceChain?: string[];
     arrayDimensions?: Array<{ start: number; end: number }>;
     elementTypeName?: string;
+    elementReferenceChain?: string[];
   }): string {
     let baseType: string;
 
@@ -705,9 +732,17 @@ export class CodeGenerator {
     // Array1D stores T directly — use IECVar-wrapped types for elementary elements
     // and bare names for composites (whose fields already contain IECVar leaves)
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-      const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
-        ? typeRef.elementTypeName
-        : this.mapVarTypeToCpp(typeRef.elementTypeName);
+      const elemCpp = typeRef.elementReferenceChain
+        ? // ARRAY OF POINTER TO / REF_TO: each element is the wrapper a
+          // variable of that type gets. Before, the element's reference levels
+          // were dropped and this was an array of the element type.
+          wrapReferenceChain(
+            typeRef.elementReferenceChain,
+            this.rawReferencedType(typeRef.elementTypeName),
+          )
+        : this.isUserDefinedType(typeRef.elementTypeName)
+          ? typeRef.elementTypeName
+          : this.mapVarTypeToCpp(typeRef.elementTypeName);
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
     } else {
       baseType = this.mapVarTypeToCpp(
@@ -724,19 +759,11 @@ export class CodeGenerator {
       // Pointer (IEC_Ptr<T>) and reference (IEC_REF_TO<T> / IEC_REFERENCE_TO<T>)
       // wrappers all take the raw element type (not IECVar-wrapped); they wrap
       // an IECVar<T> internally.
-      let elemType: string;
-      if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-        // Array pointer/reference: baseType is already raw (Array1D<...>)
-        elemType = baseType;
-      } else if (this.isUserDefinedType(typeRef.name)) {
-        // UDT: use raw struct/FB/program name
-        elemType = this.knownProgramTypes.has(typeRef.name.toUpperCase())
-          ? `Program_${typeRef.name}`
-          : typeRef.name;
-      } else {
-        // Primitive type: use raw type mapping (BYTE_t, INT_t, etc.)
-        elemType = this.typeCodeGen.mapTypeToCpp(typeRef.name);
-      }
+      // Array pointer/reference: baseType is already raw (Array1D<...>)
+      const elemType =
+        typeRef.arrayDimensions && typeRef.elementTypeName
+          ? baseType
+          : this.rawReferencedType(typeRef.name);
       // Nested levels (`POINTER TO REF_TO INT`) wrap innermost first.
       return wrapReferenceChain(
         typeRef.referenceChain ?? [typeRef.referenceKind],
@@ -2453,6 +2480,9 @@ export class CodeGenerator {
           ...(decl.elementTypeName !== undefined
             ? { elementTypeName: decl.elementTypeName }
             : {}),
+          ...(decl.elementReferenceChain !== undefined
+            ? { elementReferenceChain: decl.elementReferenceChain }
+            : {}),
           ...(decl.referenceKind !== undefined
             ? { referenceKind: decl.referenceKind }
             : {}),
@@ -3340,9 +3370,24 @@ export class CodeGenerator {
       (target.accessChain !== undefined && target.accessChain.length > 0);
     if (!hasMember) return this.currentScopeVarRefKinds.get(nameUpper);
     const baseType = this.currentScopeVarTypes.get(nameUpper);
-    if (baseType === undefined || !this.ast) return undefined;
-    return resolveMemberAccessDeclaration(baseType, target, this.ast)?.type
-      .referenceKind;
+    if (baseType === undefined) return undefined;
+    return resolveMemberAccessDeclaration(baseType, target, (type, field) => {
+      const local = this.ast
+        ? resolveFieldDeclarationUtil(type, field, this.ast)
+        : undefined;
+      if (local) return local;
+      // A library function block: its member types come from the manifest.
+      const key = `${type.toUpperCase()}.${field.toUpperCase()}`;
+      const name = this.libraryFBFieldTypes.get(key);
+      if (name === undefined) return undefined;
+      const kind = this.libraryFBFieldTypeRefs.get(key)?.referenceKind;
+      return {
+        type: {
+          name,
+          referenceKind: (kind ?? "none") as ReferenceKind,
+        },
+      };
+    })?.type.referenceKind;
   }
 
   /**

@@ -345,8 +345,9 @@ export class TypeCodeGenerator {
       let cppType: string;
       if (field.type.arrayDimensions && field.type.elementTypeName) {
         // Inline array type: emit Array1D/2D/3D<WrappedElementType, bounds...>
-        const elemCpp = this.mapStructFieldTypeToCpp(
+        const elemCpp = this.arrayElementTypeToCpp(
           field.type.elementTypeName,
+          field.type.elementReferenceChain,
         );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
@@ -460,7 +461,13 @@ export class TypeCodeGenerator {
    * IEC 61131-3 array semantics (arrays can have arbitrary start indices).
    */
   private generateArrayType(name: string, def: ArrayDefinition): void {
-    const elementType = this.mapStructFieldTypeToCpp(def.elementType.name);
+    const elementKind = def.elementType.referenceKind;
+    const elementType = this.arrayElementTypeToCpp(
+      def.elementType.name,
+      elementKind === undefined || elementKind === "none"
+        ? undefined
+        : (def.elementType.referenceChain ?? [elementKind]),
+    );
     const numDims = def.dimensions.length;
 
     // Collect bounds for all dimensions (skip variable-length dimensions)
@@ -532,7 +539,12 @@ export class TypeCodeGenerator {
     let cppType: string;
     if (def.arrayDimensions && def.elementTypeName) {
       // POINTER TO ARRAY[...] OF T — use array template
-      const elemCpp = this.mapTypeToCpp(def.elementTypeName);
+      const elemCpp = def.elementReferenceChain
+        ? wrapReferenceChain(
+            def.elementReferenceChain,
+            this.mapTypeToCpp(def.elementTypeName),
+          )
+        : this.mapTypeToCpp(def.elementTypeName);
       cppType = formatArrayType(elemCpp, def.arrayDimensions);
     } else {
       cppType = this.mapTypeToCpp(def.name);
@@ -544,6 +556,20 @@ export class TypeCodeGenerator {
     );
     this.emit(`using ${name} = ${cppType};`);
     this.emit("");
+  }
+
+  /**
+   * The C++ element type of an array: the IECVar-wrapped type for a value
+   * element, or for an element declared POINTER TO / REF_TO the wrapper a
+   * variable of that type gets (`IEC_Ptr<INT_t>`).
+   */
+  private arrayElementTypeToCpp(
+    typeName: string,
+    referenceChain: readonly string[] | undefined,
+  ): string {
+    return referenceChain
+      ? wrapReferenceChain(referenceChain, this.mapTypeToCpp(typeName))
+      : this.mapStructFieldTypeToCpp(typeName);
   }
 
   /**

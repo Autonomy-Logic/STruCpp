@@ -88,6 +88,8 @@ export interface ProjectVarDeclaration {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type for inline arrays (e.g. "DINT"). */
   elementTypeName?: string;
+  /** Element reference levels for an inline array of pointers or references. */
+  elementReferenceChain?: string[];
   /** Pointer/reference qualifier carried through from the AST TypeReference. */
   referenceKind?: string;
   /** Every reference level, outermost first, when there is more than one. */
@@ -109,6 +111,7 @@ export interface VarExternalDeclaration {
   maxLength?: number | string;
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  elementReferenceChain?: string[];
   referenceKind?: string;
   referenceChain?: string[];
   /** Location of the declaration, so a "no matching VAR_GLOBAL" diagnostic can
@@ -270,6 +273,9 @@ export function toProjectVarDeclaration(
       : {}),
     ...(decl.type.elementTypeName !== undefined
       ? { elementTypeName: decl.type.elementTypeName }
+      : {}),
+    ...(decl.type.elementReferenceChain !== undefined
+      ? { elementReferenceChain: decl.type.elementReferenceChain }
       : {}),
     ...(decl.type.referenceKind !== undefined &&
     decl.type.referenceKind !== "none"
@@ -928,6 +934,9 @@ export class ProjectModelBuilder {
         : {}),
       ...(decl.type.elementTypeName !== undefined
         ? { elementTypeName: decl.type.elementTypeName }
+        : {}),
+      ...(decl.type.elementReferenceChain !== undefined
+        ? { elementReferenceChain: decl.type.elementReferenceChain }
         : {}),
       ...(decl.type.referenceKind !== undefined &&
       decl.type.referenceKind !== "none"

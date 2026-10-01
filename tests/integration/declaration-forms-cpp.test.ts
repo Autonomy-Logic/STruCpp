@@ -7,6 +7,9 @@
  *     REF_TO, REF_TO REF_TO), in variables, a TYPE alias and a STRUCT field
  *   - REF_TO and REFERENCE TO struct fields hold references (bound with :=
  *     REF() and REF=), where they used to be emitted as plain values
+ *   - arrays of pointers and references (inline, TYPE, in a STRUCT, several
+ *     dimensions) hold pointers and references, where the element's
+ *     reference levels used to be dropped
  *   - typed enumeration values (E_State#Idle), including in CASE labels
  *   - anonymous enumerations and subranges written in a declaration, which
  *     behave like their TYPE equivalents
@@ -131,6 +134,44 @@ END_PROGRAM
       "struct_ref_fields",
     );
     expect(out.trim()).toBe("7 3 3 11 11");
+  });
+
+  it("arrays of pointers and references hold pointers and references", () => {
+    const source = `
+TYPE PAT : ARRAY[0..1] OF POINTER TO INT; END_TYPE
+TYPE RAT : ARRAY[0..1] OF REF_TO INT; END_TYPE
+TYPE S : STRUCT ps : ARRAY[0..1] OF POINTER TO INT; rs : ARRAY[0..1] OF REF_TO INT; END_STRUCT; END_TYPE
+PROGRAM main
+VAR
+  x : INT := 7; z : INT := 3;
+  ia : ARRAY[0..1] OF POINTER TO INT;
+  ra : ARRAY[0..1] OF REF_TO INT;
+  m : ARRAY[0..1, 0..1] OF POINTER TO INT;
+  pp : ARRAY[0..1] OF POINTER TO POINTER TO INT;
+  px : POINTER TO INT;
+  ta : PAT; tr : RAT; s : S;
+  y : ARRAY[0..7] OF INT;
+END_VAR
+ia[0] := ADR(x); ia[1] := ADR(z);
+y[0] := ia[0]^ + ia[1]^;
+ra[1] := REF(z); y[1] := ra[1]^;
+m[1, 0] := ADR(x); y[2] := m[1, 0]^;
+px := ADR(z); pp[0] := ADR(px); y[3] := pp[0]^^;
+ta[1] := ADR(x); y[4] := ta[1]^;
+tr[0] := REF(z); y[5] := tr[0]^;
+s.ps[1] := ADR(z); y[6] := s.ps[1]^;
+s.rs[0] := REF(x); y[7] := s.rs[0]^;
+ra[1]^ := 42;
+END_PROGRAM
+`;
+    const out = run(
+      source,
+      `    Program_MAIN p; p.run();
+    for (int i = 0; i < 8; i++) std::cout << p.Y[i].get() << " ";
+    std::cout << p.Z.get() << std::endl;`,
+      "arrays_of_refs",
+    );
+    expect(out.trim()).toBe("10 3 7 3 7 3 3 7 42");
   });
 
   it("typed enumeration values, in expressions and CASE labels", () => {
