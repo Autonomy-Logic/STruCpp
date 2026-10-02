@@ -27,10 +27,11 @@
 #include <sstream>
 #include <type_traits>
 
-namespace strucpp {
+// The scan-cycle time slot lives in iec_std_lib.hpp. Included rather than
+// forward-declared: it is no longer a plain object a declaration can restate.
+#include "iec_std_lib.hpp"
 
-// Forward declaration of scan-cycle time global (defined in iec_std_lib.hpp)
-extern int64_t __CURRENT_TIME_NS;
+namespace strucpp {
 
 // ============================================================================
 // Value formatting
@@ -188,7 +189,7 @@ struct TestContext {
      * ASSERT_EQ: check actual == expected (mixed types, e.g. IECStringVar vs const char*)
      */
     template<typename T, typename U,
-        std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+        std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
     bool assert_eq(T actual, U expected,
                    const char* actual_expr, const char* expected_expr,
                    int line, const char* msg = "") {
@@ -218,7 +219,7 @@ struct TestContext {
      * ASSERT_NEQ: check actual != expected (mixed types)
      */
     template<typename T, typename U,
-        std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+        std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
     bool assert_neq(T actual, U expected,
                     const char* actual_expr, const char* expected_expr,
                     int line, const char* msg = "") {

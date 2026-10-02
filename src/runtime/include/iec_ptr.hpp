@@ -128,12 +128,12 @@ public:
     // Pointer arithmetic (in units of sizeof(T))
     // Use templates to directly match any arithmetic type, avoiding
     // ambiguity with the integral conversion operator.
-    template<typename N, std::enable_if_t<std::is_arithmetic_v<N>, int> = 0>
+    template<typename N, std::enable_if_t<std::is_arithmetic<N>::value, int> = 0>
     IEC_Ptr operator+(N n) const noexcept {
         return IEC_Ptr(static_cast<T*>(ptr_) + static_cast<std::ptrdiff_t>(n));
     }
 
-    template<typename N, std::enable_if_t<std::is_arithmetic_v<N>, int> = 0>
+    template<typename N, std::enable_if_t<std::is_arithmetic<N>::value, int> = 0>
     IEC_Ptr operator-(N n) const noexcept {
         return IEC_Ptr(static_cast<T*>(ptr_) - static_cast<std::ptrdiff_t>(n));
     }
@@ -149,13 +149,13 @@ public:
         return IEC_Ptr(static_cast<T*>(ptr_) - static_cast<std::ptrdiff_t>(n.get()));
     }
 
-    template<typename N, std::enable_if_t<std::is_arithmetic_v<N>, int> = 0>
+    template<typename N, std::enable_if_t<std::is_arithmetic<N>::value, int> = 0>
     IEC_Ptr& operator+=(N n) noexcept {
         ptr_ = static_cast<T*>(ptr_) + static_cast<std::ptrdiff_t>(n);
         return *this;
     }
 
-    template<typename N, std::enable_if_t<std::is_arithmetic_v<N>, int> = 0>
+    template<typename N, std::enable_if_t<std::is_arithmetic<N>::value, int> = 0>
     IEC_Ptr& operator-=(N n) noexcept {
         ptr_ = static_cast<T*>(ptr_) - static_cast<std::ptrdiff_t>(n);
         return *this;
@@ -222,27 +222,27 @@ public:
     bool operator!=(std::nullptr_t) const noexcept { return ptr_ != nullptr; }
 
     // Comparison with IECVar<integer> (for CODESYS: PT < DWORD_END)
-    template<typename U, std::enable_if_t<std::is_integral_v<U>, int> = 0>
+    template<typename U, std::enable_if_t<std::is_integral<U>::value, int> = 0>
     bool operator<(IECVar<U> other) const noexcept {
         return reinterpret_cast<uintptr_t>(ptr_) < static_cast<uintptr_t>(other.get());
     }
-    template<typename U, std::enable_if_t<std::is_integral_v<U>, int> = 0>
+    template<typename U, std::enable_if_t<std::is_integral<U>::value, int> = 0>
     bool operator>(IECVar<U> other) const noexcept {
         return reinterpret_cast<uintptr_t>(ptr_) > static_cast<uintptr_t>(other.get());
     }
-    template<typename U, std::enable_if_t<std::is_integral_v<U>, int> = 0>
+    template<typename U, std::enable_if_t<std::is_integral<U>::value, int> = 0>
     bool operator<=(IECVar<U> other) const noexcept {
         return reinterpret_cast<uintptr_t>(ptr_) <= static_cast<uintptr_t>(other.get());
     }
-    template<typename U, std::enable_if_t<std::is_integral_v<U>, int> = 0>
+    template<typename U, std::enable_if_t<std::is_integral<U>::value, int> = 0>
     bool operator>=(IECVar<U> other) const noexcept {
         return reinterpret_cast<uintptr_t>(ptr_) >= static_cast<uintptr_t>(other.get());
     }
-    template<typename U, std::enable_if_t<std::is_integral_v<U>, int> = 0>
+    template<typename U, std::enable_if_t<std::is_integral<U>::value, int> = 0>
     bool operator==(IECVar<U> other) const noexcept {
         return reinterpret_cast<uintptr_t>(ptr_) == static_cast<uintptr_t>(other.get());
     }
-    template<typename U, std::enable_if_t<std::is_integral_v<U>, int> = 0>
+    template<typename U, std::enable_if_t<std::is_integral<U>::value, int> = 0>
     bool operator!=(IECVar<U> other) const noexcept {
         return reinterpret_cast<uintptr_t>(ptr_) != static_cast<uintptr_t>(other.get());
     }

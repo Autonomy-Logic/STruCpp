@@ -26,6 +26,7 @@ import {
   RUNTIME_INCLUDE_PATH,
   TEST_RUNTIME_PATH,
   cxxEnv,
+  CXX_STD,
 } from "./test-helpers.js";
 import { execSync } from "child_process";
 
@@ -182,7 +183,7 @@ describe.skipIf(!hasGpp || !oscatStlibAvailable)(
         const binaryPath = path.join(tempDir, "oscat_test");
         const gppCmd = [
           "g++",
-          "-std=c++17",
+          `-std=${CXX_STD}`,
           `-include "${pchPath}"`,
           `-I"${RUNTIME_INCLUDE_PATH}"`,
           `-I"${TEST_RUNTIME_PATH}"`,

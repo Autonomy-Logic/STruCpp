@@ -1267,6 +1267,8 @@ export class CodeGenerator {
         for (const decl of block.declarations) {
           const cppType = this.mapTypeRefToCpp(decl.type);
           for (const name of decl.names) {
+            // `inline`, not a static-local behind a reference: the debug table takes
+            // their address into PROGMEM, which needs a constant.
             this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
             if (decl.initialValue) {
               const initExpr = this.generateInitializer(
@@ -3127,6 +3129,7 @@ export class CodeGenerator {
           );
           emittedAny = true;
         }
+        // Must stay a real object — generated_debug.cpp takes `&name` into PROGMEM.
         this.emitHeader(
           `inline GlobalVar<${cppType}> ${gvar.name}{${initVal}};`,
         );

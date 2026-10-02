@@ -17,7 +17,7 @@ import * as path from "path";
 import * as os from "os";
 import { compile } from "../../src/index.js";
 import { discoverStlibs } from "../../src/node/library-loader.js";
-import { hasGpp, RUNTIME_INCLUDE_PATH, cxxEnv } from "./test-helpers.js";
+import { hasGpp, RUNTIME_INCLUDE_PATH, CXX_STD, cxxEnv } from "./test-helpers.js";
 
 const LIBRARIES = discoverStlibs(path.resolve(__dirname, "../../libs"));
 
@@ -139,7 +139,7 @@ describeIfGpp("shared globals: locked access, all build modes", () => {
       let diag = "";
       try {
         execSync(
-          `g++ -std=c++17 -pthread ${FLAGS[mode]} -I"${RUNTIME_INCLUDE_PATH}" -I"${dir}" "${cpp}" ${linked} -o "${out}"`,
+          `g++ -std=${CXX_STD} -pthread ${FLAGS[mode]} -I"${RUNTIME_INCLUDE_PATH}" -I"${dir}" "${cpp}" ${linked} -o "${out}"`,
           { stdio: "pipe", env: cxxEnv },
         );
         execSync(`"${out}"`, { stdio: "pipe", timeout: 20000 });
@@ -190,7 +190,7 @@ int main() {
       let diag = "";
       try {
         execSync(
-          `g++ -std=c++17 -pthread ${FLAGS[mode]} -I"${RUNTIME_INCLUDE_PATH}" "${cpp}" -o "${out}"`,
+          `g++ -std=${CXX_STD} -pthread ${FLAGS[mode]} -I"${RUNTIME_INCLUDE_PATH}" "${cpp}" -o "${out}"`,
           { stdio: "pipe", env: cxxEnv },
         );
         execSync(`"${out}"`, { stdio: "pipe", timeout: 10000 });
