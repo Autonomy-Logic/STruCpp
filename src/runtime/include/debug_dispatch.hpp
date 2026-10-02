@@ -365,9 +365,9 @@ struct PtrOps {
 
 // ---------------------------------------------------------------------------
 // type_ops[]: one row per TypeTag, in tag order.
-// Kept inline so no separate .cpp is required.
+// Header-scope `constexpr`, so no separate .cpp is required.
 //
-// NOT flash-resident on AVR, whatever "inline constexpr" suggests. The Entry
+// NOT flash-resident on AVR, whatever `constexpr` suggests. The Entry
 // tables carry STRUCPP_DEBUG_FLASH (see debug_table.hpp) and this does not, so
 // on a Harvard target it is const data in .rodata, which the startup code
 // copies into SRAM. Every AVR firmware pays for this table.
@@ -377,29 +377,34 @@ struct PtrOps {
 // Moving this one to STRUCPP_DEBUG_FLASH would mean routing every row read
 // through pgm_read_ptr in the hot path of handle_read / handle_write /
 // handle_set. Worth doing on its own evidence, not as a side effect.
+//
+// Plain `constexpr`, not `inline constexpr`, because the runtime is C++14:
+// that gives the table internal linkage, one copy per translation unit.
+// Harmless while a single TU includes this header — include it from a
+// second and an AVR pays for the table twice in SRAM.
 // ---------------------------------------------------------------------------
-inline constexpr TypeOps type_ops[TAG__COUNT] = {
-    /*BOOL    */ { &force_impl<BOOL_t>,   &unforce_impl<BOOL_t>,   &read_impl<BOOL_t>,   &write_impl<BOOL_t>,   sizeof(BOOL_t)   },
-    /*SINT    */ { &force_impl<SINT_t>,   &unforce_impl<SINT_t>,   &read_impl<SINT_t>,   &write_impl<SINT_t>,   sizeof(SINT_t)   },
-    /*USINT   */ { &force_impl<USINT_t>,  &unforce_impl<USINT_t>,  &read_impl<USINT_t>,  &write_impl<USINT_t>,  sizeof(USINT_t)  },
-    /*INT     */ { &force_impl<INT_t>,    &unforce_impl<INT_t>,    &read_impl<INT_t>,    &write_impl<INT_t>,    sizeof(INT_t)    },
-    /*UINT    */ { &force_impl<UINT_t>,   &unforce_impl<UINT_t>,   &read_impl<UINT_t>,   &write_impl<UINT_t>,   sizeof(UINT_t)   },
-    /*DINT    */ { &force_impl<DINT_t>,   &unforce_impl<DINT_t>,   &read_impl<DINT_t>,   &write_impl<DINT_t>,   sizeof(DINT_t)   },
-    /*UDINT   */ { &force_impl<UDINT_t>,  &unforce_impl<UDINT_t>,  &read_impl<UDINT_t>,  &write_impl<UDINT_t>,  sizeof(UDINT_t)  },
-    /*LINT    */ { &force_impl<LINT_t>,   &unforce_impl<LINT_t>,   &read_impl<LINT_t>,   &write_impl<LINT_t>,   sizeof(LINT_t)   },
-    /*ULINT   */ { &force_impl<ULINT_t>,  &unforce_impl<ULINT_t>,  &read_impl<ULINT_t>,  &write_impl<ULINT_t>,  sizeof(ULINT_t)  },
-    /*REAL    */ { &force_impl<REAL_t>,   &unforce_impl<REAL_t>,   &read_impl<REAL_t>,   &write_impl<REAL_t>,   sizeof(REAL_t)   },
-    /*LREAL   */ { &force_impl<LREAL_t>,  &unforce_impl<LREAL_t>,  &read_impl<LREAL_t>,  &write_impl<LREAL_t>,  sizeof(LREAL_t)  },
-    /*BYTE    */ { &force_impl<BYTE_t>,   &unforce_impl<BYTE_t>,   &read_impl<BYTE_t>,   &write_impl<BYTE_t>,   sizeof(BYTE_t)   },
-    /*WORD    */ { &force_impl<WORD_t>,   &unforce_impl<WORD_t>,   &read_impl<WORD_t>,   &write_impl<WORD_t>,   sizeof(WORD_t)   },
-    /*DWORD   */ { &force_impl<DWORD_t>,  &unforce_impl<DWORD_t>,  &read_impl<DWORD_t>,  &write_impl<DWORD_t>,  sizeof(DWORD_t)  },
-    /*LWORD   */ { &force_impl<LWORD_t>,  &unforce_impl<LWORD_t>,  &read_impl<LWORD_t>,  &write_impl<LWORD_t>,  sizeof(LWORD_t)  },
-    /*TIME    */ { &force_impl<TIME_t>,   &unforce_impl<TIME_t>,   &read_impl<TIME_t>,   &write_impl<TIME_t>,   sizeof(TIME_t)   },
-    /*DATE    */ { &force_impl<DATE_t>,   &unforce_impl<DATE_t>,   &read_impl<DATE_t>,   &write_impl<DATE_t>,   sizeof(DATE_t)   },
-    /*TOD     */ { &force_impl<TOD_t>,    &unforce_impl<TOD_t>,    &read_impl<TOD_t>,    &write_impl<TOD_t>,    sizeof(TOD_t)    },
-    /*DT      */ { &force_impl<DT_t>,     &unforce_impl<DT_t>,     &read_impl<DT_t>,     &write_impl<DT_t>,     sizeof(DT_t)     },
-    /*STRING  */ { &force_string,         &unforce_string,         &read_string,         &write_string,         DEBUG_STRING_WIDTH   },
-    /*WSTRING */ { &force_wstring,        &unforce_wstring,        &read_wstring,        &write_wstring,        DEBUG_WSTRING_WIDTH },
+constexpr TypeOps type_ops[TAG__COUNT] = {
+    /*BOOL    */ { &force_impl<BOOL_t>,  &unforce_impl<BOOL_t>,  &read_impl<BOOL_t>,  &write_impl<BOOL_t>,  sizeof(BOOL_t)      },
+    /*SINT    */ { &force_impl<SINT_t>,  &unforce_impl<SINT_t>,  &read_impl<SINT_t>,  &write_impl<SINT_t>,  sizeof(SINT_t)      },
+    /*USINT   */ { &force_impl<USINT_t>, &unforce_impl<USINT_t>, &read_impl<USINT_t>, &write_impl<USINT_t>, sizeof(USINT_t)     },
+    /*INT     */ { &force_impl<INT_t>,   &unforce_impl<INT_t>,   &read_impl<INT_t>,   &write_impl<INT_t>,   sizeof(INT_t)       },
+    /*UINT    */ { &force_impl<UINT_t>,  &unforce_impl<UINT_t>,  &read_impl<UINT_t>,  &write_impl<UINT_t>,  sizeof(UINT_t)      },
+    /*DINT    */ { &force_impl<DINT_t>,  &unforce_impl<DINT_t>,  &read_impl<DINT_t>,  &write_impl<DINT_t>,  sizeof(DINT_t)      },
+    /*UDINT   */ { &force_impl<UDINT_t>, &unforce_impl<UDINT_t>, &read_impl<UDINT_t>, &write_impl<UDINT_t>, sizeof(UDINT_t)     },
+    /*LINT    */ { &force_impl<LINT_t>,  &unforce_impl<LINT_t>,  &read_impl<LINT_t>,  &write_impl<LINT_t>,  sizeof(LINT_t)      },
+    /*ULINT   */ { &force_impl<ULINT_t>, &unforce_impl<ULINT_t>, &read_impl<ULINT_t>, &write_impl<ULINT_t>, sizeof(ULINT_t)     },
+    /*REAL    */ { &force_impl<REAL_t>,  &unforce_impl<REAL_t>,  &read_impl<REAL_t>,  &write_impl<REAL_t>,  sizeof(REAL_t)      },
+    /*LREAL   */ { &force_impl<LREAL_t>, &unforce_impl<LREAL_t>, &read_impl<LREAL_t>, &write_impl<LREAL_t>, sizeof(LREAL_t)     },
+    /*BYTE    */ { &force_impl<BYTE_t>,  &unforce_impl<BYTE_t>,  &read_impl<BYTE_t>,  &write_impl<BYTE_t>,  sizeof(BYTE_t)      },
+    /*WORD    */ { &force_impl<WORD_t>,  &unforce_impl<WORD_t>,  &read_impl<WORD_t>,  &write_impl<WORD_t>,  sizeof(WORD_t)      },
+    /*DWORD   */ { &force_impl<DWORD_t>, &unforce_impl<DWORD_t>, &read_impl<DWORD_t>, &write_impl<DWORD_t>, sizeof(DWORD_t)     },
+    /*LWORD   */ { &force_impl<LWORD_t>, &unforce_impl<LWORD_t>, &read_impl<LWORD_t>, &write_impl<LWORD_t>, sizeof(LWORD_t)     },
+    /*TIME    */ { &force_impl<TIME_t>,  &unforce_impl<TIME_t>,  &read_impl<TIME_t>,  &write_impl<TIME_t>,  sizeof(TIME_t)      },
+    /*DATE    */ { &force_impl<DATE_t>,  &unforce_impl<DATE_t>,  &read_impl<DATE_t>,  &write_impl<DATE_t>,  sizeof(DATE_t)      },
+    /*TOD     */ { &force_impl<TOD_t>,   &unforce_impl<TOD_t>,   &read_impl<TOD_t>,   &write_impl<TOD_t>,   sizeof(TOD_t)       },
+    /*DT      */ { &force_impl<DT_t>,    &unforce_impl<DT_t>,    &read_impl<DT_t>,    &write_impl<DT_t>,    sizeof(DT_t)        },
+    /*STRING  */ { &force_string,        &unforce_string,        &read_string,        &write_string,        DEBUG_STRING_WIDTH  },
+    /*WSTRING */ { &force_wstring,       &unforce_wstring,       &read_wstring,       &write_wstring,       DEBUG_WSTRING_WIDTH },
 };
 
 // ---------------------------------------------------------------------------
@@ -422,7 +427,7 @@ inline constexpr TypeOps type_ops[TAG__COUNT] = {
 //
 // So the feature now costs what it costs, and only to firmware that uses it.
 // ---------------------------------------------------------------------------
-inline constexpr PtrOps ptr_ops[TAG__COUNT] = {
+constexpr PtrOps ptr_ops[TAG__COUNT] = {
     /*BOOL    */ { &ptr_impl<BOOL_t> },
     /*SINT    */ { &ptr_impl<SINT_t> },
     /*USINT   */ { &ptr_impl<USINT_t> },

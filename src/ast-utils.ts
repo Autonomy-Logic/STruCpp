@@ -615,13 +615,15 @@ function getChildren(node: ASTNode): ASTNode[] {
 
     case "VariableExpression": {
       const ve = node as VariableExpression;
-      children.push(...ve.subscripts);
+      // `accessChain` holds its own clones of the indices — walking both visits each twice.
       if (ve.accessChain) {
         for (const step of ve.accessChain) {
           if (step.kind === "subscript") {
             children.push(...step.indices);
           }
         }
+      } else {
+        children.push(...ve.subscripts);
       }
       break;
     }

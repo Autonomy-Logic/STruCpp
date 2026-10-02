@@ -18,7 +18,7 @@
 //
 // In this header (and anything it includes) do NOT use C++17/20 features
 // unguarded. In particular:
-//   * `std::trait_v<T>`               -> `std::trait<T>::value`
+//   * `std::trait_v<T>`                -> `std::trait<T>::value`
 //   * `if constexpr`                  -> SFINAE / tag dispatch
 //   * inline variables / `inline constexpr`
 //   * `auto` non-type template params -> typed NTTPs

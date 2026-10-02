@@ -201,16 +201,33 @@ struct ConfigurationInstance {
  * ABS - Absolute value
  * Input: ANY_NUM, Output: ANY_NUM (same type)
  */
+namespace detail {
+// Tag dispatch instead of `if constexpr`: the runtime is C++14 (see the header
+// banner). Each overload is the branch that C++17 would have discarded.
+template<typename T, typename V>
+inline T iec_abs_impl(T value, V v, std::true_type /*floating*/, std::false_type) noexcept {
+    (void)value;
+    return T(std::abs(v));
+}
+template<typename T, typename V>
+inline T iec_abs_impl(T value, V v, std::false_type, std::true_type /*signed*/) noexcept {
+    (void)value;
+    return T(v < 0 ? -v : v);
+}
+template<typename T, typename V>
+inline T iec_abs_impl(T value, V, std::false_type, std::false_type /*unsigned*/) noexcept {
+    return value;
+}
+}  // namespace detail
+
 template<typename T, enable_if_any_num<T> = 0>
 inline T ABS(T value) noexcept {
     auto v = iec_unwrap(value);
-    if constexpr (std::is_floating_point_v<decltype(v)>) {
-        return T(std::abs(v));
-    } else if constexpr (std::is_signed_v<decltype(v)>) {
-        return T(v < 0 ? -v : v);
-    } else {
-        return value;
-    }
+    using V = decltype(v);
+    return detail::iec_abs_impl(
+        value, v,
+        std::integral_constant<bool, std::is_floating_point<V>::value>{},
+        std::integral_constant<bool, !std::is_floating_point<V>::value && std::is_signed<V>::value>{});
 }
 
 /**
@@ -260,7 +277,7 @@ inline T EXPT(T base, T exponent) noexcept {
 
 // Mixed-type EXPT: allows e.g. EXPT(INT, REAL) → returns LREAL
 template<typename T1, typename T2,
-         typename = std::enable_if_t<!std::is_same_v<std::decay_t<T1>, std::decay_t<T2>>>>
+         typename = std::enable_if_t<!std::is_same<std::decay_t<T1>, std::decay_t<T2>>::value>>
 inline IEC_LREAL EXPT(T1 base, T2 exponent) noexcept {
     return IEC_LREAL(std::pow(static_cast<double>(iec_unwrap(base)), static_cast<double>(iec_unwrap(exponent))));
 }
@@ -403,7 +420,7 @@ inline T LIMIT(T mn, T in, T mx) noexcept {
 
 // Mixed-type MIN/MAX/LIMIT/SEL overloads (OSCAT mixes e.g. INT with DINT)
 template<typename T, typename U,
-    std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
 inline auto MAX(T a, U b) noexcept {
     using CT = std::common_type_t<decltype(iec_unwrap(a)), decltype(iec_unwrap(b))>;
     auto va = static_cast<CT>(iec_unwrap(a));
@@ -412,7 +429,7 @@ inline auto MAX(T a, U b) noexcept {
 }
 
 template<typename T, typename U,
-    std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
 inline auto MIN(T a, U b) noexcept {
     using CT = std::common_type_t<decltype(iec_unwrap(a)), decltype(iec_unwrap(b))>;
     auto va = static_cast<CT>(iec_unwrap(a));
@@ -423,8 +440,8 @@ inline auto MIN(T a, U b) noexcept {
 template<typename T1, typename T2, typename T3>
 inline auto LIMIT(T1 mn, T2 in, T3 mx) noexcept
     -> std::enable_if_t<
-        !(std::is_same_v<std::decay_t<T1>, std::decay_t<T2>> &&
-          std::is_same_v<std::decay_t<T2>, std::decay_t<T3>>),
+        !(std::is_same<std::decay_t<T1>, std::decay_t<T2>>::value &&
+          std::is_same<std::decay_t<T2>, std::decay_t<T3>>::value),
         std::common_type_t<decltype(iec_unwrap(mn)), decltype(iec_unwrap(in)), decltype(iec_unwrap(mx))>> {
     using CT = std::common_type_t<decltype(iec_unwrap(mn)), decltype(iec_unwrap(in)), decltype(iec_unwrap(mx))>;
     auto vmn = static_cast<CT>(iec_unwrap(mn));
@@ -436,7 +453,7 @@ inline auto LIMIT(T1 mn, T2 in, T3 mx) noexcept
 }
 
 template<typename T, typename U,
-    std::enable_if_t<!std::is_same_v<std::decay_t<T>, std::decay_t<U>>, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
 inline auto SEL(IEC_BOOL g, T in0, U in1) noexcept {
     using CT = std::common_type_t<decltype(iec_unwrap(in0)), decltype(iec_unwrap(in1))>;
     return iec_unwrap(g) ? static_cast<CT>(iec_unwrap(in1)) : static_cast<CT>(iec_unwrap(in0));
@@ -670,7 +687,7 @@ inline T SHL(T in, IEC_INT n) noexcept {
 // Mixed-type shift count overloads (OSCAT uses various integer types for shift amount)
 template<typename T, typename N,
     enable_if_any_bit<T> = 0,
-    std::enable_if_t<!std::is_same_v<std::decay_t<N>, IEC_INT>, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<N>, IEC_INT>::value, int> = 0>
 inline T SHL(T in, N n) noexcept {
     auto shift = static_cast<int>(iec_unwrap(n));
     if (shift <= 0) return shift == 0 ? in : T(0);
@@ -691,7 +708,7 @@ inline T SHR(T in, IEC_INT n) noexcept {
 // Mixed-type shift count overloads
 template<typename T, typename N,
     enable_if_any_bit<T> = 0,
-    std::enable_if_t<!std::is_same_v<std::decay_t<N>, IEC_INT>, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<N>, IEC_INT>::value, int> = 0>
 inline T SHR(T in, N n) noexcept {
     auto shift = static_cast<int>(iec_unwrap(n));
     if (shift <= 0) return shift == 0 ? in : T(0);
@@ -735,7 +752,7 @@ inline T ROL(T in, IEC_INT n) noexcept {
 // Mixed-type rotate overloads
 template<typename T, typename N,
     enable_if_any_bit<T> = 0,
-    std::enable_if_t<!std::is_same_v<std::decay_t<N>, IEC_INT>, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<N>, IEC_INT>::value, int> = 0>
 inline T ROL(T in, N n) noexcept {
     constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
     auto v = iec_unwrap(in);
@@ -762,7 +779,7 @@ inline T ROR(T in, IEC_INT n) noexcept {
 // Mixed-type rotate overloads
 template<typename T, typename N,
     enable_if_any_bit<T> = 0,
-    std::enable_if_t<!std::is_same_v<std::decay_t<N>, IEC_INT>, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<N>, IEC_INT>::value, int> = 0>
 inline T ROR(T in, N n) noexcept {
     constexpr int bits = sizeof(iec_underlying_type_t<T>) * 8;
     auto v = iec_unwrap(in);
@@ -797,14 +814,24 @@ inline double iec_round_half_even(T value) noexcept {
 /**
  * Helper: round-then-cast for REAL→integer conversions per IEC 61131-3
  */
+namespace detail {
+template<typename ToVal, typename FromVal>
+inline ToVal iec_convert_value_impl(FromVal value, std::true_type /*round*/) noexcept {
+    return static_cast<ToVal>(iec_round_half_even(value));
+}
+template<typename ToVal, typename FromVal>
+inline ToVal iec_convert_value_impl(FromVal value, std::false_type) noexcept {
+    return static_cast<ToVal>(value);
+}
+}  // namespace detail
+
 template<typename ToVal, typename FromVal>
 inline ToVal iec_convert_value(FromVal value) noexcept {
     // IEC 61131-3: REAL/LREAL to integer types round to nearest, ties to even.
-    if constexpr (std::is_floating_point_v<FromVal> && std::is_integral_v<ToVal>) {
-        return static_cast<ToVal>(iec_round_half_even(value));
-    } else {
-        return static_cast<ToVal>(value);
-    }
+    return detail::iec_convert_value_impl<ToVal>(
+        value,
+        std::integral_constant<bool, std::is_floating_point<FromVal>::value &&
+                                     std::is_integral<ToVal>::value>{});
 }
 
 /**
@@ -812,7 +839,7 @@ inline ToVal iec_convert_value(FromVal value) noexcept {
  */
 template<typename To, typename From>
 inline auto CONVERT(From value) noexcept
-    -> std::enable_if_t<!std::is_arithmetic_v<From>, To> {
+    -> std::enable_if_t<!std::is_arithmetic<From>::value, To> {
     return To(iec_convert_value<typename To::value_type>(iec_unwrap(value)));
 }
 
@@ -821,7 +848,7 @@ inline auto CONVERT(From value) noexcept
  */
 template<typename To, typename From>
 inline auto CONVERT(From value) noexcept
-    -> std::enable_if_t<std::is_arithmetic_v<From>, To> {
+    -> std::enable_if_t<std::is_arithmetic<From>::value, To> {
     return To(iec_convert_value<typename To::value_type>(value));
 }
 
@@ -1297,13 +1324,23 @@ inline T DIV(T a, T b) noexcept {
  * Input: ANY_NUM, Output: ANY_NUM (same type)
  * Returns remainder of division
  */
+namespace detail {
+template<typename T>
+inline T iec_mod_impl(T a, T b, std::true_type /*floating*/) noexcept {
+    return T(std::fmod(static_cast<double>(iec_unwrap(a)), static_cast<double>(iec_unwrap(b))));
+}
+template<typename T>
+inline T iec_mod_impl(T a, T b, std::false_type) noexcept {
+    return T(iec_unwrap(a) % iec_unwrap(b));
+}
+}  // namespace detail
+
 template<typename T, enable_if_any_num<T> = 0>
 inline T MOD(T a, T b) noexcept {
-    if constexpr (std::is_floating_point_v<iec_underlying_type_t<T>>) {
-        return T(std::fmod(static_cast<double>(iec_unwrap(a)), static_cast<double>(iec_unwrap(b))));
-    } else {
-        return T(iec_unwrap(a) % iec_unwrap(b));
-    }
+    return detail::iec_mod_impl(
+        a, b,
+        std::integral_constant<bool,
+            std::is_floating_point<iec_underlying_type_t<T>>::value>{});
 }
 
 // =============================================================================
@@ -1388,14 +1425,13 @@ inline T XOR(T first, T second, Args... rest) noexcept {
  * Input: ANY_ELEMENTARY, Output: ANY_ELEMENTARY (same type)
  * Returns the maximum of two or more values
  */
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline T MAX(T first, T second, Args... rest) noexcept {
-    T current_max = iec_unwrap(first) > iec_unwrap(second) ? first : second;
-    if constexpr (sizeof...(rest) > 0) {
-        return MAX(current_max, rest...);
-    } else {
-        return current_max;
-    }
+// Three-or-more arguments only; the two-argument base case is defined above.
+// Recursion instead of `if constexpr (sizeof...(rest) > 0)`, which is C++17.
+// `third` keeps its own type so the recursion still reaches the mixed-type
+// two-argument overload — OSCAT passes INT and DINT to the same call.
+template<typename T, typename U, typename... Args, enable_if_any_elementary<T> = 0>
+inline auto MAX(T first, T second, U third, Args... rest) noexcept {
+    return MAX(MAX(first, second), third, rest...);
 }
 
 /**
@@ -1403,14 +1439,13 @@ inline T MAX(T first, T second, Args... rest) noexcept {
  * Input: ANY_ELEMENTARY, Output: ANY_ELEMENTARY (same type)
  * Returns the minimum of two or more values
  */
-template<typename T, typename... Args, enable_if_any_elementary<T> = 0>
-inline T MIN(T first, T second, Args... rest) noexcept {
-    T current_min = iec_unwrap(first) < iec_unwrap(second) ? first : second;
-    if constexpr (sizeof...(rest) > 0) {
-        return MIN(current_min, rest...);
-    } else {
-        return current_min;
-    }
+// Three-or-more arguments only; the two-argument base case is defined above.
+// Recursion instead of `if constexpr (sizeof...(rest) > 0)`, which is C++17.
+// `third` keeps its own type so the recursion still reaches the mixed-type
+// two-argument overload — OSCAT passes INT and DINT to the same call.
+template<typename T, typename U, typename... Args, enable_if_any_elementary<T> = 0>
+inline auto MIN(T first, T second, U third, Args... rest) noexcept {
+    return MIN(MIN(first, second), third, rest...);
 }
 
 /**
@@ -1447,9 +1482,21 @@ inline T MOVE(T value) noexcept {
 // for the other tasks. Gated on STRUCPP_THREADED because single-threaded
 // targets (Arduino/bare-metal) may have no TLS runtime — there it stays a plain
 // global, which is correct for a one-thread scan loop.
-inline thread_local int64_t __CURRENT_TIME_NS = 0;
+inline int64_t& __current_time_ns_slot() {
+    static thread_local int64_t slot = 0;
+    return slot;
+}
+static thread_local int64_t& __CURRENT_TIME_NS = __current_time_ns_slot();
 #else
-inline int64_t __CURRENT_TIME_NS = 0;
+// One slot shared by every translation unit, reached through a reference so
+// every existing use site still reads and writes the plain name. A header-scope
+// `inline` variable would say this in one line, but that is C++17 and the
+// runtime targets C++14.
+inline int64_t& __current_time_ns_slot() {
+    static int64_t slot = 0;
+    return slot;
+}
+static int64_t& __CURRENT_TIME_NS = __current_time_ns_slot();
 #endif
 
 /**
@@ -1471,7 +1518,11 @@ inline IEC_TIME TIME() {
  * and CURRENT_DT() falls back to a meaningful-but-not-wall-clock
  * value — see the function comment for the full priority order.
  */
-inline int64_t __CURRENT_DT_NS = 0;
+inline int64_t& __current_dt_ns_slot() {
+    static int64_t slot = 0;
+    return slot;
+}
+static int64_t& __CURRENT_DT_NS = __current_dt_ns_slot();
 
 /**
  * CURRENT_DT() — wall-clock date-and-time.

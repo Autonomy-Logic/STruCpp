@@ -26,7 +26,7 @@ import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
 import { compile } from "../../src/index.js";
-import { hasGpp, RUNTIME_INCLUDE_PATH, cxxEnv } from "./test-helpers.js";
+import { hasGpp, RUNTIME_INCLUDE_PATH, cxxEnv, CXX_STD } from "./test-helpers.js";
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
 
@@ -93,7 +93,7 @@ ${driverBody}
 
     const bin = path.join(dir, name);
     execSync(
-      `g++ -std=c++17 -I"${RUNTIME_INCLUDE_PATH}" -I"${dir}" ` +
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE_PATH}" -I"${dir}" ` +
         `-o "${bin}" "${path.join(dir, "main.cpp")}" ` +
         `"${path.join(dir, "generated.cpp")}" "${path.join(dir, "generated_debug.cpp")}"`,
       { encoding: "utf-8", env: cxxEnv },

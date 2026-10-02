@@ -44,9 +44,9 @@ namespace strucpp {
 // ---------------------------------------------------------------------------
 // Duplicated from iec_time.hpp on purpose: clients sometimes include
 // iec_dt.hpp without iec_time.hpp, and the `DT_FROM_*` helpers below
-// need the unit factor.  C++ tolerates redeclaration of inline
-// constexpr at namespace scope as long as the value matches.
-inline constexpr int64_t DT_NS_PER_DAY = IEC_NS_PER_DAY;
+// need the unit factor.  Plain `constexpr` under C++14, so each header
+// carries its own internal-linkage copy and the values must agree.
+constexpr int64_t DT_NS_PER_DAY = IEC_NS_PER_DAY;
 
 // ---------------------------------------------------------------------------
 // Construction helpers

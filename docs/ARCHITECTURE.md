@@ -1,6 +1,6 @@
 # STruC++ Architecture
 
-STruC++ is an IEC 61131-3 Structured Text to C++17 compiler written in TypeScript. It produces readable, debuggable C++ output with line mapping back to the original ST source.
+STruC++ is an IEC 61131-3 Structured Text to C++14 compiler written in TypeScript. It produces readable, debuggable C++ output with line mapping back to the original ST source.
 
 ## Compilation Pipeline
 

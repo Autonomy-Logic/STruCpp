@@ -304,8 +304,13 @@ using iec_enum_of_t = typename iec_enum_of<T>::type;
 template<typename T, typename = void>
 struct is_iec_enum_operand : std::false_type {};
 
+// std::void_t is C++17; the struct form also sidesteps CWG 1558 on older GCC.
+template<typename...>
+struct iec_enum_make_void { using type = void; };
+
 template<typename T>
-struct is_iec_enum_operand<T, std::void_t<typename iec_enum_of<T>::type>> : std::true_type {};
+struct is_iec_enum_operand<T, typename iec_enum_make_void<typename iec_enum_of<T>::type>::type>
+    : std::true_type {};
 
 template<typename T>
 constexpr bool is_iec_enum_operand_v = is_iec_enum_operand<T>::value;

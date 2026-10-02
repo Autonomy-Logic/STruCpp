@@ -33,6 +33,7 @@ import {
   compileAndRunStandalone,
   RUNTIME_INCLUDE_PATH,
   cxxEnv,
+  CXX_STD,
 } from "./test-helpers.js";
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
@@ -544,7 +545,7 @@ describeIfGpp(
       const binPath = path.join(tempDir, testName);
       fs.writeFileSync(srcPath, source);
       execSync(
-        `g++ -std=c++17 -O2 -DSTRUCPP_THREADED -pthread -I"${RUNTIME_INCLUDE_PATH}" "${srcPath}" -o "${binPath}" 2>&1`,
+        `g++ -std=${CXX_STD} -O2 -DSTRUCPP_THREADED -pthread -I"${RUNTIME_INCLUDE_PATH}" "${srcPath}" -o "${binPath}" 2>&1`,
         { encoding: "utf-8", env: cxxEnv },
       );
       return execSync(`"${binPath}"`, {

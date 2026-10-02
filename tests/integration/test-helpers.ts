@@ -18,6 +18,15 @@ import { analyzeTestFile } from '../../src/semantic/analyzer.js';
 /** Resolved path to the C++ runtime headers */
 export const RUNTIME_INCLUDE_PATH = path.resolve(__dirname, '../../src/runtime/include');
 
+/**
+ * The C++ standard every integration test compiles at.
+ *
+ * Pinned here rather than spelled out per call site: the runtime is C++14 and
+ * `cli.ts` builds at c++14, so a site left at c++17 makes the suite green on
+ * code the shipped compiler would reject.
+ */
+export const CXX_STD = 'c++14';
+
 /** Resolved path to the REPL support files (isocline, etc.) */
 export const REPL_PATH = path.resolve(__dirname, '../../src/runtime/repl');
 
@@ -94,7 +103,7 @@ export function createPCH(tempDir: string): string {
 
   fs.writeFileSync(pchHppPath, PCH_INCLUDES);
   execSync(
-    `g++ -std=c++17 -x c++-header -I"${RUNTIME_INCLUDE_PATH}" "${pchHppPath}" -o "${pchGchPath}" 2>&1`,
+    `g++ -std=${CXX_STD} -x c++-header -I"${RUNTIME_INCLUDE_PATH}" "${pchHppPath}" -o "${pchGchPath}" 2>&1`,
     { encoding: 'utf-8', env: cxxEnv },
   );
 
@@ -168,14 +177,14 @@ export function compileWithGpp(opts: CompileWithGppOptions): CompileResult {
   try {
     if (syntaxOnly) {
       execSync(
-        `g++ -std=c++17 -fsyntax-only ${includeFlags} ${flagsStr} "${cppPath}" 2>&1`,
+        `g++ -std=${CXX_STD} -fsyntax-only ${includeFlags} ${flagsStr} "${cppPath}" 2>&1`,
         { encoding: 'utf-8', env: cxxEnv },
       );
       return { success: true };
     } else {
       const binPath = path.join(tempDir, testName);
       execSync(
-        `g++ -std=c++17 ${includeFlags} ${flagsStr} "${cppPath}" ${objectsStr} -o "${binPath}" 2>&1`,
+        `g++ -std=${CXX_STD} ${includeFlags} ${flagsStr} "${cppPath}" ${objectsStr} -o "${binPath}" 2>&1`,
         { encoding: 'utf-8', env: cxxEnv },
       );
       return { success: true, outputPath: binPath };
@@ -317,7 +326,7 @@ export function runE2ETestPipeline(
 
     const gppCommand = [
       'g++',
-      '-std=c++17',
+      `-std=${CXX_STD}`,
       `-I"${RUNTIME_INCLUDE_PATH}"`,
       `-I"${TEST_RUNTIME_PATH}"`,
       `-I"${tempDir}"`,
