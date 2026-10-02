@@ -49,6 +49,7 @@ import type {
 import {
   collectFileScopeGlobals,
   getProjectNamespace,
+  lockedGlobals,
   parseDateLiteralToDays,
   parseDtLiteralToNs,
   parseTimeLiteral,
@@ -107,6 +108,14 @@ interface LocatedVarDescriptor {
    * initialiser to bind `arr[i]` rather than `arr` (openplc-editor#565).
    */
   elementIndex?: number;
+}
+
+/** How a POU body reaches one `GlobalVar<V>`: its VAR_EXTERNAL pointer. */
+interface GlobalRef {
+  /** Member-access prefix: `G->`. */
+  acc: string;
+  /** Struct / array / FB / derived type: accessed through with_lock(). */
+  composite: boolean;
 }
 
 /**
@@ -368,17 +377,16 @@ export class CodeGenerator {
   /** Track located variables for descriptor array generation */
   private locatedVars: LocatedVarDescriptor[] = [];
 
-  /** UPPER(names) of the current PROGRAM's VAR_EXTERNAL globals. Non-empty only
-   *  while emitting a program body; access to these is rewritten to go through
-   *  the GlobalVar pointer (g->read() / g->write() / g->with_lock()). */
-  private programExternals: Set<string> = new Set();
+  /** UPPER(name) → access for the current PROGRAM / FUNCTION_BLOCK body's
+   *  VAR_EXTERNAL globals (set while that body is emitted). */
+  private globalRefs: Map<string, GlobalRef> = new Map();
 
-  /** UPPER(names) of the current PROGRAM's VAR_EXTERNAL globals whose type is
-   *  NOT elementary (struct / array / function-block). Subset of
-   *  programExternals. Scalar externals get full read()/write() codegen;
-   *  composite externals can be declared + debugged but their in-body access is
-   *  gated here (fail-loud) until locked field/element/call codegen lands. */
-  private compositeExternals: Set<string> = new Set();
+  /** Set while an expression is rendered inside one global's with_lock():
+   *  reads of that global render through `(*__glk)`; any other lock-taking
+   *  sub-expression is evaluated by `hoist` into a temporary before the lock. */
+  private lockCtx:
+    | { rootUpper: string; hoist: (code: string) => string }
+    | undefined;
 
   /** Store AST for looking up program bodies when using project model */
   protected ast?: CompilationUnit;
@@ -1545,6 +1553,403 @@ export class CodeGenerator {
     return this.fileScopeGlobalNameCache;
   }
 
+  // ===========================================================================
+  // Shared-global access
+  // ===========================================================================
+
+  /** How the current body reaches global `name`, or undefined when it is not
+   *  one of the body's VAR_EXTERNAL globals. */
+  private globalRefOf(name: string): GlobalRef | undefined {
+    return this.globalRefs.get(name.toUpperCase());
+  }
+
+  /** Access records for a PROGRAM's or FUNCTION_BLOCK's VAR_EXTERNALs. */
+  private externalRefs(
+    externals: Array<{ name: string; typeName: string }>,
+  ): Map<string, GlobalRef> {
+    return new Map(
+      externals.map((e) => [
+        e.name.toUpperCase(),
+        { acc: `${e.name}->`, composite: !isElementaryType(e.typeName) },
+      ]),
+    );
+  }
+
+  /** A direct access to a shared global (not through a dereference). */
+  private isGlobalAccess(expr: VariableExpression): boolean {
+    return !expr.isDereference && this.globalRefOf(expr.name) !== undefined;
+  }
+
+  /** True for a call whose callee is ST code (user or library FUNCTION, a
+   *  method): it may take global locks, so it never runs under one. */
+  private isUserCall(expr: Expression): boolean {
+    if (expr.kind === "MethodCallExpression") return true;
+    if (expr.kind !== "FunctionCallExpression") return false;
+    const upper = expr.functionName.toUpperCase();
+    if (upper.includes(".") || upper === "SUPER") return true;
+    if (["ADR", "REF_LINK", "LOWER_BOUND", "UPPER_BOUND"].includes(upper)) {
+      return false;
+    }
+    return (
+      !this.stdRegistry.resolveConversion(upper) &&
+      !this.stdRegistry.lookup(upper)
+    );
+  }
+
+  /** Whether evaluating `expr` may take a global lock: it reads a global or
+   *  calls ST code. */
+  private mayTakeLock(expr: Expression): boolean {
+    return this.someSubExpression(
+      expr,
+      (e) =>
+        (e.kind === "VariableExpression" && this.isGlobalAccess(e)) ||
+        this.isUserCall(e),
+    );
+  }
+
+  /** Whether `expr` reads the global `rootUpper` anywhere. */
+  private expressionUsesRoot(expr: Expression, rootUpper: string): boolean {
+    return this.someSubExpression(
+      expr,
+      (e) =>
+        e.kind === "VariableExpression" &&
+        this.isGlobalAccess(e) &&
+        e.name.toUpperCase() === rootUpper,
+    );
+  }
+
+  /** Depth-first search of an expression tree, index expressions included. */
+  private someSubExpression(
+    expr: Expression,
+    pred: (e: Expression) => boolean,
+  ): boolean {
+    if (pred(expr)) return true;
+    const any = (list: Expression[]): boolean =>
+      list.some((e) => this.someSubExpression(e, pred));
+    switch (expr.kind) {
+      case "VariableExpression": {
+        const idx: Expression[] = [...expr.subscripts];
+        for (const step of expr.accessChain ?? []) {
+          if (step.kind === "subscript") idx.push(...step.indices);
+        }
+        return any(idx);
+      }
+      case "BinaryExpression":
+        return any([expr.left, expr.right]);
+      case "UnaryExpression":
+        return any([expr.operand]);
+      case "ParenthesizedExpression":
+        return any([expr.expression]);
+      case "FunctionCallExpression":
+        return (
+          any(expr.arguments.map((a) => a.value)) ||
+          (expr.instance !== undefined && any([expr.instance]))
+        );
+      case "MethodCallExpression":
+        return any([expr.object, ...expr.arguments.map((a) => a.value)]);
+      case "RefExpression":
+      case "DrefExpression":
+        return any([expr.operand]);
+      case "ArrayLiteralExpression":
+        return any(expr.elements);
+      case "NewExpression":
+        return expr.arraySize !== undefined && any([expr.arraySize]);
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Render code that runs inside `rootUpper`'s with_lock(): reads of that
+   * global go through `(*__glk)`; every other lock-taking sub-expression is
+   * evaluated first into an `auto __gwv_N` temporary emitted at `indent`.
+   */
+  private renderUnderLock<T>(
+    rootUpper: string,
+    indent: string,
+    render: () => T,
+  ): T {
+    const saved = this.lockCtx;
+    this.lockCtx = {
+      rootUpper,
+      hoist: (code: string): string => {
+        const tmp = `__gwv_${this.tempVarCounter++}`;
+        this.emit(`${indent}auto ${tmp} = ${code};`);
+        return tmp;
+      },
+    };
+    try {
+      return render();
+    } finally {
+      this.lockCtx = saved;
+    }
+  }
+
+  /** Inside {@link renderUnderLock}: evaluate `render` outside the lock into a
+   *  temporary and return the temporary's name. */
+  private hoistOutOfLock(render: () => string): string {
+    const ctx = this.lockCtx!;
+    this.lockCtx = undefined;
+    let code: string;
+    try {
+      code = render();
+    } finally {
+      this.lockCtx = ctx;
+    }
+    return ctx.hoist(code);
+  }
+
+  /** Whether a variable expression has anything after its base name. */
+  private hasAccessTail(expr: VariableExpression): boolean {
+    return (
+      (expr.accessChain?.length ?? 0) > 0 ||
+      expr.subscripts.length > 0 ||
+      expr.fieldAccess.length > 0
+    );
+  }
+
+  /** `expr`'s access tail on `(*__glk)`; index expressions that take a lock
+   *  are evaluated first, into `temps`. */
+  private renderLockedTail(expr: VariableExpression, temps: string[]): string {
+    return this.renderAccessTail(
+      "(*__glk)",
+      expr,
+      expr.name.toUpperCase(),
+      (idx) => {
+        const code = this.generateExpression(idx);
+        if (!this.mayTakeLock(idx)) return code;
+        const tmp = `__gi${this.tempVarCounter++}`;
+        temps.push(`auto ${tmp} = ${code};`);
+        return tmp;
+      },
+    );
+  }
+
+  /**
+   * A read of a global: `G->read()` for a scalar, else one with_lock()
+   * returning the addressed part. Lock-taking index expressions are evaluated
+   * first, into temporaries of an immediately-invoked lambda.
+   */
+  private renderGlobalRead(expr: VariableExpression, ref: GlobalRef): string {
+    if (!ref.composite && !this.hasAccessTail(expr)) {
+      return `${ref.acc}read()`;
+    }
+    const temps: string[] = [];
+    const inner = this.renderLockedTail(expr, temps);
+    const locked = `${ref.acc}with_lock([&](auto* __glk){ return ${inner}; })`;
+    if (temps.length === 0) return locked;
+    return `[&]{ ${temps.join(" ")} return ${locked}; }()`;
+  }
+
+  /** Split a target into the part it addresses and a trailing bit selector
+   *  (`.3`), if any. */
+  private splitBitTarget(target: VariableExpression): {
+    base: VariableExpression;
+    bit: string | undefined;
+  } {
+    const chain = target.accessChain;
+    const step =
+      chain && chain.length > 0 ? chain[chain.length - 1] : undefined;
+    const last =
+      chain && chain.length > 0
+        ? step?.kind === "field"
+          ? step.name
+          : undefined
+        : target.fieldAccess[target.fieldAccess.length - 1];
+    if (last === undefined || !/^\d+$/.test(last)) {
+      return { base: target, bit: undefined };
+    }
+    const base: VariableExpression = {
+      ...target,
+      fieldAccess: target.fieldAccess.slice(0, -1),
+    };
+    if (chain) {
+      const trimmed = this.trimLastFieldFromAccessChain(chain);
+      if (trimmed) base.accessChain = trimmed;
+      else delete base.accessChain;
+    }
+    return { base, bit: last };
+  }
+
+  /** `lv = <value>`, or the read-modify-write of bit `bit` of `lv`. 1ULL
+   *  (64-bit) avoids UB when the bit index is >= 32 (e.g., LWORD.33). */
+  private renderStore(
+    lv: string,
+    bit: string | undefined,
+    value: string,
+  ): string {
+    if (bit === undefined) return `${lv} = ${value}`;
+    return `${lv} = (${lv} & ~(1ULL << ${bit})) | ((${value} ? 1ULL : 0ULL) << ${bit})`;
+  }
+
+  /**
+   * Store rendered `value` (which takes no lock) into a global target:
+   * `G->write(v)` for a whole scalar, else one with_lock() (a bit as one
+   * read-modify-write). Lock-taking indices are evaluated before the lock.
+   */
+  private emitGlobalStore(
+    target: VariableExpression,
+    ref: GlobalRef,
+    value: string,
+    indent: string,
+  ): void {
+    const upper = target.name.toUpperCase();
+    if (!ref.composite && !this.hasAccessTail(target)) {
+      this.emit(`${indent}${ref.acc}write(${value});`);
+      return;
+    }
+    const body = this.renderUnderLock(upper, indent, () => {
+      const { base, bit } = this.splitBitTarget(target);
+      return this.renderStore(
+        this.renderAccessTail("(*__glk)", base, upper),
+        bit,
+        value,
+      );
+    });
+    this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){ ${body}; });`);
+  }
+
+  /**
+   * Assignment to a global target. When the right-hand side reads the same
+   * global, the whole assignment is one locked step (other lock-taking parts
+   * evaluated first); otherwise the value is computed first and stored under
+   * the lock.
+   */
+  private emitGlobalAssignment(
+    target: VariableExpression,
+    ref: GlobalRef,
+    valueExpr: Expression,
+    indent: string,
+  ): void {
+    const upper = target.name.toUpperCase();
+    if (!this.expressionUsesRoot(valueExpr, upper)) {
+      if (!ref.composite && !this.hasAccessTail(target)) {
+        this.emit(
+          `${indent}${ref.acc}write(${this.generateExpression(valueExpr)});`,
+        );
+        return;
+      }
+      const tmp = `__gwv_${this.tempVarCounter++}`;
+      this.emit(
+        `${indent}auto ${tmp} = ${this.generateExpression(valueExpr)};`,
+      );
+      this.emitGlobalStore(target, ref, tmp, indent);
+      return;
+    }
+    const body = this.renderUnderLock(upper, indent, () => {
+      const value = this.generateExpression(valueExpr);
+      const { base, bit } = this.splitBitTarget(target);
+      const lv = this.hasAccessTail(base)
+        ? this.renderAccessTail("(*__glk)", base, upper)
+        : "(*__glk)";
+      return this.renderStore(lv, bit, value);
+    });
+    this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){ ${body}; });`);
+  }
+
+  /** The type `expr` names: its variable's type through its subscripts and
+   *  fields, or undefined when unknown. */
+  private accessType(expr: VariableExpression): string | undefined {
+    let type = this.currentScopeVarTypes.get(expr.name.toUpperCase());
+    const steps: AccessStep[] = expr.accessChain ?? [
+      ...(expr.subscripts.length > 0
+        ? [{ kind: "subscript" as const, indices: expr.subscripts }]
+        : []),
+      ...expr.fieldAccess.map((name) => ({ kind: "field" as const, name })),
+    ];
+    for (const step of steps) {
+      if (type === undefined) return undefined;
+      if (step.kind === "subscript") {
+        type = this.ast
+          ? resolveArrayElementTypeUtil(type, this.ast)
+          : undefined;
+      } else if (step.kind === "field") {
+        type = this.resolveMemberType(type, step.name);
+      } else {
+        return undefined;
+      }
+    }
+    return type;
+  }
+
+  /** A method of `typeName` (or of a function block it extends). */
+  private findMethodDecl(
+    typeName: string | undefined,
+    methodName: string,
+  ): MethodDeclaration | undefined {
+    const seen = new Set<string>();
+    let current = typeName;
+    while (
+      current !== undefined &&
+      this.ast !== undefined &&
+      !seen.has(current.toUpperCase())
+    ) {
+      const upper = current.toUpperCase();
+      seen.add(upper);
+      const fb = this.ast.functionBlocks.find(
+        (f) => f.name.toUpperCase() === upper,
+      );
+      if (!fb) return undefined;
+      const method = fb.methods.find(
+        (m) => m.name.toUpperCase() === methodName.toUpperCase(),
+      );
+      if (method) return method;
+      current = fb.extends;
+    }
+    return undefined;
+  }
+
+  /** Whether each positional parameter of a method is passed by reference. */
+  private methodParamByRef(method: MethodDeclaration | undefined): boolean[] {
+    const byRef: boolean[] = [];
+    for (const block of method?.varBlocks ?? []) {
+      const kind = block.blockType;
+      if (
+        kind !== "VAR_INPUT" &&
+        kind !== "VAR_IN_OUT" &&
+        kind !== "VAR_OUTPUT"
+      ) {
+        continue;
+      }
+      for (const decl of block.declarations) {
+        for (let i = 0; i < decl.names.length; i++) {
+          byRef.push(kind !== "VAR_INPUT");
+        }
+      }
+    }
+    return byRef;
+  }
+
+  /**
+   * Call of `method` on a function block instance held in a shared global
+   * (the global, an element or a member of it), under that global's lock.
+   * By-value arguments and indices that take a lock are evaluated first.
+   */
+  private renderGlobalMethodCall(
+    object: VariableExpression,
+    ref: GlobalRef,
+    objectType: string | undefined,
+    method: string,
+    args: Argument[],
+  ): string {
+    const byRef = this.methodParamByRef(
+      this.findMethodDecl(objectType, method),
+    );
+    const temps: string[] = [];
+    const callArgs = args.map((a, i) => {
+      const code = this.generateExpression(a.value);
+      if (byRef[i] === true || !this.mayTakeLock(a.value)) return code;
+      const tmp = `__gma${this.tempVarCounter++}`;
+      temps.push(`auto ${tmp} = ${code};`);
+      return tmp;
+    });
+    const target = this.renderLockedTail(object, temps);
+    const call = `${ref.acc}with_lock([&](auto* __glk){ return ${target}.${method}(${callArgs.join(", ")}); })`;
+    return temps.length === 0
+      ? call
+      : `[&]{ ${temps.join(" ")} return ${call}; }()`;
+  }
+
   /**
    * Generate header declaration for a function block.
    */
@@ -2194,14 +2599,7 @@ export class CodeGenerator {
     // to go through the GlobalVar pointer (g->read()/write()/with_lock), exactly
     // like a PROGRAM. Set for the whole implementation, cleared at the end.
     const externalDecls = this.collectFBExternals(fb);
-    this.programExternals = new Set(
-      externalDecls.map((e) => e.name.toUpperCase()),
-    );
-    this.compositeExternals = new Set(
-      externalDecls
-        .filter((e) => !isElementaryType(e.typeName))
-        .map((e) => e.name.toUpperCase()),
-    );
+    this.globalRefs = this.externalRefs(externalDecls);
 
     // Constructor with initializer list for variables with defaults
     const fbInits: string[] = [];
@@ -2282,8 +2680,7 @@ export class CodeGenerator {
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
     this.currentFBInterfaceMethods = new Set();
-    this.programExternals = new Set();
-    this.compositeExternals = new Set();
+    this.globalRefs = new Map();
   }
 
   /**
@@ -2488,11 +2885,7 @@ export class CodeGenerator {
       for (let i = 0; i < prog.varExternal.length; i++) {
         const ext = prog.varExternal[i]!;
         // Every external — scalar or composite — is a pointer to its canonical
-        // GlobalVar<V>. Composite globals (struct / array / function-block) can
-        // be declared and debugged (the located image + debug table reach them
-        // through `.value`); only their in-body ACCESS is currently gated, at
-        // the access sites (see compositeExternals), because correct locked
-        // field / element / call codegen is a follow-up phase.
+        // GlobalVar<V>; body access goes through it under the global's lock.
         this.emitHeader(
           `    GlobalVar<${extTypes[i]!}>* ${ext.name} = nullptr;`,
         );
@@ -2642,14 +3035,7 @@ export class CodeGenerator {
     this.emit(`void Program_${prog.name}::run() {`);
     // VAR_EXTERNAL names for this program: body access to these is rewritten to
     // go through the GlobalVar pointer (g->read()/write()/with_lock).
-    this.programExternals = new Set(
-      prog.varExternal.map((ext) => ext.name.toUpperCase()),
-    );
-    this.compositeExternals = new Set(
-      prog.varExternal
-        .filter((ext) => !isElementaryType(ext.typeName))
-        .map((ext) => ext.name.toUpperCase()),
-    );
+    this.globalRefs = this.externalRefs(prog.varExternal);
     if (astProg) {
       this.enterScope(astProg.varBlocks);
     }
@@ -2663,8 +3049,7 @@ export class CodeGenerator {
       this.exitScope();
       this.emitLineDirective(astProg.sourceSpan.endLine);
     }
-    this.programExternals = new Set();
-    this.compositeExternals = new Set();
+    this.globalRefs = new Map();
     const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
@@ -3127,8 +3512,40 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
-    // Check for property write: m.Speed := 75 → m.set_Speed(75)
+    // A shared global (VAR_EXTERNAL) target is stored under its own lock.
+    const globalRef =
+      stmt.target.kind === "VariableExpression" &&
+      this.isGlobalAccess(stmt.target)
+        ? this.globalRefOf(stmt.target.name)
+        : undefined;
+
+    // Check for property write: m.Speed := 75 → m.set_Speed(75). On a global
+    // FB instance the setter runs under the instance's lock.
     const propWrite = this.detectPropertyWrite(stmt.target);
+    if (propWrite && globalRef && stmt.target.kind === "VariableExpression") {
+      const target = stmt.target;
+      const upper = target.name.toUpperCase();
+      const tmp = `__gwv_${this.tempVarCounter++}`;
+      this.emit(
+        `${indent}auto ${tmp} = ${this.generateExpression(stmt.value)};`,
+      );
+      const obj = this.renderUnderLock(upper, indent, () => {
+        const base: VariableExpression = {
+          ...target,
+          fieldAccess: target.fieldAccess.slice(0, -1),
+        };
+        if (target.accessChain) {
+          const trimmed = this.trimLastFieldFromAccessChain(target.accessChain);
+          if (trimmed) base.accessChain = trimmed;
+          else delete base.accessChain;
+        }
+        return this.renderAccessTail("(*__glk)", base, upper);
+      });
+      this.emit(
+        `${indent}${globalRef.acc}with_lock([&](auto* __glk){ ${obj}.set_${propWrite.propertyName}(${tmp}); });`,
+      );
+      return;
+    }
     if (propWrite) {
       const value = this.generateExpression(stmt.value);
       this.emit(
@@ -3137,17 +3554,40 @@ export class CodeGenerator {
       return;
     }
 
-    // Composite / array shared-global WRITE (VAR_EXTERNAL to a composite
-    // VAR_GLOBAL): take the global's own mutex and write the canonical directly
-    // through with_lock. The RHS is computed into a temp first, so any
-    // composite-global reads in it take + release their locks before we take the
-    // target's lock — at most one global lock is ever held at a time.
+    // EN/ENO on function call assignment:
+    // result := func(EN := cond, args..., ENO => eno_var);
+    // → if (cond) { result = func(args); eno_var = true; } else { eno_var = false; }
     if (
-      stmt.target.kind === "VariableExpression" &&
-      !stmt.target.isDereference &&
-      this.compositeExternals.has(stmt.target.name.toUpperCase())
+      stmt.value.kind === "FunctionCallExpression" &&
+      this.hasEnEno(stmt.value.arguments)
     ) {
-      this.emitCompositeGlobalWrite(stmt.target, stmt.value, indent);
+      const { enExpr, enoVar, filteredArgs } = this.extractEnEno(
+        stmt.value.arguments,
+      );
+      const target = globalRef ? "" : this.generateExpression(stmt.target);
+      const modifiedCall: FunctionCallExpression = {
+        ...stmt.value,
+        arguments: filteredArgs,
+      };
+      const callExpr = this.generateFunctionCallExpression(modifiedCall);
+      const targetExpr = stmt.target;
+      this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+        if (!globalRef) {
+          this.emit(`${bi}${target} = ${callExpr};`);
+          return;
+        }
+        // The call runs before the target's lock is taken.
+        const tmp = `__gwv_${this.tempVarCounter++}`;
+        this.emit(`${bi}auto ${tmp} = ${callExpr};`);
+        this.emitCaptureToLvalue(targetExpr, tmp, bi);
+      });
+      return;
+    }
+
+    // Shared-global target: one locked step when the value reads the same
+    // global, else the value first and a locked store.
+    if (globalRef && stmt.target.kind === "VariableExpression") {
+      this.emitGlobalAssignment(stmt.target, globalRef, stmt.value, indent);
       return;
     }
 
@@ -3184,42 +3624,6 @@ export class CodeGenerator {
       return;
     }
 
-    // EN/ENO on function call assignment:
-    // result := func(EN := cond, args..., ENO => eno_var);
-    // → if (cond) { result = func(args); eno_var = true; } else { eno_var = false; }
-    if (
-      stmt.value.kind === "FunctionCallExpression" &&
-      this.hasEnEno(stmt.value.arguments)
-    ) {
-      const { enExpr, enoVar, filteredArgs } = this.extractEnEno(
-        stmt.value.arguments,
-      );
-      const target = this.generateExpression(stmt.target);
-      const modifiedCall: FunctionCallExpression = {
-        ...stmt.value,
-        arguments: filteredArgs,
-      };
-      const callExpr = this.generateFunctionCallExpression(modifiedCall);
-      this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
-        this.emit(`${bi}${target} = ${callExpr};`);
-      });
-      return;
-    }
-
-    // VAR_EXTERNAL scalar write → lock the shared global and set its value via
-    // the pointer. (Struct/array/FB-instance external writes go through
-    // with_lock at their emission sites.)
-    if (
-      stmt.target.kind === "VariableExpression" &&
-      stmt.target.fieldAccess.length === 0 &&
-      !stmt.target.isDereference &&
-      this.programExternals.has(stmt.target.name.toUpperCase())
-    ) {
-      const value = this.generateExpression(stmt.value);
-      this.emit(`${indent}${stmt.target.name}->write(${value});`);
-      return;
-    }
-
     const target = this.generateExpression(stmt.target);
     const value = this.generateExpression(stmt.value);
 
@@ -3234,55 +3638,6 @@ export class CodeGenerator {
     }
 
     this.emit(`${indent}${target} = ${value};`);
-  }
-
-  /**
-   * Emit a write to a composite / array shared global (VAR_EXTERNAL to a
-   * composite VAR_GLOBAL) under the global's own mutex via with_lock. The RHS is
-   * hoisted to a temp BEFORE the lock is taken so its own composite-global reads
-   * (each a self-contained with_lock) release before this write's lock is
-   * acquired — guaranteeing at most one global lock held at a time. Handles
-   * whole-object, field/element, and bit writes (the bit read-modify-write runs
-   * inside the single lock, so it is atomic). The lock compiles out on
-   * non-STRUCPP_THREADED builds (the guard lives inside GlobalVar::with_lock).
-   */
-  private emitCompositeGlobalWrite(
-    target: VariableExpression,
-    valueExpr: Expression,
-    indent: string,
-  ): void {
-    const nameUpper = target.name.toUpperCase();
-    const ptr = this.resolveVariableBaseName(target.name);
-    const tmp = `__gwv_${this.tempVarCounter++}`;
-    const value = this.generateExpression(valueExpr);
-    this.emit(`${indent}auto ${tmp} = ${value};`);
-
-    const lastField = target.fieldAccess[target.fieldAccess.length - 1];
-    const isBitWrite =
-      target.fieldAccess.length > 0 && /^\d+$/.test(lastField ?? "");
-
-    if (isBitWrite) {
-      // Base without the trailing bit index, rendered on the lock lambda param.
-      const baseVar: VariableExpression = {
-        ...target,
-        fieldAccess: target.fieldAccess.slice(0, -1),
-      };
-      if (target.accessChain) {
-        const trimmed = this.trimLastFieldFromAccessChain(target.accessChain);
-        if (trimmed) baseVar.accessChain = trimmed;
-        else delete baseVar.accessChain;
-      }
-      const lv = this.renderAccessTail("(*__glk)", baseVar, nameUpper);
-      this.emit(
-        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = (${lv} & ~(1ULL << ${lastField})) | ((${tmp} ? 1ULL : 0ULL) << ${lastField}); });`,
-      );
-      return;
-    }
-
-    const lv = this.renderAccessTail("(*__glk)", target, nameUpper);
-    this.emit(
-      `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${tmp}; });`,
-    );
   }
 
   /**
@@ -3729,40 +4084,18 @@ export class CodeGenerator {
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
-    // Composite shared global (struct / array / function-block) accessed in a
-    // body: reach its canonical value directly through the GlobalVar pointer
-    // (`g->value` / `g->value.field` / `g->value.field.N`). The per-global mutex
-    // is intentionally bypassed for composites — they are shared within a single
-    // (bus-cycle) task, e.g. a SoftMotion AXIS_REF_SM3 driven by its bridge and
-    // the MC_* blocks in the same scan. Cross-task composite sharing (needing a
-    // lock spanning a whole field/call access) remains a follow-up. The base is
-    // set to `g->value` below (see the `result` assignment); field/subscript/bit
-    // access then builds on it.
-
-    // VAR_EXTERNAL scalar read → lock the shared global and return its value.
-    // read() yields the real IEC type, so it stays deduction-friendly in
-    // std-lib templates (NOT/ADD/...). Composite externals use `->value`
-    // directly (handled at the base below), not read().
-    if (
-      this.programExternals.has(nameUpper) &&
-      !this.compositeExternals.has(nameUpper) &&
-      expr.fieldAccess.length === 0 &&
-      !expr.isDereference
-    ) {
-      return `${expr.name}->read()`;
-    }
-
-    // Composite / array shared-global READ (VAR_EXTERNAL to a composite
-    // VAR_GLOBAL). Take the global's own mutex and read the canonical value
-    // directly through with_lock — a field/element read copies only that
-    // sub-value, never the whole struct. The lock lives inside
-    // GlobalVar::with_lock (compiled out when not STRUCPP_THREADED), and each
-    // with_lock is self-contained (acquire → return → release), so several
-    // composite-global reads in one expression are sequential, never nested.
-    if (this.compositeExternals.has(nameUpper) && !expr.isDereference) {
-      const ptr = this.resolveVariableBaseName(expr.name);
-      const inner = this.renderAccessTail("(*__glk)", expr, nameUpper);
-      return `${ptr}->with_lock([&](auto* __glk){ return ${inner}; })`;
+    // Shared global. Under this global's own lock it reads through `(*__glk)`;
+    // under another global's lock it is read into a temporary before that lock
+    // is taken; otherwise it is one locked read (see renderGlobalRead).
+    const gref = expr.isDereference ? undefined : this.globalRefOf(expr.name);
+    if (gref) {
+      if (this.lockCtx) {
+        if (this.lockCtx.rootUpper === nameUpper) {
+          return this.renderAccessTail("(*__glk)", expr, nameUpper);
+        }
+        return this.hoistOutOfLock(() => this.renderGlobalRead(expr, gref));
+      }
+      return this.renderGlobalRead(expr, gref);
     }
 
     // Handle THIS reference
@@ -3902,12 +4235,18 @@ export class CodeGenerator {
     base: string,
     expr: VariableExpression,
     nameUpper: string,
+    indexCode: (e: Expression) => string = (e) => this.generateExpression(e),
   ): string {
     let result = base;
 
     // Use ordered access chain when available (preserves interleaving)
     if (expr.accessChain && expr.accessChain.length > 0) {
-      return this.generateAccessChain(result, expr.accessChain, nameUpper);
+      return this.generateAccessChain(
+        result,
+        expr.accessChain,
+        nameUpper,
+        indexCode,
+      );
     }
 
     // Legacy path: flat subscripts/fieldAccess/dereference (no interleaving)
@@ -3917,11 +4256,11 @@ export class CodeGenerator {
     // iec_runtime_fault(ArrayBounds) on -fno-exceptions MCU targets — instead of
     // the unchecked operator[]/operator() that silently corrupts memory.
     if (expr.subscripts.length > 1) {
-      const args = expr.subscripts.map((sub) => this.generateExpression(sub));
+      const args = expr.subscripts.map(indexCode);
       result += `.at(${args.join(", ")})`;
     } else {
       for (const sub of expr.subscripts) {
-        result += `.at(${this.generateExpression(sub)})`;
+        result += `.at(${indexCode(sub)})`;
       }
     }
 
@@ -3983,6 +4322,7 @@ export class CodeGenerator {
     base: string,
     chain: AccessStep[],
     baseNameUpper: string,
+    indexCode: (e: Expression) => string = (e) => this.generateExpression(e),
   ): string {
     let result = base;
     let currentType = this.currentScopeVarTypes.get(baseNameUpper);
@@ -4027,12 +4367,10 @@ export class CodeGenerator {
           // MCU targets. operator[] stays unchecked+constexpr for the debug-table
           // generator's &arr[i] address-of expressions; POU bodies use .at().
           if (step.indices.length > 1) {
-            const args = step.indices.map((idx) =>
-              this.generateExpression(idx),
-            );
+            const args = step.indices.map(indexCode);
             result += `.at(${args.join(", ")})`;
           } else if (step.indices.length === 1) {
-            result += `.at(${this.generateExpression(step.indices[0]!)})`;
+            result += `.at(${indexCode(step.indices[0]!)})`;
           }
           break;
         }
@@ -4125,10 +4463,10 @@ export class CodeGenerator {
    * e.g., fb.method1(args).method2(args) → fb.method1(args).method2(args)
    */
   private generateMethodCallExpression(expr: MethodCallExpression): string {
-    const obj = this.generateExpression(expr.object);
-    const args = expr.arguments
-      .map((a) => this.generateExpression(a.value))
-      .join(", ");
+    // ST code never runs under a global's lock: evaluate it before the lock.
+    if (this.lockCtx) {
+      return this.hoistOutOfLock(() => this.generateMethodCallExpression(expr));
+    }
     // Try type-specific resolution first (avoids collisions when two FBs share a method name)
     let resolvedName: string;
     if (expr.object.kind === "VariableExpression") {
@@ -4138,9 +4476,26 @@ export class CodeGenerator {
       resolvedName = varType
         ? this.resolveMethodName(varType, expr.methodName)
         : this.resolveMethodNameGlobal(expr.methodName);
+      // A method of a global FB instance runs under the instance's lock.
+      const ref = this.isGlobalAccess(expr.object)
+        ? this.globalRefOf(expr.object.name)
+        : undefined;
+      if (ref) {
+        return this.renderGlobalMethodCall(
+          expr.object,
+          ref,
+          this.accessType(expr.object),
+          resolvedName,
+          expr.arguments,
+        );
+      }
     } else {
       resolvedName = this.resolveMethodNameGlobal(expr.methodName);
     }
+    const obj = this.generateExpression(expr.object);
+    const args = expr.arguments
+      .map((a) => this.generateExpression(a.value))
+      .join(", ");
     return `${obj}.${resolvedName}(${args})`;
   }
 
@@ -4567,14 +4922,18 @@ export class CodeGenerator {
   protected generateFunctionCallExpression(
     expr: FunctionCallExpression,
   ): string {
+    // ST code never runs under a global's lock: evaluate it before the lock.
+    if (this.lockCtx && this.isUserCall(expr)) {
+      return this.hoistOutOfLock(() =>
+        this.generateFunctionCallExpression(expr),
+      );
+    }
+
     // Handle dotted method calls: THIS.method, SUPER.method, instance.method
     if (expr.functionName.includes(".")) {
       const dotIdx = expr.functionName.indexOf(".");
       const prefix = expr.functionName.substring(0, dotIdx);
       const methodName = expr.functionName.substring(dotIdx + 1);
-      const args = expr.arguments.map((arg) =>
-        this.generateExpression(arg.value),
-      );
 
       // Resolve method name case from declaration
       const varType = this.currentScopeVarTypes.get(prefix.toUpperCase());
@@ -4582,6 +4941,28 @@ export class CodeGenerator {
         ? this.resolveMethodName(varType, methodName)
         : this.resolveMethodNameGlobal(methodName);
 
+      // A method of a global FB instance runs under the instance's lock.
+      const ref = this.globalRefOf(prefix);
+      if (ref) {
+        return this.renderGlobalMethodCall(
+          {
+            kind: "VariableExpression",
+            sourceSpan: expr.sourceSpan,
+            name: prefix,
+            subscripts: [],
+            fieldAccess: [],
+            isDereference: false,
+          },
+          ref,
+          varType,
+          resolvedMethod,
+          expr.arguments,
+        );
+      }
+
+      const args = expr.arguments.map((arg) =>
+        this.generateExpression(arg.value),
+      );
       if (prefix.toUpperCase() === "THIS") {
         return `this->${resolvedMethod}(${args.join(", ")})`;
       } else if (prefix.toUpperCase() === "SUPER" && this.currentFBExtends) {
@@ -5290,10 +5671,6 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate code for an FB invocation.
-   * Pattern: assign inputs → call operator() → capture outputs
-   */
-  /**
    * Extract implicit EN/ENO arguments from a function/FB call.
    * Returns the EN condition expression, ENO target variable, and the
    * remaining arguments with EN/ENO stripped out.
@@ -5377,24 +5754,41 @@ export class CodeGenerator {
     }
   }
 
+  /**
+   * Generate code for an FB invocation.
+   * Pattern: assign inputs → call operator() → capture outputs
+   */
   private generateFBInvocation(
     call: FunctionCallExpression,
     indent: string,
   ): void {
     const rawName = this.resolveVariableBaseName(call.functionName);
 
-    // Calling a function-block instance that is a shared global: not yet
-    // supported (see generateVariableExpression for the rationale). An FB call
-    // mutates instance state and reads its outputs across several emitted
-    // lines; doing that safely needs a single with_lock() spanning the whole
-    // call, which is a follow-up phase. Fail loudly.
-    if (this.compositeExternals.has(call.functionName.toUpperCase())) {
-      throw new Error(
-        `Shared global '${call.functionName}' is a function-block instance and ` +
-          `is invoked in a program body. Calling a shared function-block global ` +
-          `is not yet supported in the mutex-based shared-global model — scalar ` +
-          `globals only for now.`,
+    // An instance held in a shared global (the global or an element of it) is
+    // called in place under that global's lock.
+    const instanceExpr: VariableExpression =
+      call.instance?.kind === "VariableExpression"
+        ? call.instance
+        : {
+            kind: "VariableExpression",
+            sourceSpan: call.sourceSpan,
+            name: call.functionName,
+            subscripts: [],
+            fieldAccess: [],
+            isDereference: false,
+          };
+    if (this.isGlobalAccess(instanceExpr)) {
+      this.generateGlobalFBInvocation(
+        call,
+        instanceExpr,
+        this.globalRefOf(instanceExpr.name)!,
+        this.getFBInvocationType(
+          call.functionName,
+          call.instance !== undefined,
+        ),
+        indent,
       );
+      return;
     }
 
     // `units[0](…)` invokes an element rather than a bare instance: the target
@@ -5492,44 +5886,136 @@ export class CodeGenerator {
   }
 
   /**
+   * Call of an FB instance held in a shared global (the global or an element
+   * of it). Under the global's lock: inputs, the call in place, and outputs /
+   * in-outs / ENO read into temporaries, stored after the release.
+   */
+  private generateGlobalFBInvocation(
+    call: FunctionCallExpression,
+    instanceExpr: VariableExpression,
+    ref: GlobalRef,
+    fbTypeName: string | undefined,
+    indent: string,
+  ): void {
+    if (fbTypeName === undefined) {
+      throw new Error(
+        `Internal error: no function block type for the call of '${call.functionName}'.`,
+      );
+    }
+    const upper = instanceExpr.name.toUpperCase();
+    let enArg: Expression | undefined;
+    let enoTarget: Expression | undefined;
+    const args: Argument[] = [];
+    for (const arg of call.arguments) {
+      const n = arg.name?.toUpperCase();
+      if (n === "EN" && !arg.isOutput) enArg = arg.value;
+      else if (n === "ENO" && arg.isOutput) enoTarget = arg.value;
+      else args.push(arg);
+    }
+
+    const value = (e: Expression): string => {
+      const code = this.generateExpression(e);
+      if (!this.mayTakeLock(e)) return code;
+      const tmp = `__gfa${this.tempVarCounter++}`;
+      this.emit(`${indent}auto ${tmp} = ${code};`);
+      return tmp;
+    };
+
+    const inputParamNames = this.fbInputParams.get(fbTypeName.toUpperCase());
+    const inoutParams = this.fbInoutParams.get(fbTypeName.toUpperCase());
+    const inputs: Array<{ member: string; code: string }> = [];
+    let positionalIndex = 0;
+    for (const arg of args) {
+      if (arg.isOutput) continue;
+      let paramName = arg.name;
+      if (paramName === undefined) {
+        paramName = inputParamNames?.[positionalIndex];
+        if (paramName === undefined) {
+          this.emit(
+            `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
+          );
+        }
+        positionalIndex++;
+        if (paramName === undefined) continue;
+      }
+      inputs.push({
+        member: this.fbParamMemberName(paramName, fbTypeName),
+        code: value(arg.value),
+      });
+    }
+    const en = enArg !== undefined ? value(enArg) : null;
+
+    // Values read out under the lock, stored to the caller's variables after.
+    const fbCpp = this.mapVarTypeToCpp(fbTypeName);
+    const captures: Array<{ tmp: string; member: string; target: Expression }> =
+      [];
+    for (const arg of args) {
+      if (arg.name === undefined) continue;
+      const isInout =
+        !arg.isOutput && inoutParams?.has(arg.name.toUpperCase()) === true;
+      if (!arg.isOutput && !isInout) continue;
+      captures.push({
+        tmp: `__gfo${this.tempVarCounter++}`,
+        member: this.fbParamMemberName(arg.name, fbTypeName),
+        target: arg.value,
+      });
+    }
+    if (enoTarget !== undefined) {
+      captures.push({
+        tmp: `__gfo${this.tempVarCounter++}`,
+        member: "ENO",
+        target: enoTarget,
+      });
+    }
+    for (const c of captures) {
+      this.emit(`${indent}decltype(${fbCpp}::${c.member}) ${c.tmp};`);
+    }
+
+    const instance = this.renderUnderLock(upper, indent, () =>
+      this.renderAccessTail("(*__glk)", instanceExpr, upper),
+    );
+    const inner = indent + this.options.indent;
+    this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){`);
+    this.emit(`${inner}auto& __fbi = ${instance};`);
+    for (const input of inputs) {
+      this.emit(`${inner}__fbi.${input.member} = ${input.code};`);
+    }
+    this.emitEnEnoWrapper(
+      inner,
+      en,
+      null,
+      (bi) => {
+        this.emitPOUCallLine("__fbi", call.functionName, bi);
+      },
+      "__fbi.ENO",
+    );
+    for (const c of captures) {
+      this.emit(`${inner}${c.tmp} = __fbi.${c.member};`);
+    }
+    this.emit(`${indent}});`);
+    for (const c of captures) {
+      this.emitCaptureToLvalue(c.target, c.tmp, indent);
+    }
+  }
+
+  /**
    * Emit `<target> = <source>` where `source` is an already-rendered C++
-   * expression. If `target` is a composite / array shared global (VAR_EXTERNAL
-   * to a composite VAR_GLOBAL), the write goes through the global's mutex via
-   * with_lock (a with_lock read result is an rvalue and can't be assigned to).
-   * Used for FB VAR_IN_OUT copy-back and `=>` output capture.
+   * expression that takes no lock. A shared-global target is stored under its
+   * lock (`write()` / with_lock). Used for FB VAR_IN_OUT copy-back and `=>`
+   * output capture.
    */
   private emitCaptureToLvalue(
     target: Expression,
     source: string,
     indent: string,
   ): void {
-    if (
-      target.kind === "VariableExpression" &&
-      !target.isDereference &&
-      this.compositeExternals.has(target.name.toUpperCase())
-    ) {
-      const ptr = this.resolveVariableBaseName(target.name);
-      const lv = this.renderAccessTail(
-        "(*__glk)",
+    if (target.kind === "VariableExpression" && this.isGlobalAccess(target)) {
+      this.emitGlobalStore(
         target,
-        target.name.toUpperCase(),
+        this.globalRefOf(target.name)!,
+        source,
+        indent,
       );
-      this.emit(
-        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${source}; });`,
-      );
-      return;
-    }
-    // Scalar VAR_EXTERNAL capture → the shared global is a pointer, so its value
-    // is read via `->read()` (an rvalue) and written via `->write()`. Assigning
-    // to `->read()` fails to compile, so route the write through the pointer,
-    // mirroring the scalar-external branch of generateAssignmentStatement.
-    if (
-      target.kind === "VariableExpression" &&
-      target.fieldAccess.length === 0 &&
-      !target.isDereference &&
-      this.programExternals.has(target.name.toUpperCase())
-    ) {
-      this.emit(`${indent}${target.name}->write(${source});`);
       return;
     }
     this.emit(`${indent}${this.generateExpression(target)} = ${source};`);
@@ -6146,8 +6632,62 @@ export class CodeGenerator {
     this.emit(
       'extern "C" uint32_t strucpp_get_located_global_count(void) { return locatedGlobalsCount; }',
     );
+    this.emit("");
+    this.generateGlobalLockHooks(globals);
     this.emit("#endif  // STRUCPP_THREADED");
     this.emit("");
+  }
+
+  /**
+   * The C-linkage hooks a runtime service uses to take a global's lock by
+   * index `g` (see {@link lockedGlobals} for the order), and to find the global
+   * a located-global entry belongs to. Emitted inside the STRUCPP_THREADED
+   * block of the configuration TU.
+   */
+  private generateGlobalLockHooks(located: LocatedVarDescriptor[]): void {
+    const globals = lockedGlobals(this.projectModel);
+    const index = new Map(globals.map((g, i) => [g.key, i]));
+    this.emit("// Each CONFIGURATION global's lock, by index.");
+    this.emit("static detail::GlobalMutex *strucpp_global_mutex(uint32_t g) {");
+    if (globals.length === 0) {
+      this.emit("    (void)g;");
+      this.emit("    return nullptr;");
+    } else {
+      this.emit("    switch (g) {");
+      globals.forEach((g, i) =>
+        this.emit(`        case ${i}: return ${g.name}.lock_handle();`),
+      );
+      this.emit("        default: return nullptr;");
+      this.emit("    }");
+    }
+    this.emit("}");
+    this.emit(
+      `extern "C" uint32_t strucpp_global_count(void) { return ${globals.length}; }`,
+    );
+    this.emit(
+      'extern "C" bool strucpp_global_try_lock(uint32_t g) { return detail::global_try_lock(strucpp_global_mutex(g)); }',
+    );
+    this.emit(
+      'extern "C" void strucpp_global_lock(uint32_t g) { detail::global_lock(strucpp_global_mutex(g)); }',
+    );
+    this.emit(
+      'extern "C" void strucpp_global_unlock(uint32_t g) { detail::global_unlock(strucpp_global_mutex(g)); }',
+    );
+    this.emit("// locatedGlobals[k] -> the index of the global it is in.");
+    this.emit('extern "C" int32_t strucpp_located_global_index(uint32_t k) {');
+    if (located.length === 0) {
+      this.emit("    (void)k;");
+      this.emit("    return -1;");
+    } else {
+      const entries = located.map(
+        (v) => index.get(v.varName.toUpperCase()) ?? -1,
+      );
+      this.emit(
+        `    static const int32_t index[${entries.length}] = {${entries.join(", ")}};`,
+      );
+      this.emit(`    return k < ${entries.length} ? index[k] : -1;`);
+    }
+    this.emit("}");
   }
 
   /**

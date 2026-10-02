@@ -305,6 +305,26 @@ export function collectFileScopeGlobals(
 }
 
 /**
+ * The CONFIGURATION globals in the index order a runtime locks them by
+ * (strucpp_global_lock), each name once.
+ */
+export function lockedGlobals(
+  model: ProjectModel | undefined,
+): Array<{ key: string; name: string }> {
+  const out: Array<{ key: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const config of model?.configurations ?? []) {
+    for (const g of config.globalVars) {
+      const key = g.name.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, name: g.name });
+    }
+  }
+  return out;
+}
+
+/**
  * Result of building the project model.
  */
 export interface ProjectModelResult {
