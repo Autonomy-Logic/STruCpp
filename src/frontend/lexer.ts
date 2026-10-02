@@ -7,7 +7,7 @@
  * This module defines all tokens used by the ST grammar.
  */
 
-import { createToken, Lexer } from "chevrotain";
+import { createToken, Lexer, type IToken } from "chevrotain";
 
 // =============================================================================
 // Token Categories
@@ -339,6 +339,12 @@ export const END_REPEAT = createToken({
   pattern: /END_REPEAT/i,
 });
 export const EXIT = createToken({ name: "EXIT", pattern: /EXIT/i });
+// Skips the rest of the loop body and starts the next iteration. Listed beside
+// EXIT because the two are the loop-control pair.
+export const CONTINUE = createToken({
+  name: "CONTINUE",
+  pattern: /CONTINUE/i,
+});
 export const RETURN = createToken({ name: "RETURN", pattern: /RETURN/i });
 
 // Boolean literals
@@ -502,33 +508,36 @@ export const VAR_INST = createToken({
 // Literals
 // =============================================================================
 
-// Time literal: T#1s, T#100ms, TIME#1h2m3s
+// Time literal: T#1s, T#100ms, TIME#1h2m3s, and the LTIME forms LT#14.7s,
+// LTIME#5m_30s.
 // Note: Each numeric component must have a unit suffix (ms, us, ns, d, h, m, s)
 // Longer suffixes (ms, us, ns) must come before shorter ones (m, s) in the alternation
 export const TimeLiteral = createToken({
   name: "TimeLiteral",
-  pattern: /(?:T|TIME)#(?:[0-9_]+(?:\.[0-9_]+)?(?:ms|us|ns|d|h|m|s))+/i,
+  pattern:
+    /(?:LTIME|LT|TIME|T)#(?:[0-9_]+(?:\.[0-9_]+)?(?:ms|us|ns|d|h|m|s))+/i,
 });
 
-// Date literal: D#2024-01-15, D#1970-9-1 (IEC allows 1- or 2-digit month/day)
+// Date literal: D#2024-01-15, D#1970-9-1, and the LDATE forms LD#…, LDATE#…
 export const DateLiteral = createToken({
   name: "DateLiteral",
-  pattern: /(?:D|DATE)#[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}/i,
+  pattern: /(?:LDATE|LD|DATE|D)#[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}/i,
 });
 
-// Time of day literal: TOD#12:30:00, TOD#1:2:3 (1- or 2-digit fields; seconds optional)
+// Time of day literal: TOD#12:30:00, TOD#1:2:3, and the LTOD forms.
+// Seconds are optional here.
 export const TimeOfDayLiteral = createToken({
   name: "TimeOfDayLiteral",
   pattern:
-    /(?:TOD|TIME_OF_DAY)#[0-9]{1,2}:[0-9]{1,2}(?::[0-9]{1,2}(?:\.[0-9]+)?)?/i,
+    /(?:LTIME_OF_DAY|LTOD|TIME_OF_DAY|TOD)#[0-9]{1,2}:[0-9]{1,2}(?::[0-9]{1,2}(?:\.[0-9]+)?)?/i,
 });
 
-// Date and time literal: DT#2024-01-15-12:30:00, DT#1970-1-1-00:00:00
+// Date and time literal: DT#2024-01-15-12:30:00, and the LDT forms.
 // (1- or 2-digit month/day/time fields; seconds optional)
 export const DateTimeLiteral = createToken({
   name: "DateTimeLiteral",
   pattern:
-    /(?:DT|DATE_AND_TIME)#[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}-[0-9]{1,2}:[0-9]{1,2}(?::[0-9]{1,2}(?:\.[0-9]+)?)?/i,
+    /(?:LDATE_AND_TIME|LDT|DATE_AND_TIME|DT)#[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}-[0-9]{1,2}:[0-9]{1,2}(?::[0-9]{1,2}(?:\.[0-9]+)?)?/i,
 });
 
 // Typed literal: BYTE#255, DWORD#16#FF, INT#0, BOOL#1, REAL#1.5E10, etc.
@@ -604,6 +613,15 @@ export const Power = createToken({ name: "Power", pattern: /\*\*/ });
 // Reference operators (IEC v3)
 export const Caret = createToken({ name: "Caret", pattern: /\^/ });
 export const Ampersand = createToken({ name: "Ampersand", pattern: /&/ });
+
+// Partial access to a bit-field variable: `Wo.%X15`, `Do.%B3`, `Lo.%W3`,
+// `Lo.%D1`. X/B/W/D is the width, the index counts from the least significant
+// part. Unambiguous against DirectAddress, which needs an I/Q/M letter after
+// the `%`, but must still be listed BEFORE it.
+export const PartialAccess = createToken({
+  name: "PartialAccess",
+  pattern: /%[XBWD][0-9]+/i,
+});
 
 // Located variable prefix
 export const DirectAddress = createToken({
@@ -707,6 +725,7 @@ const keywordTokens = [
   UNTIL,
   END_REPEAT,
   EXIT,
+  CONTINUE,
   RETURN,
   TRUE,
   FALSE,
@@ -836,6 +855,7 @@ export const allTokens = [
   REPEAT,
   UNTIL,
   EXIT,
+  CONTINUE,
   RETURN,
   TRUE,
   FALSE,
@@ -878,6 +898,7 @@ export const allTokens = [
   IntegerLiteral,
   StringLiteral,
   WideStringLiteral,
+  PartialAccess,
   DirectAddress,
 
   // Single-character operators and punctuation
@@ -1244,6 +1265,72 @@ export function uppercaseSource(source: string): string {
 }
 
 /**
+ * Token types whose image is a name the engineer chose rather than a word of
+ * the grammar. Only these carry a declared spelling. The contextual keywords
+ * are here because the grammar also accepts each as an ordinary identifier, so
+ * `VAR mod : INT;` must report `mod`.
+ */
+const NAMED_TOKEN_TYPES = new Set<string>([
+  "Identifier",
+  "SET",
+  "GET",
+  "ON",
+  "OVERRIDE",
+  "ABSTRACT",
+  "FINAL",
+  "AND",
+  "OR",
+  "XOR",
+  "NOT",
+  "MOD",
+]);
+
+/** A token that remembers how its name was spelled before case folding. */
+interface TokenWithDeclaredImage extends IToken {
+  declaredImage?: string;
+}
+
+/**
+ * The spelling a name was given in source, before case folding.
+ *
+ * Everything downstream matches on `image`, which is folded: IEC 61131-3
+ * §6.1.2 makes identifiers case-insensitive. The declared spelling is kept
+ * beside it for the generated strings that report a name rather than resolve
+ * one — see `iec_typedesc.hpp`.
+ */
+export function declaredImageOf(token: IToken): string {
+  return (token as TokenWithDeclaredImage).declaredImage ?? token.image;
+}
+
+/**
+ * Record each name token's original spelling. Safe because `uppercaseSource`
+ * writes one output character per input character, so a token's offsets index
+ * the original source unchanged; the guard below pins that.
+ */
+function attachDeclaredImages(
+  tokens: IToken[],
+  source: string,
+  upperSource: string,
+): void {
+  // If folding ever stops being length-preserving, every offset past the first
+  // difference is wrong. Falling back to the folded image loses the spelling;
+  // slicing anyway would put one name's characters under another name.
+  if (upperSource.length !== source.length) return;
+  for (const token of tokens) {
+    if (!NAMED_TOKEN_TYPES.has(token.tokenType.name)) continue;
+    const start = token.startOffset;
+    const end = token.endOffset;
+    if (start === undefined || end === undefined) continue;
+    const declared = source.slice(start, end + 1);
+    // Equal already for an all-caps name, which is the common case in ST; not
+    // storing it there keeps the usual file free of extra strings.
+    if (declared !== token.image) {
+      (token as TokenWithDeclaredImage).declaredImage = declared;
+    }
+  }
+}
+
+/**
  * Tokenize ST source code.
  *
  * @param source - The ST source code to tokenize
@@ -1257,6 +1344,7 @@ export function tokenize(source: string): ReturnType<typeof STLexer.tokenize> {
   const unclosedComment = findUnclosedBlockComment(upperSource);
 
   const result = STLexer.tokenize(upperSource);
+  attachDeclaredImages(result.tokens, source, upperSource);
 
   if (unclosedComment) {
     result.errors.push({
@@ -1287,6 +1375,7 @@ export function tokenizeTest(
   const unclosedComment = findUnclosedBlockComment(upperSource);
 
   const result = TestLexer.tokenize(upperSource);
+  attachDeclaredImages(result.tokens, source, upperSource);
 
   if (unclosedComment) {
     result.errors.push({

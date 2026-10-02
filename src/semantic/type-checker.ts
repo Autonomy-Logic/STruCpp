@@ -25,6 +25,8 @@ import type {
   CompilationUnit,
   Statement,
   VarBlock,
+  FunctionBlockDeclaration,
+  MethodDeclaration,
 } from "../frontend/ast.js";
 import type { SymbolTables, Scope } from "./symbol-table.js";
 import type { StdFunctionRegistry } from "./std-function-registry.js";
@@ -40,6 +42,7 @@ import {
   resolveArrayElementType,
   typeName as typeNameUtil,
   isGenericGroupType,
+  parsePartialAccess,
 } from "./type-utils.js";
 import { stripEnEno } from "../ast-utils.js";
 
@@ -123,6 +126,15 @@ export class TypeChecker {
   private warnings: CompileError[] = [];
   private ast: CompilationUnit | undefined;
 
+  /**
+   * The function block whose body or method is being checked, if any.
+   *
+   * A method may call another method of its own type by bare name, without
+   * `THIS^.`, so an unresolved call name has to be offered to the enclosing
+   * type before it is reported as unknown.
+   */
+  private currentFb: FunctionBlockDeclaration | undefined;
+
   constructor(
     private symbolTables: SymbolTables,
     private stdRegistry?: StdFunctionRegistry,
@@ -161,6 +173,7 @@ export class TypeChecker {
     // Walk all function blocks
     for (const fb of ast.functionBlocks) {
       const scope = this.symbolTables.getFBScope(fb.name);
+      this.currentFb = fb;
       if (scope) {
         // FB body
         this.checkVarBlocks(fb.varBlocks, scope);
@@ -182,12 +195,56 @@ export class TypeChecker {
           if (prop.setter) this.checkStatements(prop.setter, scope);
         }
       }
+      this.currentFb = undefined;
     }
 
     return {
       errors: this.errors,
       warnings: this.warnings,
     };
+  }
+
+  /**
+   * Find a method by name on a function block or anything it EXTENDS. Walks
+   * base-last, so an override is found before what it overrides. `seen` breaks
+   * a cycle in a malformed EXTENDS chain, which the analyzer reports.
+   */
+  private findMethodInChain(
+    fbName: string | undefined,
+    methodName: string,
+  ): MethodDeclaration | undefined {
+    if (!fbName || !this.ast) return undefined;
+    const wanted = methodName.toUpperCase();
+    const seen = new Set<string>();
+    let current: string | undefined = fbName;
+
+    while (current && !seen.has(current.toUpperCase())) {
+      seen.add(current.toUpperCase());
+      const currentName: string = current;
+      const fb = this.ast.functionBlocks.find(
+        (f) => f.name.toUpperCase() === currentName.toUpperCase(),
+      );
+      if (!fb) return undefined;
+      const method = fb.methods.find((m) => m.name.toUpperCase() === wanted);
+      if (method) return method;
+      current = fb.extends;
+    }
+    return undefined;
+  }
+
+  /**
+   * The IEC type a method returns, or undefined for a method with no result.
+   */
+  private methodReturnType(method: MethodDeclaration): IECType | undefined {
+    if (!method.returnType) return undefined;
+    return (
+      ELEMENTARY_TYPES[method.returnType.name.toUpperCase()] ??
+      ({
+        typeKind: "elementary",
+        name: method.returnType.name,
+        sizeBits: 0,
+      } as ElementaryType)
+    );
   }
 
   // ===========================================================================
@@ -428,10 +485,12 @@ export class TypeChecker {
             currentTypeName = fieldType;
             currentType = this.resolveNamedType(fieldType);
           } else {
-            // Check if it's a numeric bit access (e.g., var.0)
-            if (/^\d+$/.test(step.name)) {
-              currentType = ELEMENTARY_TYPES["BOOL"];
-              currentTypeName = "BOOL";
+            // Partial access: a bare bit index like `var.0`, or a sized part
+            // like `var.%B1`, which yields BYTE rather than BOOL.
+            const part = parsePartialAccess(step.name);
+            if (part) {
+              currentType = ELEMENTARY_TYPES[part.resultType];
+              currentTypeName = part.resultType;
             } else {
               currentType = undefined;
               currentTypeName = undefined;
@@ -482,10 +541,11 @@ export class TypeChecker {
         for (const field of expr.fieldAccess) {
           if (!currentTypeName) break;
 
-          if (/^\d+$/.test(field)) {
-            // Bit access
-            currentType = ELEMENTARY_TYPES["BOOL"];
-            currentTypeName = "BOOL";
+          const part = parsePartialAccess(field);
+          if (part) {
+            // Partial access — BOOL for a bit, BYTE/WORD/DWORD for a sized part.
+            currentType = ELEMENTARY_TYPES[part.resultType];
+            currentTypeName = part.resultType;
           } else {
             const fieldType = this.resolveFieldTypeAnywhere(
               currentTypeName,
@@ -685,7 +745,76 @@ export class TypeChecker {
       return undefined; // FB invocation, no direct return type
     }
 
-    // Unknown function — don't error here, the undeclared-variable pass handles this
+    // `inst.M()` reaches here as one FunctionCallExpression named "INST.M"
+    // rather than as a MethodCallExpression, so the dotted form is resolved
+    // here too: find the instance's declared type, then the method on it or on
+    // anything that type extends.
+    const dot = expr.functionName.lastIndexOf(".");
+    if (dot > 0) {
+      const objName = expr.functionName.slice(0, dot);
+      const objSymbol = scope.lookup(objName);
+      const objUpper = objName.toUpperCase();
+      // THIS resolves to the enclosing type, SUPER to the type it extends —
+      // the ast-builder spells `SUPER^.M()` as one name, "SUPER.M".
+      const fbTypeName =
+        objUpper === "THIS"
+          ? this.currentFb?.name
+          : objUpper === "SUPER"
+            ? this.currentFb?.extends
+            : objSymbol?.kind === "variable"
+              ? objSymbol.declaration?.type?.name
+              : undefined;
+      const dotted = this.findMethodInChain(
+        fbTypeName,
+        expr.functionName.slice(dot + 1),
+      );
+      if (dotted) {
+        const retType = this.methodReturnType(dotted);
+        if (retType) expr.resolvedType = retType;
+        return retType;
+      }
+      // A deeper access or a namespaced library name is left alone rather than
+      // reported as undeclared on a guess.
+      return undefined;
+    }
+
+    // `SUPER^()` — the parent body call — reaches here as a bare name, since
+    // the ast-builder gives it no method to qualify it with. It runs the base
+    // type's body and yields no value.
+    if (nameUpper === "SUPER") return undefined;
+
+    // A method of the enclosing type, called by bare name. Resolved here
+    // rather than left to C++ this-> lookup, which accepts it either way — so
+    // a misspelling would be reported against generated code.
+    const ownMethod = this.findMethodInChain(
+      this.currentFb?.name,
+      expr.functionName,
+    );
+    if (ownMethod) {
+      const retType = this.methodReturnType(ownMethod);
+      if (retType) expr.resolvedType = retType;
+      return retType;
+    }
+
+    // A registry entry proves the function exists even when the checks above
+    // could not narrow its result. SEL and LIMIT take theirs from a later
+    // parameter, so they arrive unresolved and are not undeclared names.
+    if (
+      this.stdRegistry?.lookup(nameUpper) ??
+      this.stdRegistry?.resolveConversion(nameUpper)
+    ) {
+      return undefined;
+    }
+
+    // Nothing resolved the name. Left alone it would be emitted verbatim and
+    // fail in the C++ compiler with no ST source location — or be rescued by
+    // C++ name lookup and never fail at all.
+    this.addError(
+      `Unknown function '${expr.functionName}'`,
+      expr.sourceSpan.startLine,
+      expr.sourceSpan.startCol,
+      expr.sourceSpan.file,
+    );
     return undefined;
   }
 
@@ -719,22 +848,12 @@ export class TypeChecker {
 
     if (!objTypeName) return undefined;
 
-    // Find the FB declaration and the method
-    const fb = this.ast.functionBlocks.find(
-      (f) => f.name.toUpperCase() === objTypeName.toUpperCase(),
-    );
-    if (fb) {
-      const method = fb.methods.find(
-        (m) => m.name.toUpperCase() === expr.methodName.toUpperCase(),
-      );
-      if (method?.returnType) {
-        const retType =
-          ELEMENTARY_TYPES[method.returnType.name.toUpperCase()] ??
-          ({
-            typeKind: "elementary",
-            name: method.returnType.name,
-            sizeBits: 0,
-          } as ElementaryType);
+    // The method may be declared on the object's own type or inherited from
+    // anything it EXTENDS, so this walks the chain rather than one level.
+    const method = this.findMethodInChain(objTypeName, expr.methodName);
+    if (method) {
+      const retType = this.methodReturnType(method);
+      if (retType) {
         expr.resolvedType = retType;
         return retType;
       }
@@ -938,6 +1057,7 @@ export class TypeChecker {
 
       case "ReturnStatement":
       case "ExitStatement":
+      case "ContinueStatement":
       case "ExternalCodePragma":
         // No expressions to validate
         break;

@@ -466,16 +466,6 @@ export function compileLibrary(
   // consist entirely of native blocks and hand the compiler nothing.
   const { st: stSources, native: nativeSources } =
     partitionLibrarySources(sources);
-  const nativeEntries = compileNativeEntries(nativeSources, options);
-  if (nativeEntries.errors.length > 0) {
-    return {
-      success: false,
-      manifest: emptyManifest(options),
-      headerCode: "",
-      cppCode: "",
-      errors: nativeEntries.errors,
-    };
-  }
 
   if (sources.length === 0) {
     return {
@@ -493,6 +483,20 @@ export function compileLibrary(
   // unit would fail, which is what used to make an all-native library
   // unbuildable.
   if (stSources.length === 0) {
+    // No ST in this library, so there is nothing of its own for the native
+    // headers to resolve against: the declared dependencies are the whole
+    // world, exactly as before.
+    const nativeEntries = compileNativeEntries(nativeSources, options);
+    if (nativeEntries.errors.length > 0) {
+      return {
+        success: false,
+        manifest: emptyManifest(options),
+        headerCode: "",
+        cppCode: "",
+        errors: nativeEntries.errors,
+      };
+    }
+
     const nativeOnlyManifest: LibraryManifest = {
       ...emptyManifest(options),
       functionBlocks: nativeEntries.functionBlocks,
@@ -616,7 +620,7 @@ export function compileLibrary(
     options.dependencies ?? [],
   );
 
-  const builtManifest: LibraryManifest = {
+  const stManifest: LibraryManifest = {
     name: options.name,
     version: options.version,
     namespace: options.namespace,
@@ -678,7 +682,6 @@ export function compileLibrary(
           docByName,
         ),
       ),
-      ...nativeEntries.functionBlocks,
     ],
     types: ast.types.map((t) => {
       const kind: "struct" | "enum" | "alias" =
@@ -690,13 +693,34 @@ export function compileLibrary(
       const entry: {
         name: string;
         kind: typeof kind;
-        fields?: Array<{ name: string; type: string }>;
+        declaredName?: string;
+        fields?: Array<{ name: string; type: string; declaredName?: string }>;
+        members?: string[];
       } = { name: t.name, kind };
+      // Only when it says something the folded name does not, so an all-caps
+      // library adds nothing to its manifest.
+      if (t.declaredName !== undefined && t.declaredName !== t.name) {
+        entry.declaredName = t.declaredName;
+      }
+      // Export the enumerators, so a consumer can name one. The C++ chunk has
+      // them, but the symbol table is built from the manifest.
+      if (t.definition.kind === "EnumDefinition") {
+        entry.members = t.definition.members.map((m) => m.name);
+      }
       // Export struct member fields so consumers can type `x.field` access
       // on a dependency struct.
       if (t.definition.kind === "StructDefinition") {
         entry.fields = t.definition.fields.flatMap((decl) =>
-          decl.names.map((name) => ({ name, type: decl.type.name })),
+          decl.names.map((name, i) => {
+            const declared = decl.declaredNames?.[i];
+            return {
+              name,
+              type: decl.type.name,
+              ...(declared !== undefined && declared !== name
+                ? { declaredName: declared }
+                : {}),
+            };
+          }),
         );
       }
       return tagDocumentation(tagCategory(entry, catByName), docByName);
@@ -721,6 +745,44 @@ export function compileLibrary(
     headers: [headerFileName],
     isBuiltin: false,
     sourceFiles: sources.map((s) => s.fileName),
+  };
+
+  // The native headers compile LAST and see this library's own ST symbols as a
+  // dependency. The two passes are separate compiles, so with the native pass
+  // first a native block could not name a type its own library declares,
+  // though it could across a real dependency. The chunks are empty: this pass
+  // exists for its AST and discards its codegen.
+  const selfArchive: StlibArchive = {
+    formatVersion: 1,
+    manifest: stManifest,
+    chunks: [],
+    // Names what this library depends on, which is a question about the
+    // library and not about this pass. It is what the caller declared.
+    dependencies: (options.dependencies ?? []).map((dep) => ({
+      name: dep.manifest.name,
+      version: dep.manifest.version,
+    })),
+  };
+  const nativeEntries = compileNativeEntries(nativeSources, {
+    ...options,
+    dependencies: [...(options.dependencies ?? []), selfArchive],
+  });
+  if (nativeEntries.errors.length > 0) {
+    return {
+      success: false,
+      manifest: emptyManifest(options),
+      headerCode: "",
+      cppCode: "",
+      errors: nativeEntries.errors,
+    };
+  }
+
+  const builtManifest: LibraryManifest = {
+    ...stManifest,
+    functionBlocks: [
+      ...stManifest.functionBlocks,
+      ...nativeEntries.functionBlocks,
+    ],
   };
 
   // Guard AFTER both lists are assembled: the ST symbols and the native ones

@@ -9,6 +9,7 @@
 
 import type {
   Argument,
+  AssignmentStatement,
   ArrayLiteralExpression,
   AssertCall,
   CompilationUnit,
@@ -34,20 +35,28 @@ import type {
 import type { CompileError, SourceSpan } from "../types.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
-import type { FunctionSymbol } from "./symbol-table.js";
+import type { FunctionBlockSymbol, FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 import {
-  getBitAccessWidth,
-  resolveFieldType,
-  resolveArrayElementType,
+  arrayDimSize,
+  arrayElementTypeName,
+  arrayTotalSize,
   buildEnumMemberMap,
   describeType,
+  ELEMENTARY_TYPES,
+  getBitAccessWidth,
+  isAnyDescriptorType,
+  isVarInfoType,
+  isDeclarableGenericType,
+  isStandardPartialAccessType,
+  parsePartialAccess,
+  resolveArrayElementType,
   resolveArrayShape,
   resolveArrayShapeByName,
-  arrayDimSize,
-  arrayTotalSize,
+  resolveFieldType,
   type ArrayShape,
   type EnumMemberEntry,
+  TYPE_CATEGORIES,
 } from "./type-utils.js";
 import {
   isEnArgument,
@@ -321,6 +330,24 @@ interface UndeclaredVarContext {
   propertyName?: string;
 }
 
+/** One parameter of a callee, in the order it was declared. */
+interface InOutSlot {
+  name: string;
+  kind: "input" | "inout" | "output";
+  type: string;
+}
+
+function slot(name: string, kind: InOutSlot["kind"], type: string): InOutSlot {
+  return { name: name.toUpperCase(), kind, type: type.toUpperCase() };
+}
+
+/** How a partial access reads in a diagnostic: "Bit", "Byte", "Word", "Dword". */
+function partLabel(part: { resultType: string }): string {
+  return part.resultType === "BOOL"
+    ? "Bit"
+    : part.resultType.charAt(0) + part.resultType.slice(1).toLowerCase();
+}
+
 export class SemanticAnalyzer {
   private symbolTables: SymbolTables;
   private typeChecker: TypeChecker;
@@ -397,6 +424,32 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * Which generic families an argument's type may be passed to. An array takes
+   * its element's families, so `ARRAY OF DINT` reaches an `ANY_INT` pin and
+   * `ARRAY OF REAL` does not. Undefined when a generic accepts it at all.
+   */
+  private genericCategoriesFor(
+    typeName: string,
+  ): readonly string[] | undefined {
+    const upper = typeName.toUpperCase();
+    const direct = TYPE_CATEGORIES[upper];
+    if (direct) return direct;
+
+    const element = arrayElementTypeName(upper);
+    if (element) {
+      const inner = TYPE_CATEGORIES[element];
+      return inner
+        ? [...inner, "ANY_DERIVED"]
+        : this.isKnownType(element)
+          ? ["ANY", "ANY_DERIVED"]
+          : undefined;
+    }
+
+    // A declared structure or enumeration.
+    return this.isKnownType(upper) ? ["ANY", "ANY_DERIVED"] : undefined;
+  }
+
+  /**
    * Build symbol tables from the AST.
    */
   private buildSymbolTables(ast: CompilationUnit): void {
@@ -458,8 +511,12 @@ export class SemanticAnalyzer {
       }
     }
 
-    // Build reverse lookup map: enum member name → owning enum type
-    this.enumMemberMap = buildEnumMemberMap(
+    // Reverse lookup: enum member name → owning enum type.
+    //
+    // A library's enums count too — a program that imports one may name its
+    // members directly. Listed after the project's, so a clash is reported as
+    // ambiguous rather than resolving silently to the library.
+    const enumDescriptors: Array<{ name: string; members: string[] }> =
       ast.types
         .filter((t) => t.definition.kind === "EnumDefinition")
         .map((t) => ({
@@ -468,8 +525,15 @@ export class SemanticAnalyzer {
             t.definition.kind === "EnumDefinition"
               ? t.definition.members.map((m) => m.name)
               : [],
-        })),
-    );
+        }));
+    for (const sym of this.symbolTables.globalScope.getAllSymbols()) {
+      if (sym.kind !== "type" || sym.resolvedType?.typeKind !== "enum")
+        continue;
+      const enumType = sym.resolvedType as EnumType;
+      if (enumType.values.length === 0) continue;
+      enumDescriptors.push({ name: enumType.name, members: enumType.values });
+    }
+    this.enumMemberMap = buildEnumMemberMap(enumDescriptors);
 
     // Register function declarations
     for (const funcDecl of ast.functions) {
@@ -830,6 +894,9 @@ export class SemanticAnalyzer {
 
     // Validate CONSTANT assignment restrictions
     this.validateConstantAssignments(ast);
+
+    // Validate in-out mapping at calls, and in-out access outside a block
+    this.validateInOutUsage(ast);
 
     // Validate OOP property/member name collisions
     this.validatePropertyNameCollisions(ast);
@@ -1341,6 +1408,356 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * How a call must map an in-out, and where an in-out may be used.
+   */
+  private validateInOutUsage(ast: CompilationUnit): void {
+    for (const prog of ast.programs) {
+      const scope = this.symbolTables.getProgramScope(prog.name);
+      if (scope) this.checkInOutsIn(prog.body, scope);
+    }
+    for (const func of ast.functions) {
+      const scope = this.symbolTables.getFunctionScope(func.name);
+      if (scope) this.checkInOutsIn(func.body, scope);
+    }
+    for (const fb of ast.functionBlocks) {
+      const fbScope = this.symbolTables.getFBScope(fb.name);
+      if (fbScope) this.checkInOutsIn(fb.body, fbScope);
+      for (const method of fb.methods ?? []) {
+        const scope = this.symbolTables.getMethodScope(fb.name, method.name);
+        if (!scope) continue;
+        this.checkInOutsIn(method.body, scope);
+        if (fbScope) this.checkMethodInOutAccess(method, scope, fbScope);
+      }
+    }
+  }
+
+  private checkInOutsIn(stmts: Statement[], scope: Scope): void {
+    for (const stmt of stmts) {
+      walkAST(stmt, (node) => {
+        if (node.kind === "FunctionCallExpression") {
+          const call = node as FunctionCallExpression;
+          this.checkCallInOuts(call, scope);
+          this.checkPassedInstanceCall(call, scope);
+        } else if (node.kind === "VariableExpression") {
+          this.checkRemoteInOutAccess(node as VariableExpression, scope);
+        } else if (node.kind === "AssignmentStatement") {
+          this.checkPassedInstanceWrite(
+            (node as AssignmentStatement).target,
+            scope,
+          );
+        }
+      });
+    }
+  }
+
+  /** The instance a name refers to, when it was passed into this POU. */
+  private passedInstance(
+    name: string,
+    scope: Scope,
+  ): { fb: FunctionBlockSymbol; isInput: boolean } | undefined {
+    const sym = scope.lookup(name);
+    if (sym?.kind !== "variable") return undefined;
+    if (!sym.isInput && !sym.isInOut && !sym.isExternal) return undefined;
+    const fb = this.symbolTables.lookupFunctionBlock(sym.declaration.type.name);
+    return fb ? { fb, isInput: sym.isInput } : undefined;
+  }
+
+  /**
+   * A block handed in as an input is read-only, and the outputs of any block
+   * handed in belong to it.
+   */
+  private checkPassedInstanceWrite(target: Expression, scope: Scope): void {
+    if (target.kind !== "VariableExpression") return;
+    const field = target.fieldAccess[0];
+    if (field === undefined) return;
+    const passed = this.passedInstance(target.name, scope);
+    if (!passed) return;
+
+    const span = target.sourceSpan;
+    if (passed.isInput) {
+      this.addError(
+        `'${target.name}' is an input of type '${passed.fb.name}' and can only be read`,
+        span.startLine,
+        span.startCol,
+        span.file,
+      );
+      return;
+    }
+    const wanted = field.toUpperCase();
+    if (
+      this.fbSlots(passed.fb).some(
+        (s) => s.kind === "output" && s.name === wanted,
+      )
+    ) {
+      this.addError(
+        `'${target.name}.${field}' is an output of '${passed.fb.name}' and can be read but not written`,
+        span.startLine,
+        span.startCol,
+        span.file,
+      );
+    }
+  }
+
+  /** A block handed in as an input cannot be run. */
+  private checkPassedInstanceCall(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): void {
+    if (expr.functionName.includes(".")) return;
+    const passed = this.passedInstance(expr.functionName, scope);
+    if (passed?.isInput !== true) return;
+    this.addError(
+      `'${expr.functionName}' is an input of type '${passed.fb.name}' and cannot be called`,
+      expr.sourceSpan.startLine,
+      expr.sourceSpan.startCol,
+      expr.sourceSpan.file,
+    );
+  }
+
+  /** The function block a name is an instance of, if it is one. */
+  private fbTypeOf(
+    name: string,
+    scope: Scope,
+  ): FunctionBlockSymbol | undefined {
+    const sym = scope.lookup(name);
+    if (!sym || sym.kind !== "variable") return undefined;
+    return this.symbolTables.lookupFunctionBlock(sym.declaration.type.name);
+  }
+
+  /**
+   * A block's parameters in declaration order. A library block carries its
+   * interface as three lists instead of a declaration, so both shapes are read.
+   */
+  private fbSlots(fb: FunctionBlockSymbol): InOutSlot[] {
+    if (fb.declaration.varBlocks.length > 0) {
+      return this.slotsFromVarBlocks(fb.declaration.varBlocks);
+    }
+    return [
+      ...fb.inputs.map((v) => slot(v.name, "input", v.declaration.type.name)),
+      ...fb.inouts.map((v) => slot(v.name, "inout", v.declaration.type.name)),
+      ...fb.outputs.map((v) => slot(v.name, "output", v.declaration.type.name)),
+    ];
+  }
+
+  private slotsFromVarBlocks(blocks: VarBlock[]): InOutSlot[] {
+    const slots: InOutSlot[] = [];
+    for (const block of blocks) {
+      const kind =
+        block.blockType === "VAR_INPUT"
+          ? "input"
+          : block.blockType === "VAR_IN_OUT"
+            ? "inout"
+            : block.blockType === "VAR_OUTPUT"
+              ? "output"
+              : undefined;
+      if (!kind) continue;
+      for (const decl of block.declarations) {
+        for (const name of decl.names)
+          slots.push(slot(name, kind, decl.type.name));
+      }
+    }
+    return slots;
+  }
+
+  /** The parameters of whatever a call names, or undefined if it names none. */
+  private calleeSlots(name: string, scope: Scope): InOutSlot[] | undefined {
+    const dot = name.indexOf(".");
+    if (dot >= 0) {
+      const owner = this.fbTypeOf(name.substring(0, dot), scope);
+      const wanted = name.substring(dot + 1).toUpperCase();
+      const method = owner?.declaration.methods.find(
+        (m) => m.name.toUpperCase() === wanted,
+      );
+      return method ? this.slotsFromVarBlocks(method.varBlocks) : undefined;
+    }
+
+    const fb = this.fbTypeOf(name, scope);
+    if (fb) return this.fbSlots(fb);
+
+    const sym = scope.lookup(name);
+    if (sym?.kind !== "function") return undefined;
+    if (sym.declaration.varBlocks.length > 0) {
+      return this.slotsFromVarBlocks(sym.declaration.varBlocks);
+    }
+    return sym.parameters.map((p) =>
+      slot(
+        p.name,
+        p.isInOut ? "inout" : p.isOutput ? "output" : "input",
+        p.declaration.type.name,
+      ),
+    );
+  }
+
+  /**
+   * Every in-out of a call must be assigned, and assigned something the callee
+   * can write back to.
+   */
+  private checkCallInOuts(expr: FunctionCallExpression, scope: Scope): void {
+    const slots = this.calleeSlots(expr.functionName, scope);
+    if (!slots || !slots.some((s) => s.kind === "inout")) return;
+
+    const byName = new Map<string, Argument>();
+    const captured = new Set<string>();
+    const positional: Argument[] = [];
+    for (const arg of stripEnEno(expr.arguments)) {
+      if (arg.name === undefined) positional.push(arg);
+      else if (arg.isOutput) captured.add(arg.name.toUpperCase());
+      else byName.set(arg.name.toUpperCase(), arg);
+    }
+    // A parameter list without names fills the slots it has not already
+    // claimed, in order.
+    let next = 0;
+    for (const s of slots) {
+      if (next >= positional.length) break;
+      if (byName.has(s.name) || captured.has(s.name)) continue;
+      byName.set(s.name, positional[next]!);
+      next++;
+    }
+
+    const callee = expr.functionName.toUpperCase();
+    const span = expr.sourceSpan;
+    for (const s of slots) {
+      if (s.kind !== "inout") continue;
+      if (captured.has(s.name)) {
+        this.addError(
+          `'${callee}' captures in-out '${s.name}' with '=>' — an in-out is assigned with ':='`,
+          span.startLine,
+          span.startCol,
+          span.file,
+        );
+        continue;
+      }
+      const arg = byName.get(s.name);
+      if (!arg) {
+        this.addError(
+          `'${callee}' leaves in-out '${s.name}' unassigned — every in-out must be assigned in the call`,
+          span.startLine,
+          span.startCol,
+          span.file,
+        );
+        continue;
+      }
+      this.checkInOutActual(callee, s, arg, scope);
+    }
+  }
+
+  /** What a call may assign to an in-out. */
+  private checkInOutActual(
+    callee: string,
+    target: InOutSlot,
+    arg: Argument,
+    scope: Scope,
+  ): void {
+    const slotName = target.name;
+    let value = arg.value;
+    while (value.kind === "ParenthesizedExpression") value = value.expression;
+    const span = value.sourceSpan;
+
+    if (value.kind !== "VariableExpression") {
+      this.addError(
+        `Only a variable may be assigned to in-out '${slotName}' of '${callee}' — a literal or the result of an expression has nowhere to write back to`,
+        span.startLine,
+        span.startCol,
+        span.file,
+      );
+      return;
+    }
+
+    // An element or field of a variable is still that variable, so the root of
+    // the chain is what has to be writable.
+    const sym = scope.lookup(value.name);
+    if (!sym) return;
+    if (sym.kind === "constant") {
+      this.addError(
+        `'${value.name}' is CONSTANT and cannot be assigned to in-out '${slotName}' of '${callee}'`,
+        span.startLine,
+        span.startCol,
+        span.file,
+      );
+      return;
+    }
+    if (sym.kind !== "variable") return;
+    if (sym.isInput) {
+      this.addError(
+        `'${value.name}' is a VAR_INPUT and cannot be assigned to in-out '${slotName}' of '${callee}' — the callee may write to it`,
+        span.startLine,
+        span.startCol,
+        span.file,
+      );
+      return;
+    }
+
+    // The callee writes back through the caller's own storage, so both sides
+    // must be the same type — nothing is widened either way. Only a whole
+    // elementary variable is compared; an element or field would need its type
+    // resolved through the chain first.
+    if (
+      value.subscripts.length > 0 ||
+      value.fieldAccess.length > 0 ||
+      value.isDereference
+    ) {
+      return;
+    }
+    const actual = sym.declaration.type.name.toUpperCase();
+    if (
+      actual === target.type ||
+      ELEMENTARY_TYPES[actual] === undefined ||
+      ELEMENTARY_TYPES[target.type] === undefined
+    ) {
+      return;
+    }
+    this.addError(
+      `'${value.name}' is ${actual} but in-out '${slotName}' of '${callee}' is ${target.type} — an in-out is not converted`,
+      span.startLine,
+      span.startCol,
+      span.file,
+    );
+  }
+
+  /** An in-out belongs to the block's own body and to the call, nowhere else. */
+  private checkRemoteInOutAccess(expr: VariableExpression, scope: Scope): void {
+    const field = expr.fieldAccess[0];
+    if (field === undefined) return;
+    const fb = this.fbTypeOf(expr.name, scope);
+    if (!fb) return;
+    const wanted = field.toUpperCase();
+    if (
+      !this.fbSlots(fb).some((s) => s.kind === "inout" && s.name === wanted)
+    ) {
+      return;
+    }
+    this.addError(
+      `'${expr.name}.${field}' reaches an in-out of '${fb.name}' from outside it — an in-out is available only in the block's own body and in the call`,
+      expr.sourceSpan.startLine,
+      expr.sourceSpan.startCol,
+      expr.sourceSpan.file,
+    );
+  }
+
+  /** A method cannot reach the in-outs of the block that owns it. */
+  private checkMethodInOutAccess(
+    method: MethodDeclaration,
+    methodScope: Scope,
+    fbScope: Scope,
+  ): void {
+    for (const stmt of method.body) {
+      walkAST(stmt, (node) => {
+        if (node.kind !== "VariableExpression") return;
+        const expr = node as VariableExpression;
+        if (methodScope.lookupLocal(expr.name)) return;
+        const outer = fbScope.lookupLocal(expr.name);
+        if (outer?.kind !== "variable" || !outer.isInOut) return;
+        this.addError(
+          `'${expr.name}' is an in-out of the function block and is not available in a method`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+      });
+    }
+  }
+
+  /**
    * Collect located CONFIGURATION VAR_GLOBALs.
    *
    * These are NOT gathered by buildVarBlockSymbols: that runs per POU scope
@@ -1689,6 +2106,30 @@ export class SemanticAnalyzer {
           block.sourceSpan.startCol,
           block.sourceSpan.file,
         );
+      }
+    }
+
+    // ---- VAR_IN_OUT declaration shape -------------------------------------
+    if (blockType === "VAR_IN_OUT") {
+      for (const decl of block.declarations) {
+        // The caller supplies the variable, so there is nothing to initialise.
+        if (decl.initialValue) {
+          this.addError(
+            `VAR_IN_OUT '${decl.names.join(", ")}' cannot have an initial value — the caller supplies the variable`,
+            decl.sourceSpan.startLine,
+            decl.sourceSpan.startCol,
+            decl.sourceSpan.file,
+          );
+        }
+        // An in-out already refers to the caller's variable.
+        if (decl.type.referenceKind !== "none") {
+          this.addError(
+            `VAR_IN_OUT '${decl.names.join(", ")}' cannot be a reference type`,
+            decl.sourceSpan.startLine,
+            decl.sourceSpan.startCol,
+            decl.sourceSpan.file,
+          );
+        }
       }
     }
   }
@@ -2326,12 +2767,18 @@ export class SemanticAnalyzer {
       this.checkBitAccess(expr, varTypeMap, ast, expr.subscripts.length > 0);
     }
 
+    // Validate arguments bound to a generic parameter
+    if (expr.kind === "FunctionCallExpression") {
+      this.checkGenericArgs(expr, varTypeMap, ast);
+    }
+
     // Validate standard function argument counts and ADR l-value requirement
     if (
       expr.kind === "FunctionCallExpression" &&
       !expr.functionName.includes(".")
     ) {
       this.checkStdFunctionArgs(expr);
+      this.checkVarInfoArg(expr, varTypeMap);
     }
 
     // Recurse into sub-expressions
@@ -2373,6 +2820,137 @@ export class SemanticAnalyzer {
    * success around the call site, but they are not part of any function's
    * declared signature. Strip them before counting against the registry.
    */
+  /**
+   * Check arguments passed to a generic parameter. Two rules, both CODESYS's:
+   * the argument must be a variable, since the parameter is an address; and
+   * its type must be one the declared generic accepts. Concrete parameters are
+   * left to C++, but a REAL handed to an ANY_INT still produces valid C++ —
+   * a descriptor stamped TYPE_REAL — so this check is the only guard.
+   */
+  private checkGenericArgs(
+    expr: FunctionCallExpression,
+    varTypeMap: Map<string, string>,
+    ast: CompilationUnit,
+  ): void {
+    // The callee is an FB instance; its declared type names the FB.
+    const instanceType = varTypeMap.get(expr.functionName.toUpperCase());
+    if (!instanceType) return;
+
+    const fb = ast.functionBlocks.find(
+      (candidate) =>
+        candidate.name.toUpperCase() === instanceType.toUpperCase(),
+    );
+    if (!fb) return;
+
+    // Which of its VAR_INPUTs are generic, and with which family.
+    const generics = new Map<string, string>();
+    for (const block of fb.varBlocks) {
+      if (block.blockType !== "VAR_INPUT") continue;
+      for (const decl of block.declarations) {
+        if (!isDeclarableGenericType(decl.type.name)) continue;
+        for (const name of decl.names) {
+          generics.set(name.toUpperCase(), decl.type.name.toUpperCase());
+        }
+      }
+    }
+    if (generics.size === 0) return;
+
+    for (const arg of expr.arguments) {
+      if (!arg.name) continue;
+      const generic = generics.get(arg.name.toUpperCase());
+      if (!generic) continue;
+
+      const where = `argument '${arg.name}' of '${fb.name}'`;
+
+      if (arg.value.kind !== "VariableExpression") {
+        this.addError(
+          `Only a variable may be passed to the generic parameter '${arg.name}' of '${fb.name}' — ` +
+            "a literal, a constant or the result of an expression has no address to pass",
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        continue;
+      }
+
+      // The type of the ARGUMENT, not of the variable it starts from:
+      // `aTemps[i]` is a VariableExpression carrying subscripts, so a lookup
+      // keyed on the name reports the array and refuses the element, which
+      // CODESYS admits. The type checker has already walked the chain, so
+      // prefer its answer; the map is the fallback for a plain variable.
+      const resolved = arg.value.resolvedType;
+      const argType =
+        resolved?.typeKind === "elementary"
+          ? (resolved as ElementaryType).name
+          : varTypeMap.get(arg.value.name.toUpperCase());
+      if (!argType) continue;
+
+      // A composite is accepted, and the class names the composite: an array
+      // arrives as TYPE_ARRAY, a structure TYPE_USERDEF, an enumeration
+      // TYPE_ENUM.
+      const categories = this.genericCategoriesFor(argType);
+      if (!categories) {
+        this.addError(
+          `Type '${argType}' cannot be passed as ${where}: a generic parameter takes an elementary type, an array, a structure or an enumeration`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        continue;
+      }
+
+      if (!categories.includes(generic)) {
+        this.addError(
+          `Type '${argType}' cannot be passed as ${where}, declared '${generic}'`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+      }
+    }
+  }
+
+  /**
+   * `__VARINFO(x)` describes a VARIABLE, so the argument has to be one.
+   *
+   * Checked here, not left to codegen: an argument codegen cannot describe
+   * used to reach the generated C++ as a call to a nonexistent function.
+   */
+  private checkVarInfoArg(
+    expr: FunctionCallExpression,
+    varTypeMap: Map<string, string>,
+  ): void {
+    if (expr.functionName.toUpperCase() !== "__VARINFO") return;
+    const arg = stripEnEno(expr.arguments)[0]?.value;
+    if (!arg) return;
+
+    if (arg.kind !== "VariableExpression") {
+      this.addError(
+        "Only a variable may be passed to __VARINFO — it describes where a " +
+          "variable lives, and a literal or an expression has no storage to describe",
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
+      return;
+    }
+
+    // A descriptor describes another variable; describing the descriptor
+    // itself is almost certainly a mistake, and nothing downstream can render
+    // one as a TYPE_CLASS.
+    const typeName = varTypeMap.get(arg.name.toUpperCase());
+    if (typeName === undefined) return;
+    if (isAnyDescriptorType(typeName) || isVarInfoType(typeName)) {
+      this.addError(
+        `'${typeName}' cannot be passed to __VARINFO: it already describes a ` +
+          "variable rather than being one",
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
+    }
+  }
+
   private checkStdFunctionArgs(expr: FunctionCallExpression): void {
     const nameUpper = expr.functionName.toUpperCase();
     const userArgs = stripEnEno(expr.arguments);
@@ -2551,6 +3129,44 @@ export class SemanticAnalyzer {
     }
   }
 
+  /** Descriptor members beyond the three a generic pin carries elsewhere. */
+  private static readonly EXTENDED_DESCRIPTOR_FIELDS = new Set([
+    "DICOUNT",
+    "DISTRIDE",
+    "ELEMCLASS",
+  ]);
+
+  /**
+   * Accepted, and reported: these members are an extension, so a POU reading
+   * one does not port to a toolchain that carries only the first three.
+   */
+  private checkGenericDescriptorField(
+    expr: {
+      name: string;
+      fieldAccess: string[];
+      sourceSpan: { startLine: number; startCol: number; file?: string };
+    },
+    varTypeMap: Map<string, string>,
+  ): void {
+    const typeName = varTypeMap.get(expr.name.toUpperCase());
+    if (!typeName) return;
+    if (!isDeclarableGenericType(typeName) && !isAnyDescriptorType(typeName))
+      return;
+
+    for (const field of expr.fieldAccess) {
+      const upper = field.toUpperCase();
+      if (!SemanticAnalyzer.EXTENDED_DESCRIPTOR_FIELDS.has(upper)) continue;
+      this.addWarning(
+        `${upper} is an extension to the generic descriptor — the portable members are ` +
+          `TYPECLASS, PVALUE and DISIZE`,
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
+      return;
+    }
+  }
+
   /**
    * Check bit access bounds on a variable expression.
    * Detects patterns like `var.31` where 31 exceeds the bit width of var's type.
@@ -2567,12 +3183,14 @@ export class SemanticAnalyzer {
   ): void {
     if (expr.fieldAccess.length === 0) return;
 
-    // Find the first numeric field access (bit index)
+    this.checkGenericDescriptorField(expr, varTypeMap);
+
+    // Find the first partial access — a bare bit index (`var.31`) or a sized
+    // part (`var.%B3`).
     for (let i = 0; i < expr.fieldAccess.length; i++) {
       const field = expr.fieldAccess[i]!;
-      if (!/^\d+$/.test(field)) continue;
-
-      const bitIndex = parseInt(field, 10);
+      const part = parsePartialAccess(field);
+      if (!part) continue;
 
       // Resolve the type of the field chain up to (but not including) the bit index
       let typeName = varTypeMap.get(expr.name.toUpperCase());
@@ -2591,7 +3209,8 @@ export class SemanticAnalyzer {
       // Walk intermediate fields to resolve the type
       for (let j = 0; j < i; j++) {
         const intermediateField = expr.fieldAccess[j]!;
-        if (/^\d+$/.test(intermediateField)) return; // Earlier bit access — skip
+        // An earlier partial access — nothing further can be resolved from it.
+        if (parsePartialAccess(intermediateField)) return;
         typeName = resolveFieldType(typeName, intermediateField, ast);
         if (!typeName) return;
       }
@@ -2599,24 +3218,51 @@ export class SemanticAnalyzer {
       const typeUpper = typeName.toUpperCase();
       const bits = getBitAccessWidth(typeUpper);
       if (bits === undefined) {
-        // Type doesn't support bit access (REAL, STRING, user-defined, etc.)
+        // Type doesn't support partial access (REAL, STRING, user-defined, …).
         this.addError(
-          `Bit access is not valid on type ${typeName}`,
+          `${partLabel(part)} access is not valid on type ${typeName}`,
           expr.sourceSpan.startLine,
           expr.sourceSpan.startCol,
           expr.sourceSpan.file,
         );
         return;
       }
-      if (bitIndex >= bits) {
+
+      // A part exists only where it is strictly narrower than the variable: a
+      // WORD has bytes and bits but no words, and nothing has a part as wide
+      // as itself. The count of parts follows from the widths.
+      const parts = Math.floor(bits / part.widthBits);
+      if (parts <= 1) {
         this.addError(
-          `Bit index ${bitIndex} is out of range for type ${typeName} (0..${bits - 1})`,
+          `${partLabel(part)} access is not valid on type ${typeName}, which is ${bits} bits wide`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        return;
+      }
+      if (part.index >= parts) {
+        this.addError(
+          `${partLabel(part)} index ${part.index} is out of range for type ${typeName} (0..${parts - 1})`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        return;
+      }
+
+      // Well formed, but on an integer rather than a bit-field type: accepted,
+      // and reported. After the bounds checks, so a malformed access gets one
+      // clear error rather than an error and an aside.
+      if (!isStandardPartialAccessType(typeUpper)) {
+        this.addWarning(
+          `Partial access on type ${typeName} is an extension — the standard set is BYTE, WORD, DWORD and LWORD`,
           expr.sourceSpan.startLine,
           expr.sourceSpan.startCol,
           expr.sourceSpan.file,
         );
       }
-      return; // Only check the first bit access
+      return; // Only check the first partial access
     }
   }
 
@@ -3088,6 +3734,7 @@ export class SemanticAnalyzer {
   private validateSingleTypeReference(
     typeRef: TypeReference,
     context: string,
+    genericsPermitted = false,
   ): void {
     // Skip empty or VOID type names
     if (!typeRef.name || typeRef.name.toUpperCase() === "VOID") return;
@@ -3102,6 +3749,26 @@ export class SemanticAnalyzer {
         typeRef.sourceSpan.startCol,
         typeRef.sourceSpan.file,
       );
+      return;
+    }
+
+    // A generic names a family rather than a layout, so it can only be a
+    // parameter the caller supplies a concrete argument for. `permitted`
+    // defaults false and VAR_INPUT opts in. `ARRAY [*] OF ANY` cannot be
+    // written at all: a variable-length array is VAR_IN_OUT only, a generic
+    // VAR_INPUT only.
+    if (isDeclarableGenericType(nameToCheck)) {
+      const asArrayElement = typeRef.elementTypeName !== undefined;
+      if (!genericsPermitted || asArrayElement) {
+        this.addError(
+          `Generic type '${nameToCheck.toUpperCase()}'${context ? " in " + context : ""} — ` +
+            "a generic type may only be declared on a VAR_INPUT of a FUNCTION, FUNCTION_BLOCK or METHOD, " +
+            "and not as an array element",
+          typeRef.sourceSpan.startLine,
+          typeRef.sourceSpan.startCol,
+          typeRef.sourceSpan.file,
+        );
+      }
     }
   }
 
@@ -3112,10 +3779,20 @@ export class SemanticAnalyzer {
    */
   private validateTypeReferences(ast: CompilationUnit): void {
     // Helper to validate var blocks
-    const validateVarBlocks = (varBlocks: VarBlock[], context: string) => {
+    const validateVarBlocks = (
+      varBlocks: VarBlock[],
+      context: string,
+      // CODESYS declares generics on FUNCTION, FUNCTION_BLOCK and METHOD, and
+      // nowhere else. A PROGRAM is not in that list, so it does not opt in.
+      genericsAllowedHere = false,
+    ) => {
       for (const block of varBlocks) {
         for (const decl of block.declarations) {
-          this.validateSingleTypeReference(decl.type, context);
+          this.validateSingleTypeReference(
+            decl.type,
+            context,
+            genericsAllowedHere && block.blockType === "VAR_INPUT",
+          );
         }
       }
     };
@@ -3127,7 +3804,7 @@ export class SemanticAnalyzer {
 
     // Functions — var blocks + return type
     for (const func of ast.functions) {
-      validateVarBlocks(func.varBlocks, `FUNCTION '${func.name}'`);
+      validateVarBlocks(func.varBlocks, `FUNCTION '${func.name}'`, true);
       this.validateSingleTypeReference(
         func.returnType,
         `FUNCTION '${func.name}' return type`,
@@ -3136,7 +3813,7 @@ export class SemanticAnalyzer {
 
     // Function blocks — var blocks, methods, properties, EXTENDS, IMPLEMENTS
     for (const fb of ast.functionBlocks) {
-      validateVarBlocks(fb.varBlocks, `FUNCTION_BLOCK '${fb.name}'`);
+      validateVarBlocks(fb.varBlocks, `FUNCTION_BLOCK '${fb.name}'`, true);
 
       // EXTENDS clause
       if (fb.extends) {
@@ -3175,6 +3852,7 @@ export class SemanticAnalyzer {
         validateVarBlocks(
           method.varBlocks,
           `METHOD '${method.name}' of '${fb.name}'`,
+          true,
         );
       }
 
@@ -3208,9 +3886,14 @@ export class SemanticAnalyzer {
             `METHOD '${method.name}' of INTERFACE '${iface.name}' return type`,
           );
         }
+        // An interface method is a METHOD, which is one of the three scopes
+        // CODESYS names. Refusing it here would make a generic method
+        // undeclarable in an interface while the function block implementing
+        // it declared one happily — so the pair could never be written.
         validateVarBlocks(
           method.varBlocks,
           `METHOD '${method.name}' of INTERFACE '${iface.name}'`,
+          true,
         );
       }
     }

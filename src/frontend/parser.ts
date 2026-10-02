@@ -800,6 +800,18 @@ export class STParser extends CstParser {
       ]);
     });
     const typeNameTok = this.CONSUME(tokens.Identifier);
+    // CODESYS spells its descriptor type `__SYSTEM.AnyType`, so a type name
+    // may carry that one qualifier. Gated on the namespace rather than opened
+    // to dotted names: elsewhere a dot after a type is a mistake.
+    this.OPTION3({
+      GATE: () =>
+        typeNameTok.image.toUpperCase() === "__SYSTEM" &&
+        this.LA(1).tokenType === tokens.Dot,
+      DEF: () => {
+        this.CONSUME(tokens.Dot);
+        this.CONSUME3(tokens.Identifier);
+      },
+    });
     // Optional parameterized length for STRING(n) / WSTRING(n) / STRING(CONSTANT_NAME)
     // GATE: only when the type name is STRING or WSTRING, consume ( IntegerLiteral ) or ( Identifier )
     // Avoid ( Identifier ) for typed enums and ( IntegerLiteral .. ) for subrange types
@@ -974,6 +986,10 @@ export class STParser extends CstParser {
         {
           ALT: () => this.SUBRULE(this.exitStatement),
           GATE: () => this.LA(1).tokenType === tokens.EXIT,
+        },
+        {
+          ALT: () => this.SUBRULE(this.continueStatement),
+          GATE: () => this.LA(1).tokenType === tokens.CONTINUE,
         },
         {
           ALT: () => this.SUBRULE(this.returnStatement),
@@ -1464,6 +1480,14 @@ export class STParser extends CstParser {
   });
 
   /**
+   * CONTINUE statement.
+   */
+  public continueStatement = this.RULE("continueStatement", () => {
+    this.CONSUME(tokens.CONTINUE);
+    this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
    * RETURN statement
    */
   public returnStatement = this.RULE("returnStatement", () => {
@@ -1829,8 +1853,10 @@ export class STParser extends CstParser {
             this.OR3({
               DEF: [
                 { ALT: () => this.SUBRULE2(this.identifierOrKeyword) },
-                // Bit access: var.0, var.31
+                // Bit access: var.0, var.31 — `%X` is optional for bits.
                 { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
+                // Partial access: var.%X15, var.%B3, var.%W1, var.%D0
+                { ALT: () => this.CONSUME(tokens.PartialAccess) },
               ],
               IGNORE_AMBIGUITIES: true,
             });
