@@ -308,6 +308,18 @@ export interface TypeDeclaration extends ASTNode {
    * `applyTypeDefaults` in the AST builder.
    */
   defaultValue?: Expression;
+  /** Set on a TYPE hoisted from an inline enumeration or subrange. */
+  inline?: InlineTypeOrigin;
+}
+
+/** Where a hoisted inline type was written. */
+export interface InlineTypeOrigin {
+  /** First variable of the declaration. */
+  variable: string;
+  /** POU, type or TEST that holds the declaration. */
+  container: string;
+  /** POU whose bodies see the members; absent for global, CONFIGURATION and STRUCT fields. */
+  owner?: string;
 }
 
 /**
@@ -750,6 +762,8 @@ export interface VariableExpression extends TypedNode {
   isDereference: boolean;
   /** Ordered access chain preserving interleaving of fields, subscripts, deref */
   accessChain?: AccessStep[];
+  /** Written as a typed enumeration value (`E_State#Idle`). */
+  typedLiteral?: true;
 }
 
 /**
@@ -857,6 +871,8 @@ export interface TestFile {
   setup?: SetupBlock;
   teardown?: TeardownBlock;
   testCases: TestCase[];
+  /** TYPEs hoisted from inline enumerations and subranges in its VAR blocks. */
+  inlineTypes?: TypeDeclaration[];
 }
 
 /**

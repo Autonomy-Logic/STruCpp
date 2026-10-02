@@ -1,5 +1,5 @@
 /**
- * Pointers and references are left out of the debug table (DOPE-687).
+ * Pointers and references are left out of the debug table.
  *
  * A POINTER TO / REF_TO / REFERENCE TO holds an address, not a value of its
  * element type. It used to be registered as the element type, so the debugger
@@ -79,9 +79,13 @@ describe("debug table and references", () => {
 describe("debug table and arrays of references", () => {
   const result = compile(`
 TYPE PAT : ARRAY[0..1] OF POINTER TO INT; END_TYPE
+TYPE PI : POINTER TO INT; END_TYPE
+TYPE PIA : ARRAY[0..1] OF PI; END_TYPE
 PROGRAM main
 VAR
   ia : ARRAY[0..1] OF POINTER TO INT;
+  pa : ARRAY[0..999] OF PI;
+  tpa : PIA;
   ra : ARRAY[0..1] OF REF_TO INT;
   ta : PAT;
   y : ARRAY[0..1] OF INT;
@@ -95,7 +99,7 @@ END_RESOURCE
 END_CONFIGURATION
 `);
 
-  it("keeps value arrays and leaves arrays of references out", () => {
+  it("keeps value arrays and leaves arrays of references out, once per array", () => {
     expect(result.errors).toEqual([]);
     expect(result.debugMap?.leaves.map((l) => l.path)).toEqual([
       "INST.Y[0]",
@@ -107,6 +111,8 @@ END_CONFIGURATION
         .filter((m) => m.includes("is not debuggable")),
     ).toEqual([
       "INST.IA is not debuggable: an array of POINTER TO holds addresses, which the debugger cannot show or write.",
+      "INST.PA is not debuggable: an array of POINTER TO holds addresses, which the debugger cannot show or write.",
+      "INST.TPA is not debuggable: an array of POINTER TO holds addresses, which the debugger cannot show or write.",
       "INST.RA is not debuggable: an array of REF_TO holds addresses, which the debugger cannot show or write.",
       "INST.TA is not debuggable: an array of POINTER TO holds addresses, which the debugger cannot show or write.",
     ]);

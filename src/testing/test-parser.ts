@@ -10,6 +10,7 @@
 
 import { parseTestSource } from "../frontend/parser.js";
 import { buildTestAST } from "../frontend/ast-builder.js";
+import { lowerTestInlineTypes } from "../frontend/lower-inline-types.js";
 import type { TestFile } from "./test-model.js";
 import type { CompileError } from "../types.js";
 
@@ -63,6 +64,7 @@ export function parseTestFile(
   // Build TestFile AST from CST
   try {
     const testFile = buildTestAST(parseResult.cst, fileName);
+    errors.push(...lowerTestInlineTypes(testFile));
     return { testFile, errors };
   } catch (e) {
     errors.push({

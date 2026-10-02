@@ -7,7 +7,7 @@
  * address, the initial value and the whole declaration. The compiler itself
  * reads the AST fields, not the text, so a span that is wrong but whose fields
  * are right compiles fine and still breaks the Editor. That is what happened
- * with `POINTER TO` (DOPE-687): its span covered only `real` in
+ * with `POINTER TO`: its span covered only `real` in
  * `p : POINTER TO real;`, and the variables code view turned the pointer into
  * a plain REAL. These tests pin the text under every span, for every
  * declaration form, in every place a declaration can be written.

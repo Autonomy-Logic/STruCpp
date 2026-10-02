@@ -1,18 +1,17 @@
 /**
- * Declaration forms added or fixed by DOPE-687, end to end: the ST compiles,
- * the generated C++ compiles with g++, and the program computes the values the
- * source asks for.
+ * Declaration forms, end to end: the ST compiles, the generated C++ compiles
+ * with g++, and the program computes the values the source asks for.
  *
  *   - nested references keep every level (POINTER TO POINTER TO, POINTER TO
- *     REF_TO, REF_TO REF_TO), in variables, a TYPE alias and a STRUCT field
+ *     REF_TO, REF_TO REF_TO), in variables, TYPE aliases and STRUCT fields
  *   - REF_TO and REFERENCE TO struct fields hold references (bound with :=
- *     REF() and REF=), where they used to be emitted as plain values
+ *     REF() and REF=)
  *   - arrays of pointers and references (inline, TYPE, in a STRUCT, several
- *     dimensions) hold pointers and references, where the element's
- *     reference levels used to be dropped
+ *     dimensions, ARRAY[*] parameters) hold pointers and references
+ *   - REF= on array elements and inherited members
  *   - typed enumeration values (E_State#Idle), including in CASE labels
  *   - anonymous enumerations and subranges written in a declaration, which
- *     behave like their TYPE equivalents
+ *     behave like their TYPE equivalents, in TEST blocks too
  *   - the forum program that reinterprets two Modbus WORDs as a REAL
  */
 
@@ -21,7 +20,12 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { compile, parse } from "../../src/index.js";
-import { hasGpp, createPCH, compileAndRunStandalone } from "./test-helpers.js";
+import {
+  hasGpp,
+  createPCH,
+  compileAndRunStandalone,
+  runE2ETestPipeline,
+} from "./test-helpers.js";
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
 
@@ -272,6 +276,144 @@ END_PROGRAM`);
       declared.errors.map((e) => e.message),
     );
     expect(inline.headerCode).toBe(declared.headerCode);
+  });
+
+  it("REF= reaches array elements and inherited members", () => {
+    const source = `
+TYPE RA : ARRAY[0..1] OF REF_TO INT; END_TYPE
+TYPE S : STRUCT rs : ARRAY[0..1] OF REF_TO INT; END_STRUCT; END_TYPE
+FUNCTION_BLOCK BaseFB
+VAR o : REF_TO INT; END_VAR
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK DerivedFB EXTENDS BaseFB
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR
+  arr : ARRAY[0..1] OF REF_TO INT; ta : RA; s : S; dd : DerivedFB;
+  a : INT := 1; b : INT := 2; c : INT := 3; d : INT := 4; y : INT;
+END_VAR
+arr[1] REF= a;
+ta[0] REF= b;
+s.rs[1] REF= c;
+dd.o REF= d;
+y := arr[1]^ * 1000 + ta[0]^ * 100 + s.rs[1]^ * 10 + dd.o^;
+END_PROGRAM
+`;
+    const out = run(
+      source,
+      `    Program_MAIN p; p.run();
+    std::cout << p.Y.get() << std::endl;`,
+      "ref_assign_targets",
+    );
+    expect(out.trim()).toBe("1234");
+  });
+
+  it("a REF_TO REF_TO alias dereferences twice", () => {
+    const source = `
+TYPE R1 : REF_TO INT; END_TYPE
+TYPE RR2 : REF_TO REF_TO INT; END_TYPE
+TYPE S : STRUCT q : RR2; END_STRUCT; END_TYPE
+PROGRAM main
+VAR x : INT := 7; y : INT; z : INT; r : R1; q : RR2; s : S; END_VAR
+r := REF(x);
+q := REF(r);
+y := q^^;
+s.q := REF(r);
+z := s.q^^ + r^;
+END_PROGRAM
+`;
+    const out = run(
+      source,
+      `    Program_MAIN p; p.run();
+    std::cout << p.Y.get() << " " << p.Z.get() << std::endl;`,
+      "ref_alias_chain",
+    );
+    expect(out.trim()).toBe("7 14");
+  });
+
+  it("an ARRAY[*] OF POINTER TO parameter takes an array of pointers", () => {
+    const source = `
+FUNCTION SumAll : INT
+VAR_IN_OUT a : ARRAY[*] OF POINTER TO INT; END_VAR
+VAR i : DINT; END_VAR
+SumAll := 0;
+FOR i := LOWER_BOUND(a, 1) TO UPPER_BOUND(a, 1) DO
+  SumAll := SumAll + a[i]^;
+END_FOR;
+END_FUNCTION
+PROGRAM main
+VAR x : INT := 3; z : INT := 4; p : ARRAY[0..1] OF POINTER TO INT; y : INT; END_VAR
+p[0] := ADR(x);
+p[1] := ADR(z);
+y := SumAll(p);
+END_PROGRAM
+`;
+    const out = run(
+      source,
+      `    Program_MAIN p; p.run();
+    std::cout << p.Y.get() << std::endl;`,
+      "vla_of_pointers",
+    );
+    expect(out.trim()).toBe("7");
+  });
+
+  it("inline enumerations with the same values in two blocks, set by a caller", () => {
+    const source = `
+FUNCTION_BLOCK Motor
+VAR_INPUT cmd : (Off, Fwd, Rev); END_VAR
+VAR_OUTPUT speed : INT; END_VAR
+CASE cmd OF
+  Off: speed := 0;
+  Fwd: speed := 50;
+  Rev: speed := -50;
+END_CASE;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK Valve
+VAR_INPUT cmd : (Off, Open); END_VAR
+VAR_OUTPUT pos : INT; END_VAR
+IF cmd = Open THEN pos := 100; ELSE pos := 0; END_IF;
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR m : Motor; v : Valve; a : INT; b : INT; END_VAR
+m(cmd := Rev);
+v(cmd := Open);
+a := m.speed;
+IF m.cmd = Rev THEN b := v.pos; END_IF;
+END_PROGRAM
+`;
+    const out = run(
+      source,
+      `    Program_MAIN p; p.run();
+    std::cout << p.A.get() << " " << p.B.get() << std::endl;`,
+      "inline_enum_callers",
+    );
+    expect(out.trim()).toBe("-50 100");
+  });
+
+  it("inline enumerations and subranges in a TEST block", () => {
+    const { stdout, exitCode } = runE2ETestPipeline({
+      sourceST: `
+FUNCTION_BLOCK Counter
+VAR_INPUT go : BOOL; END_VAR
+VAR_OUTPUT n : INT; END_VAR
+IF go THEN n := n + 1; END_IF;
+END_FUNCTION_BLOCK
+`,
+      testST: `
+TEST 'inline types in a test'
+VAR c : Counter; s : (Idle, Running); lvl : INT(0..10) := 3; END_VAR
+s := Running;
+c(go := TRUE);
+ASSERT_EQ(c.n, 1);
+ASSERT_TRUE(s = Running);
+ASSERT_EQ(lvl, 3);
+END_TEST
+`,
+      testFileName: "t_inline.st",
+      tempDirPrefix: "strucpp-declforms-test-",
+    });
+    expect(stdout).toContain("1 passed, 0 failed");
+    expect(exitCode).toBe(0);
   });
 
   it("the forum program reinterprets two WORDs as a REAL", () => {

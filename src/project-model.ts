@@ -9,6 +9,7 @@
  */
 
 import type {
+  ReferenceKind,
   CompilationUnit,
   ConfigurationDeclaration,
   ResourceDeclaration,
@@ -89,11 +90,11 @@ export interface ProjectVarDeclaration {
   /** Element type for inline arrays (e.g. "DINT"). */
   elementTypeName?: string;
   /** Element reference levels for an inline array of pointers or references. */
-  elementReferenceChain?: string[];
+  elementReferenceChain?: ReferenceKind[];
   /** Pointer/reference qualifier carried through from the AST TypeReference. */
   referenceKind?: string;
   /** Every reference level, outermost first, when there is more than one. */
-  referenceChain?: string[];
+  referenceChain?: ReferenceKind[];
 }
 
 /**
@@ -111,9 +112,9 @@ export interface VarExternalDeclaration {
   maxLength?: number | string;
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
-  elementReferenceChain?: string[];
+  elementReferenceChain?: ReferenceKind[];
   referenceKind?: string;
-  referenceChain?: string[];
+  referenceChain?: ReferenceKind[];
   /** Location of the declaration, so a "no matching VAR_GLOBAL" diagnostic can
    *  point at the offending line instead of being emitted file-less. */
   sourceSpan?: SourceSpan;

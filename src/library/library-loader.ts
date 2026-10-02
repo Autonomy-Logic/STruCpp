@@ -41,10 +41,7 @@ export class LibraryManifestError extends Error {
  *  reference preserves the metadata downstream consumers (codegen,
  *  debug-table-gen) need to recurse into nested types. */
 function makeTypeRef(v: LibraryVarType): TypeReference {
-  // Every kind the library compiler writes. REF_TO used to be missing here,
-  // so a library FB's REF_TO member read back as its element type: the
-  // debugger registered it as a value, and REF= on it was lowered as if it
-  // were a REFERENCE TO.
+  // Archive JSON is external input: keep only kinds the compiler writes.
   const referenceKind: ReferenceKind = isReferenceKind(v.referenceKind)
     ? v.referenceKind
     : "none";
@@ -67,7 +64,7 @@ function makeTypeRef(v: LibraryVarType): TypeReference {
 }
 
 function isReferenceKind(
-  kind: string | undefined,
+  kind: unknown,
 ): kind is "pointer_to" | "ref_to" | "reference_to" {
   return kind === "pointer_to" || kind === "ref_to" || kind === "reference_to";
 }

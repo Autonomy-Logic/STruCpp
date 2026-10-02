@@ -1,9 +1,7 @@
 /**
  * A REF_TO is typed (IEC 61131-3): it can only hold a reference to its
- * declared type. Assigning a REF_TO DWORD to a REF_TO REAL used to pass
- * semantic analysis (the target types were compared with the ordinary
- * conversion rules, and DWORD converts to REAL implicitly) and then fail in
- * the C++ compiler with an error about IEC_REF_TO templates (DOPE-687).
+ * declared type, wherever the reference comes from: a variable, a member, an
+ * array element, a function result or a call argument.
  *
  * POINTER TO keeps its CODESYS cross-type assignment, which is how a WORD pair
  * is reinterpreted as a REAL, and anything that cannot be resolved exactly
@@ -92,5 +90,197 @@ END_PROGRAM
     expect(errors("s.v REF= x;")).toEqual([
       "REF= requires a REF_TO or REFERENCE TO target; 'S.V' is not a reference",
     ]);
+  });
+});
+
+describe("REF= targets reached through elements and inheritance", () => {
+  const source = (body: string): string => `
+TYPE RA : ARRAY[0..1] OF REF_TO INT; END_TYPE
+TYPE S : STRUCT rs : ARRAY[0..1] OF REF_TO INT; END_STRUCT; END_TYPE
+FUNCTION_BLOCK BaseFB
+VAR o : REF_TO INT; d : REF_TO DWORD; END_VAR
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK DerivedFB EXTENDS BaseFB
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR
+  vals : ARRAY[0..1] OF INT; refs : ARRAY[0..1] OF REF_TO INT; ta : RA; s : S;
+  dw_refs : ARRAY[0..1] OF REF_TO DWORD; dd : DerivedFB; x : INT; r : REF_TO INT;
+END_VAR
+${body}
+END_PROGRAM
+`;
+  const errors = (body: string): string[] =>
+    compile(source(body)).errors.map((e) => e.message);
+
+  it("rejects REF= on an element of a value array", () => {
+    expect(errors("vals[1] REF= x;")).toEqual([
+      "REF= requires a REF_TO or REFERENCE TO target; 'VALS' is not a reference",
+    ]);
+  });
+
+  it.each([
+    ["an inline array of references", "refs[1] REF= x;"],
+    ["a TYPE array of references", "ta[0] REF= x;"],
+    ["an array of references in a struct", "s.rs[1] REF= x;"],
+    ["an inherited member", "dd.o REF= x;"],
+  ])("accepts REF= on an element or member of %s", (_label, body) => {
+    expect(errors(body)).toEqual([]);
+  });
+
+  it.each([
+    ["an inherited member", "r := dd.d;"],
+    ["an array element", "r := dw_refs[0];"],
+  ])("checks the target type of %s", (_label, body) => {
+    expect(errors(body)).toEqual([
+      "Cannot assign REF_TO DWORD to REF_TO INT: a REF_TO can only hold a reference to its declared type",
+    ]);
+  });
+});
+
+describe("REF_TO through calls", () => {
+  const source = (body: string): string => `
+FUNCTION GetD : REF_TO DWORD
+VAR_INPUT rd : REF_TO DWORD; END_VAR
+GetD := rd;
+END_FUNCTION
+FUNCTION TakeI : INT
+VAR_INPUT ri : REF_TO INT; END_VAR
+TakeI := 0;
+END_FUNCTION
+FUNCTION_BLOCK FBI
+VAR_INPUT i : REF_TO INT; END_VAR
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR dw : DWORD; x : INT; rd : REF_TO DWORD; ri : REF_TO INT; r : REF_TO INT; fb : FBI; n : INT; END_VAR
+${body}
+END_PROGRAM
+`;
+  const errors = (body: string): string[] =>
+    compile(source(body)).errors.map((e) => e.message);
+  const mismatch =
+    "Cannot assign REF_TO DWORD to REF_TO INT: a REF_TO can only hold a reference to its declared type";
+
+  it.each([
+    ["a function result", "r := GetD(rd);"],
+    ["a named FB input", "fb(i := rd);"],
+    ["a positional function input", "n := TakeI(rd);"],
+    ["a named function input", "n := TakeI(ri := REF(dw));"],
+  ])("checks %s", (_label, body) => {
+    expect(errors(body)).toEqual([mismatch]);
+  });
+
+  it("accepts arguments of the declared type", () => {
+    expect(
+      errors("fb(i := ri);\nfb(i := REF(x));\nn := TakeI(REF(x));"),
+    ).toEqual([]);
+  });
+});
+
+describe("pointer and reference initializers", () => {
+  const errors = (decl: string): string[] =>
+    compile(
+      `PROGRAM main\nVAR x : INT; dw : DWORD; ${decl} END_VAR\nEND_PROGRAM\n`,
+    ).errors.map((e) => e.message);
+
+  it.each([
+    [
+      "r : REF_TO REAL := REF(dw);",
+      "REF_TO initializers are not supported; assign 'R' in the body instead",
+    ],
+    [
+      "p : POINTER TO INT := ADR(x);",
+      "POINTER TO initializers are not supported; assign 'P' in the body instead",
+    ],
+  ])("rejects %s", (decl, message) => {
+    expect(errors(decl)).toEqual([message]);
+  });
+
+  it.each(["r : REF_TO INT := NULL;", "p : POINTER TO INT := 0;"])(
+    "accepts %s",
+    (decl) => {
+      expect(errors(decl)).toEqual([]);
+    },
+  );
+});
+
+describe("REFERENCE TO is not combined with other levels", () => {
+  const message = (where: string): string =>
+    `REFERENCE TO cannot be combined with other reference levels in ${where}`;
+
+  it.each([
+    ["rr : REFERENCE TO REF_TO INT;"],
+    ["rp : REFERENCE TO POINTER TO INT;"],
+    ["rrf : REF_TO REFERENCE TO INT;"],
+    ["arr : ARRAY[0..1] OF REF_TO REFERENCE TO INT;"],
+  ])("rejects %s", (decl) => {
+    const result = compile(`PROGRAM main\nVAR ${decl} END_VAR\nEND_PROGRAM\n`);
+    expect(result.errors.map((e) => e.message)).toEqual([
+      message("PROGRAM 'MAIN'"),
+    ]);
+  });
+
+  it("rejects it in a struct field, an array TYPE and an alias", () => {
+    const result = compile(`
+TYPE S : STRUCT f : REFERENCE TO REF_TO INT; END_STRUCT; END_TYPE
+TYPE A : ARRAY[0..1] OF REFERENCE TO POINTER TO INT; END_TYPE
+TYPE RRA : REF_TO REFERENCE TO INT; END_TYPE
+PROGRAM main
+VAR x : INT; END_VAR
+END_PROGRAM
+`);
+    expect(result.errors.map((e) => e.message)).toEqual([
+      message("STRUCT 'S'"),
+      message("ARRAY type 'A'"),
+      message("type alias 'RRA'"),
+    ]);
+  });
+
+  it("still accepts a single REFERENCE TO", () => {
+    const result = compile(
+      "PROGRAM main\nVAR x : INT; rf : REFERENCE TO INT; END_VAR\nrf REF= x;\nEND_PROGRAM\n",
+    );
+    expect(result.errors).toEqual([]);
+  });
+});
+
+describe("one diagnostic per mistake", () => {
+  it("reports a derived-to-base REF_TO assignment once", () => {
+    const result = compile(`
+FUNCTION_BLOCK BaseFB
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK DerivedFB EXTENDS BaseFB
+END_FUNCTION_BLOCK
+PROGRAM main
+VAR rb : REF_TO BaseFB; rd : REF_TO DerivedFB; END_VAR
+rb := rd;
+END_PROGRAM
+`);
+    expect(result.errors.map((e) => e.message)).toEqual([
+      "Cannot assign DERIVEDFB to BASEFB",
+    ]);
+  });
+});
+
+describe("typed literals on a type that is not an enumeration", () => {
+  const errors = (expr: string): string[] =>
+    compile(
+      `PROGRAM main\nVAR b : BYTE; END_VAR\nb := ${expr};\nEND_PROGRAM\n`,
+    ).errors.map((e) => e.message);
+
+  it("suggests the radix form for a hex-looking value", () => {
+    expect(errors("BYTE#FF")).toEqual([
+      "'BYTE#FF' is not a valid literal: 'BYTE' is not an enumeration; did you mean '16#FF' or 'BYTE#16#FF'?",
+    ]);
+  });
+
+  it("names the type for any other value", () => {
+    expect(errors("BYTE#Foo")).toEqual([
+      "'BYTE#FOO' is not a valid literal: 'BYTE' is not an enumeration.",
+    ]);
+  });
+
+  it("still accepts BYTE#16#FF", () => {
+    expect(errors("BYTE#16#FF")).toEqual([]);
   });
 });

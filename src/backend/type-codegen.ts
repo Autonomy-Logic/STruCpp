@@ -162,7 +162,7 @@ function rawPointerType(
   return `${wrapReferenceChain(chain.slice(1), rawType)}*`;
 }
 
-/** A field whose outermost level is REF_TO or REFERENCE TO. */
+/** A field or alias whose outermost level is REF_TO or REFERENCE TO. */
 function isReferenceField(typeRef: TypeReference): boolean {
   return (
     typeRef.referenceKind === "ref_to" ||
@@ -222,7 +222,11 @@ export class TypeCodeGenerator {
     // Build reverse map for bare enum member qualification
     this.enumMemberToType = buildEnumMemberMap(
       types
-        .filter((t) => t.definition.kind === "EnumDefinition")
+        .filter(
+          (t) =>
+            t.definition.kind === "EnumDefinition" &&
+            t.inline?.owner === undefined,
+        )
         .map((t) => ({
           name: t.name,
           members: (
@@ -360,9 +364,7 @@ export class TypeCodeGenerator {
         ? cppType
         : this.mapTypeToCpp(field.type.name);
       cppType = isReferenceField(field.type)
-        ? // REF_TO / REFERENCE TO: the same wrapper a variable gets, null until
-          // bound. Before, the qualifier was dropped and the field was a plain
-          // value, so `s.r := REF(x)` failed in C++.
+        ? // REF_TO / REFERENCE TO: the same wrapper a variable gets.
           wrapReferenceChain(
             field.type.referenceChain ?? [field.type.referenceKind],
             rawType,
@@ -549,11 +551,10 @@ export class TypeCodeGenerator {
     } else {
       cppType = this.mapTypeToCpp(def.name);
     }
-    cppType = rawPointerType(
-      def,
-      cppType,
-      def.arrayDimensions ? cppType : this.mapTypeToCpp(def.name),
-    );
+    const rawType = def.arrayDimensions ? cppType : this.mapTypeToCpp(def.name);
+    cppType = isReferenceField(def)
+      ? wrapReferenceChain(def.referenceChain ?? [def.referenceKind], rawType)
+      : rawPointerType(def, cppType, rawType);
     this.emit(`using ${name} = ${cppType};`);
     this.emit("");
   }

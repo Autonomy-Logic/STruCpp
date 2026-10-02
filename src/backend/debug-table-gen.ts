@@ -30,7 +30,7 @@ import type {
 import type { ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import { isElementaryType } from "../semantic/type-registry.js";
-import { evalIntConst } from "../semantic/type-utils.js";
+import { evalIntConst, MAX_TYPE_ALIAS_DEPTH } from "../semantic/type-utils.js";
 import { formatArrayElementAccess } from "./codegen-utils.js";
 import { mangledMemberName } from "./member-mangling.js";
 
@@ -503,6 +503,20 @@ export function generateDebugTable(
     }
   };
 
+  // The reference kind a TYPE alias resolves to (`TYPE PI : POINTER TO INT`), if any.
+  const aliasReferenceKind = (typeName: string): string | undefined => {
+    let name = typeName;
+    for (let depth = 0; depth < MAX_TYPE_ALIAS_DEPTH; depth++) {
+      const def = symbolTables.lookupType(name)?.declaration?.definition;
+      if (def?.kind !== "TypeReference") return undefined;
+      if (def.referenceKind !== undefined && def.referenceKind !== "none") {
+        return def.referenceKind;
+      }
+      name = def.name;
+    }
+    return undefined;
+  };
+
   // visitTypeRef walks a TypeReference: elementary type → leaf, inline array
   // → per-element recursion, named user type (struct / FB / elementary alias)
   // → recurse into definition.
@@ -512,13 +526,8 @@ export function generateDebugTable(
     typeRef: TypeReference,
     flags: number,
   ): void => {
-    // A POINTER TO / REF_TO / REFERENCE TO holds an address, not a value of its
-    // element type. Registered as the element type, the debugger read the
-    // pointer's own bytes as the value and a write from it overwrote the
-    // pointer. The table has no per-leaf width, and pointers are 2, 4 or 8
-    // bytes depending on the target, so the variable is left out, with a build
-    // warning, rather than registered wrong. Checked before the array branch:
-    // a POINTER TO ARRAY carries array dimensions too.
+    // Pointers are left out: the table has no per-leaf width and pointer size varies per target.
+    // Checked before the array branch, since a POINTER TO ARRAY has dimensions too.
     if (
       typeRef.referenceKind !== undefined &&
       typeRef.referenceKind !== "none"
@@ -534,11 +543,11 @@ export function generateDebugTable(
 
     // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-      if (typeRef.elementReferenceChain) {
-        skipped.push({
-          path,
-          reason: arrayOfReferencesReason(typeRef.elementReferenceChain[0]!),
-        });
+      const elementKind =
+        typeRef.elementReferenceChain?.[0] ??
+        aliasReferenceKind(typeRef.elementTypeName);
+      if (elementKind !== undefined) {
+        skipped.push({ path, reason: arrayOfReferencesReason(elementKind) });
         return;
       }
       walkArrayDims(
@@ -606,8 +615,12 @@ export function generateDebugTable(
         return;
       }
       if (def.kind === "ArrayDefinition") {
-        const elementKind = def.elementType.referenceKind;
-        if (elementKind !== undefined && elementKind !== "none") {
+        const ownKind = def.elementType.referenceKind;
+        const elementKind =
+          ownKind !== undefined && ownKind !== "none"
+            ? ownKind
+            : aliasReferenceKind(def.elementType.name);
+        if (elementKind !== undefined) {
           skipped.push({ path, reason: arrayOfReferencesReason(elementKind) });
           return;
         }

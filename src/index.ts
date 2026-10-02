@@ -472,7 +472,19 @@ function runPipeline(
     }
 
     ast = mergeCompilationUnits(units);
-    lowerInlineTypes(ast);
+    const loweringErrors = lowerInlineTypes(ast);
+    errors.push(...loweringErrors);
+    if (!continueOnError && loweringErrors.length > 0) {
+      return {
+        ast,
+        projectModel,
+        symbolTables,
+        errors,
+        warnings,
+        allArchives,
+        mergedOptions,
+      };
+    }
   } catch (e) {
     errors.push({
       message: `AST building failed: ${e instanceof Error ? e.message : String(e)}`,

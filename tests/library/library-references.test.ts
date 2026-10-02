@@ -1,5 +1,5 @@
 /**
- * Pointers and references in library interfaces (DOPE-687).
+ * Pointers and references in library interfaces.
  *
  * The library compiler writes a member's reference kind into the manifest,
  * but the loader only read back "pointer_to" and "reference_to": a REF_TO

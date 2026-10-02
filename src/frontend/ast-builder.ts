@@ -1552,10 +1552,8 @@ export class ASTBuilder {
       }
     }
 
-    // A POINTER TO consumed here is the outermost level: on a plain type it is
-    // the only one, on a reference type (`POINTER TO REF_TO INT`, `POINTER TO
-    // POINTER TO INT`) it wraps the levels the type rule already read. The
-    // span starts at POINTER so it covers the type as written.
+    // This POINTER TO is the outermost level, wrapping any the type rule read.
+    // The span starts at POINTER so it covers the type as written.
     const pointerToken = getFirstToken(children.POINTER);
     if (hasPointerTo && pointerToken) {
       if (type.referenceKind !== "none") {
@@ -1789,9 +1787,10 @@ export class ASTBuilder {
     if (arrayDimensions) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
-      const elementChain = this.elementReferenceChain(elementTypeNode);
-      if (elementChain) result.elementReferenceChain = elementChain;
     }
+    // Also on an ARRAY[*], whose element type is otherwise only in its name.
+    const elementChain = this.elementReferenceChain(elementTypeNode);
+    if (elementChain) result.elementReferenceChain = elementChain;
     return result;
   }
 
@@ -3068,6 +3067,7 @@ export class ASTBuilder {
       fieldAccess: [member],
       isDereference: false,
       accessChain: [{ kind: "field", name: member }],
+      typedLiteral: true,
     };
   }
 
