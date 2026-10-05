@@ -23,8 +23,11 @@ import type {
   ReferenceType,
   StructType,
   CompilationUnit,
+  FunctionBlockDeclaration,
+  FunctionDeclaration,
   Statement,
   VarBlock,
+  VarDeclaration,
 } from "../frontend/ast.js";
 import type { SymbolTables, Scope } from "./symbol-table.js";
 import type { StdFunctionRegistry } from "./std-function-registry.js";
@@ -40,6 +43,12 @@ import {
   resolveArrayElementType,
   typeName as typeNameUtil,
   isGenericGroupType,
+  canonicalElementaryName,
+  resolveAccessType,
+  resolveArrayElementAccessType,
+  resolveFieldDeclaration,
+  type AccessLookup,
+  type AccessType,
 } from "./type-utils.js";
 import { stripEnEno } from "../ast-utils.js";
 
@@ -115,9 +124,46 @@ function resolveDateTimeArithmetic(
 // Type Checker
 // =============================================================================
 
+const REFERENCE_LEVEL_TEXT: Record<string, string> = {
+  ref_to: "REF_TO",
+  reference_to: "REFERENCE TO",
+  pointer_to: "POINTER TO",
+};
+
+/** `REF_TO REF_TO INT` for a declared reference shape. */
+function describeReferenceShape(shape: {
+  chain: string[];
+  base: string;
+}): string {
+  return [...shape.chain.map((k) => REFERENCE_LEVEL_TEXT[k] ?? k), shape.base]
+    .join(" ")
+    .toUpperCase();
+}
+
 /**
  * Type checker for IEC 61131-3 programs.
  */
+/** `NULL` or `0`: the only initializers a pointer or reference keeps (it starts null anyway). */
+function isNullInitializer(expr: Expression): boolean {
+  return (
+    expr.kind === "LiteralExpression" &&
+    (expr.literalType === "NULL" || expr.value === 0)
+  );
+}
+
+/** The reference levels and target type of a declared type; undefined for an array. */
+function referenceShapeOf(
+  type: AccessType,
+): { chain: string[]; base: string } | undefined {
+  if (type.arrayDimensions) return undefined;
+  const chain =
+    type.referenceChain ??
+    (type.referenceKind !== undefined && type.referenceKind !== "none"
+      ? [type.referenceKind]
+      : []);
+  return { chain, base: type.name };
+}
+
 export class TypeChecker {
   private errors: CompileError[] = [];
   private warnings: CompileError[] = [];
@@ -603,6 +649,7 @@ export class TypeChecker {
     for (const arg of expr.arguments) {
       this.resolveExprType(arg.value, scope);
     }
+    this.validateReferenceArguments(expr, scope);
 
     const nameUpper = expr.functionName.toUpperCase();
 
@@ -763,6 +810,20 @@ export class TypeChecker {
     for (const block of blocks) {
       for (const decl of block.declarations) {
         if (!decl.initialValue) continue;
+        const outerKind = decl.type.referenceKind;
+        if (
+          (outerKind === "ref_to" || outerKind === "pointer_to") &&
+          !isNullInitializer(decl.initialValue)
+        ) {
+          const kindText = outerKind === "ref_to" ? "REF_TO" : "POINTER TO";
+          this.addError(
+            `${kindText} initializers are not supported; assign '${decl.names[0] ?? ""}' in the body instead`,
+            decl.initialValue.sourceSpan.startLine,
+            decl.initialValue.sourceSpan.startCol,
+            decl.initialValue.sourceSpan.file,
+          );
+          continue;
+        }
         const targetType = ELEMENTARY_TYPES[decl.type.name.toUpperCase()];
         if (!targetType) continue; // Non-elementary types — handled elsewhere
         const valueType = this.resolveExprType(decl.initialValue, scope);
@@ -800,7 +861,12 @@ export class TypeChecker {
       case "AssignmentStatement": {
         const targetType = this.resolveExprType(stmt.target, scope);
         const valueType = this.resolveExprType(stmt.value, scope);
+        const errorsBefore = this.errors.length;
         this.validateAssignment(targetType, valueType, stmt.target, stmt.value);
+        // One error per mistake: the REF_TO check only adds what the general one missed.
+        if (this.errors.length === errorsBefore) {
+          this.validateReferenceAssignment(stmt.target, stmt.value, scope);
+        }
         break;
       }
 
@@ -813,11 +879,22 @@ export class TypeChecker {
         // error (e.g. `IEC_INT` has no member `bind`).
         if (stmt.target.kind === "VariableExpression") {
           const sym = scope.lookup(stmt.target.name);
-          if (sym && sym.kind === "variable") {
-            const refKind = sym.declaration.type.referenceKind;
+          // A member or element target is checked by its own declaration; one
+          // that cannot be resolved falls back to the variable holding it.
+          const base =
+            sym?.kind === "variable"
+              ? (sym.declaration as VarDeclaration | undefined)?.type
+              : undefined;
+          const declared =
+            base === undefined || !this.hasMemberAccess(stmt.target)
+              ? base
+              : (resolveAccessType(base, stmt.target, this.accessLookup) ??
+                base);
+          if (declared) {
+            const refKind = declared.referenceKind;
             if (refKind !== "ref_to" && refKind !== "reference_to") {
               this.addError(
-                `REF= requires a REF_TO or REFERENCE TO target; '${stmt.target.name}' is not a reference`,
+                `REF= requires a REF_TO or REFERENCE TO target; '${[stmt.target.name, ...stmt.target.fieldAccess].join(".")}' is not a reference`,
                 stmt.target.sourceSpan.startLine,
                 stmt.target.sourceSpan.startCol,
                 stmt.target.sourceSpan.file,
@@ -1050,6 +1127,206 @@ export class TypeChecker {
       expr.literalType === "INT" ||
       expr.literalType === "REAL" ||
       expr.literalType === "BOOL"
+    );
+  }
+
+  /**
+   * A REF_TO T holds only a reference to a T (IEC 61131-3), so the declared
+   * reference levels and target type must match exactly.
+   *
+   * Only a REF_TO target is checked, and only when both sides are fully known:
+   * POINTER TO keeps its CODESYS cross-type assignment, REFERENCE TO assigns
+   * through the reference, and an alias or unknown type is left to the
+   * general check.
+   */
+  private validateReferenceAssignment(
+    target: Expression,
+    value: Expression,
+    scope: Scope,
+  ): void {
+    const t = this.declaredReferenceShape(target, scope);
+    if (t) this.validateReferenceValue(t, value, scope);
+  }
+
+  /** Report `value` when it cannot be held by a target of shape `t`. */
+  private validateReferenceValue(
+    t: { chain: string[]; base: string },
+    value: Expression,
+    scope: Scope,
+  ): void {
+    if (t.chain[0] !== "ref_to") return;
+    const v = this.declaredReferenceShape(value, scope);
+    if (!v || v.chain.length === 0) return;
+    if (!this.isExactlyKnownType(t.base) || !this.isExactlyKnownType(v.base)) {
+      return;
+    }
+    const sameLevels =
+      t.chain.length === v.chain.length &&
+      t.chain.every((kind, i) => kind === v.chain[i]);
+    const sameBase =
+      canonicalElementaryName(t.base.toUpperCase()) ===
+      canonicalElementaryName(v.base.toUpperCase());
+    if (sameLevels && sameBase) return;
+    this.addError(
+      `Cannot assign ${describeReferenceShape(v)} to ${describeReferenceShape(t)}: a REF_TO can only hold a reference to its declared type`,
+      value.sourceSpan.startLine,
+      value.sourceSpan.startCol,
+      value.sourceSpan.file,
+    );
+  }
+
+  /**
+   * The declared reference levels and target type of a plain variable, or of
+   * `REF(variable)`, which adds a REF_TO level. Undefined for anything else.
+   */
+  private declaredReferenceShape(
+    expr: Expression,
+    scope: Scope,
+  ): { chain: string[]; base: string } | undefined {
+    if (expr.kind === "RefExpression") {
+      const inner = this.declaredReferenceShape(expr.operand, scope);
+      return inner
+        ? { chain: ["ref_to", ...inner.chain], base: inner.base }
+        : undefined;
+    }
+    if (expr.kind === "FunctionCallExpression") {
+      const fn = this.findUserFunction(expr.functionName);
+      return fn ? referenceShapeOf(fn.returnType) : undefined;
+    }
+    if (expr.kind !== "VariableExpression") return undefined;
+    const sym = scope.lookup(expr.name);
+    if (!sym || (sym.kind !== "variable" && sym.kind !== "constant")) {
+      return undefined;
+    }
+    // A member (`s.r`) is shaped by its own declaration.
+    // Some symbols (a method's return variable) carry no declaration.
+    const declared = sym.declaration as VarDeclaration | undefined;
+    if (!declared) return undefined;
+    const type = this.hasMemberAccess(expr)
+      ? resolveAccessType(declared.type, expr, this.accessLookup)
+      : declared.type;
+    return type ? referenceShapeOf(type) : undefined;
+  }
+
+  private findUserFunction(name: string): FunctionDeclaration | undefined {
+    const upper = name.toUpperCase();
+    return this.ast?.functions.find((f) => f.name.toUpperCase() === upper);
+  }
+
+  /**
+   * The inputs of a user function or FB instance call, in declaration order,
+   * with an FB's inherited inputs first. Undefined when the callee is unknown.
+   */
+  private callInputs(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): Array<{ name: string; type: AccessType }> | undefined {
+    const fromBlocks = (
+      blocks: readonly VarBlock[],
+    ): Array<{ name: string; type: AccessType }> =>
+      blocks
+        .filter(
+          (b) => b.blockType === "VAR_INPUT" || b.blockType === "VAR_IN_OUT",
+        )
+        .flatMap((b) => b.declarations)
+        .flatMap((d) => d.names.map((name) => ({ name, type: d.type })));
+    const fn = this.findUserFunction(expr.functionName);
+    if (fn) return fromBlocks(fn.varBlocks);
+    const sym = scope.lookup(expr.functionName);
+    if (sym?.kind !== "variable" || expr.instance) return undefined;
+    const declared = sym.declaration as VarDeclaration | undefined;
+    if (!declared) return undefined;
+    const typeName = declared.type.name.toUpperCase();
+    const chain: FunctionBlockDeclaration[] = [];
+    let current: string | undefined = typeName;
+    while (current !== undefined && chain.length < 32) {
+      const upper: string = current;
+      const fb = this.ast?.functionBlocks.find(
+        (f) => f.name.toUpperCase() === upper,
+      );
+      if (!fb) break;
+      chain.unshift(fb);
+      current = fb.extends?.toUpperCase();
+    }
+    if (chain.length > 0)
+      return chain.flatMap((fb) => fromBlocks(fb.varBlocks));
+    const libraryFb = this.symbolTables.lookupFunctionBlock(typeName);
+    if (!libraryFb) return undefined;
+    return [...libraryFb.inputs, ...libraryFb.inouts].map((m) => ({
+      name: m.name,
+      type: m.declaration.type,
+    }));
+  }
+
+  /** The REF_TO check for each argument passed to a REF_TO input. */
+  private validateReferenceArguments(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): void {
+    const inputs = this.callInputs(expr, scope);
+    if (!inputs) return;
+    stripEnEno(expr.arguments).forEach((arg, i) => {
+      if (arg.isOutput) return;
+      const argName = arg.name?.toUpperCase();
+      const input =
+        argName === undefined
+          ? inputs[i]
+          : inputs.find((p) => p.name.toUpperCase() === argName);
+      if (!input) return;
+      const shape = referenceShapeOf(input.type);
+      if (shape) this.validateReferenceValue(shape, arg.value, scope);
+    });
+  }
+
+  /**
+   * One member of a struct, FB or program: from this compile's AST, or from a
+   * library function block, whose members the symbol tables carry.
+   */
+  private readonly accessLookup: AccessLookup = {
+    field: (typeName, fieldName) => this.lookupMember(typeName, fieldName),
+    arrayElement: (typeName) =>
+      this.ast ? resolveArrayElementAccessType(typeName, this.ast) : undefined,
+  };
+
+  private readonly lookupMember = (
+    typeName: string,
+    fieldName: string,
+  ): VarDeclaration | undefined => {
+    const local = this.ast
+      ? resolveFieldDeclaration(typeName, fieldName, this.ast)
+      : undefined;
+    if (local) return local;
+    const fb = this.symbolTables.lookupFunctionBlock(typeName);
+    if (!fb) return undefined;
+    const upper = fieldName.toUpperCase();
+    return [...fb.inputs, ...fb.outputs, ...fb.inouts, ...fb.locals].find(
+      (m) => m.name.toUpperCase() === upper,
+    )?.declaration;
+  };
+
+  /** The expression reaches into a member: `s.r`, `a[1]`, `p^`. */
+  private hasMemberAccess(expr: VariableExpression): boolean {
+    return (
+      expr.subscripts.length > 0 ||
+      expr.fieldAccess.length > 0 ||
+      expr.isDereference ||
+      (expr.accessChain !== undefined && expr.accessChain.length > 0)
+    );
+  }
+
+  /** An elementary type, or a struct, FB or enum this compile declares. */
+  private isExactlyKnownType(name: string): boolean {
+    if (ELEMENTARY_TYPES[canonicalElementaryName(name.toUpperCase())]) {
+      return true;
+    }
+    if (this.isKnownCompositeType(name)) return true;
+    const upper = name.toUpperCase();
+    return (
+      this.ast?.types.some(
+        (td) =>
+          td.name.toUpperCase() === upper &&
+          td.definition.kind === "EnumDefinition",
+      ) ?? false
     );
   }
 

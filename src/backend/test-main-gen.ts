@@ -32,8 +32,10 @@ import type {
   VarDeclaration,
   Statement,
   Expression,
+  TypeDeclaration,
 } from "../frontend/ast.js";
 import { TestCodeGenerator } from "./test-codegen.js";
+import { TypeCodeGenerator } from "./type-codegen.js";
 import type { StlibArchive } from "../library/library-manifest.js";
 
 /**
@@ -134,6 +136,26 @@ export function buildPOUInfoFromAST(ast: CompilationUnit): {
   return { pous };
 }
 
+/** The TYPEs hoisted from every test file; two files may not hoist the same name. */
+function collectTestInlineTypes(testFiles: TestFile[]): TypeDeclaration[] {
+  const byName = new Map<string, string>();
+  const types: TypeDeclaration[] = [];
+  for (const testFile of testFiles) {
+    for (const type of testFile.inlineTypes ?? []) {
+      const other = byName.get(type.name);
+      if (other !== undefined) {
+        throw new Error(
+          `Test files '${other}' and '${testFile.fileName}' both generate the ` +
+            `type name '${type.name}'; rename one of the files.`,
+        );
+      }
+      byName.set(type.name, testFile.fileName);
+      types.push(type);
+    }
+  }
+  return types;
+}
+
 /**
  * Generate the test_main.cpp source code.
  *
@@ -147,10 +169,14 @@ export function generateTestMain(
 ): string {
   const lines: string[] = [];
   const testCodegen = new TestCodeGenerator(options.pous);
+  const inlineTypes = collectTestInlineTypes(testFiles);
 
   // Initialize type sets from AST if provided
   if (options.ast) {
-    testCodegen.initFromAST(options.ast);
+    testCodegen.initFromAST({
+      ...options.ast,
+      types: [...options.ast.types, ...inlineTypes],
+    });
   }
 
   // Register library metadata (FB types, field mappings, enum/struct types)
@@ -165,6 +191,13 @@ export function generateTestMain(
   lines.push("");
   lines.push("using namespace strucpp;");
   lines.push("");
+
+  if (inlineTypes.length > 0) {
+    lines.push("namespace strucpp {");
+    lines.push(new TypeCodeGenerator().generateTypes(inlineTypes));
+    lines.push("} // namespace strucpp");
+    lines.push("");
+  }
 
   // Generate setup structs and test functions for each file
   let testIndex = 0;

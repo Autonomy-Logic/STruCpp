@@ -7,6 +7,8 @@
  * Libraries can be either built-in C++ libraries or compiled ST libraries.
  */
 
+import type { ReferenceKind } from "../frontend/ast.js";
+
 /**
  * Library function entry in a manifest.
  *
@@ -76,8 +78,12 @@ export interface LibraryVarType {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type name for inline array types */
   elementTypeName?: string;
-  /** Reference/pointer qualifier ("pointer_to" | "reference_to") */
-  referenceKind?: string;
+  /** Element reference levels for an inline array of pointers or references */
+  elementReferenceChain?: ReferenceKind[];
+  /** Reference/pointer qualifier ("pointer_to" | "ref_to" | "reference_to") */
+  referenceKind?: ReferenceKind;
+  /** Every reference level, outermost first, when there is more than one */
+  referenceChain?: ReferenceKind[];
   /**
    * The C++ member name, when it differs from `name`.
    *

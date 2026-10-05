@@ -98,7 +98,9 @@ export class TestCodeGenerator extends CodeGenerator {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
-        enumDescriptors.push({ name: td.name, members: memberNames });
+        if (td.inline?.owner === undefined) {
+          enumDescriptors.push({ name: td.name, members: memberNames });
+        }
       }
     }
     this.enumMemberToType = buildEnumMemberMap(enumDescriptors);

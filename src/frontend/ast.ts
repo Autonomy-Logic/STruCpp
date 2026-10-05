@@ -308,6 +308,18 @@ export interface TypeDeclaration extends ASTNode {
    * `applyTypeDefaults` in the AST builder.
    */
   defaultValue?: Expression;
+  /** Set on a TYPE hoisted from an inline enumeration or subrange. */
+  inline?: InlineTypeOrigin;
+}
+
+/** Where a hoisted inline type was written. */
+export interface InlineTypeOrigin {
+  /** First variable of the declaration. */
+  variable: string;
+  /** POU, type or TEST that holds the declaration. */
+  container: string;
+  /** POU whose bodies see the members; absent for global, CONFIGURATION and STRUCT fields. */
+  owner?: string;
 }
 
 /**
@@ -394,9 +406,29 @@ export interface TypeReference extends ASTNode {
   name: string;
   isReference: boolean; // true for REF_TO (for backwards compat)
   referenceKind: ReferenceKind; // more specific: "none", "ref_to", or "reference_to"
+  /**
+   * Every reference level, outermost first, when there is more than one:
+   * `POINTER TO REF_TO INT` is `["pointer_to", "ref_to"]` with `name` "INT".
+   * `referenceKind` is always the first entry. Absent for zero or one level,
+   * so single-level types are unchanged.
+   */
+  referenceChain?: ReferenceKind[];
+  /**
+   * An anonymous type written inside a declaration: `a : (Idle, Running);`
+   * or `a : INT(0..100);`. The AST keeps it where it was written; compile
+   * lowers it to a TYPE declaration (see `lowerInlineTypes`) and points
+   * `name` at that, so it behaves exactly like the declared equivalent.
+   */
+  inlineDefinition?: EnumDefinition | SubrangeDefinition;
   maxLength?: number | string; // For STRING(n) / WSTRING(n) parameterized length; string for constant names
   arrayDimensions?: Array<{ start: number; end: number }>; // For __INLINE_ARRAY_* types
   elementTypeName?: string; // Element type for inline arrays (e.g. "BYTE" for ARRAY[0..7] OF BYTE)
+  /**
+   * The element's reference levels, outermost first, for an inline array of
+   * pointers or references: `ARRAY[0..3] OF POINTER TO INT` is
+   * `["pointer_to"]` with `elementTypeName` "INT". Absent for plain elements.
+   */
+  elementReferenceChain?: ReferenceKind[];
 }
 
 // =============================================================================
@@ -730,6 +762,8 @@ export interface VariableExpression extends TypedNode {
   isDereference: boolean;
   /** Ordered access chain preserving interleaving of fields, subscripts, deref */
   accessChain?: AccessStep[];
+  /** Written as a typed enumeration value (`E_State#Idle`). */
+  typedLiteral?: true;
 }
 
 /**
@@ -837,6 +871,8 @@ export interface TestFile {
   setup?: SetupBlock;
   teardown?: TeardownBlock;
   testCases: TestCase[];
+  /** TYPEs hoisted from inline enumerations and subranges in its VAR blocks. */
+  inlineTypes?: TypeDeclaration[];
 }
 
 /**

@@ -9,6 +9,7 @@
  */
 
 import type {
+  ReferenceKind,
   CompilationUnit,
   ConfigurationDeclaration,
   ResourceDeclaration,
@@ -88,8 +89,12 @@ export interface ProjectVarDeclaration {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type for inline arrays (e.g. "DINT"). */
   elementTypeName?: string;
+  /** Element reference levels for an inline array of pointers or references. */
+  elementReferenceChain?: ReferenceKind[];
   /** Pointer/reference qualifier carried through from the AST TypeReference. */
   referenceKind?: string;
+  /** Every reference level, outermost first, when there is more than one. */
+  referenceChain?: ReferenceKind[];
 }
 
 /**
@@ -107,7 +112,9 @@ export interface VarExternalDeclaration {
   maxLength?: number | string;
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  elementReferenceChain?: ReferenceKind[];
   referenceKind?: string;
+  referenceChain?: ReferenceKind[];
   /** Location of the declaration, so a "no matching VAR_GLOBAL" diagnostic can
    *  point at the offending line instead of being emitted file-less. */
   sourceSpan?: SourceSpan;
@@ -268,9 +275,15 @@ export function toProjectVarDeclaration(
     ...(decl.type.elementTypeName !== undefined
       ? { elementTypeName: decl.type.elementTypeName }
       : {}),
+    ...(decl.type.elementReferenceChain !== undefined
+      ? { elementReferenceChain: decl.type.elementReferenceChain }
+      : {}),
     ...(decl.type.referenceKind !== undefined &&
     decl.type.referenceKind !== "none"
       ? { referenceKind: decl.type.referenceKind }
+      : {}),
+    ...(decl.type.referenceChain !== undefined
+      ? { referenceChain: decl.type.referenceChain }
       : {}),
   };
 }
@@ -923,9 +936,15 @@ export class ProjectModelBuilder {
       ...(decl.type.elementTypeName !== undefined
         ? { elementTypeName: decl.type.elementTypeName }
         : {}),
+      ...(decl.type.elementReferenceChain !== undefined
+        ? { elementReferenceChain: decl.type.elementReferenceChain }
+        : {}),
       ...(decl.type.referenceKind !== undefined &&
       decl.type.referenceKind !== "none"
         ? { referenceKind: decl.type.referenceKind }
+        : {}),
+      ...(decl.type.referenceChain !== undefined
+        ? { referenceChain: decl.type.referenceChain }
         : {}),
     };
   }

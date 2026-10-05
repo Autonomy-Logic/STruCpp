@@ -30,7 +30,7 @@ import type {
 import type { ProjectModel } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import { isElementaryType } from "../semantic/type-registry.js";
-import { evalIntConst } from "../semantic/type-utils.js";
+import { evalIntConst, MAX_TYPE_ALIAS_DEPTH } from "../semantic/type-utils.js";
 import { formatArrayElementAccess } from "./codegen-utils.js";
 import { mangledMemberName } from "./member-mangling.js";
 
@@ -74,8 +74,22 @@ export type TagName = keyof typeof TAG;
 // would leak the cleared value into the following sibling.
 // ---------------------------------------------------------------------------
 export const LEAF_FLAG_READONLY = 1 << 0;
+
 /** Mirrors LEAF_FLAG_RETAIN in runtime/include/debug_table.hpp. */
 export const LEAF_FLAG_RETAIN = 1 << 1;
+
+/** How a reference kind reads in a "not debuggable" warning. */
+const REFERENCE_KIND_TEXT: Record<string, string> = {
+  pointer_to: "a POINTER TO",
+  ref_to: "a REF_TO",
+  reference_to: "a REFERENCE TO",
+};
+
+/** Why an array whose elements are pointers or references is left out. */
+function arrayOfReferencesReason(kind: string): string {
+  const text = (REFERENCE_KIND_TEXT[kind] ?? "a reference").replace(/^a /, "");
+  return `an array of ${text} holds addresses, which the debugger cannot show or write.`;
+}
 
 /**
  * Apply one var block's qualifiers to the flags inherited from its container.
@@ -489,6 +503,20 @@ export function generateDebugTable(
     }
   };
 
+  // The reference kind a TYPE alias resolves to (`TYPE PI : POINTER TO INT`), if any.
+  const aliasReferenceKind = (typeName: string): string | undefined => {
+    let name = typeName;
+    for (let depth = 0; depth < MAX_TYPE_ALIAS_DEPTH; depth++) {
+      const def = symbolTables.lookupType(name)?.declaration?.definition;
+      if (def?.kind !== "TypeReference") return undefined;
+      if (def.referenceKind !== undefined && def.referenceKind !== "none") {
+        return def.referenceKind;
+      }
+      name = def.name;
+    }
+    return undefined;
+  };
+
   // visitTypeRef walks a TypeReference: elementary type → leaf, inline array
   // → per-element recursion, named user type (struct / FB / elementary alias)
   // → recurse into definition.
@@ -498,8 +526,30 @@ export function generateDebugTable(
     typeRef: TypeReference,
     flags: number,
   ): void => {
+    // Pointers are left out: the table has no per-leaf width and pointer size varies per target.
+    // Checked before the array branch, since a POINTER TO ARRAY has dimensions too.
+    if (
+      typeRef.referenceKind !== undefined &&
+      typeRef.referenceKind !== "none"
+    ) {
+      skipped.push({
+        path,
+        reason:
+          `${REFERENCE_KIND_TEXT[typeRef.referenceKind] ?? "reference"} holds an ` +
+          `address, which the debugger cannot show or write.`,
+      });
+      return;
+    }
+
     // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
+      const elementKind =
+        typeRef.elementReferenceChain?.[0] ??
+        aliasReferenceKind(typeRef.elementTypeName);
+      if (elementKind !== undefined) {
+        skipped.push({ path, reason: arrayOfReferencesReason(elementKind) });
+        return;
+      }
       walkArrayDims(
         path,
         cppExpr,
@@ -565,6 +615,15 @@ export function generateDebugTable(
         return;
       }
       if (def.kind === "ArrayDefinition") {
+        const ownKind = def.elementType.referenceKind;
+        const elementKind =
+          ownKind !== undefined && ownKind !== "none"
+            ? ownKind
+            : aliasReferenceKind(def.elementType.name);
+        if (elementKind !== undefined) {
+          skipped.push({ path, reason: arrayOfReferencesReason(elementKind) });
+          return;
+        }
         // TYPE MyArr: ARRAY[0..9] OF INT; END_TYPE
         const dims = def.dimensions
           .filter((d) => !d.isVariableLength)

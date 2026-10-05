@@ -26,6 +26,8 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  ReferenceKind,
+  TypeReference,
   AccessStep,
   ExternalCodePragma,
   MethodDeclaration,
@@ -55,6 +57,7 @@ import {
   parseTodLiteralToNs,
 } from "../project-model.js";
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
+import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
   formatArrayType,
@@ -68,6 +71,10 @@ import {
   getTypeCategory,
   isImplicitlyConvertible,
   resolveFieldType as resolveFieldTypeUtil,
+  resolveAccessType,
+  resolveArrayElementAccessType,
+  resolveFieldDeclaration as resolveFieldDeclarationUtil,
+  type AccessLookup,
   resolveArrayElementType as resolveArrayElementTypeUtil,
   resolveArrayShapeByName,
   typeName as typeNameUtil,
@@ -83,6 +90,33 @@ import {
 // =============================================================================
 // Located Variable Support
 // =============================================================================
+
+/** `__VLA_<rank>D_<ElementType>`, the AST builder's name for an `ARRAY [*]`. */
+const VLA_TYPE_NAME = /^__VLA_(\d+)D_(.+)$/;
+
+/** The parts of a type reference that decide its C++ type. */
+interface TypeShape {
+  name: string;
+  maxLength?: number | string;
+  referenceKind?: string;
+  referenceChain?: ReferenceKind[];
+  arrayDimensions?: Array<{ start: number; end: number }>;
+  elementTypeName?: string;
+  elementReferenceChain?: ReferenceKind[];
+}
+
+/** What codegen keeps about a library FB member's type. */
+interface LibraryFieldShape {
+  arrayDimensions?: Array<{ start: number; end: number }>;
+  elementTypeName?: string;
+  referenceKind?: ReferenceKind;
+}
+
+/** A library FB member as read from its manifest. */
+interface LibraryField extends LibraryFieldShape {
+  name: string;
+  type: string;
+}
 
 /**
  * Information about a located variable for code generation.
@@ -438,14 +472,7 @@ export class CodeGenerator {
   private libraryFBFieldTypes: Map<string, string> = new Map();
 
   /** Extended type metadata for library FB fields (array dims, reference kind) */
-  private libraryFBFieldTypeRefs: Map<
-    string,
-    {
-      arrayDimensions?: Array<{ start: number; end: number }>;
-      elementTypeName?: string;
-      referenceKind?: string;
-    }
-  > = new Map();
+  private libraryFBFieldTypeRefs: Map<string, LibraryFieldShape> = new Map();
 
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
@@ -457,6 +484,9 @@ export class CodeGenerator {
    *  | "pointer_to") for current scope. Only reference/pointer vars are present;
    *  used e.g. to pick the correct lowering for a REF= rebind. */
   protected currentScopeVarRefKinds: Map<string, string> = new Map();
+
+  /** Map of variable name (upper case) → declared type, for current scope. */
+  protected currentScopeVarTypeRefs: Map<string, TypeReference> = new Map();
 
   /** Parent class name of current FB (for SUPER resolution) */
   private currentFBExtends: string | undefined;
@@ -552,7 +582,7 @@ export class CodeGenerator {
   ): string {
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     // Use IECVar-wrapped types to match concrete Array1D<IEC_T, ...> elements
-    const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
+    const vlaMatch = VLA_TYPE_NAME.exec(typeName);
     if (vlaMatch) {
       const ndims = vlaMatch[1];
       const elemType = this.mapVarTypeToCpp(vlaMatch[2]!);
@@ -606,23 +636,7 @@ export class CodeGenerator {
    * &-reference — matching the previous behavior of the call sites that
    * went through `mapVarTypeToCpp(decl.type.name)` without maxLength.
    */
-  protected toParamTypeRef<
-    T extends {
-      name: string;
-      maxLength?: number | string;
-      referenceKind?: string;
-      arrayDimensions?: Array<{ start: number; end: number }>;
-      elementTypeName?: string;
-    },
-  >(
-    typeRef: T,
-  ): {
-    name: string;
-    maxLength?: number | string;
-    referenceKind?: string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-  } {
+  protected toParamTypeRef<T extends TypeShape>(typeRef: T): TypeShape {
     const upper = typeRef.name.toUpperCase();
     const isString = upper === "STRING" || upper === "WSTRING";
     return {
@@ -636,8 +650,14 @@ export class CodeGenerator {
       ...(typeRef.elementTypeName !== undefined
         ? { elementTypeName: typeRef.elementTypeName }
         : {}),
+      ...(typeRef.elementReferenceChain !== undefined
+        ? { elementReferenceChain: typeRef.elementReferenceChain }
+        : {}),
       ...(typeRef.referenceKind !== undefined
         ? { referenceKind: typeRef.referenceKind }
+        : {}),
+      ...(typeRef.referenceChain !== undefined
+        ? { referenceChain: typeRef.referenceChain }
         : {}),
     };
   }
@@ -650,19 +670,9 @@ export class CodeGenerator {
    * this helper rewires the fields so the shape matches what the
    * type-resolution helpers expect.
    */
-  private projectVarToTypeRef(spec: {
-    typeName: string;
-    maxLength?: number | string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-    referenceKind?: string;
-  }): {
-    name: string;
-    maxLength?: number | string;
-    referenceKind?: string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-  } {
+  private projectVarToTypeRef(
+    spec: Omit<TypeShape, "name"> & { typeName: string },
+  ): TypeShape {
     return {
       name: spec.typeName,
       ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
@@ -672,29 +682,60 @@ export class CodeGenerator {
       ...(spec.elementTypeName !== undefined
         ? { elementTypeName: spec.elementTypeName }
         : {}),
+      ...(spec.elementReferenceChain !== undefined
+        ? { elementReferenceChain: spec.elementReferenceChain }
+        : {}),
       ...(spec.referenceKind !== undefined
         ? { referenceKind: spec.referenceKind }
+        : {}),
+      ...(spec.referenceChain !== undefined
+        ? { referenceChain: spec.referenceChain }
         : {}),
     };
   }
 
-  protected mapTypeRefToCpp(typeRef: {
-    name: string;
-    maxLength?: number | string;
-    referenceKind?: string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-  }): string {
+  /**
+   * The type a pointer or reference wraps: the raw struct / FB / program name
+   * for a user type, the raw value type (`INT_t`) for an elementary one. The
+   * wrappers hold an IECVar<T> themselves.
+   */
+  private rawReferencedType(name: string): string {
+    if (this.isUserDefinedType(name)) {
+      return this.knownProgramTypes.has(name.toUpperCase())
+        ? `Program_${name}`
+        : name;
+    }
+    return this.typeCodeGen.mapTypeToCpp(name);
+  }
+
+  protected mapTypeRefToCpp(typeRef: TypeShape): string {
     let baseType: string;
 
     // Handle inline array types with dimension info
     // Array1D stores T directly — use IECVar-wrapped types for elementary elements
     // and bare names for composites (whose fields already contain IECVar leaves)
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-      const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
-        ? typeRef.elementTypeName
-        : this.mapVarTypeToCpp(typeRef.elementTypeName);
+      const elemCpp = typeRef.elementReferenceChain
+        ? // ARRAY OF POINTER TO / REF_TO: each element is the wrapper a variable gets.
+          wrapReferenceChain(
+            typeRef.elementReferenceChain,
+            this.rawReferencedType(typeRef.elementTypeName),
+          )
+        : this.isUserDefinedType(typeRef.elementTypeName)
+          ? typeRef.elementTypeName
+          : this.mapVarTypeToCpp(typeRef.elementTypeName);
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
+    } else if (
+      typeRef.elementReferenceChain &&
+      VLA_TYPE_NAME.test(typeRef.name)
+    ) {
+      // ARRAY[*] OF POINTER TO / REF_TO: a view over the same wrappers.
+      const [, ndims, elem] = VLA_TYPE_NAME.exec(typeRef.name)!;
+      const elemCpp = wrapReferenceChain(
+        typeRef.elementReferenceChain,
+        this.rawReferencedType(elem!),
+      );
+      baseType = `ArrayView${ndims}D<${elemCpp}>`;
     } else {
       baseType = this.mapVarTypeToCpp(
         typeRef.name,
@@ -710,32 +751,16 @@ export class CodeGenerator {
       // Pointer (IEC_Ptr<T>) and reference (IEC_REF_TO<T> / IEC_REFERENCE_TO<T>)
       // wrappers all take the raw element type (not IECVar-wrapped); they wrap
       // an IECVar<T> internally.
-      let elemType: string;
-      if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-        // Array pointer/reference: baseType is already raw (Array1D<...>)
-        elemType = baseType;
-      } else if (this.isUserDefinedType(typeRef.name)) {
-        // UDT: use raw struct/FB/program name
-        elemType = this.knownProgramTypes.has(typeRef.name.toUpperCase())
-          ? `Program_${typeRef.name}`
-          : typeRef.name;
-      } else {
-        // Primitive type: use raw type mapping (BYTE_t, INT_t, etc.)
-        elemType = this.typeCodeGen.mapTypeToCpp(typeRef.name);
-      }
-      switch (typeRef.referenceKind) {
-        case "pointer_to":
-          // IEC_Ptr<T> — cross-type assignment, pointer arithmetic,
-          // pointer-to-integer conversion.
-          return `IEC_Ptr<${elemType}>`;
-        case "ref_to":
-          // REF_TO — explicit dereference (^), nullable, rebind via
-          // `:= REF(x)` / `:= ADR(x)`.
-          return `IEC_REF_TO<${elemType}>`;
-        case "reference_to":
-          // REFERENCE TO — implicit dereference, rebind via `REF=`.
-          return `IEC_REFERENCE_TO<${elemType}>`;
-      }
+      // Array pointer/reference: baseType is already raw (Array1D<...>)
+      const elemType =
+        typeRef.arrayDimensions && typeRef.elementTypeName
+          ? baseType
+          : this.rawReferencedType(typeRef.name);
+      // Nested levels (`POINTER TO REF_TO INT`) wrap innermost first.
+      return wrapReferenceChain(
+        typeRef.referenceChain ?? [typeRef.referenceKind],
+        elemType,
+      );
     }
     // For STRING(CONSTANT_NAME), emit template with the constant name
     if (typeof typeRef.maxLength === "string") {
@@ -766,13 +791,7 @@ export class CodeGenerator {
       name: string;
       inputNames: string[];
       inoutNames: string[];
-      fields: Array<{
-        name: string;
-        type: string;
-        arrayDimensions?: Array<{ start: number; end: number }>;
-        elementTypeName?: string;
-        referenceKind?: string;
-      }>;
+      fields: Array<LibraryField>;
     }>,
   ): void {
     for (const fb of fbs) {
@@ -797,11 +816,7 @@ export class CodeGenerator {
         );
         // Store array metadata for inline array type reconstruction
         if (f.arrayDimensions || f.elementTypeName || f.referenceKind) {
-          const ref: {
-            arrayDimensions?: Array<{ start: number; end: number }>;
-            elementTypeName?: string;
-            referenceKind?: string;
-          } = {};
+          const ref: LibraryFieldShape = {};
           if (f.arrayDimensions) ref.arrayDimensions = f.arrayDimensions;
           if (f.elementTypeName) ref.elementTypeName = f.elementTypeName;
           if (f.referenceKind) ref.referenceKind = f.referenceKind;
@@ -842,23 +857,8 @@ export class CodeGenerator {
     for (const archive of archives) {
       this.registerLibraryFBTypes(
         archive.manifest.functionBlocks.map((fb) => {
-          const mapVar = (v: {
-            name: string;
-            type: string;
-            arrayDimensions?: Array<{ start: number; end: number }>;
-            elementTypeName?: string;
-            referenceKind?: string;
-          }) => {
-            const entry: {
-              name: string;
-              type: string;
-              arrayDimensions?: Array<{ start: number; end: number }>;
-              elementTypeName?: string;
-              referenceKind?: string;
-            } = {
-              name: v.name,
-              type: v.type,
-            };
+          const mapVar = (v: LibraryField): LibraryField => {
+            const entry: LibraryField = { name: v.name, type: v.type };
             if (v.arrayDimensions) entry.arrayDimensions = v.arrayDimensions;
             if (v.elementTypeName) entry.elementTypeName = v.elementTypeName;
             if (v.referenceKind) entry.referenceKind = v.referenceKind;
@@ -1081,7 +1081,9 @@ export class CodeGenerator {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
-        enumDescriptors.push({ name: td.name, members: memberNames });
+        if (td.inline?.owner === undefined) {
+          enumDescriptors.push({ name: td.name, members: memberNames });
+        }
       }
     }
     this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
@@ -2441,8 +2443,14 @@ export class CodeGenerator {
           ...(decl.elementTypeName !== undefined
             ? { elementTypeName: decl.elementTypeName }
             : {}),
+          ...(decl.elementReferenceChain !== undefined
+            ? { elementReferenceChain: decl.elementReferenceChain }
+            : {}),
           ...(decl.referenceKind !== undefined
             ? { referenceKind: decl.referenceKind }
+            : {}),
+          ...(decl.referenceChain !== undefined
+            ? { referenceChain: decl.referenceChain }
             : {}),
         });
         const memberName = this.mangleMemberIfNeeded(decl.name, decl.typeName);
@@ -3304,7 +3312,7 @@ export class CodeGenerator {
     const source = this.generateExpression(stmt.source);
     const targetKind =
       stmt.target.kind === "VariableExpression"
-        ? this.currentScopeVarRefKinds.get(stmt.target.name.toUpperCase())
+        ? this.refAssignTargetKind(stmt.target)
         : undefined;
     if (targetKind === "ref_to") {
       this.emit(`${indent}${target} = REF(${source});`);
@@ -3313,6 +3321,41 @@ export class CodeGenerator {
       this.emit(`${indent}${target}.bind(${source});`);
     }
   }
+
+  /**
+   * The reference kind of a REF= target: a variable's own, or for a member or
+   * element (`s.r`, `arr[1]`) the declared kind of what it lands on.
+   */
+  private refAssignTargetKind(target: VariableExpression): string | undefined {
+    const nameUpper = target.name.toUpperCase();
+    const hasAccess =
+      target.subscripts.length > 0 ||
+      target.fieldAccess.length > 0 ||
+      target.isDereference ||
+      (target.accessChain !== undefined && target.accessChain.length > 0);
+    if (!hasAccess) return this.currentScopeVarRefKinds.get(nameUpper);
+    const base = this.currentScopeVarTypeRefs.get(nameUpper);
+    if (base === undefined) return undefined;
+    return resolveAccessType(base, target, this.accessLookup)?.referenceKind;
+  }
+
+  /** Member and element lookups over the AST and the library FBs. */
+  private readonly accessLookup: AccessLookup = {
+    field: (type, field) => {
+      const local = this.ast
+        ? resolveFieldDeclarationUtil(type, field, this.ast)
+        : undefined;
+      if (local) return local;
+      // A library function block: its member types come from the manifest.
+      const key = `${type.toUpperCase()}.${field.toUpperCase()}`;
+      const name = this.libraryFBFieldTypes.get(key);
+      if (name === undefined) return undefined;
+      const kind = this.libraryFBFieldTypeRefs.get(key)?.referenceKind;
+      return { type: { name, referenceKind: kind ?? "none" } };
+    },
+    arrayElement: (type) =>
+      this.ast ? resolveArrayElementAccessType(type, this.ast) : undefined,
+  };
 
   /**
    * Generate code for an external code pragma.
@@ -5140,6 +5183,7 @@ export class CodeGenerator {
   ): void {
     this.currentScopeVarTypes.clear();
     this.currentScopeVarRefKinds.clear();
+    this.currentScopeVarTypeRefs.clear();
     this.memberMangledNames.clear();
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
@@ -5148,6 +5192,7 @@ export class CodeGenerator {
           : `IEC_${decl.type.name}`;
         for (const name of decl.names) {
           this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
+          this.currentScopeVarTypeRefs.set(name.toUpperCase(), decl.type);
           if (
             decl.type.referenceKind !== undefined &&
             decl.type.referenceKind !== "none"

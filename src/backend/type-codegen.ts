@@ -26,6 +26,7 @@ import {
   formatIntegerLiteral,
   translateIECString,
 } from "./codegen-utils.js";
+import { wrapReferenceChain } from "./reference-types.js";
 import { mangledMemberName } from "./member-mangling.js";
 import {
   parseDateLiteralToDays,
@@ -144,6 +145,32 @@ export const IEC_TO_CPP_VAR_TYPE: Record<string, string> = {
 };
 
 /**
+ * The C++ type of a struct field or type alias declared POINTER TO, which is a
+ * raw pointer. `cppType` is the pointee as a single level spells it today;
+ * `rawType` is the unwrapped element (`INT_t`, a UDT name). With more levels,
+ * the pointee is itself a reference variable, so `POINTER TO POINTER TO INT`
+ * is `IEC_Ptr<INT_t>*` and `POINTER TO REF_TO INT` is `IEC_REF_TO<INT_t>*`.
+ */
+function rawPointerType(
+  typeRef: TypeReference,
+  cppType: string,
+  rawType: string,
+): string {
+  const chain = typeRef.referenceChain ?? [typeRef.referenceKind];
+  if (chain[0] !== "pointer_to") return cppType;
+  if (chain.length === 1) return `${cppType}*`;
+  return `${wrapReferenceChain(chain.slice(1), rawType)}*`;
+}
+
+/** A field or alias whose outermost level is REF_TO or REFERENCE TO. */
+function isReferenceField(typeRef: TypeReference): boolean {
+  return (
+    typeRef.referenceKind === "ref_to" ||
+    typeRef.referenceKind === "reference_to"
+  );
+}
+
+/**
  * Type Code Generator for user-defined types
  */
 export class TypeCodeGenerator {
@@ -195,7 +222,11 @@ export class TypeCodeGenerator {
     // Build reverse map for bare enum member qualification
     this.enumMemberToType = buildEnumMemberMap(
       types
-        .filter((t) => t.definition.kind === "EnumDefinition")
+        .filter(
+          (t) =>
+            t.definition.kind === "EnumDefinition" &&
+            t.inline?.owner === undefined,
+        )
         .map((t) => ({
           name: t.name,
           members: (
@@ -318,8 +349,9 @@ export class TypeCodeGenerator {
       let cppType: string;
       if (field.type.arrayDimensions && field.type.elementTypeName) {
         // Inline array type: emit Array1D/2D/3D<WrappedElementType, bounds...>
-        const elemCpp = this.mapStructFieldTypeToCpp(
+        const elemCpp = this.arrayElementTypeToCpp(
           field.type.elementTypeName,
+          field.type.elementReferenceChain,
         );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
@@ -328,9 +360,16 @@ export class TypeCodeGenerator {
           field.type.maxLength,
         );
       }
-      if (field.type.referenceKind === "pointer_to") {
-        cppType += "*";
-      }
+      const rawType = field.type.arrayDimensions
+        ? cppType
+        : this.mapTypeToCpp(field.type.name);
+      cppType = isReferenceField(field.type)
+        ? // REF_TO / REFERENCE TO: the same wrapper a variable gets.
+          wrapReferenceChain(
+            field.type.referenceChain ?? [field.type.referenceKind],
+            rawType,
+          )
+        : rawPointerType(field.type, cppType, rawType);
       for (const fieldName of field.names) {
         // One rule, shared with the class definition and the debug table — see
         // member-mangling.ts. Compare against the ST type name, not cppType
@@ -424,7 +463,13 @@ export class TypeCodeGenerator {
    * IEC 61131-3 array semantics (arrays can have arbitrary start indices).
    */
   private generateArrayType(name: string, def: ArrayDefinition): void {
-    const elementType = this.mapStructFieldTypeToCpp(def.elementType.name);
+    const elementKind = def.elementType.referenceKind;
+    const elementType = this.arrayElementTypeToCpp(
+      def.elementType.name,
+      elementKind === undefined || elementKind === "none"
+        ? undefined
+        : (def.elementType.referenceChain ?? [elementKind]),
+    );
     const numDims = def.dimensions.length;
 
     // Collect bounds for all dimensions (skip variable-length dimensions)
@@ -496,16 +541,36 @@ export class TypeCodeGenerator {
     let cppType: string;
     if (def.arrayDimensions && def.elementTypeName) {
       // POINTER TO ARRAY[...] OF T — use array template
-      const elemCpp = this.mapTypeToCpp(def.elementTypeName);
+      const elemCpp = def.elementReferenceChain
+        ? wrapReferenceChain(
+            def.elementReferenceChain,
+            this.mapTypeToCpp(def.elementTypeName),
+          )
+        : this.mapTypeToCpp(def.elementTypeName);
       cppType = formatArrayType(elemCpp, def.arrayDimensions);
     } else {
       cppType = this.mapTypeToCpp(def.name);
     }
-    if (def.referenceKind === "pointer_to") {
-      cppType += "*";
-    }
+    const rawType = def.arrayDimensions ? cppType : this.mapTypeToCpp(def.name);
+    cppType = isReferenceField(def)
+      ? wrapReferenceChain(def.referenceChain ?? [def.referenceKind], rawType)
+      : rawPointerType(def, cppType, rawType);
     this.emit(`using ${name} = ${cppType};`);
     this.emit("");
+  }
+
+  /**
+   * The C++ element type of an array: the IECVar-wrapped type for a value
+   * element, or for an element declared POINTER TO / REF_TO the wrapper a
+   * variable of that type gets (`IEC_Ptr<INT_t>`).
+   */
+  private arrayElementTypeToCpp(
+    typeName: string,
+    referenceChain: readonly string[] | undefined,
+  ): string {
+    return referenceChain
+      ? wrapReferenceChain(referenceChain, this.mapTypeToCpp(typeName))
+      : this.mapStructFieldTypeToCpp(typeName);
   }
 
   /**

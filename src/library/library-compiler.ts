@@ -94,8 +94,14 @@ function serializeVarType(
   if (typeRef.elementTypeName) {
     entry.elementTypeName = typeRef.elementTypeName;
   }
+  if (typeRef.elementReferenceChain) {
+    entry.elementReferenceChain = typeRef.elementReferenceChain;
+  }
   if (typeRef.referenceKind && typeRef.referenceKind !== "none") {
     entry.referenceKind = typeRef.referenceKind;
+  }
+  if (typeRef.referenceChain) {
+    entry.referenceChain = typeRef.referenceChain;
   }
   return entry;
 }
