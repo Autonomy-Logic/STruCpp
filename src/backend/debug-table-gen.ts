@@ -326,8 +326,11 @@ export interface DebugTableResult {
 // ---------------------------------------------------------------------------
 
 export interface DebugTableGenOptions {
-  /** Max entries per debug array. Default 8000 — safe under AVR's 32767-byte
-   *  per-object limit assuming sizeof(Entry) == 4. */
+  /** Max entries per debug array. Default 6000 — under AVR's 32767-byte
+   *  per-object limit with sizeof(Entry) == 5 there (2-byte pointer, tag,
+   *  flags, cap): 6000 * 5 = 30000. Each array is also static_assert'ed on
+   *  AVR, so a bigger Entry fails the build with a clear message instead of
+   *  "size of array is too large". */
   maxEntriesPerArray?: number;
   /** Name of the global configuration instance the generated table references.
    *  The sketch / runtime must declare this with external linkage. */
@@ -338,7 +341,7 @@ export interface DebugTableGenOptions {
 }
 
 const DEFAULTS: Required<Omit<DebugTableGenOptions, "md5">> = {
-  maxEntriesPerArray: 8000,
+  maxEntriesPerArray: 6000,
   configGlobalName: "g_config",
 };
 
@@ -1152,6 +1155,11 @@ function renderCpp(
       }
     }
     lines.push("};");
+    lines.push("#ifdef __AVR__");
+    lines.push(
+      `static_assert(sizeof(debug_arr_${ai}) <= 32767, "debug_arr_${ai} is over AVR's 32767-byte object limit: lower maxEntriesPerArray");`,
+    );
+    lines.push("#endif");
     lines.push("");
   }
 

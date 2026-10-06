@@ -363,6 +363,7 @@ export class TypeCodeGenerator {
         // Inline array type: emit Array1D/2D/3D<WrappedElementType, bounds...>
         const elemCpp = this.mapStructFieldTypeToCpp(
           field.type.elementTypeName,
+          field.type.elementMaxLength,
         );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
@@ -471,7 +472,10 @@ export class TypeCodeGenerator {
    * IEC 61131-3 array semantics (arrays can have arbitrary start indices).
    */
   private generateArrayType(name: string, def: ArrayDefinition): void {
-    const elementType = this.mapStructFieldTypeToCpp(def.elementType.name);
+    const elementType = this.mapStructFieldTypeToCpp(
+      def.elementType.name,
+      def.elementType.maxLength,
+    );
     const numDims = def.dimensions.length;
 
     // Collect bounds for all dimensions (skip variable-length dimensions)

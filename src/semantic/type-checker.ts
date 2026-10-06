@@ -584,19 +584,25 @@ export class TypeChecker {
     const leftType = this.resolveExprType(expr.left, scope);
     const rightType = this.resolveExprType(expr.right, scope);
 
+    // A comparison is BOOL whatever its operands are, so it is typed even
+    // when an operand is not (a bare enumeration value, for one). Leaving it
+    // untyped let NOT's generic ANY_BIT result through to an IF condition.
+    if (["=", "<>", "<", ">", "<=", ">="].includes(expr.operator)) {
+      const bool = ELEMENTARY_TYPES["BOOL"];
+      if (bool) expr.resolvedType = bool;
+      return bool;
+    }
+
     if (leftType === undefined || rightType === undefined) {
       return undefined;
     }
 
     let type: IECType | undefined;
 
-    // Comparison operators always return BOOL
-    if (["=", "<>", "<", ">", "<=", ">="].includes(expr.operator)) {
-      type = ELEMENTARY_TYPES["BOOL"];
-    }
-    // Logical operators return BOOL
-    else if (["AND", "OR", "XOR"].includes(expr.operator)) {
-      type = ELEMENTARY_TYPES["BOOL"];
+    // AND/OR/XOR are bitwise on ANY_BIT (IEC 61131-3 table 28): BOOL with
+    // BOOL is BOOL, BYTE XOR BYTE is BYTE, and mixed widths take the wider.
+    if (["AND", "OR", "XOR"].includes(expr.operator)) {
+      type = getCommonType(leftType, rightType) ?? leftType;
     }
     // IEC 61131-3 date/time arithmetic (table 30 of the standard).
     // Date types are int64_t aliases at the C++ level so the operator-

@@ -410,12 +410,14 @@ inline T MIN(T a, T b) noexcept {
 /**
  * LIMIT - Limit value to range [mn, mx]
  * Input: ANY_ELEMENTARY, Output: ANY_ELEMENTARY (same type)
+ *
+ * IEC 61131-3 table 24: OUT := MIN(MAX(IN, MN), MX), so MX wins when
+ * MN > MX.
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline T LIMIT(T mn, T in, T mx) noexcept {
-    if (iec_unwrap(in) < iec_unwrap(mn)) return mn;
-    if (iec_unwrap(in) > iec_unwrap(mx)) return mx;
-    return in;
+    T v = iec_unwrap(in) < iec_unwrap(mn) ? mn : in;
+    return iec_unwrap(v) > iec_unwrap(mx) ? mx : v;
 }
 
 // Mixed-type MIN/MAX/LIMIT/SEL overloads (OSCAT mixes e.g. INT with DINT)
@@ -447,9 +449,8 @@ inline auto LIMIT(T1 mn, T2 in, T3 mx) noexcept
     auto vmn = static_cast<CT>(iec_unwrap(mn));
     auto vin = static_cast<CT>(iec_unwrap(in));
     auto vmx = static_cast<CT>(iec_unwrap(mx));
-    if (vin < vmn) return vmn;
-    if (vin > vmx) return vmx;
-    return vin;
+    CT v = vin < vmn ? vmn : vin;
+    return v > vmx ? vmx : v;
 }
 
 template<typename T, typename U,

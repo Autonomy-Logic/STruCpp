@@ -7,7 +7,7 @@
  * Uses Chevrotain's embedded DSL for grammar definition.
  */
 
-import { CstParser, CstNode, type TokenType } from "chevrotain";
+import { CstParser, CstNode, EOF, type TokenType } from "chevrotain";
 import * as tokens from "./lexer.js";
 import { resolveErrorMessageProvider } from "./parser-error-message-provider.js";
 
@@ -1147,17 +1147,15 @@ export class STParser extends CstParser {
     ) {
       return false;
     }
-    // Scan forward looking for Colon before Assign/Semicolon/LParen.
-    // 8-token cap covers all realistic label patterns:
-    //   42:                → 2 tokens    EnumType.MEMBER:  → 4 tokens
-    //   -5:                → 3 tokens    1, 2, 3, 4:       → 8 tokens
-    //   1..10:             → 4 tokens
-    // The AT_LEAST_ONE_SEP in caseElement handles comma-separated labels
-    // internally, so the gate only needs to detect the first label's colon.
-    for (let i = 2; i <= 8; i++) {
+    // Scan forward to the label's Colon, stopping at anything only a
+    // statement can contain (Assign, Semicolon, LParen). No length cap: IEC
+    // puts no limit on a label list, and `2, 3, 4, 5, 6:` is already ten
+    // tokens (an 8-token cap rejected five labels or more).
+    for (let i = 2; ; i++) {
       const t = this.LA(i).tokenType;
       if (t === tokens.Colon) return true;
       if (
+        t === EOF ||
         t === tokens.Assign ||
         t === tokens.Semicolon ||
         t === tokens.LParen ||

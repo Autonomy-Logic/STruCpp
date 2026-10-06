@@ -147,6 +147,71 @@ export const TYPE_CLASS_BY_IEC_TYPE: Readonly<Record<string, string>> = {
 };
 
 /**
+ * Every `__SYSTEM.TYPE_CLASS` enumerator, as `iec_type_class.hpp` defines
+ * them. CODESYS code compares a generic's class against these by their
+ * qualified name: `IF In.TypeClass = __SYSTEM.TYPE_CLASS.TYPE_INT THEN`.
+ */
+export const TYPE_CLASS_MEMBERS: readonly string[] = [
+  "TYPE_BOOL",
+  "TYPE_BIT",
+  "TYPE_BYTE",
+  "TYPE_WORD",
+  "TYPE_DWORD",
+  "TYPE_LWORD",
+  "TYPE_SINT",
+  "TYPE_INT",
+  "TYPE_DINT",
+  "TYPE_LINT",
+  "TYPE_USINT",
+  "TYPE_UINT",
+  "TYPE_UDINT",
+  "TYPE_ULINT",
+  "TYPE_REAL",
+  "TYPE_LREAL",
+  "TYPE_STRING",
+  "TYPE_WSTRING",
+  "TYPE_TIME",
+  "TYPE_DATE",
+  "TYPE_DATEANDTIME",
+  "TYPE_TIMEOFDAY",
+  "TYPE_POINTER",
+  "TYPE_REFERENCE",
+  "TYPE_SUBRANGE",
+  "TYPE_ENUM",
+  "TYPE_ARRAY",
+  "TYPE_PARAMS",
+  "TYPE_USERDEF",
+  "TYPE_NONE",
+  "TYPE_ANY",
+  "TYPE_ANYBIT",
+  "TYPE_ANYDATE",
+  "TYPE_ANYINT",
+  "TYPE_ANYNUM",
+  "TYPE_ANYREAL",
+  "TYPE_LAZY",
+  "TYPE_LTIME",
+  "TYPE_BITCONST",
+];
+
+/**
+ * Whether a variable reference is written `__SYSTEM.TYPE_CLASS.<member>`.
+ * Returns `undefined` when it is not that shape, otherwise the member in upper
+ * case — which may not be a real enumerator; check `TYPE_CLASS_MEMBERS`.
+ */
+export function systemTypeClassMember(expr: {
+  name: string;
+  fieldAccess: string[];
+  subscripts: unknown[];
+  isDereference: boolean;
+}): string | undefined {
+  if (expr.name.toUpperCase() !== "__SYSTEM") return undefined;
+  if (expr.subscripts.length > 0 || expr.isDereference) return undefined;
+  if (expr.fieldAccess.length !== 2) return undefined;
+  if (expr.fieldAccess[0]!.toUpperCase() !== "TYPE_CLASS") return undefined;
+  return expr.fieldAccess[1]!.toUpperCase();
+}
+
+/**
  * The descriptor type behind a generic parameter, as CODESYS names it.
  *
  * `ANY` cannot be a variable — the caller fills the descriptor and a local has

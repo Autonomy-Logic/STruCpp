@@ -445,7 +445,7 @@ describe("Phase 3.2: WHILE Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while (((X < 10)) & ((Y > 0))) {");
+    expect(result.cppCode).toContain("while (static_cast<bool>(((X < 10)) & ((Y > 0)))) {");
     expect(result.cppCode).toContain("X = X + 1;");
     expect(result.cppCode).toContain("Y = Y - 1;");
   });
@@ -638,7 +638,7 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_FUNCTION_BLOCK
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if ((ENABLE) & (!PREV)) {");
+    expect(result.cppCode).toContain("if (static_cast<bool>((ENABLE) & (!PREV))) {");
     expect(result.cppCode).toContain("COUNT = COUNT + 1;");
     expect(result.cppCode).toContain("PREV = ENABLE;");
   });

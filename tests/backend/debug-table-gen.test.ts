@@ -292,11 +292,44 @@ CONFIGURATION Config0
   END_RESOURCE
 END_CONFIGURATION
 `;
-    // compile() uses default 8000 cap, so we can't easily test the split
+    // compile() uses the default cap, so we can't easily test the split
     // via compile(). Test the helper directly with a smaller cap (see unit
     // tests above). For now, just verify all 10 leaves make it in.
     const result = compile(manyVarsSource);
     expect(result.debugMap!.leaves.length).toBe(10);
+  });
+
+  it("keeps each debug array under AVR's 32767-byte object limit", () => {
+    // On AVR an Entry is 5 bytes (2-byte pointer, tag, flags, cap), so 8000
+    // entries made a 40000-byte array and avr-g++ refused the program
+    // ("size of array is too large"). 7000 leaves now split 6000 + 1000, and
+    // each array carries an AVR-only static_assert on its size.
+    const source = `
+PROGRAM main
+  VAR
+    a : ARRAY[0..6999] OF BOOL;
+  END_VAR
+  a[0] := TRUE;
+END_PROGRAM
+
+CONFIGURATION Config0
+  RESOURCE Res0 ON PLC
+    TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+    PROGRAM p WITH t : main;
+  END_RESOURCE
+END_CONFIGURATION
+`;
+    const result = compile(source);
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+    const cpp = result.debugTableCpp!;
+    expect(cpp).toContain("const Entry debug_arr_0[6000]");
+    expect(cpp).toContain("const Entry debug_arr_1[1000]");
+    expect(cpp).toMatch(
+      /#ifdef __AVR__\nstatic_assert\(sizeof\(debug_arr_0\) <= 32767/,
+    );
+    expect(cpp).toMatch(
+      /#ifdef __AVR__\nstatic_assert\(sizeof\(debug_arr_1\) <= 32767/,
+    );
   });
 
   it("embeds the md5 option into the map", () => {
