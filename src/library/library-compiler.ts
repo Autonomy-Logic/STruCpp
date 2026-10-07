@@ -275,7 +275,11 @@ function buildFBEntry(fb: {
   name: string;
   varBlocks: Array<{
     blockType: string;
-    declarations: Array<{ names: string[]; type: TypeReference }>;
+    declarations: Array<{
+      names: string[];
+      type: TypeReference;
+      initialValue?: Expression;
+    }>;
   }>;
 }): LibraryFBEntry {
   const varsOfBlock = (blockType: string): LibraryVarType[] =>
@@ -283,7 +287,16 @@ function buildFBEntry(fb: {
       .filter((b) => b.blockType === blockType)
       .flatMap((b) =>
         b.declarations.flatMap((d) =>
-          d.names.map((n) => serializeVarType(n, d.type)),
+          d.names.map((n) => {
+            const entry = serializeVarType(n, d.type);
+            // An input's default, as function parameters carry theirs: it tells
+            // tooling the pin may be left unwired (a block's `ENABLE := TRUE`).
+            if (blockType === "VAR_INPUT" && d.initialValue !== undefined) {
+              const initial = serializeInitialValue(d.initialValue);
+              if (initial !== undefined) entry.initialValue = initial;
+            }
+            return entry;
+          }),
         ),
       );
 

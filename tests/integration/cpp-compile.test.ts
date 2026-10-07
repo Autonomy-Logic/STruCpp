@@ -48,6 +48,68 @@ describeIfGpp('C++ Compilation Tests', () => {
   // Basic program, variable, FB, and function compilation tests removed —
   // covered by st-validation behavioral tests.
 
+  it('should compile ST identifiers that platform headers #define as macros', () => {
+    // <Arduino.h> on ESP32 defines PI, HIGH, ANALOG …, and the Xtensa headers
+    // register names such as WINDOWSTART, all as plain macros. A TU that
+    // includes them before generated.hpp (a C/C++ block, the Arduino glue)
+    // used to expand them inside the declarations: OSCAT's CONSTANTS_MATH has
+    // a member PI. The header saves and removes every identifier it uses and
+    // restores them at its end for a TU that is not STruC++'s own.
+    const source = `
+      TYPE PINS : STRUCT
+        PI : REAL := 3.0;
+        HIGH : BOOL;
+        INPUT : INT;
+        ANALOG : INT;
+        windowStart : TIME;
+      END_STRUCT;
+      END_TYPE
+      PROGRAM MainProgram
+        VAR p : PINS; x : REAL; END_VAR
+        x := p.PI;
+        p.HIGH := x > 1.0;
+        p.ANALOG := p.INPUT + 1;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('#pragma push_macro("PI")');
+    expect(result.headerCode).toContain('#pragma pop_macro("PI")');
+
+    const arduinoMacros = [
+      '-DPI=3.1415926535897932384626433832795',
+      '-DHIGH=0x1',
+      '-DINPUT=0x01',
+      '-DANALOG=0xC0',
+      '-DWINDOWSTART=73',
+    ];
+    // The generated code itself, with the macros defined from the start.
+    const generated = compileWithGppHelper({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName: 'arduino_macro_guard',
+      extraFlags: arduinoMacros,
+    });
+    expect(generated.error ?? '').toBe('');
+    expect(generated.success).toBe(true);
+
+    // A C/C++ block's TU: includes the header, then uses the Arduino macros.
+    const block = compileWithGppHelper({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: '#include "generated.hpp"',
+      testName: 'arduino_macro_guard_block',
+      extraFlags: arduinoMacros,
+      mainCode:
+        'static_assert(PI > 3.0 && HIGH == 1 && ANALOG == 0xC0 && WINDOWSTART == 73, "macros restored");\nint main() { return 0; }',
+    });
+    expect(block.error ?? '').toBe('');
+    expect(block.success).toBe(true);
+  });
+
   it('should compile a configuration with resource and task', () => {
     const source = `
       CONFIGURATION TestConfig

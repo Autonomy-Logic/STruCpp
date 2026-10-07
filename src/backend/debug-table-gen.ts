@@ -39,6 +39,7 @@ import {
 } from "../semantic/type-utils.js";
 import { formatArrayElementAccess } from "./codegen-utils.js";
 import { mangledMemberName } from "./member-mangling.js";
+import { GENERATED_TU_MACRO } from "./codegen.js";
 
 // ---------------------------------------------------------------------------
 // Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
@@ -1115,6 +1116,7 @@ function renderCpp(
   lines.push("// Per-project debugger pointer tables consumed by");
   lines.push("// strucpp::debug::handle_*() in debug_dispatch.hpp.");
   lines.push("");
+  lines.push(`#define ${GENERATED_TU_MACRO}`);
   lines.push('#include "generated.hpp"');
   // `debug_table.hpp` carries the AVR-clean subset (Entry, TypeTag,
   // STRUCPP_DEBUG_FLASH).  Including `debug_dispatch.hpp` here would

@@ -104,6 +104,92 @@ int main() {
     expect(stdout).toBe("42");
   });
 
+  it("calls a library FB with ARRAY [*] inouts without copying the views back", () => {
+    // An `ARRAY [*] OF …` inout is an ArrayView onto the caller's array. A
+    // local FB's was never copied back; a library FB's was (the manifest only
+    // says `__VLA_1D_<T>`), which assigned the view to the array and did not
+    // compile.
+    const libResult = compileStlib(
+      [
+        {
+          source: `
+            TYPE ITEM : STRUCT
+              n : INT;
+            END_STRUCT;
+            END_TYPE
+            FUNCTION_BLOCK Filler
+              VAR_INPUT
+                V : INT;
+              END_VAR
+              VAR_IN_OUT
+                Items : ARRAY[*] OF ITEM;
+                Nums : ARRAY[*] OF INT;
+              END_VAR
+              VAR
+                i : DINT;
+              END_VAR
+              FOR i := LOWER_BOUND(Items, 1) TO UPPER_BOUND(Items, 1) DO
+                Items[i].n := V;
+              END_FOR;
+              FOR i := LOWER_BOUND(Nums, 1) TO UPPER_BOUND(Nums, 1) DO
+                Nums[i] := Nums[i] + V;
+              END_FOR;
+            END_FUNCTION_BLOCK
+          `,
+          fileName: "filler.st",
+        },
+      ],
+      { name: "vla-lib", version: "1.0.0", namespace: "vla" },
+    );
+    expect(libResult.success).toBe(true);
+
+    const libDir = path.join(tempDir, "libs-vla");
+    fs.mkdirSync(libDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(libDir, "vla-lib.stlib"),
+      JSON.stringify(libResult.archive),
+    );
+
+    const userSource = `
+      PROGRAM Main
+        VAR
+          f : Filler;
+          items : ARRAY[1..3] OF ITEM;
+          nums : ARRAY[1..4] OF INT;
+        END_VAR
+        f(V := 5, Items := items, Nums := nums);
+        f(V := 2, Items := items, Nums := nums);
+      END_PROGRAM
+    `;
+    const result = compile(userSource, {
+      libraries: discoverStlibs(libDir),
+    });
+    expect(result.success).toBe(true);
+    expect(result.cppCode).not.toMatch(/ITEMS\s*=\s*F\.ITEMS/);
+    expect(result.cppCode).not.toMatch(/NUMS\s*=\s*F\.NUMS/);
+
+    const mainCode = `
+#include "generated.hpp"
+#include <iostream>
+int main() {
+    strucpp::Program_MAIN prog;
+    prog.run();
+    std::cout << static_cast<int>(prog.ITEMS[3].N) << " "
+              << static_cast<int>(prog.NUMS[4]) << std::endl;
+    return 0;
+}
+`;
+    const stdout = compileAndRunStandalone({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName: "lib_e2e_vla_inout",
+      mainCode,
+    });
+    expect(stdout).toBe("2 7");
+  });
+
   it("builds a custom library and runs tests against it via test framework", () => {
     // 1. Build custom FB library
     const libResult = compileStlib(
