@@ -125,3 +125,38 @@ describe("library manifest: VAR_INPUT initial values", () => {
     expect(byName.HIGH!.initialValue).toBe("10.0");
   });
 });
+
+describe("library manifest: function-block VAR_INPUT initial values", () => {
+  it("captures an FB input's default and omits it for inputs without one", () => {
+    const result = compileStlib(
+      [
+        {
+          source: `
+          FUNCTION_BLOCK LINK_DEMO
+            VAR_INPUT
+              CONNECT : BOOL := TRUE;
+              HOST : STRING(32);
+              PERIOD : TIME := T#10s;
+            END_VAR
+            VAR_OUTPUT
+              READY : BOOL := FALSE;
+            END_VAR
+            READY := CONNECT;
+          END_FUNCTION_BLOCK
+        `,
+          fileName: "lib.st",
+        },
+      ],
+      { name: "test-lib", version: "1.0.0", namespace: "test" },
+    );
+    expect(result.success).toBe(true);
+    const fb = result.archive!.manifest.functionBlocks.find((f) => f.name === "LINK_DEMO");
+    expect(fb).toBeDefined();
+    const byName = Object.fromEntries(fb!.inputs.map((p) => [p.name, p]));
+    expect(byName.CONNECT!.initialValue).toBe("TRUE");
+    expect(byName.PERIOD!.initialValue).toBeDefined();
+    expect("initialValue" in byName.HOST!).toBe(false);
+    // Only inputs carry it: an output's initial value is not a call-site default.
+    expect("initialValue" in fb!.outputs[0]!).toBe(false);
+  });
+});

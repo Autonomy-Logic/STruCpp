@@ -24,8 +24,16 @@
 #include "iec_traits.hpp"
 #include "iec_retain.hpp"
 #include "iec_ptr.hpp"
+#include "iec_any.hpp"
+// `__VARINFO(x)` yields one of these; codegen emits a single
+// `#include "iec_std_lib.hpp"`, so it can only be found through this chain.
+#include "iec_varinfo.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
+// Enumerated types, for the same reason as the temporal headers below: codegen
+// emits one `#include "iec_std_lib.hpp"`, so EQ and NE on an enumeration
+// (IEC 61131-3 Table 38) can only be found through this chain.
+#include "iec_enum.hpp"
 // IEC 61131-3 temporal types — pulled in here so the standard
 // library entry point exposes every standard function (`ADD_TIME`,
 // `ADD_DATE`, `ADD_DT`, `ADD_TOD`, `CONCAT_DATE_TOD`, etc.) without
@@ -402,12 +410,14 @@ inline T MIN(T a, T b) noexcept {
 /**
  * LIMIT - Limit value to range [mn, mx]
  * Input: ANY_ELEMENTARY, Output: ANY_ELEMENTARY (same type)
+ *
+ * IEC 61131-3 table 24: OUT := MIN(MAX(IN, MN), MX), so MX wins when
+ * MN > MX.
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline T LIMIT(T mn, T in, T mx) noexcept {
-    if (iec_unwrap(in) < iec_unwrap(mn)) return mn;
-    if (iec_unwrap(in) > iec_unwrap(mx)) return mx;
-    return in;
+    T v = iec_unwrap(in) < iec_unwrap(mn) ? mn : in;
+    return iec_unwrap(v) > iec_unwrap(mx) ? mx : v;
 }
 
 // Mixed-type MIN/MAX/LIMIT/SEL overloads (OSCAT mixes e.g. INT with DINT)
@@ -439,16 +449,25 @@ inline auto LIMIT(T1 mn, T2 in, T3 mx) noexcept
     auto vmn = static_cast<CT>(iec_unwrap(mn));
     auto vin = static_cast<CT>(iec_unwrap(in));
     auto vmx = static_cast<CT>(iec_unwrap(mx));
-    if (vin < vmn) return vmn;
-    if (vin > vmx) return vmx;
-    return vin;
+    CT v = vin < vmn ? vmn : vin;
+    return v > vmx ? vmx : v;
 }
 
 template<typename T, typename U,
-    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value &&
+                     !is_same_iec_enum_v<T, U>, int> = 0>
 inline auto SEL(IEC_BOOL g, T in0, U in1) noexcept {
     using CT = std::common_type_t<decltype(iec_unwrap(in0)), decltype(iec_unwrap(in1))>;
     return iec_unwrap(g) ? static_cast<CT>(iec_unwrap(in1)) : static_cast<CT>(iec_unwrap(in0));
+}
+
+// SEL of one enumeration given in two spellings (a variable and an enumerator):
+// IEC 61131-3 Table 38 admits SEL on an enumerated type.
+template<typename T, typename U,
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value &&
+                     is_same_iec_enum_v<T, U>, int> = 0>
+inline auto SEL(IEC_BOOL g, const T& in0, const U& in1) noexcept {
+    return iec_unwrap(g) ? iec_enum_value(in1) : iec_enum_value(in0);
 }
 
 /**
@@ -538,6 +557,45 @@ inline IEC_BOOL GE(A a, B b) noexcept {
 template<typename A, typename B, enable_if_two_elementary<A, B> = 0>
 inline IEC_BOOL EQ(A a, B b) noexcept {
     return IEC_BOOL(iec_unwrap(a) == iec_unwrap(b));
+}
+
+// -----------------------------------------------------------------------------
+// EQ and NE on an enumerated data type — IEC 61131-3 Ed 3 §6.6.2.5.14 Table 38
+// -----------------------------------------------------------------------------
+//
+// An enumeration is ANY_DERIVED (§6.4.3 rule 3), so it cannot satisfy the
+// comparison constraint above, whose inputs are ANY_ELEMENTARY (Table 33).
+// Table 38 is the separate provision that admits it, for four functions only:
+// SEL, MUX, EQ and NE.
+//
+// Without these overloads the two spellings of one Table 38 function disagree:
+// `q = GOOD` compiles, `EQ(q, GOOD)` does not. An FBD box has no symbol form,
+// so an enumeration could not be compared graphically at all, which §8.1.2
+// requires.
+//
+// GT, GE, LT and LE are deliberately absent: Table 38 omits them, and §6.4.4.2
+// lets two enumerations share enumerator names, so an ordering would mean
+// nothing. They keep failing to compile.
+template<typename A, typename B>
+using enable_if_two_same_enum = std::enable_if_t<is_same_iec_enum_v<A, B>, int>;
+
+template<typename A, typename B, enable_if_two_same_enum<A, B> = 0>
+inline IEC_BOOL EQ(const A& a, const B& b) noexcept {
+    return IEC_BOOL(iec_enum_value(a) == iec_enum_value(b));
+}
+
+/** Extensible, as Table 33 feature 3 is: OUT := (IN1=IN2) & (IN2=IN3) & … */
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_two_same_enum<A, B> = 0>
+inline IEC_BOOL EQ(const A& a, const B& b, const C& c, const Rest&... rest) noexcept {
+    if (!(iec_enum_value(a) == iec_enum_value(b))) return IEC_BOOL(false);
+    return EQ(b, c, rest...);
+}
+
+/** NE is non-extensible — Table 33 feature 6 takes exactly two operands. */
+template<typename A, typename B, enable_if_two_same_enum<A, B> = 0>
+inline IEC_BOOL NE(const A& a, const B& b) noexcept {
+    return IEC_BOOL(iec_enum_value(a) != iec_enum_value(b));
 }
 
 /**
@@ -747,12 +805,30 @@ inline T ROR(T in, N n) noexcept {
 // =============================================================================
 
 /**
+ * Round to nearest, ties to even — IEC 61131-3's rule for REAL/LREAL to
+ * integer. 2.5 gives 2, 3.5 gives 4, -2.5 gives -2.
+ *
+ * `std::round` rounds halves away from zero; `std::nearbyint` follows the FP
+ * mode and is absent from avr-libc. Distinct from `ROUND()` above.
+ */
+template<typename T>
+inline double iec_round_half_even(T value) noexcept {
+    const double d = static_cast<double>(value);
+    double r = std::floor(d + 0.5);
+    // Landed exactly on a tie and rounded to an odd number: step to the even one.
+    if ((r - d) == 0.5 && std::fmod(r, 2.0) != 0.0) {
+        r -= 1.0;
+    }
+    return r;
+}
+
+/**
  * Helper: round-then-cast for REAL→integer conversions per IEC 61131-3
  */
 namespace detail {
 template<typename ToVal, typename FromVal>
 inline ToVal iec_convert_value_impl(FromVal value, std::true_type /*round*/) noexcept {
-    return static_cast<ToVal>(std::round(static_cast<double>(value)));
+    return static_cast<ToVal>(iec_round_half_even(value));
 }
 template<typename ToVal, typename FromVal>
 inline ToVal iec_convert_value_impl(FromVal value, std::false_type) noexcept {
@@ -762,12 +838,35 @@ inline ToVal iec_convert_value_impl(FromVal value, std::false_type) noexcept {
 
 template<typename ToVal, typename FromVal>
 inline ToVal iec_convert_value(FromVal value) noexcept {
-    // IEC 61131-3: REAL/LREAL to integer types use rounding (nearest)
+    // IEC 61131-3: REAL/LREAL to integer types round to nearest, ties to even.
     return detail::iec_convert_value_impl<ToVal>(
         value,
         std::integral_constant<bool, std::is_floating_point<FromVal>::value &&
                                      std::is_integral<ToVal>::value>{});
 }
+
+namespace detail {
+// The value a conversion starts from: the payload of an IEC wrapper, and for
+// an enumeration its numeric value (the ordinal, or the declared value).
+template<typename T>
+inline auto iec_convert_source(const T& v) noexcept
+    -> std::enable_if_t<!std::is_enum<T>::value, decltype(iec_unwrap(v))> {
+    return iec_unwrap(v);
+}
+template<typename E>
+inline auto iec_convert_source(E v) noexcept
+    -> std::enable_if_t<std::is_enum<E>::value, typename std::underlying_type<E>::type> {
+    return static_cast<typename std::underlying_type<E>::type>(v);
+}
+template<typename E>
+inline typename std::underlying_type<E>::type iec_convert_source(const IEC_ENUM_Value<E>& v) noexcept {
+    return static_cast<typename std::underlying_type<E>::type>(v.get());
+}
+template<typename E>
+inline typename std::underlying_type<E>::type iec_convert_source(const IEC_ENUM_Var<E>& v) noexcept {
+    return static_cast<typename std::underlying_type<E>::type>(static_cast<E>(v.get()));
+}
+}  // namespace detail
 
 /**
  * Generic type conversion (IECVar → IECVar)
@@ -775,7 +874,7 @@ inline ToVal iec_convert_value(FromVal value) noexcept {
 template<typename To, typename From>
 inline auto CONVERT(From value) noexcept
     -> std::enable_if_t<!std::is_arithmetic<From>::value, To> {
-    return To(iec_convert_value<typename To::value_type>(iec_unwrap(value)));
+    return To(iec_convert_value<typename To::value_type>(detail::iec_convert_source(value)));
 }
 
 /**
@@ -1549,6 +1648,30 @@ inline IEC_UDINT IEC_SIZEOF(const IECVar<T>&) noexcept {
 template<typename T>
 inline IEC_UDINT IEC_SIZEOF(const T&) noexcept {
     return static_cast<IEC_UDINT>(sizeof(T));
+}
+
+/**
+ * STRING / WSTRING: the character buffer, not the forcing wrapper.
+ *
+ * `IECStringVar` is not an `IECVar`, so without these the generic overload
+ * reports 518 bytes for the default STRING where CODESYS reports 255.
+ * `capacity + 1` for the terminator; a WSTRING is UCS-2, so doubled.
+ */
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECStringVar<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>(MaxLen + 1);
+}
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECString<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>(MaxLen + 1);
+}
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECWStringVar<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>((MaxLen + 1) * sizeof(char16_t));
+}
+template<size_t MaxLen>
+inline IEC_UDINT IEC_SIZEOF(const IECWString<MaxLen>&) noexcept {
+    return static_cast<IEC_UDINT>((MaxLen + 1) * sizeof(char16_t));
 }
 
 /**

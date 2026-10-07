@@ -35,6 +35,7 @@ import type {
 } from "../frontend/ast.js";
 import { TestCodeGenerator } from "./test-codegen.js";
 import type { StlibArchive } from "../library/library-manifest.js";
+import { GENERATED_TU_MACRO } from "./codegen.js";
 
 /**
  * Information about a POU (Program Organization Unit) from compilation.
@@ -159,6 +160,7 @@ export function generateTestMain(
   }
 
   // Includes
+  lines.push(`#define ${GENERATED_TU_MACRO}`);
   lines.push(`#include "${options.headerFileName}"`);
   lines.push('#include "iec_test.hpp"');
   lines.push("#include <cstring>");

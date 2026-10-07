@@ -73,6 +73,37 @@ describe("Library System", () => {
       expect(result.cppCode).toBeTruthy();
     });
 
+    it("carries a type's declared case into the manifest", () => {
+      // A manifest is the only thing a consuming compilation has to go on.
+      // The compiler folds every name it resolves on (IEC 61131-3 §6.1.2), so
+      // without this a consumer's descriptors report `S_PLANT.SPPRESSUREALT`
+      // — see MemberDesc::NAME in iec_typedesc.hpp.
+      const result = compileLibrary(
+        [
+          {
+            source: `
+              TYPE S_Plant : STRUCT
+                spPressureAlt : REAL;
+                ALARM : BOOL;
+              END_STRUCT END_TYPE
+            `,
+            fileName: "types.st",
+          },
+        ],
+        { name: "plant-lib", version: "1.0.0", namespace: "plant" },
+      );
+
+      expect(result.success).toBe(true);
+      const entry = result.manifest.types.find((t) => t.name === "S_PLANT");
+      expect(entry?.declaredName).toBe("S_Plant");
+      expect(entry?.fields).toEqual([
+        { name: "SPPRESSUREALT", type: "REAL", declaredName: "spPressureAlt" },
+        // Already upper case, so nothing to record — an all-caps library adds
+        // nothing to its manifest.
+        { name: "ALARM", type: "BOOL" },
+      ]);
+    });
+
     it("should compile library with types", () => {
       const result = compileLibrary(
         [

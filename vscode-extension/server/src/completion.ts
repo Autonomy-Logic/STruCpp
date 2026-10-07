@@ -27,7 +27,13 @@ import { ELEMENTARY_TYPES, resolveArrayElementType, typeName } from "strucpp";
 import { getCursorContext } from "./cursor-context.js";
 import { getScopeForContext } from "./resolve-symbol.js";
 import { isTestFile, extractTestVarDeclarations } from "../../shared/test-utils.js";
-import { inlineArrayInfo, renderVariableType, stripCommentsAndStrings } from "./lsp-utils.js";
+import {
+  inlineArrayInfoFromType,
+  inlineArrayInfo,
+  renderTypeReference,
+  renderVariableType,
+  stripCommentsAndStrings,
+} from "./lsp-utils.js";
 
 /**
  * Get completion items for the given position.
@@ -515,16 +521,11 @@ function getMembersForType(
     if (typeSym?.declaration?.definition?.kind === "StructDefinition") {
       const fields = typeSym.declaration.definition.fields as Array<{
         names: string[];
-        type: { name: string };
+        type: StructFieldType;
       }>;
       for (const field of fields) {
         for (const name of field.names) {
-          items.push({
-            label: name,
-            kind: CompletionItemKind.Field,
-            detail: field.type.name,
-            sortText: "1",
-          });
+          items.push(...makeStructFieldCompletions(name, field.type));
         }
       }
     }
@@ -946,6 +947,57 @@ function makeVariableCompletion(
       // the suffix keeps them grouped without displacing other symbols at the
       // same scope priority.
       sortText: `${sortText}~${indices.map((i) => String(i).padStart(6, "0")).join(",")}`,
+    });
+  }
+  return items;
+}
+
+/** The shape a STRUCT field's type node has in the AST. */
+interface StructFieldType {
+  name: string;
+  elementTypeName?: string;
+  arrayDimensions?: Array<{ start: number; end: number }>;
+}
+
+/**
+ * Completion items for one STRUCT field: the field itself, plus one item per
+ * element when it's a fixed-bound inline array.
+ *
+ * The same reasoning as {@link makeVariableCompletion}, which a field cannot
+ * use because it is declared as `{ names, type }` and never becomes a
+ * `VariableSymbol`. Without this a client filtering by an expected type sees
+ * `gvl.bits` typed `ARRAY [0..7] OF BOOL`, has nothing BOOL-shaped to offer,
+ * and — worse — cannot resolve `gvl.bits[0]` at all, so a perfectly valid
+ * ladder contact gets flagged as an unknown variable.
+ *
+ * A Global Variable List is compiled to a STRUCT, so this is the path every
+ * `LIST.member` reference in a graphical editor takes.
+ */
+function makeStructFieldCompletions(
+  name: string,
+  type: StructFieldType,
+): CompletionItem[] {
+  const items: CompletionItem[] = [
+    {
+      label: name,
+      kind: CompletionItemKind.Field,
+      // Never the raw `type.name`: an inline array carries a synthetic
+      // internal name (`__INLINE_ARRAY_BOOL`) there, and publishing it both
+      // leaks a compiler internal and hides the element type.
+      detail: renderTypeReference(type) ?? type.name,
+      sortText: "1",
+    },
+  ];
+
+  const array = inlineArrayInfoFromType(type);
+  if (!array) return items;
+
+  for (const indices of arrayIndexTuples(array.dimensions)) {
+    items.push({
+      label: `${name}[${indices.join(",")}]`,
+      kind: CompletionItemKind.Field,
+      detail: array.elementType,
+      sortText: `1~${indices.map((i) => String(i).padStart(6, "0")).join(",")}`,
     });
   }
   return items;

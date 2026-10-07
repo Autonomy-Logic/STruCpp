@@ -157,6 +157,22 @@ END_PROGRAM${CFG}`,
     ).toBe("");
   });
 
+  it("compiles for a variable named like a <cmath> macro (nan)", () => {
+    // ST `nan` is emitted upper case, and <cmath> defines NAN. The header
+    // removes the macro for its declarations and restores it at its end; the
+    // debug table is STruC++'s own file, so it must keep it removed too.
+    expect(
+      buildDebugTable(
+        `PROGRAM Main
+VAR nan : REAL; infinity : REAL; END_VAR
+  nan := 1.0;
+  infinity := nan + 1.0;
+END_PROGRAM${CFG}`,
+        "cmath_macro_names",
+      ),
+    ).toBe("");
+  });
+
   it("compiles for the same member one scope in, inside a FUNCTION_BLOCK", () => {
     // Used to fail: "no member named 'MOTOR' in 'strucpp::RIG'".
     expect(

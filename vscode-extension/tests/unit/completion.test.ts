@@ -409,6 +409,81 @@ END_PROGRAM
   });
 });
 
+describe("array fields of a STRUCT", () => {
+  // A Global Variable List compiles to a STRUCT, so this is the path every
+  // `LIST.member` reference in the graphical editors takes. The struct branch
+  // used to emit only the bare field, which left a ladder contact named
+  // `NET.bits[0]` unresolvable and flagged red in a project that compiles and
+  // lints clean.
+  const SOURCE = `TYPE
+  NET_TYPE : STRUCT
+    bits : ARRAY [0..7] OF BOOL;
+    grid : ARRAY [0..1, 0..1] OF INT;
+    huge : ARRAY [1..500] OF INT;
+    healthy : BOOL;
+  END_STRUCT;
+END_TYPE
+
+PROGRAM Main
+VAR
+  NET : NET_TYPE;
+END_VAR
+  NET.
+END_PROGRAM
+`;
+
+  function memberCompletions() {
+    const analysis = analyze(SOURCE, { fileName: "gvl.st" });
+    const lines = SOURCE.split("\n");
+    const line = lines.findIndex((l) => l.trim() === "NET.") + 1;
+    return getCompletions(analysis, "gvl.st", line, lines[line - 1].length + 1, SOURCE);
+  }
+
+  function labelsWith(items: { label: string }[], prefix: string): string[] {
+    return items.map((i) => i.label).filter((l) => l.toUpperCase().startsWith(prefix.toUpperCase()));
+  }
+
+  function detail(items: { label: string; detail?: string }[], label: string): string | undefined {
+    return items.find((i) => i.label.toUpperCase() === label.toUpperCase())?.detail;
+  }
+
+  it("offers every element of a 1-D array field, typed as the element type", () => {
+    const items = memberCompletions();
+    const elements = labelsWith(items, "bits[");
+    expect(elements).toHaveLength(8);
+    expect(elements[0]).toBe("bits[0]");
+    expect(elements[7]).toBe("bits[7]");
+    expect(detail(items, "bits[3]")).toBe("BOOL");
+  });
+
+  it("offers multi-dimensional elements in row-major order", () => {
+    const items = memberCompletions();
+    expect(labelsWith(items, "grid[")).toEqual(["grid[0,0]", "grid[0,1]", "grid[1,0]", "grid[1,1]"]);
+    expect(detail(items, "grid[1,1]")).toBe("INT");
+  });
+
+  it("renders the declared ARRAY type rather than the synthetic internal name", () => {
+    const items = memberCompletions();
+    expect(detail(items, "bits")).toBe("ARRAY [0..7] OF BOOL");
+    const leaked = items.filter(
+      (i) => i.detail?.includes("__INLINE_ARRAY") || i.detail?.includes("__VLA_"),
+    );
+    expect(leaked).toEqual([]);
+  });
+
+  it("honours the element cap, keeping the field itself completable", () => {
+    const items = memberCompletions();
+    expect(labelsWith(items, "huge[")).toEqual([]);
+    expect(detail(items, "huge")).toBe("ARRAY [1..500] OF INT");
+  });
+
+  it("leaves non-array fields untouched", () => {
+    const items = memberCompletions();
+    expect(detail(items, "healthy")).toBe("BOOL");
+    expect(labelsWith(items, "healthy[")).toEqual([]);
+  });
+});
+
 describe("dot-access past an array subscript", () => {
   const SOURCE = `TYPE
   Point : STRUCT

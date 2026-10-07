@@ -157,8 +157,11 @@ VAR b : Bag; END_VAR
 END_PROGRAM`);
     expect(header).toContain("IEC_TIME TIME");
     expect(header).toContain("IEC_WORD WORD");
-    expect(header).not.toContain("TIME_");
-    expect(header).not.toContain("WORD_");
+    // The mangled DECLARATION, not the bare substring: the layout table beside
+    // the struct legitimately says `sizeof(TIME_t)`, and a "TIME_" match would
+    // read that as a renamed field.
+    expect(header).not.toContain("IEC_TIME TIME_");
+    expect(header).not.toContain("IEC_WORD WORD_");
   });
 });
 

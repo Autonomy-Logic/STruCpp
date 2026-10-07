@@ -27,6 +27,7 @@ import {
   translateIECString,
 } from "./codegen-utils.js";
 import { mangledMemberName } from "./member-mangling.js";
+import { TypeDescriptorGenerator } from "./type-descriptor-gen.js";
 import {
   parseDateLiteralToDays,
   parseDtLiteralToNs,
@@ -151,6 +152,22 @@ export class TypeCodeGenerator {
   private output: string[] = [];
   /** Track known enum type names (uppercase) so struct fields can use IEC_ wrapper */
   private knownEnumNames: Set<string> = new Set();
+  /** Emits the layout tables a block walks when handed a STRUCT on an ANY
+   *  pin. Rebuilt per run, since it indexes the type list. */
+  private descriptors: TypeDescriptorGenerator | undefined;
+
+  /** UPPER(names) of the STRUCT types this run emitted a layout table for.
+   *  A member codegen could not describe suppresses the whole table, so a
+   *  call site must ask rather than assume every struct has one. */
+  readonly describedTypes: Set<string> = new Set();
+
+  /** STRUCT types that got no layout table, and why. Surfaced as warnings by
+   *  the caller — see `CodeGenerator.emitTypeDeclarations`. */
+  readonly undescribedTypes: Array<{
+    typeName: string;
+    member: string;
+    reason: string;
+  }> = [];
   /** Reverse map: enum member name (upper case) → owning enum type */
   private enumMemberToType: Map<string, EnumMemberEntry> = new Map();
 
@@ -191,6 +208,16 @@ export class TypeCodeGenerator {
   generateTypes(types: TypeDeclaration[]): string {
     this.output = [];
     this.knownEnumNames = new Set();
+    this.descriptors = new TypeDescriptorGenerator({
+      types,
+      mapStructFieldTypeToCpp: (
+        name: string,
+        maxLength?: number | string,
+      ): string => this.mapStructFieldTypeToCpp(name, maxLength),
+      mapTypeToCpp: (name: string): string => this.mapTypeToCpp(name),
+      isUserDefinedType: this.options.isUserDefinedType,
+      indent: this.options.indent,
+    });
 
     // Build reverse map for bare enum member qualification
     this.enumMemberToType = buildEnumMemberMap(
@@ -231,12 +258,28 @@ export class TypeCodeGenerator {
     const def = type.definition;
 
     switch (def.kind) {
-      case "StructDefinition":
+      case "StructDefinition": {
         this.generateStructType(type.name, def);
         // Struct fields already contain IECVar leaves — identity alias
         this.emit(`using IEC_${type.name} = ${type.name};`);
         this.emit("");
+        // The alias has to come first: the table says `sizeof(<name>)`, so the
+        // struct must be complete by the time the initialiser is parsed.
+        const tables = this.descriptors?.generate(type.name, def) ?? [];
+        for (const line of tables) this.emit(line);
+        if (tables.length > 0) {
+          this.emit("");
+          this.describedTypes.add(type.name.toUpperCase());
+        }
+        for (const skip of this.descriptors?.skipped ?? []) {
+          if (
+            !this.undescribedTypes.some((u) => u.typeName === skip.typeName)
+          ) {
+            this.undescribedTypes.push(skip);
+          }
+        }
         break;
+      }
       case "EnumDefinition":
         this.knownEnumNames.add(type.name.toUpperCase());
         this.generateEnumType(type.name, def);
@@ -320,6 +363,7 @@ export class TypeCodeGenerator {
         // Inline array type: emit Array1D/2D/3D<WrappedElementType, bounds...>
         const elemCpp = this.mapStructFieldTypeToCpp(
           field.type.elementTypeName,
+          field.type.elementMaxLength,
         );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
@@ -329,7 +373,11 @@ export class TypeCodeGenerator {
         );
       }
       if (field.type.referenceKind === "pointer_to") {
-        cppType += "*";
+        cppType = this.pointerTypeToCpp(
+          cppType,
+          field.type.name,
+          Boolean(field.type.arrayDimensions),
+        );
       }
       for (const fieldName of field.names) {
         // One rule, shared with the class definition and the debug table — see
@@ -424,7 +472,10 @@ export class TypeCodeGenerator {
    * IEC 61131-3 array semantics (arrays can have arbitrary start indices).
    */
   private generateArrayType(name: string, def: ArrayDefinition): void {
-    const elementType = this.mapStructFieldTypeToCpp(def.elementType.name);
+    const elementType = this.mapStructFieldTypeToCpp(
+      def.elementType.name,
+      def.elementType.maxLength,
+    );
     const numDims = def.dimensions.length;
 
     // Collect bounds for all dimensions (skip variable-length dimensions)
@@ -502,10 +553,27 @@ export class TypeCodeGenerator {
       cppType = this.mapTypeToCpp(def.name);
     }
     if (def.referenceKind === "pointer_to") {
-      cppType += "*";
+      cppType = this.pointerTypeToCpp(
+        cppType,
+        def.name ?? "",
+        Boolean(def.arrayDimensions),
+      );
     }
     this.emit(`using ${name} = ${cppType};`);
     this.emit("");
+  }
+
+  /**
+   * A `POINTER TO` field or alias, lowered the way a pointer variable is.
+   * `IEC_Ptr<T>` accepts the address of any type; a raw `T*` does not, so
+   * `pByte := ADR(anInt)` type-checked and then failed in C++.
+   */
+  private pointerTypeToCpp(
+    baseCpp: string,
+    typeName: string,
+    isArray: boolean,
+  ): string {
+    return `IEC_Ptr<${isArray ? baseCpp : this.mapTypeToCpp(typeName)}>`;
   }
 
   /**
