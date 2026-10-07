@@ -35,6 +35,7 @@ import type {
   ASTNode,
 } from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
+import { lowerInlineTypes } from "./frontend/lower-inline-types.js";
 import { walkAST } from "./ast-utils.js";
 import { registerLibrarySymbols } from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
@@ -471,6 +472,19 @@ function runPipeline(
     }
 
     ast = mergeCompilationUnits(units);
+    const loweringErrors = lowerInlineTypes(ast);
+    errors.push(...loweringErrors);
+    if (!continueOnError && loweringErrors.length > 0) {
+      return {
+        ast,
+        projectModel,
+        symbolTables,
+        errors,
+        warnings,
+        allArchives,
+        mergedOptions,
+      };
+    }
   } catch (e) {
     errors.push({
       message: `AST building failed: ${e instanceof Error ? e.message : String(e)}`,

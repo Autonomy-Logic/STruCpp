@@ -7,7 +7,13 @@
  * Uses Chevrotain's embedded DSL for grammar definition.
  */
 
-import { CstParser, CstNode, EOF, type TokenType } from "chevrotain";
+import {
+  CstParser,
+  CstNode,
+  EOF,
+  type IToken,
+  type TokenType,
+} from "chevrotain";
 import * as tokens from "./lexer.js";
 import { resolveErrorMessageProvider } from "./parser-error-message-provider.js";
 
@@ -474,7 +480,26 @@ export class STParser extends CstParser {
         ALT: () => this.SUBRULE(this.arrayType),
         GATE: () => this.LA(1).tokenType === tokens.ARRAY,
       },
-      { ALT: () => this.SUBRULE(this.dataType) },
+      // Anonymous enumeration: `state : (Idle, Running) := Idle;`
+      {
+        ALT: (): CstNode => this.SUBRULE(this.inlineEnumType),
+        GATE: (): boolean => this.LA(1).tokenType === tokens.LParen,
+      },
+      {
+        ALT: (): void => {
+          this.SUBRULE(this.dataType);
+          // Anonymous subrange: `level : INT(0..100) := 50;`
+          this.OPTION6({
+            GATE: () =>
+              this.LA(1).tokenType === tokens.LParen && this.isSubrangeAhead(),
+            DEF: () => {
+              this.CONSUME(tokens.LParen);
+              this.SUBRULE(this.subrangeBounds);
+              this.CONSUME(tokens.RParen);
+            },
+          });
+        },
+      },
     ]);
     // Non-standard but widely-used: AT directive after the type.
     this.OPTION3(() => {
@@ -670,6 +695,20 @@ export class STParser extends CstParser {
   });
 
   /**
+   * Anonymous enumeration inside a declaration: (IDLE, RUNNING := 5). Its
+   * default is the declaration's own initializer, so unlike simpleEnumType it
+   * takes no `:= member` of its own.
+   */
+  public inlineEnumType = this.RULE("inlineEnumType", () => {
+    this.CONSUME(tokens.LParen);
+    this.AT_LEAST_ONE_SEP({
+      SEP: tokens.Comma,
+      DEF: () => this.SUBRULE(this.enumMember),
+    });
+    this.CONSUME(tokens.RParen);
+  });
+
+  /**
    * Enumeration member: NAME or NAME := value
    */
   public enumMember = this.RULE("enumMember", () => {
@@ -784,10 +823,12 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Data type reference (simple type, REF_TO type, or REFERENCE_TO type)
+   * Data type reference: a type name after any number of reference prefixes
+   * (`REF_TO`, `REFERENCE TO`, `POINTER TO`), so `REF_TO REF_TO INT` and
+   * `POINTER TO REF_TO INT` keep every level.
    */
   public dataType = this.RULE("dataType", () => {
-    this.OPTION(() => {
+    this.MANY(() => {
       this.OR([
         { ALT: () => this.CONSUME(tokens.REF_TO) },
         { ALT: () => this.CONSUME(tokens.REFERENCE_TO) },
@@ -1139,10 +1180,11 @@ export class STParser extends CstParser {
   private isCaseLabelStart(): boolean {
     const la1Type = this.LA(1).tokenType;
     // Case labels must start with a value expression: integer literal,
-    // identifier, or contextual keyword
+    // identifier, contextual keyword, or typed enum value (E_State#Idle)
     if (
       la1Type !== tokens.IntegerLiteral &&
       la1Type !== tokens.Minus &&
+      la1Type !== tokens.EnumLiteral &&
       !this.isIdentifierOrKeywordToken(la1Type)
     ) {
       return false;
@@ -1644,6 +1686,8 @@ export class STParser extends CstParser {
   public primaryExpression = this.RULE("primaryExpression", () => {
     this.OR({
       DEF: [
+        // Typed enumeration value `E_State#Idle`; built as `E_State.Idle`.
+        { ALT: (): IToken => this.CONSUME(tokens.EnumLiteral) },
         { ALT: () => this.SUBRULE(this.literal) },
         {
           ALT: () => this.SUBRULE(this.refExpression),

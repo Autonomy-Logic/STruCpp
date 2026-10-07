@@ -13,14 +13,19 @@
  */
 
 import type {
+  AccessStep,
   IECType,
   ElementaryType,
   ArrayType,
   CompilationUnit,
+  ReferenceKind,
   ReferenceType,
   StructType,
   EnumType,
   FunctionBlockType,
+  TypeReference,
+  VarDeclaration,
+  VariableExpression,
 } from "../frontend/ast.js";
 import type { TypeConstraint } from "./std-function-registry.js";
 import { IEC_BASE_TYPES, lookupBaseType } from "./iec-types-data.js";
@@ -752,6 +757,166 @@ export function getCommonType(a: IECType, b: IECType): IECType | undefined {
 // =============================================================================
 
 /**
+ * The declaration of a struct, FB or program member, looked up in the AST.
+ */
+export function resolveFieldDeclaration(
+  typeName: string,
+  fieldName: string,
+  ast: CompilationUnit,
+): VarDeclaration | undefined {
+  const typeUpper = typeName.toUpperCase();
+  const fieldUpper = fieldName.toUpperCase();
+  const named = (decl: VarDeclaration): boolean =>
+    decl.names.some((name) => name.toUpperCase() === fieldUpper);
+
+  // Struct type definitions
+  for (const td of ast.types) {
+    if (
+      td.name.toUpperCase() === typeUpper &&
+      td.definition.kind === "StructDefinition"
+    ) {
+      const field = td.definition.fields.find(named);
+      if (field) return field;
+    }
+  }
+
+  // FB members, then the members each EXTENDS ancestor adds
+  const seen = new Set<string>();
+  let fbName: string | undefined = typeUpper;
+  while (fbName !== undefined && !seen.has(fbName)) {
+    seen.add(fbName);
+    const upper: string = fbName;
+    const fb = ast.functionBlocks.find((f) => f.name.toUpperCase() === upper);
+    if (!fb) break;
+    for (const block of fb.varBlocks) {
+      const decl = block.declarations.find(named);
+      if (decl) return decl;
+    }
+    fbName = fb.extends?.toUpperCase();
+  }
+
+  // Program members (instance member access)
+  const prog = ast.programs.find((p) => p.name.toUpperCase() === typeUpper);
+  if (prog) {
+    for (const block of prog.varBlocks) {
+      const decl = block.declarations.find(named);
+      if (decl) return decl;
+    }
+  }
+
+  return undefined;
+}
+
+/** The declared type of whatever an access path lands on. */
+export type AccessType = Pick<TypeReference, "name" | "referenceKind"> &
+  Partial<
+    Pick<
+      TypeReference,
+      | "referenceChain"
+      | "arrayDimensions"
+      | "elementTypeName"
+      | "elementReferenceChain"
+    >
+  >;
+
+/** What a member lookup needs to know about the member it finds. */
+export interface MemberDeclaration {
+  type: AccessType;
+}
+
+/** How an access path finds members and array elements. */
+export interface AccessLookup {
+  /** One member of a struct, FB or program type. */
+  field(typeName: string, fieldName: string): MemberDeclaration | undefined;
+  /** The element type of a named ARRAY type. */
+  arrayElement(typeName: string): AccessType | undefined;
+}
+
+function referenceLevels(type: AccessType): ReferenceKind[] {
+  if (type.referenceChain) return type.referenceChain;
+  return type.referenceKind === undefined || type.referenceKind === "none"
+    ? []
+    : [type.referenceKind];
+}
+
+/** `type` with its outermost reference level removed. */
+function dereferenced(type: AccessType): AccessType {
+  const rest = referenceLevels(type).slice(1);
+  const next: AccessType = { ...type, referenceKind: rest[0] ?? "none" };
+  if (rest.length > 1) next.referenceChain = rest;
+  else delete next.referenceChain;
+  return next;
+}
+
+function elementOf(
+  type: AccessType,
+  lookup: AccessLookup,
+): AccessType | undefined {
+  if (
+    type.arrayDimensions !== undefined &&
+    type.elementTypeName !== undefined
+  ) {
+    const chain = type.elementReferenceChain ?? [];
+    return {
+      name: type.elementTypeName,
+      referenceKind: chain[0] ?? "none",
+      ...(chain.length > 1 ? { referenceChain: chain } : {}),
+    };
+  }
+  const element = lookup.arrayElement(type.name);
+  // An ARRAY[*] carries its element's reference levels on the array itself.
+  const chain = type.elementReferenceChain;
+  if (element === undefined || chain === undefined) return element;
+  return {
+    name: element.name,
+    referenceKind: chain[0] ?? "none",
+    ...(chain.length > 1 ? { referenceChain: chain } : {}),
+  };
+}
+
+/**
+ * The declared type an access path lands on: for `s.inner.r`, `arr[1]` or
+ * `p^.x`, starting from the declared type of the base variable. Undefined
+ * when a step cannot be resolved.
+ */
+export function resolveAccessType(
+  base: AccessType,
+  expr: VariableExpression,
+  lookup: AccessLookup,
+): AccessType | undefined {
+  const steps: AccessStep[] = expr.accessChain ?? [
+    ...(expr.subscripts.length > 0
+      ? [{ kind: "subscript" as const, indices: expr.subscripts }]
+      : []),
+    ...expr.fieldAccess.map((name) => ({ kind: "field" as const, name })),
+    ...(expr.isDereference ? [{ kind: "dereference" as const }] : []),
+  ];
+  let current: AccessType | undefined = base;
+  for (const step of steps) {
+    if (current === undefined) return undefined;
+    // A REFERENCE TO is used as its target.
+    if (
+      step.kind !== "dereference" &&
+      current.referenceKind === "reference_to"
+    ) {
+      current = dereferenced(current);
+    }
+    if (step.kind === "dereference") {
+      const outer = referenceLevels(current)[0];
+      if (outer !== "pointer_to" && outer !== "ref_to") return undefined;
+      current = dereferenced(current);
+    } else if (current.referenceKind !== "none") {
+      return undefined;
+    } else if (step.kind === "subscript") {
+      current = elementOf(current, lookup);
+    } else {
+      current = lookup.field(current.name, step.name)?.type;
+    }
+  }
+  return current;
+}
+
+/**
  * Resolve the type of a struct or FB field by looking up the type definition in the AST.
  */
 export function resolveFieldType(
@@ -759,56 +924,43 @@ export function resolveFieldType(
   fieldName: string,
   ast: CompilationUnit,
 ): string | undefined {
-  const typeUpper = typeName.toUpperCase();
-  const fieldUpper = fieldName.toUpperCase();
-
-  // Check struct type definitions
-  for (const td of ast.types) {
-    if (
-      td.name.toUpperCase() === typeUpper &&
-      td.definition.kind === "StructDefinition"
-    ) {
-      for (const field of td.definition.fields) {
-        for (const name of field.names) {
-          if (name.toUpperCase() === fieldUpper) return field.type.name;
-        }
-      }
-    }
-  }
-
-  // Check FB var blocks (FB instance member access)
-  for (const fb of ast.functionBlocks) {
-    if (fb.name.toUpperCase() === typeUpper) {
-      for (const block of fb.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            if (name.toUpperCase() === fieldUpper) return decl.type.name;
-          }
-        }
-      }
-      return undefined;
-    }
-  }
-
-  // Check programs (program instance member access)
-  for (const prog of ast.programs) {
-    if (prog.name.toUpperCase() === typeUpper) {
-      for (const block of prog.varBlocks) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            if (name.toUpperCase() === fieldUpper) return decl.type.name;
-          }
-        }
-      }
-      return undefined;
-    }
-  }
-
-  return undefined;
+  return resolveFieldDeclaration(typeName, fieldName, ast)?.type.name;
 }
 
 /** `__VLA_<rank>D_<ElementType>`, the AST builder's name for an `ARRAY [*]`. */
 const VLA_NAME = /^__VLA_\d+D_(.+)$/;
+
+/** The element type of a named ARRAY type (or alias of one), with its reference levels. */
+export function resolveArrayElementAccessType(
+  typeName: string,
+  ast: CompilationUnit,
+  depth = 0,
+): AccessType | undefined {
+  if (depth >= MAX_TYPE_ALIAS_DEPTH) return undefined;
+  const typeUpper = typeName.toUpperCase();
+  const vla = VLA_NAME.exec(typeUpper);
+  if (vla) return { name: vla[1]!, referenceKind: "none" };
+  for (const td of ast.types) {
+    if (td.name.toUpperCase() !== typeUpper) continue;
+    if (td.definition.kind === "ArrayDefinition") {
+      return td.definition.elementType;
+    }
+    if (td.definition.kind === "TypeReference") {
+      return resolveArrayElementAccessType(td.definition.name, ast, depth + 1);
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+/** An `AccessLookup` over this compile's AST. */
+export function astAccessLookup(ast: CompilationUnit): AccessLookup {
+  return {
+    field: (typeName, fieldName) =>
+      resolveFieldDeclaration(typeName, fieldName, ast),
+    arrayElement: (typeName) => resolveArrayElementAccessType(typeName, ast),
+  };
+}
 
 /**
  * Resolve the element type of an array type.
@@ -888,7 +1040,7 @@ export interface ArrayShape {
 }
 
 /** Guard against a cyclic alias chain while resolving a type name. */
-const MAX_TYPE_ALIAS_DEPTH = 32;
+export const MAX_TYPE_ALIAS_DEPTH = 32;
 
 /**
  * Resolve the declared shape of an array-typed reference, following type

@@ -161,6 +161,25 @@ function nodeToSourceSpan(node: CstNode): SourceSpan {
   };
 }
 
+/** Type name of an anonymous enumeration until `lowerInlineTypes` names it. */
+export const INLINE_ENUM_PLACEHOLDER = "__INLINE_ENUM";
+
+/**
+ * Widen a span so it starts at `token`.
+ *
+ * A type's prefix keywords (`POINTER TO`) are consumed by the enclosing rule,
+ * not by the type's own rule, so the span built from the type's CST node alone
+ * starts after them. Consumers slice the source by this span to read the type
+ * as written, so the prefix must be inside it.
+ */
+function spanStartingAt(token: IToken, span: SourceSpan): SourceSpan {
+  const line = token.startLine ?? 0;
+  const col = token.startColumn ?? 0;
+  const tokenFirst =
+    line < span.startLine || (line === span.startLine && col < span.startCol);
+  return tokenFirst ? { ...span, startLine: line, startCol: col } : span;
+}
+
 /**
  * Get the first token from a CST node children array.
  */
@@ -987,8 +1006,14 @@ export class ASTBuilder {
     const arrayNode = getFirstNode(children.arrayType);
     if (arrayNode) {
       // If POINTER TO prefix present, represent as TypeReference with arrayDimensions
-      if (children.POINTER) {
-        return this.buildPointerToArrayTypeReference(arrayNode);
+      const pointerToken = getFirstToken(children.POINTER);
+      if (pointerToken) {
+        const pointerType = this.buildPointerToArrayTypeReference(arrayNode);
+        pointerType.sourceSpan = spanStartingAt(
+          pointerToken,
+          pointerType.sourceSpan,
+        );
+        return pointerType;
       }
       return this.buildArrayDefinition(arrayNode);
     }
@@ -1167,6 +1192,8 @@ export class ASTBuilder {
       if (elementMaxLength !== undefined) {
         result.elementMaxLength = elementMaxLength;
       }
+      const elementChain = this.elementReferenceChain(elementTypeNode);
+      if (elementChain) result.elementReferenceChain = elementChain;
     }
     return result;
   }
@@ -1230,7 +1257,14 @@ export class ASTBuilder {
     // Check for subrange bounds
     const subrangeBoundsNode = getFirstNode(children.subrangeBounds);
     if (subrangeBoundsNode) {
-      return this.buildSubrangeDefinition(subrangeBoundsNode, baseType);
+      // The definition is `INT (0..100)`, base type included, not only the
+      // bounds the helper builds from.
+      const subrange = this.buildSubrangeDefinition(
+        subrangeBoundsNode,
+        baseType,
+      );
+      subrange.sourceSpan = nodeToSourceSpan(node);
+      return subrange;
     }
 
     // Check for typed enum members
@@ -1542,9 +1576,12 @@ export class ASTBuilder {
 
     // Check for inline array type first (ARRAY[...] OF type)
     const arrayTypeNode = getFirstNode(children.arrayType);
+    const inlineEnumNode = getFirstNode(children.inlineEnumType);
     let type: TypeReference;
     if (arrayTypeNode) {
       type = this.buildInlineArrayTypeReference(arrayTypeNode);
+    } else if (inlineEnumNode) {
+      type = this.buildInlineEnumTypeReference(inlineEnumNode);
     } else {
       // Get type reference from the dataType subrule
       const dataTypeNode = getFirstNode(children.dataType);
@@ -1560,12 +1597,30 @@ export class ASTBuilder {
           referenceKind: "none",
         };
       }
+      const boundsNode = getFirstNode(children.subrangeBounds);
+      const closeParen = getAllTokens(children.RParen).at(-1);
+      if (boundsNode && closeParen) {
+        type = this.buildInlineSubrangeTypeReference(
+          type,
+          boundsNode,
+          closeParen,
+        );
+      }
     }
 
-    // Apply POINTER TO from varDeclaration level (overrides any existing reference kind)
-    if (hasPointerTo && type.referenceKind === "none") {
+    // This POINTER TO is the outermost level, wrapping any the type rule read.
+    // The span starts at POINTER so it covers the type as written.
+    const pointerToken = getFirstToken(children.POINTER);
+    if (hasPointerTo && pointerToken) {
+      if (type.referenceKind !== "none") {
+        type.referenceChain = [
+          "pointer_to",
+          ...(type.referenceChain ?? [type.referenceKind]),
+        ];
+      }
       type.referenceKind = "pointer_to";
       type.isReference = true;
+      type.sourceSpan = spanStartingAt(pointerToken, type.sourceSpan);
     }
 
     // Get initial value if present (from initializerExpression rule)
@@ -1617,6 +1672,49 @@ export class ASTBuilder {
   }
 
   /**
+   * `(Idle, Running := 5)` written as a declaration's type. `name` is a
+   * placeholder until `lowerInlineTypes` declares the enumeration and names it.
+   */
+  private buildInlineEnumTypeReference(node: CstNode): TypeReference {
+    const children = node.children as CstChildren;
+    const sourceSpan = nodeToSourceSpan(node);
+    return {
+      kind: "TypeReference",
+      sourceSpan,
+      name: INLINE_ENUM_PLACEHOLDER,
+      isReference: false,
+      referenceKind: "none",
+      inlineDefinition: {
+        kind: "EnumDefinition",
+        sourceSpan,
+        members: getAllNodes(children.enumMember).map((m) =>
+          this.buildEnumMember(m),
+        ),
+      },
+    };
+  }
+
+  /**
+   * `INT(0..100)` written as a declaration's type. The reference keeps the
+   * base type's name until `lowerInlineTypes` declares the subrange, and its
+   * span covers the base type and the bounds.
+   */
+  private buildInlineSubrangeTypeReference(
+    baseType: TypeReference,
+    boundsNode: CstNode,
+    closeParen: IToken,
+  ): TypeReference {
+    const sourceSpan: SourceSpan = {
+      ...baseType.sourceSpan,
+      endLine: closeParen.endLine ?? baseType.sourceSpan.endLine,
+      endCol: closeParen.endColumn ?? baseType.sourceSpan.endCol,
+    };
+    const subrange = this.buildSubrangeDefinition(boundsNode, { ...baseType });
+    subrange.sourceSpan = sourceSpan;
+    return { ...baseType, sourceSpan, inlineDefinition: subrange };
+  }
+
+  /**
    * Build a TypeReference from a CST node.
    */
   buildTypeReference(node: CstNode): TypeReference {
@@ -1633,19 +1731,26 @@ export class ASTBuilder {
       qualifiedIdents.length > 1
         ? `${qualifiedIdents[0]!.image}.${qualifiedIdents[1]!.image}`
         : (nameToken?.image ?? "INT");
-    const isRefTo = !!children.REF_TO;
-    const isReferenceTo = !!children.REFERENCE_TO;
-    const isPointerTo = !!children.POINTER;
-    const isReference = isRefTo || isReferenceTo || isPointerTo;
 
-    let referenceKind: ReferenceKind = "none";
-    if (isRefTo) {
-      referenceKind = "ref_to";
-    } else if (isReferenceTo) {
-      referenceKind = "reference_to";
-    } else if (isPointerTo) {
-      referenceKind = "pointer_to";
-    }
+    // The prefixes in source order: CST children are grouped by token type,
+    // so their relative order comes from the offsets.
+    const prefixKinds: Array<[number, ReferenceKind]> = [
+      ...getAllTokens(children.REF_TO).map((t): [number, ReferenceKind] => [
+        t.startOffset,
+        "ref_to",
+      ]),
+      ...getAllTokens(children.REFERENCE_TO).map(
+        (t): [number, ReferenceKind] => [t.startOffset, "reference_to"],
+      ),
+      ...getAllTokens(children.POINTER).map((t): [number, ReferenceKind] => [
+        t.startOffset,
+        "pointer_to",
+      ]),
+    ];
+    prefixKinds.sort((a, b) => a[0] - b[0]);
+    const chain = prefixKinds.map(([, kind]) => kind);
+    const referenceKind: ReferenceKind = chain[0] ?? "none";
+    const isReference = referenceKind !== "none";
 
     // Extract optional parameterized length: STRING(n) / WSTRING(n) / STRING(CONSTANT)
     let maxLength: number | string | undefined;
@@ -1668,6 +1773,9 @@ export class ASTBuilder {
       isReference,
       referenceKind,
     };
+    if (chain.length > 1) {
+      result.referenceChain = chain;
+    }
     if (maxLength !== undefined) {
       result.maxLength = maxLength;
     }
@@ -1756,7 +1864,23 @@ export class ASTBuilder {
         result.elementMaxLength = elementMaxLength;
       }
     }
+    // Also on an ARRAY[*], whose element type is otherwise only in its name.
+    const elementChain = this.elementReferenceChain(elementTypeNode);
+    if (elementChain) result.elementReferenceChain = elementChain;
     return result;
+  }
+
+  /**
+   * The reference levels of an array's element type (`POINTER TO INT` in
+   * `ARRAY[0..3] OF POINTER TO INT`), or undefined for a plain element.
+   */
+  private elementReferenceChain(
+    elementTypeNode: CstNode | undefined,
+  ): ReferenceKind[] | undefined {
+    if (!elementTypeNode) return undefined;
+    const element = this.buildTypeReference(elementTypeNode);
+    if (element.referenceKind === "none") return undefined;
+    return element.referenceChain ?? [element.referenceKind];
   }
 
   /**
@@ -2542,6 +2666,11 @@ export class ASTBuilder {
   buildPrimaryExpression(node: CstNode): Expression | undefined {
     const children = node.children as CstChildren;
 
+    const enumToken = getFirstToken(children.EnumLiteral);
+    if (enumToken) {
+      return this.buildEnumLiteralExpression(enumToken);
+    }
+
     // Check for literal
     if (children.literal) {
       return this.buildLiteralExpression(getFirstNode(children.literal)!);
@@ -2992,6 +3121,44 @@ export class ASTBuilder {
       literalType: "INT",
       value: 0,
       rawValue: "0",
+    };
+  }
+
+  /**
+   * `E_State#Idle`, the IEC type-qualified enumeration value, is the same
+   * value as `E_State.Idle`, which semantics and codegen already resolve, so
+   * it is built as that expression. `BOOL#TRUE` / `BOOL#FALSE` share the token
+   * and are the boolean literals.
+   */
+  private buildEnumLiteralExpression(
+    token: IToken,
+  ): VariableExpression | LiteralExpression {
+    const sourceSpan = tokenToSourceSpan(token);
+    const hash = token.image.indexOf("#");
+    const typeName = token.image.substring(0, hash);
+    const member = token.image.substring(hash + 1);
+    const upperMember = member.toUpperCase();
+    if (
+      typeName.toUpperCase() === "BOOL" &&
+      (upperMember === "TRUE" || upperMember === "FALSE")
+    ) {
+      return {
+        kind: "LiteralExpression",
+        sourceSpan,
+        literalType: "BOOL",
+        value: upperMember === "TRUE",
+        rawValue: upperMember,
+      };
+    }
+    return {
+      kind: "VariableExpression",
+      sourceSpan,
+      name: typeName,
+      subscripts: [],
+      fieldAccess: [member],
+      isDereference: false,
+      accessChain: [{ kind: "field", name: member }],
+      typedLiteral: true,
     };
   }
 

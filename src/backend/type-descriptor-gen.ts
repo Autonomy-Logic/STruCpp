@@ -171,6 +171,32 @@ export class TypeClassifier {
   }
 
   /**
+   * The pointer or reference level a TYPE alias chain carries, or undefined.
+   * `TYPE R1 : REF_TO INT` makes a member declared `R1` an address.
+   */
+  aliasReferenceKind(typeName: string, depth = 0): string | undefined {
+    if (depth > 16) return undefined; // a cycle; the analyzer reports it
+    const upper = typeName.toUpperCase();
+    if (this.arrays.has(upper)) return undefined;
+    const alias = this.aliases.get(upper);
+    if (alias === undefined) return undefined;
+    if (alias.referenceKind !== undefined && alias.referenceKind !== "none") {
+      return alias.referenceKind;
+    }
+    return this.aliasReferenceKind(alias.name, depth + 1);
+  }
+
+  /**
+   * Whether a type is a TYPE alias or subrange (not an ARRAY type). Codegen
+   * emits one as its raw C++ type — `using PCT = INT_t;` — so a STRUCT member
+   * declared with it has no IECVar wrapper around its payload.
+   */
+  isAlias(typeName: string): boolean {
+    const upper = typeName.toUpperCase();
+    return this.aliases.has(upper) && !this.arrays.has(upper);
+  }
+
+  /**
    * The element type of an array named by a declared TYPE, or undefined.
    *
    * `__VARINFO(v)` where `v : ARRT` knows only the name, so this has to be
@@ -179,15 +205,22 @@ export class TypeClassifier {
    */
   namedArrayElement(
     typeName: string,
-  ): { name: string; maxLength?: number | string } | undefined {
+  ):
+    | { name: string; maxLength?: number | string; referenceKind?: string }
+    | undefined {
     const named = this.arrays.get(this.followAliases(typeName).toUpperCase());
     if (named === undefined) return undefined;
     // A variable-length dimension has no count to report.
     if (named.dimensions.some((d) => d.isVariableLength)) return undefined;
+    const elementKind = named.elementType.referenceKind;
     return {
       name: named.elementType.name,
       ...(named.elementType.maxLength !== undefined
         ? { maxLength: named.elementType.maxLength }
+        : {}),
+      // ARRAY OF POINTER TO / REF_TO: each element is an address.
+      ...(elementKind !== undefined && elementKind !== "none"
+        ? { referenceKind: elementKind }
         : {}),
     };
   }
@@ -325,11 +358,14 @@ export class TypeDescriptorGenerator {
 
   /** Why a member could not be described, in terms of what was declared. */
   private refusalReason(typeRef: TypeReference): string {
-    if (
-      typeRef.referenceKind !== undefined &&
-      typeRef.referenceKind !== "none"
-    ) {
-      return `a ${typeRef.referenceKind.replace("_", " ").toUpperCase()} member is an address, and the descriptor cannot vouch for what it points at or how long that lives`;
+    const referenceKind =
+      typeRef.referenceKind !== undefined && typeRef.referenceKind !== "none"
+        ? typeRef.referenceKind
+        : (typeRef.elementReferenceChain?.[0] ??
+          this.arrayElementOf(typeRef)?.referenceKind ??
+          this.types.aliasReferenceKind(typeRef.name));
+    if (referenceKind !== undefined) {
+      return `a ${referenceKind.replace("_", " ").toUpperCase()} member is an address, and the descriptor cannot vouch for what it points at or how long that lives`;
     }
     const upper = typeRef.name.toUpperCase();
     if (upper === "__XWORD") {
@@ -360,6 +396,11 @@ export class TypeDescriptorGenerator {
     // somewhere this descriptor cannot reach and may not outlive the call, so
     // describing it would invite a block to follow it. Refuse the whole struct.
     if (typeRef.referenceKind !== "none") return undefined;
+    // The same for an array of them, or a TYPE alias that declares one.
+    if (typeRef.elementReferenceChain !== undefined) return undefined;
+    if (this.types.aliasReferenceKind(typeRef.name) !== undefined) {
+      return undefined;
+    }
 
     const emitName = mangledMemberName(fieldName, typeRef.name, {
       isUserDefinedType: this.ctx.isUserDefinedType,
@@ -376,14 +417,21 @@ export class TypeDescriptorGenerator {
         elementTypeName.name,
         elementTypeName.maxLength,
       );
+      if (elementTypeName.referenceKind !== undefined) return undefined;
+      if (this.types.aliasReferenceKind(elementTypeName.name) !== undefined) {
+        return undefined;
+      }
       // No arrays of arrays: the descriptor has one stride, not a rank.
       if (!elem || elem.typeClass === "TYPE_ARRAY") return undefined;
       const elemCpp = this.ctx.mapStructFieldTypeToCpp(
         elementTypeName.name,
         elementTypeName.maxLength,
       );
-      const isStruct = elem.typeClass === "TYPE_USERDEF";
-      const offset = isStruct
+      // A nested struct, or an alias's raw type: no wrapper to step over.
+      const isBare =
+        elem.typeClass === "TYPE_USERDEF" ||
+        this.types.isAlias(elementTypeName.name);
+      const offset = isBare
         ? `${memberExpr} + ${cppType}::elements_field_offset()`
         : `${memberExpr} + ${cppType}::elements_field_offset() + ${elemCpp}::value_field_offset()`;
       const count = `${cppType}::element_count()`;
@@ -406,9 +454,10 @@ export class TypeDescriptorGenerator {
     const resolved = this.resolve(typeRef.name, typeRef.maxLength);
     if (!resolved) return undefined;
 
-    // A nested struct IS its own payload — no wrapper to step over.
+    // A nested struct IS its own payload — no wrapper to step over — and so is
+    // a member declared with a TYPE alias or subrange, emitted as its raw type.
     const offset =
-      resolved.typeClass === "TYPE_USERDEF"
+      resolved.typeClass === "TYPE_USERDEF" || this.types.isAlias(typeRef.name)
         ? memberExpr
         : `${memberExpr} + ${cppType}::value_field_offset()`;
 
@@ -471,7 +520,9 @@ export class TypeDescriptorGenerator {
   /** The element type of an array member, inline or named; undefined if not one. */
   private arrayElementOf(
     typeRef: TypeReference,
-  ): { name: string; maxLength?: number | string } | undefined {
+  ):
+    | { name: string; maxLength?: number | string; referenceKind?: string }
+    | undefined {
     if (typeRef.arrayDimensions && typeRef.elementTypeName !== undefined) {
       return {
         name: typeRef.elementTypeName,

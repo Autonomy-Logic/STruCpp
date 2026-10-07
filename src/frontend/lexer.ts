@@ -548,6 +548,15 @@ export const TypedLiteral = createToken({
     /(?:BYTE|WORD|DWORD|LWORD|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BOOL|REAL|LREAL)#(?:16#[0-9A-Fa-f_]+|8#[0-7_]+|2#[01_]+|[0-9][0-9_]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/i,
 });
 
+// Typed enumeration literal: E_State#Idle (IEC 61131-3 type-qualified enum
+// value). After TypedLiteral, so BYTE#255 and the other numeric forms keep
+// their token; also takes BOOL#TRUE / BOOL#FALSE, which the builder reads as
+// boolean literals.
+export const EnumLiteral = createToken({
+  name: "EnumLiteral",
+  pattern: /[A-Za-z_][A-Za-z0-9_]*#[A-Za-z_][A-Za-z0-9_]*/,
+});
+
 // Real number literal: 3.14, 1.0e-10
 export const RealLiteral = createToken({
   name: "RealLiteral",
@@ -802,6 +811,7 @@ export const allTokens = [
   DateLiteral,
   TimeOfDayLiteral,
   TypedLiteral,
+  EnumLiteral,
 
   // Keywords (before Identifier)
   END_PROGRAM,

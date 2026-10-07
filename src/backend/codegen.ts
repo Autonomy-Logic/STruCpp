@@ -26,6 +26,8 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  ReferenceKind,
+  TypeReference,
   AccessStep,
   ExternalCodePragma,
   MethodDeclaration,
@@ -57,6 +59,7 @@ import {
 } from "../project-model.js";
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
 import { TypeClassifier } from "./type-descriptor-gen.js";
+import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
   formatArrayType,
@@ -75,6 +78,10 @@ import {
   isDeclarableGenericType,
   isImplicitlyConvertible,
   parsePartialAccess,
+  resolveAccessType,
+  resolveArrayElementAccessType,
+  resolveFieldDeclaration as resolveFieldDeclarationUtil,
+  type AccessLookup,
   resolveArrayElementType as resolveArrayElementTypeUtil,
   resolveArrayShapeByName,
   resolveFieldType as resolveFieldTypeUtil,
@@ -93,6 +100,35 @@ import {
 // =============================================================================
 // Located Variable Support
 // =============================================================================
+
+/** `__VLA_<rank>D_<ElementType>`, the AST builder's name for an `ARRAY [*]`. */
+const VLA_TYPE_NAME = /^__VLA_(\d+)D_(.+)$/;
+
+/** The parts of a type reference that decide its C++ type. */
+interface TypeShape {
+  name: string;
+  maxLength?: number | string;
+  referenceKind?: string;
+  referenceChain?: ReferenceKind[];
+  arrayDimensions?: Array<{ start: number; end: number }>;
+  elementTypeName?: string;
+  /** Declared length of an inline array's ELEMENT — `ARRAY [0..3] OF STRING(23)`. */
+  elementMaxLength?: number;
+  elementReferenceChain?: ReferenceKind[];
+}
+
+/** What codegen keeps about a library FB member's type. */
+interface LibraryFieldShape {
+  arrayDimensions?: Array<{ start: number; end: number }>;
+  elementTypeName?: string;
+  referenceKind?: ReferenceKind;
+}
+
+/** A library FB member as read from its manifest. */
+interface LibraryField extends LibraryFieldShape {
+  name: string;
+  type: string;
+}
 
 /**
  * Information about a located variable for code generation.
@@ -509,14 +545,7 @@ export class CodeGenerator {
   private libraryFBFieldTypes: Map<string, string> = new Map();
 
   /** Extended type metadata for library FB fields (array dims, reference kind) */
-  private libraryFBFieldTypeRefs: Map<
-    string,
-    {
-      arrayDimensions?: Array<{ start: number; end: number }>;
-      elementTypeName?: string;
-      referenceKind?: string;
-    }
-  > = new Map();
+  private libraryFBFieldTypeRefs: Map<string, LibraryFieldShape> = new Map();
 
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
@@ -534,6 +563,9 @@ export class CodeGenerator {
    *  the descriptor strings a callee reads back — `IEC_ANY::NAME` and
    *  `TYPENAME` — which report the name as declared. */
   protected currentScopeDeclaredNames: Map<string, string> = new Map();
+
+  /** Map of variable name (upper case) → declared type, for current scope. */
+  protected currentScopeVarTypeRefs: Map<string, TypeReference> = new Map();
 
   /** Parent class name of current FB (for SUPER resolution) */
   private currentFBExtends: string | undefined;
@@ -714,7 +746,7 @@ export class CodeGenerator {
 
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     // Use IECVar-wrapped types to match concrete Array1D<IEC_T, ...> elements
-    const vlaMatch = typeName.match(/^__VLA_(\d+)D_(.+)$/);
+    const vlaMatch = VLA_TYPE_NAME.exec(typeName);
     if (vlaMatch) {
       const ndims = vlaMatch[1];
       const elemType = this.mapVarTypeToCpp(vlaMatch[2]!);
@@ -768,23 +800,7 @@ export class CodeGenerator {
    * &-reference — matching the previous behavior of the call sites that
    * went through `mapVarTypeToCpp(decl.type.name)` without maxLength.
    */
-  protected toParamTypeRef<
-    T extends {
-      name: string;
-      maxLength?: number | string;
-      referenceKind?: string;
-      arrayDimensions?: Array<{ start: number; end: number }>;
-      elementTypeName?: string;
-    },
-  >(
-    typeRef: T,
-  ): {
-    name: string;
-    maxLength?: number | string;
-    referenceKind?: string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-  } {
+  protected toParamTypeRef<T extends TypeShape>(typeRef: T): TypeShape {
     const upper = typeRef.name.toUpperCase();
     const isString = upper === "STRING" || upper === "WSTRING";
     return {
@@ -798,8 +814,14 @@ export class CodeGenerator {
       ...(typeRef.elementTypeName !== undefined
         ? { elementTypeName: typeRef.elementTypeName }
         : {}),
+      ...(typeRef.elementReferenceChain !== undefined
+        ? { elementReferenceChain: typeRef.elementReferenceChain }
+        : {}),
       ...(typeRef.referenceKind !== undefined
         ? { referenceKind: typeRef.referenceKind }
+        : {}),
+      ...(typeRef.referenceChain !== undefined
+        ? { referenceChain: typeRef.referenceChain }
         : {}),
     };
   }
@@ -829,19 +851,9 @@ export class CodeGenerator {
    * this helper rewires the fields so the shape matches what the
    * type-resolution helpers expect.
    */
-  private projectVarToTypeRef(spec: {
-    typeName: string;
-    maxLength?: number | string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-    referenceKind?: string;
-  }): {
-    name: string;
-    maxLength?: number | string;
-    referenceKind?: string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-  } {
+  private projectVarToTypeRef(
+    spec: Omit<TypeShape, "name"> & { typeName: string },
+  ): TypeShape {
     return {
       name: spec.typeName,
       ...(spec.maxLength !== undefined ? { maxLength: spec.maxLength } : {}),
@@ -851,35 +863,65 @@ export class CodeGenerator {
       ...(spec.elementTypeName !== undefined
         ? { elementTypeName: spec.elementTypeName }
         : {}),
+      ...(spec.elementReferenceChain !== undefined
+        ? { elementReferenceChain: spec.elementReferenceChain }
+        : {}),
       ...(spec.referenceKind !== undefined
         ? { referenceKind: spec.referenceKind }
+        : {}),
+      ...(spec.referenceChain !== undefined
+        ? { referenceChain: spec.referenceChain }
         : {}),
     };
   }
 
-  protected mapTypeRefToCpp(typeRef: {
-    name: string;
-    maxLength?: number | string;
-    referenceKind?: string;
-    arrayDimensions?: Array<{ start: number; end: number }>;
-    elementTypeName?: string;
-    elementMaxLength?: number;
-  }): string {
+  /**
+   * The type a pointer or reference wraps: the raw struct / FB / program name
+   * for a user type, the raw value type (`INT_t`) for an elementary one. The
+   * wrappers hold an IECVar<T> themselves.
+   */
+  private rawReferencedType(name: string): string {
+    if (this.isUserDefinedType(name)) {
+      return this.knownProgramTypes.has(name.toUpperCase())
+        ? `Program_${name}`
+        : name;
+    }
+    return this.typeCodeGen.mapTypeToCpp(name);
+  }
+
+  protected mapTypeRefToCpp(typeRef: TypeShape): string {
     let baseType: string;
 
     // Handle inline array types with dimension info
     // Array1D stores T directly — use IECVar-wrapped types for elementary elements
     // and bare names for composites (whose fields already contain IECVar leaves)
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-      const elemCpp = this.isUserDefinedType(typeRef.elementTypeName)
-        ? typeRef.elementTypeName
-        : // The element's own declared length — `ARRAY [0..3] OF STRING(23)`.
-          // Without it every element falls back to the 254-character default.
-          this.mapVarTypeToCpp(
-            typeRef.elementTypeName,
-            typeRef.elementMaxLength,
-          );
+      const elemCpp = typeRef.elementReferenceChain
+        ? // ARRAY OF POINTER TO / REF_TO: each element is the wrapper a variable gets.
+          wrapReferenceChain(
+            typeRef.elementReferenceChain,
+            this.rawReferencedType(typeRef.elementTypeName),
+          )
+        : this.isUserDefinedType(typeRef.elementTypeName)
+          ? typeRef.elementTypeName
+          : // The element's own declared length — `ARRAY [0..3] OF STRING(23)`.
+            // Without it every element falls back to the 254-character default.
+            this.mapVarTypeToCpp(
+              typeRef.elementTypeName,
+              typeRef.elementMaxLength,
+            );
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
+    } else if (
+      typeRef.elementReferenceChain &&
+      VLA_TYPE_NAME.test(typeRef.name)
+    ) {
+      // ARRAY[*] OF POINTER TO / REF_TO: a view over the same wrappers.
+      const [, ndims, elem] = VLA_TYPE_NAME.exec(typeRef.name)!;
+      const elemCpp = wrapReferenceChain(
+        typeRef.elementReferenceChain,
+        this.rawReferencedType(elem!),
+      );
+      baseType = `ArrayView${ndims}D<${elemCpp}>`;
     } else {
       baseType = this.mapVarTypeToCpp(
         typeRef.name,
@@ -895,32 +937,16 @@ export class CodeGenerator {
       // Pointer (IEC_Ptr<T>) and reference (IEC_REF_TO<T> / IEC_REFERENCE_TO<T>)
       // wrappers all take the raw element type (not IECVar-wrapped); they wrap
       // an IECVar<T> internally.
-      let elemType: string;
-      if (typeRef.arrayDimensions && typeRef.elementTypeName) {
-        // Array pointer/reference: baseType is already raw (Array1D<...>)
-        elemType = baseType;
-      } else if (this.isUserDefinedType(typeRef.name)) {
-        // UDT: use raw struct/FB/program name
-        elemType = this.knownProgramTypes.has(typeRef.name.toUpperCase())
-          ? `Program_${typeRef.name}`
-          : typeRef.name;
-      } else {
-        // Primitive type: use raw type mapping (BYTE_t, INT_t, etc.)
-        elemType = this.typeCodeGen.mapTypeToCpp(typeRef.name);
-      }
-      switch (typeRef.referenceKind) {
-        case "pointer_to":
-          // IEC_Ptr<T> — cross-type assignment, pointer arithmetic,
-          // pointer-to-integer conversion.
-          return `IEC_Ptr<${elemType}>`;
-        case "ref_to":
-          // REF_TO — explicit dereference (^), nullable, rebind via
-          // `:= REF(x)` / `:= ADR(x)`.
-          return `IEC_REF_TO<${elemType}>`;
-        case "reference_to":
-          // REFERENCE TO — implicit dereference, rebind via `REF=`.
-          return `IEC_REFERENCE_TO<${elemType}>`;
-      }
+      // Array pointer/reference: baseType is already raw (Array1D<...>)
+      const elemType =
+        typeRef.arrayDimensions && typeRef.elementTypeName
+          ? baseType
+          : this.rawReferencedType(typeRef.name);
+      // Nested levels (`POINTER TO REF_TO INT`) wrap innermost first.
+      return wrapReferenceChain(
+        typeRef.referenceChain ?? [typeRef.referenceKind],
+        elemType,
+      );
     }
     // For STRING(CONSTANT_NAME), emit template with the constant name
     if (typeof typeRef.maxLength === "string") {
@@ -951,13 +977,7 @@ export class CodeGenerator {
       name: string;
       inputNames: string[];
       inoutNames: string[];
-      fields: Array<{
-        name: string;
-        type: string;
-        arrayDimensions?: Array<{ start: number; end: number }>;
-        elementTypeName?: string;
-        referenceKind?: string;
-      }>;
+      fields: Array<LibraryField>;
     }>,
   ): void {
     for (const fb of fbs) {
@@ -990,11 +1010,7 @@ export class CodeGenerator {
         }
         // Store array metadata for inline array type reconstruction
         if (f.arrayDimensions || f.elementTypeName || f.referenceKind) {
-          const ref: {
-            arrayDimensions?: Array<{ start: number; end: number }>;
-            elementTypeName?: string;
-            referenceKind?: string;
-          } = {};
+          const ref: LibraryFieldShape = {};
           if (f.arrayDimensions) ref.arrayDimensions = f.arrayDimensions;
           if (f.elementTypeName) ref.elementTypeName = f.elementTypeName;
           if (f.referenceKind) ref.referenceKind = f.referenceKind;
@@ -1043,23 +1059,8 @@ export class CodeGenerator {
     for (const archive of archives) {
       this.registerLibraryFBTypes(
         archive.manifest.functionBlocks.map((fb) => {
-          const mapVar = (v: {
-            name: string;
-            type: string;
-            arrayDimensions?: Array<{ start: number; end: number }>;
-            elementTypeName?: string;
-            referenceKind?: string;
-          }) => {
-            const entry: {
-              name: string;
-              type: string;
-              arrayDimensions?: Array<{ start: number; end: number }>;
-              elementTypeName?: string;
-              referenceKind?: string;
-            } = {
-              name: v.name,
-              type: v.type,
-            };
+          const mapVar = (v: LibraryField): LibraryField => {
+            const entry: LibraryField = { name: v.name, type: v.type };
             if (v.arrayDimensions) entry.arrayDimensions = v.arrayDimensions;
             if (v.elementTypeName) entry.elementTypeName = v.elementTypeName;
             if (v.referenceKind) entry.referenceKind = v.referenceKind;
@@ -1463,7 +1464,9 @@ export class CodeGenerator {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
-        enumDescriptors.push({ name: td.name, members: memberNames });
+        if (td.inline?.owner === undefined) {
+          enumDescriptors.push({ name: td.name, members: memberNames });
+        }
       }
     }
     // The project's own last, so a name declared on both sides is reported as
@@ -2160,11 +2163,11 @@ export class CodeGenerator {
     return `[&]{ ${temps.join(" ")} return ${locked}; }()`;
   }
 
-  /** Split a target into the part it addresses and a trailing bit selector
-   *  (`.3`), if any. */
+  /** Split a target into the part it addresses and a trailing partial-access
+   *  selector (`.3`, `.%B1`), if any. */
   private splitBitTarget(target: VariableExpression): {
     base: VariableExpression;
-    bit: string | undefined;
+    part: PartialAccess | undefined;
   } {
     const chain = target.accessChain;
     const step =
@@ -2175,8 +2178,9 @@ export class CodeGenerator {
           ? step.name
           : undefined
         : target.fieldAccess[target.fieldAccess.length - 1];
-    if (last === undefined || !/^\d+$/.test(last)) {
-      return { base: target, bit: undefined };
+    const part = last === undefined ? undefined : parsePartialAccess(last);
+    if (!part) {
+      return { base: target, part: undefined };
     }
     const base: VariableExpression = {
       ...target,
@@ -2187,18 +2191,18 @@ export class CodeGenerator {
       if (trimmed) base.accessChain = trimmed;
       else delete base.accessChain;
     }
-    return { base, bit: last };
+    return { base, part };
   }
 
-  /** `lv = <value>`, or the read-modify-write of bit `bit` of `lv`. 1ULL
-   *  (64-bit) avoids UB when the bit index is >= 32 (e.g., LWORD.33). */
+  /** `lv = <value>`, or the read-modify-write of one part of `lv` (see
+   *  partialAccessWrite). */
   private renderStore(
     lv: string,
-    bit: string | undefined,
+    part: PartialAccess | undefined,
     value: string,
   ): string {
-    if (bit === undefined) return `${lv} = ${value}`;
-    return `${lv} = (${lv} & ~(1ULL << ${bit})) | ((${value} ? 1ULL : 0ULL) << ${bit})`;
+    if (part === undefined) return `${lv} = ${value}`;
+    return `${lv} = ${this.partialAccessWrite(lv, value, part)}`;
   }
 
   /**
@@ -2218,10 +2222,10 @@ export class CodeGenerator {
       return;
     }
     const body = this.renderUnderLock(upper, indent, () => {
-      const { base, bit } = this.splitBitTarget(target);
+      const { base, part } = this.splitBitTarget(target);
       return this.renderStore(
         this.renderAccessTail("(*__glk)", base, upper),
-        bit,
+        part,
         value,
       );
     });
@@ -2257,11 +2261,11 @@ export class CodeGenerator {
     }
     const body = this.renderUnderLock(upper, indent, () => {
       const value = this.generateExpression(valueExpr);
-      const { base, bit } = this.splitBitTarget(target);
+      const { base, part } = this.splitBitTarget(target);
       const lv = this.hasAccessTail(base)
         ? this.renderAccessTail("(*__glk)", base, upper)
         : "(*__glk)";
-      return this.renderStore(lv, bit, value);
+      return this.renderStore(lv, part, value);
     });
     this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){ ${body}; });`);
   }
@@ -2355,8 +2359,10 @@ export class CodeGenerator {
       this.findMethodDecl(objectType, method),
     );
     const temps: string[] = [];
+    // Generic parameters take a descriptor, as in an unlocked method call.
+    const codes = this.generateCallArguments(objectType, method, args);
     const callArgs = args.map((a, i) => {
-      const code = this.generateExpression(a.value);
+      const code = codes[i]!;
       if (byRef[i] === true || !this.mayTakeLock(a.value)) return code;
       const tmp = `__gma${this.tempVarCounter++}`;
       temps.push(`auto ${tmp} = ${code};`);
@@ -3286,8 +3292,14 @@ export class CodeGenerator {
           ...(decl.elementMaxLength !== undefined
             ? { elementMaxLength: decl.elementMaxLength }
             : {}),
+          ...(decl.elementReferenceChain !== undefined
+            ? { elementReferenceChain: decl.elementReferenceChain }
+            : {}),
           ...(decl.referenceKind !== undefined
             ? { referenceKind: decl.referenceKind }
+            : {}),
+          ...(decl.referenceChain !== undefined
+            ? { referenceChain: decl.referenceChain }
             : {}),
         });
         const memberName = this.mangleMemberIfNeeded(decl.name, decl.typeName);
@@ -4156,7 +4168,7 @@ export class CodeGenerator {
     const source = this.generateExpression(stmt.source);
     const targetKind =
       stmt.target.kind === "VariableExpression"
-        ? this.currentScopeVarRefKinds.get(stmt.target.name.toUpperCase())
+        ? this.refAssignTargetKind(stmt.target)
         : undefined;
     if (targetKind === "ref_to") {
       this.emit(`${indent}${target} = REF(${source});`);
@@ -4165,6 +4177,41 @@ export class CodeGenerator {
       this.emit(`${indent}${target}.bind(${source});`);
     }
   }
+
+  /**
+   * The reference kind of a REF= target: a variable's own, or for a member or
+   * element (`s.r`, `arr[1]`) the declared kind of what it lands on.
+   */
+  private refAssignTargetKind(target: VariableExpression): string | undefined {
+    const nameUpper = target.name.toUpperCase();
+    const hasAccess =
+      target.subscripts.length > 0 ||
+      target.fieldAccess.length > 0 ||
+      target.isDereference ||
+      (target.accessChain !== undefined && target.accessChain.length > 0);
+    if (!hasAccess) return this.currentScopeVarRefKinds.get(nameUpper);
+    const base = this.currentScopeVarTypeRefs.get(nameUpper);
+    if (base === undefined) return undefined;
+    return resolveAccessType(base, target, this.accessLookup)?.referenceKind;
+  }
+
+  /** Member and element lookups over the AST and the library FBs. */
+  private readonly accessLookup: AccessLookup = {
+    field: (type, field) => {
+      const local = this.ast
+        ? resolveFieldDeclarationUtil(type, field, this.ast)
+        : undefined;
+      if (local) return local;
+      // A library function block: its member types come from the manifest.
+      const key = `${type.toUpperCase()}.${field.toUpperCase()}`;
+      const name = this.libraryFBFieldTypes.get(key);
+      if (name === undefined) return undefined;
+      const kind = this.libraryFBFieldTypeRefs.get(key)?.referenceKind;
+      return { type: { name, referenceKind: kind ?? "none" } };
+    },
+    arrayElement: (type) =>
+      this.ast ? resolveArrayElementAccessType(type, this.ast) : undefined,
+  };
 
   /**
    * Generate code for an external code pragma.
@@ -6242,6 +6289,7 @@ export class CodeGenerator {
     this.currentScopeVarTypes.clear();
     this.currentScopeVarRefKinds.clear();
     this.currentScopeDeclaredNames.clear();
+    this.currentScopeVarTypeRefs.clear();
     this.memberMangledNames.clear();
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
@@ -6254,6 +6302,7 @@ export class CodeGenerator {
           if (declared !== undefined) {
             this.currentScopeDeclaredNames.set(name.toUpperCase(), declared);
           }
+          this.currentScopeVarTypeRefs.set(name.toUpperCase(), decl.type);
           if (
             decl.type.referenceKind !== undefined &&
             decl.type.referenceKind !== "none"
@@ -6865,50 +6914,98 @@ export class CodeGenerator {
       else args.push(arg);
     }
 
-    const value = (e: Expression): string => {
-      const code = this.generateExpression(e);
+    const value = (
+      e: Expression,
+      code = this.generateExpression(e),
+    ): string => {
       if (!this.mayTakeLock(e)) return code;
       const tmp = `__gfa${this.tempVarCounter++}`;
       this.emit(`${indent}auto ${tmp} = ${code};`);
       return tmp;
     };
 
-    const inputParamNames = this.fbInputParams.get(fbTypeName.toUpperCase());
-    const inoutParams = this.fbInoutParams.get(fbTypeName.toUpperCase());
+    const fbUpper = fbTypeName.toUpperCase();
+    const inputParamNames = this.fbInputParams.get(fbUpper);
+    const inoutParams = this.fbInoutParams.get(fbUpper);
+    const vlaInouts = this.fbVlaInoutParams.get(fbUpper);
+    const refInouts = this.fbRefInoutParams.get(fbUpper);
+
+    // Which parameter each argument fills, as in generateFBInvocation.
+    const slotOf = new Map<Argument, string>();
+    const claimed = new Set<string>();
+    for (const arg of args) {
+      if (arg.name) claimed.add(arg.name.toUpperCase());
+    }
+    const order = this.fbParamOrder.get(fbUpper) ?? inputParamNames ?? [];
+    let nextSlot = 0;
+    for (const arg of args) {
+      if (arg.name) {
+        slotOf.set(arg, arg.name);
+        continue;
+      }
+      while (nextSlot < order.length && claimed.has(order[nextSlot]!))
+        nextSlot++;
+      if (nextSlot >= order.length) continue;
+      slotOf.set(arg, order[nextSlot]!);
+      claimed.add(order[nextSlot]!);
+      nextSlot++;
+    }
+
     const inputs: Array<{ member: string; code: string }> = [];
     let positionalIndex = 0;
     for (const arg of args) {
       if (arg.isOutput) continue;
-      let paramName = arg.name;
-      if (paramName === undefined) {
-        paramName = inputParamNames?.[positionalIndex];
-        if (paramName === undefined) {
-          this.emit(
-            `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
-          );
-        }
+      const paramName = slotOf.get(arg);
+      if (paramName && refInouts?.has(paramName.toUpperCase())) {
+        // A function-block inout is bound to the caller's instance.
+        inputs.push({
+          member: this.fbParamMemberName(paramName, fbTypeName),
+          code: this.generateAddressOf(arg.value),
+        });
+      } else if (paramName && !this.isOutputParam(fbTypeName, paramName)) {
+        inputs.push({
+          member: this.fbParamMemberName(paramName, fbTypeName),
+          code: value(
+            arg.value,
+            this.generateArgumentValue(paramName, arg.value, fbTypeName),
+          ),
+        });
+        if (!arg.name) positionalIndex++;
+      } else {
+        this.emit(
+          `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
+        );
         positionalIndex++;
-        if (paramName === undefined) continue;
       }
-      inputs.push({
-        member: this.fbParamMemberName(paramName, fbTypeName),
-        code: value(arg.value),
-      });
     }
     const en = enArg !== undefined ? value(enArg) : null;
 
     // Values read out under the lock, stored to the caller's variables after.
+    // A variable-length or function-block inout already wrote to the caller's
+    // own storage, so it is not copied back.
     const fbCpp = this.mapVarTypeToCpp(fbTypeName);
     const captures: Array<{ tmp: string; member: string; target: Expression }> =
       [];
     for (const arg of args) {
-      if (arg.name === undefined) continue;
-      const isInout =
-        !arg.isOutput && inoutParams?.has(arg.name.toUpperCase()) === true;
-      if (!arg.isOutput && !isInout) continue;
+      let paramName: string | undefined;
+      if (arg.isOutput) {
+        paramName = arg.name;
+      } else {
+        const slot = slotOf.get(arg);
+        const upper = slot?.toUpperCase();
+        if (
+          upper !== undefined &&
+          inoutParams?.has(upper) === true &&
+          vlaInouts?.has(upper) !== true &&
+          refInouts?.has(upper) !== true
+        ) {
+          paramName = slot;
+        }
+      }
+      if (paramName === undefined) continue;
       captures.push({
         tmp: `__gfo${this.tempVarCounter++}`,
-        member: this.fbParamMemberName(arg.name, fbTypeName),
+        member: this.fbParamMemberName(paramName, fbTypeName),
         target: arg.value,
       });
     }

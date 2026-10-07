@@ -91,6 +91,22 @@ constexpr std::nullptr_t IEC_NULL = nullptr;
 // REF_TO Type (Explicit Dereference)
 // =============================================================================
 
+template<typename T> class IEC_REF_TO;
+template<typename T> class IEC_REFERENCE_TO;
+template<typename T> class IEC_Ptr;
+
+namespace detail {
+/**
+ * The object a REF_TO T points at. A value lives in an IECVar<T>; a reference
+ * or pointer variable is the IEC_REF_TO / IEC_REFERENCE_TO / IEC_Ptr object
+ * itself, so REF_TO REF_TO INT points at an IEC_REF_TO<INT_t>.
+ */
+template<typename T> struct ref_target { using type = IECVar<T>; };
+template<typename U> struct ref_target<IEC_REF_TO<U>> { using type = IEC_REF_TO<U>; };
+template<typename U> struct ref_target<IEC_REFERENCE_TO<U>> { using type = IEC_REFERENCE_TO<U>; };
+template<typename U> struct ref_target<IEC_Ptr<U>> { using type = IEC_Ptr<U>; };
+}  // namespace detail
+
 /**
  * REF_TO pointer type for IEC 61131-3.
  * Wraps a pointer to an IECVar<T> with null checking.
@@ -104,7 +120,9 @@ template<typename T>
 class IEC_REF_TO {
 public:
     using value_type = T;
-    using pointer_type = IECVar<T>*;
+    /** What the reference points at: IECVar<T>, or T itself for a reference or pointer. */
+    using target_type = typename detail::ref_target<T>::type;
+    using pointer_type = target_type*;
 
 private:
     pointer_type ptr_;
@@ -158,7 +176,7 @@ public:
      * Dereference - throws NullReferenceException if NULL
      * Used by generated code for ^ operator and DREF() function
      */
-    IECVar<T>& deref() {
+    target_type& deref() {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
@@ -169,7 +187,7 @@ public:
         return *ptr_;
     }
 
-    const IECVar<T>& deref() const {
+    const target_type& deref() const {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
@@ -183,7 +201,7 @@ public:
     /**
      * Dereference with context for better error messages
      */
-    IECVar<T>& deref(const char* context) {
+    target_type& deref(const char* context) {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException(context);
@@ -194,7 +212,7 @@ public:
         return *ptr_;
     }
 
-    const IECVar<T>& deref(const char* context) const {
+    const target_type& deref(const char* context) const {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException(context);
@@ -238,11 +256,11 @@ public:
     /**
      * Dereference operator (*) - same as deref()
      */
-    IECVar<T>& operator*() {
+    target_type& operator*() {
         return deref();
     }
 
-    const IECVar<T>& operator*() const {
+    const target_type& operator*() const {
         return deref();
     }
 
@@ -444,6 +462,14 @@ inline IEC_REF_TO<T> REF(IECVar<T>& var) noexcept {
 template<typename T>
 inline IEC_REF_TO<IEC_REF_TO<T>> REF(IEC_REF_TO<T>& ref) noexcept {
     return IEC_REF_TO<IEC_REF_TO<T>>(&ref);
+}
+
+/**
+ * REF() for a pointer variable: REF_TO POINTER TO T.
+ */
+template<typename T>
+inline IEC_REF_TO<IEC_Ptr<T>> REF(IEC_Ptr<T>& ptr) noexcept {
+    return IEC_REF_TO<IEC_Ptr<T>>(&ptr);
 }
 
 // Note: REF() for array elements and struct fields works automatically

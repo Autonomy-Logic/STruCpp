@@ -33,6 +33,7 @@ import type {
   Visibility,
 } from "../frontend/ast.js";
 import type { CompileError, SourceSpan } from "../types.js";
+import { describeInlineType } from "../frontend/lower-inline-types.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
 import type { FunctionBlockSymbol, FunctionSymbol } from "./symbol-table.js";
@@ -355,6 +356,8 @@ export class SemanticAnalyzer {
   private typeChecker: TypeChecker;
   private stdRegistry = new StdFunctionRegistry();
   private enumMemberMap: Map<string, EnumMemberEntry> = new Map();
+  /** Uppercase names of the TYPEs hoisted from the test file being analyzed. */
+  private testTypeNames = new Set<string>();
   private errors: CompileError[] = [];
   private warnings: CompileError[] = [];
 
@@ -487,7 +490,11 @@ export class SemanticAnalyzer {
         // language accepts them.  Skip names already claimed by a
         // real symbol (e.g. a global variable with the same
         // identifier) to avoid silently shadowing them.
-        if (typeDecl.definition.kind === "EnumDefinition") {
+        // An inline enumeration's members belong to its POU, not the global scope.
+        if (
+          typeDecl.definition.kind === "EnumDefinition" &&
+          typeDecl.inline?.owner === undefined
+        ) {
           typeDecl.definition.members.forEach((member, index) => {
             if (this.symbolTables.globalScope.hasLocal(member.name)) return;
             this.symbolTables.globalScope.defineOrReplace({
@@ -520,7 +527,11 @@ export class SemanticAnalyzer {
     // ambiguous rather than resolving silently to the library.
     const enumDescriptors: Array<{ name: string; members: string[] }> =
       ast.types
-        .filter((t) => t.definition.kind === "EnumDefinition")
+        .filter(
+          (t) =>
+            t.definition.kind === "EnumDefinition" &&
+            t.inline?.owner === undefined,
+        )
         .map((t) => ({
           name: t.name,
           members:
@@ -530,6 +541,13 @@ export class SemanticAnalyzer {
         }));
     for (const sym of this.symbolTables.globalScope.getAllSymbols()) {
       if (sym.kind !== "type" || sym.resolvedType?.typeKind !== "enum")
+        continue;
+      // An inline enumeration's members belong to its POU, not the global
+      // member table.
+      if (
+        (sym.declaration as TypeDeclaration | undefined)?.inline?.owner !==
+        undefined
+      )
         continue;
       const enumType = sym.resolvedType as EnumType;
       if (enumType.values.length === 0) continue;
@@ -3721,12 +3739,36 @@ export class SemanticAnalyzer {
     if (upper.startsWith("__VLA_") || upper.startsWith("__INLINE_ARRAY_")) {
       return true;
     }
+    if (this.testTypeNames.has(upper)) return true;
     const sym = this.symbolTables.globalScope.lookup(upper);
     if (!sym) return false;
     return (
       sym.kind === "type" ||
       sym.kind === "functionBlock" ||
       sym.kind === "program"
+    );
+  }
+
+  /** REFERENCE TO is an alias with no storage of its own, so it cannot be stacked with other levels. */
+  private validateReferenceLevels(
+    typeRef: TypeReference,
+    context: string,
+  ): void {
+    const stacked = [
+      typeRef.referenceChain,
+      typeRef.elementReferenceChain,
+    ].some(
+      (chain) =>
+        chain !== undefined &&
+        chain.length > 1 &&
+        chain.includes("reference_to"),
+    );
+    if (!stacked) return;
+    this.addError(
+      `REFERENCE TO cannot be combined with other reference levels${context ? " in " + context : ""}`,
+      typeRef.sourceSpan.startLine,
+      typeRef.sourceSpan.startCol,
+      typeRef.sourceSpan.file,
     );
   }
 
@@ -3738,6 +3780,8 @@ export class SemanticAnalyzer {
     context: string,
     genericsPermitted = false,
   ): void {
+    this.validateReferenceLevels(typeRef, context);
+
     // Skip empty or VOID type names
     if (!typeRef.name || typeRef.name.toUpperCase() === "VOID") return;
 
@@ -4220,6 +4264,21 @@ export class SemanticAnalyzer {
     const sym = scope.lookup(expr.name);
     if (!sym) return; // undeclared — separate diagnostic from checkNameDeclared
 
+    if (expr.typedLiteral) {
+      if (sym.kind === "type" && sym.resolvedType?.typeKind === "enum") return;
+      const member = expr.fieldAccess[0] ?? "";
+      const hint = /^[0-9A-F_]+$/i.test(member)
+        ? `; did you mean '16#${member}' or '${expr.name}#16#${member}'?`
+        : ".";
+      this.addError(
+        `'${expr.name}#${member}' is not a valid literal: '${expr.name}' is not an enumeration${hint}`,
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
+      return;
+    }
+
     let noun: string | null = null;
     if (sym.kind === "functionBlock") noun = "function block";
     else if (sym.kind === "program") noun = "program";
@@ -4338,12 +4397,19 @@ export class SemanticAnalyzer {
     // Build enum member map from source symbol tables for bare enum resolution
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
     for (const sym of sourceSymbolTables.globalScope.getAllSymbols()) {
-      if (sym.kind === "type" && sym.resolvedType?.typeKind === "enum") {
+      if (
+        sym.kind === "type" &&
+        sym.resolvedType?.typeKind === "enum" &&
+        (sym.declaration as TypeDeclaration | undefined)?.inline?.owner ===
+          undefined
+      ) {
         const enumType = sym.resolvedType as EnumType;
         enumDescriptors.push({ name: enumType.name, members: enumType.values });
       }
     }
     this.enumMemberMap = buildEnumMemberMap(enumDescriptors);
+
+    const typeScope = this.buildTestTypeScope(testFile);
 
     // Validate type references in SETUP and TEST var blocks
     if (testFile.setup) {
@@ -4353,10 +4419,10 @@ export class SemanticAnalyzer {
       this.validateTestVarBlocks(tc.varBlocks, `TEST '${tc.name}'`);
     }
 
-    // Build SETUP scope (parented to globalScope)
+    // Build SETUP scope (parented to the test file's own types)
     const setupScope = this.buildTestScope(
       testFile.setup?.varBlocks ?? [],
-      this.symbolTables.globalScope,
+      typeScope,
     );
 
     // Walk SETUP body
@@ -4378,7 +4444,46 @@ export class SemanticAnalyzer {
       this.walkTestStatementsForUndeclaredVars(tc.body, testScope);
     }
 
+    this.testTypeNames.clear();
     return { errors: [...this.errors], warnings: [...this.warnings] };
+  }
+
+  /** Scope holding the TYPEs hoisted from a test file's inline enumerations and subranges. */
+  private buildTestTypeScope(testFile: TestFile): Scope {
+    const scope = new Scope("testTypes", this.symbolTables.globalScope);
+    this.testTypeNames.clear();
+    for (const typeDecl of testFile.inlineTypes ?? []) {
+      if (this.symbolTables.globalScope.lookup(typeDecl.name)) {
+        this.addError(
+          `The ${describeInlineType(typeDecl)} uses the type name '${typeDecl.name}', ` +
+            `which the program already declares; rename one of them.`,
+          typeDecl.sourceSpan.startLine,
+          typeDecl.sourceSpan.startCol,
+          testFile.fileName,
+        );
+        continue;
+      }
+      const resolvedType: EnumType | ElementaryType =
+        typeDecl.definition.kind === "EnumDefinition"
+          ? {
+              typeKind: "enum" as const,
+              name: typeDecl.name,
+              values: typeDecl.definition.members.map((m) => m.name),
+            }
+          : {
+              typeKind: "elementary" as const,
+              name: typeDecl.name,
+              sizeBits: 0,
+            };
+      scope.define({
+        name: typeDecl.name,
+        kind: "type",
+        declaration: typeDecl,
+        resolvedType,
+      });
+      this.testTypeNames.add(typeDecl.name.toUpperCase());
+    }
+    return scope;
   }
 
   /**
