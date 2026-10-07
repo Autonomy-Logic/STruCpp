@@ -449,6 +449,202 @@ int main() {
     expectNoNestedLocks(result.cppCode);
   }, 120000);
 
+  it("binds in-outs to a global's own storage, under its lock, from two tasks", () => {
+    const source = `
+      TYPE Station : STRUCT count : DINT; hits : DINT; END_STRUCT; END_TYPE
+      TYPE Plant : STRUCT
+        pumps : ARRAY[1..3] OF DINT; stn : Station; last : INT; spare : ARRAY[0..1] OF DINT;
+      END_STRUCT; END_TYPE
+      FUNCTION_BLOCK BumpAll
+        VAR_IN_OUT arr : ARRAY[*] OF DINT; END_VAR
+        VAR i : DINT; END_VAR
+        FOR i := LOWER_BOUND(arr, 1) TO UPPER_BOUND(arr, 1) DO
+          arr[i] := arr[i] + 1;
+        END_FOR;
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK BumpStation
+        VAR_IN_OUT data : Station; END_VAR
+        VAR_INPUT seen : INT; END_VAR
+        data.count := data.count + 1;
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK AddOther
+        VAR_EXTERNAL gOther : DINT; END_VAR
+        VAR_IN_OUT arr : ARRAY[*] OF DINT; END_VAR
+        arr[LOWER_BOUND(arr, 1)] := arr[LOWER_BOUND(arr, 1)] + gOther;
+      END_FUNCTION_BLOCK
+      FUNCTION BumpF : BOOL
+        VAR_IN_OUT s : Station; END_VAR
+        s.hits := s.hits + 1;
+        BumpF := TRUE;
+      END_FUNCTION
+      FUNCTION BumpV : BOOL
+        VAR_IN_OUT v : DINT; END_VAR
+        VAR_INPUT inc : DINT; END_VAR
+        v := v + inc;
+        BumpV := TRUE;
+      END_FUNCTION
+      PROGRAM Worker
+        VAR_EXTERNAL dev : Plant; gCount : DINT; gStep : DINT; END_VAR
+        VAR all : BumpAll; st : BumpStation; ok : BOOL; k : INT := 1; END_VAR
+        all(arr := dev.pumps);
+        st(data := dev.stn, seen := dev.last);
+        ok := BumpF(dev.stn);
+        BumpF(s := dev.stn);
+        ok := BumpV(gCount, gStep);
+        CASE k OF
+          1: dev.last := k;
+          2: dev.last := 0;
+        END_CASE;
+      END_PROGRAM
+      PROGRAM Single
+        VAR_EXTERNAL dev : Plant; END_VAR
+        VAR adder : AddOther; END_VAR
+        adder(arr := dev.spare);
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL dev : Plant; gCount : DINT; gStep : DINT := 1; gOther : DINT := 5; END_VAR
+        RESOURCE Res ON PLC
+          TASK t1(INTERVAL := T#10ms, PRIORITY := 0);
+          TASK t2(INTERVAL := T#10ms, PRIORITY := 1);
+          PROGRAM instA WITH t1 : Worker;
+          PROGRAM instB WITH t2 : Worker;
+          PROGRAM instC WITH t2 : Single;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = buildAndRun(
+      "inout-binding",
+      source,
+      `int main() {
+  strucpp::Configuration_CFG cfg;
+  const int N = 20000;
+#ifdef STRUCPP_THREADED
+  std::thread ta([&] { for (int i = 0; i < N; ++i) cfg.INSTA.run(); });
+  std::thread tb([&] { for (int i = 0; i < N; ++i) cfg.INSTB.run(); });
+  ta.join();
+  tb.join();
+#else
+  for (int i = 0; i < N; ++i) { cfg.INSTA.run(); cfg.INSTB.run(); }
+#endif
+  for (int i = 1; i <= 3; ++i) CHECK(strucpp::DEV.value.PUMPS[i] == 2 * N);
+  CHECK(strucpp::DEV.value.STN.COUNT == 2 * N);
+  CHECK(strucpp::DEV.value.STN.HITS == 4 * N);
+  CHECK(strucpp::DEV.value.LAST == 1);
+  CHECK(strucpp::GCOUNT.read() == 2 * N);
+  cfg.INSTC.run();
+  cfg.INSTC.run();
+  CHECK(strucpp::DEV.value.SPARE[0] == 10);
+  CHECK(MAX_HELD() == 1);
+  return fails ? 1 : 0;
+}`,
+    );
+    // An ARRAY[*] in-out views the global's own array inside its lock.
+    expect(result.cppCode).toMatch(
+      /DEV->with_lock\(\[&\]\(auto\* __glk\)\{\s*auto& __fbi = ALL;\s*__fbi\.ARR = \(\*__glk\)\.PUMPS;\s*__fbi\(\);/,
+    );
+    // A value in-out is copied in and back inside the one lock, and an input
+    // read from the same global is read inside it too.
+    expect(result.cppCode).toMatch(
+      /__fbi\.DATA = \(\*__glk\)\.STN;\s*__fbi\.SEEN = \(\*__glk\)\.LAST;\s*__fbi\(\);\s*__fbi\.ENO = true;\s*\(\*__glk\)\.STN = __fbi\.DATA;/,
+    );
+    // A function binds its in-out to the global under the global's lock; an
+    // input reading another global is read before it.
+    expect(result.cppCode).toContain(
+      "DEV->with_lock([&](auto* __glk){ return BUMPF((*__glk).STN); })",
+    );
+    expect(result.cppCode).toMatch(
+      /\[&\]\{ auto (__gca\d+) = GSTEP->read\(\); return GCOUNT->with_lock\(\[&\]\(auto\* __glk\)\{ return BUMPV\(\(\*__glk\), \1\); \}\); \}\(\)/,
+    );
+    // A block that takes another global's lock gets a copy, stored back after.
+    expect(result.cppCode).toMatch(
+      /auto (__gva\d+) = DEV->with_lock\(\[&\]\(auto\* __glk\)\{ return \(\*__glk\)\.SPARE; \}\);\s*ADDER\.ARR = \1;\s*ADDER\(\);/,
+    );
+    expectNoNestedLocks(result.cppCode);
+  }, 120000);
+
+  it("binds outputs, bits, FB instances and indexed elements of globals by reference", () => {
+    const source = `
+      FUNCTION_BLOCK Counter
+        VAR_OUTPUT n : DINT; END_VAR
+        n := n + 1;
+      END_FUNCTION_BLOCK
+      TYPE Plant : STRUCT last : INT; flags : WORD; c : Counter; END_STRUCT; END_TYPE
+      FUNCTION_BLOCK UseCounter
+        VAR_IN_OUT c : Counter; END_VAR
+        VAR_INPUT go : BOOL; END_VAR
+        VAR_OUTPUT q : BOOL; END_VAR
+        IF go THEN c(); END_IF;
+        q := c.n > 0;
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK Flip
+        VAR_IN_OUT b : BOOL; END_VAR
+        b := NOT b;
+      END_FUNCTION_BLOCK
+      FUNCTION SetOut : BOOL
+        VAR_OUTPUT o : INT; END_VAR
+        o := 42;
+        SetOut := TRUE;
+      END_FUNCTION
+      FUNCTION SetBit : BOOL
+        VAR_IN_OUT b : BOOL; END_VAR
+        b := TRUE;
+        SetBit := TRUE;
+      END_FUNCTION
+      FUNCTION BumpV : BOOL
+        VAR_IN_OUT v : DINT; END_VAR
+        v := v + 1;
+        BumpV := TRUE;
+      END_FUNCTION
+      PROGRAM Main
+        VAR_EXTERNAL dev : Plant; gCnt : Counter; gArr : ARRAY[0..3] OF DINT; gIdx : INT; gQ : BOOL; END_VAR
+        VAR ut : UseCounter; fl : Flip; ok : BOOL; x : INT; END_VAR
+        ut(c := gCnt, go := TRUE, q => gQ);
+        ut(c := dev.c, go := gQ, q => ok);
+        ok := SetOut(o => dev.last);
+        ok := SetBit(dev.flags.3);
+        fl(b := dev.flags.2);
+        ok := BumpV(gArr[gIdx]);
+        IF x <> 0 THEN
+          x := 1;
+        ELSIF BumpV(gArr[0]) THEN
+          x := 2;
+        END_IF;
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL dev : Plant; gCnt : Counter; gArr : ARRAY[0..3] OF DINT; gIdx : INT := 2; gQ : BOOL; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = buildAndRun(
+      "byref-shapes",
+      source,
+      `int main() {
+  strucpp::Configuration_CFG cfg;
+  cfg.INST.run();
+  CHECK(strucpp::GCNT.value.N == 1);
+  CHECK(strucpp::GQ.read() == true);
+  CHECK(strucpp::DEV.value.C.N == 1);
+  CHECK(strucpp::DEV.value.LAST == 42);
+  CHECK(strucpp::DEV.value.FLAGS == 12);
+  CHECK(strucpp::GARR.value[2] == 1);
+  CHECK(strucpp::GARR.value[0] == 1);
+  CHECK(cfg.INST.X == 2);
+  CHECK(MAX_HELD() == 1);
+  return fails ? 1 : 0;
+}`,
+    );
+    // A block in-out points at the global's own instance, under its lock.
+    expect(result.cppCode).toMatch(/__fbi\.C = &\(\*__glk\)\.C;/);
+    // An index that reads another global is read before the lock.
+    expect(result.cppCode).toMatch(
+      /auto (__gi\d+) = GIDX->read\(\); return GARR->with_lock\(\[&\]\(auto\* __glk\)\{ return BUMPV\(\(\*__glk\)\.at\(\1\)\); \}\);/,
+    );
+    expectNoNestedLocks(result.cppCode);
+  }, 120000);
+
   it("generates the hooks a runtime takes a global's lock by index with", () => {
     const source = `
       TYPE P3 : STRUCT x : DINT; y : INT; END_STRUCT; END_TYPE

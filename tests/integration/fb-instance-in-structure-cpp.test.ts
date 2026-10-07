@@ -113,7 +113,10 @@ describeIfGpp("a function block instance inside a structure", () => {
 
   it("binds the same instance into another program's in-out", () => {
     const { result } = build(SPLIT_TASKS, "split-tasks-bind");
-    expect(result.cppCode ?? "").toContain("RD.N = &NET->value.NODE_;");
+    // Bound to the global's own instance, with the call under its lock.
+    expect(result.cppCode ?? "").toMatch(
+      /NET->with_lock\(\[&\]\(auto\* __glk\)\{\s*auto& __fbi = RD;\s*__fbi\.N = &\(\*__glk\)\.NODE_;/,
+    );
   });
 
   it("declares the structure after the class it holds", () => {

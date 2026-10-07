@@ -684,6 +684,20 @@ export class CodeGenerator {
    *  so a positional argument can be matched to the parameter it fills. */
   private functionParamOrder: Map<string, string[]> = new Map();
 
+  /** UPPER(functionName) → its VAR_IN_OUT and VAR_OUTPUT parameters (UPPER),
+   *  which the C++ function takes by reference. */
+  private functionByRefParams: Map<string, Set<string>> = new Map();
+
+  /** UPPER names of the functions declared without a return value. */
+  private voidFunctions: Set<string> = new Set();
+
+  /** Code that stands in for an argument expression while a call that binds
+   *  a shared global by reference is rendered (see renderGlobalByRefCall). */
+  private argOverrides: Map<Expression, string> | undefined;
+
+  /** UPPER(POU) → whether running it may take a shared global's lock. */
+  private pouLockMemo: Map<string, boolean> = new Map();
+
   /** Statements re-caching a string length after this one handed a STRING,
    *  WSTRING or a STRUCT holding one to a generic parameter. `raw_ptr()` gives
    *  the characters, not the cached length. Whole statements, because a struct
@@ -1113,6 +1127,16 @@ export class CodeGenerator {
     }
   }
 
+  /** Record that function `key` takes parameter `name` by reference. */
+  private noteFunctionByRefParam(key: string, name: string): void {
+    let set = this.functionByRefParams.get(key);
+    if (!set) {
+      set = new Set();
+      this.functionByRefParams.set(key, set);
+    }
+    set.add(name.toUpperCase());
+  }
+
   /**
    * A library function's parameter order and generic slots, from the manifest
    * rather than the AST. Without the generic slots an argument bound to one is
@@ -1122,6 +1146,7 @@ export class CodeGenerator {
     functions:
       | Array<{
           name: string;
+          returnType?: string;
           parameters?: Array<{
             name: string;
             type: string;
@@ -1132,9 +1157,13 @@ export class CodeGenerator {
   ): void {
     for (const fn of functions ?? []) {
       const key = fn.name.toUpperCase();
+      if (fn.returnType?.toUpperCase() === "VOID") this.voidFunctions.add(key);
       const order: string[] = [];
       for (const param of fn.parameters ?? []) {
         order.push(param.name.toUpperCase());
+        if (param.direction === "output" || param.direction === "inout") {
+          this.noteFunctionByRefParam(key, param.name);
+        }
         // A generic is VAR_INPUT only.
         if (
           param.direction !== "output" &&
@@ -1386,6 +1415,9 @@ export class CodeGenerator {
     for (const func of ast.functions) {
       const key = func.name.toUpperCase();
       const order: string[] = [];
+      if (func.returnType.name.toUpperCase() === "VOID") {
+        this.voidFunctions.add(key);
+      }
       for (const block of func.varBlocks) {
         if (
           block.blockType !== "VAR_INPUT" &&
@@ -1397,6 +1429,9 @@ export class CodeGenerator {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
             order.push(name.toUpperCase());
+            if (block.blockType !== "VAR_INPUT") {
+              this.noteFunctionByRefParam(key, name);
+            }
             if (
               block.blockType === "VAR_INPUT" &&
               isDeclarableGenericType(decl.type.name)
@@ -2027,6 +2062,84 @@ export class CodeGenerator {
         (e.kind === "VariableExpression" && this.isGlobalAccess(e)) ||
         this.isUserCall(e),
     );
+  }
+
+  /**
+   * Whether running the FUNCTION_BLOCK or FUNCTION `name` may take a shared
+   * global's lock: it, a block it holds or a function it calls has a
+   * VAR_EXTERNAL; an interface it holds may be anything. Library POUs cannot
+   * reach the project's globals.
+   */
+  private pouMayTakeGlobalLock(name: string): boolean {
+    const upper = name.toUpperCase();
+    const memo = this.pouLockMemo.get(upper);
+    if (memo !== undefined) return memo;
+    this.pouLockMemo.set(upper, false); // recursion guard
+    const ast = this.ast;
+    const pou =
+      ast?.functionBlocks.find((f) => f.name.toUpperCase() === upper) ??
+      ast?.functions.find((f) => f.name.toUpperCase() === upper);
+    let result = false;
+    if (pou) {
+      if (pou.kind === "FunctionBlockDeclaration" && pou.extends) {
+        result = this.pouMayTakeGlobalLock(pou.extends);
+      }
+      result = result || this.nodeMayTakeGlobalLock(pou, new Set());
+    }
+    this.pouLockMemo.set(upper, result);
+    return result;
+  }
+
+  /** Whether a user type may take a shared global's lock when used. */
+  private typeMayTakeGlobalLock(name: string, seen: Set<string>): boolean {
+    const upper = name.toUpperCase();
+    const ast = this.ast;
+    if (!ast || seen.has(upper)) return false;
+    seen.add(upper);
+    if (ast.interfaces.some((i) => i.name.toUpperCase() === upper)) return true;
+    if (
+      ast.functionBlocks.some((f) => f.name.toUpperCase() === upper) ||
+      ast.functions.some((f) => f.name.toUpperCase() === upper)
+    ) {
+      return this.pouMayTakeGlobalLock(upper);
+    }
+    const type = ast.types.find((t) => t.name.toUpperCase() === upper);
+    return type !== undefined && this.nodeMayTakeGlobalLock(type, seen);
+  }
+
+  /** Scan of an AST subtree for {@link pouMayTakeGlobalLock}. */
+  private nodeMayTakeGlobalLock(node: object, seen: Set<string>): boolean {
+    const n = node as {
+      kind?: string;
+      blockType?: string;
+      name?: string;
+      elementTypeName?: string;
+      functionName?: string;
+    };
+    if (n.kind === "VarBlock" && n.blockType === "VAR_EXTERNAL") return true;
+    if (n.kind === "TypeReference") {
+      for (const t of [n.name, n.elementTypeName]) {
+        if (t !== undefined && this.typeMayTakeGlobalLock(t, seen)) return true;
+      }
+    }
+    if (n.kind === "FunctionCallExpression" && n.functionName !== undefined) {
+      const callee = n.functionName.split(".")[0]!;
+      if (
+        this.ast?.functions.some(
+          (f) => f.name.toUpperCase() === callee.toUpperCase(),
+        ) === true &&
+        this.pouMayTakeGlobalLock(callee)
+      ) {
+        return true;
+      }
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "sourceSpan" || value === null || typeof value !== "object") {
+        continue;
+      }
+      if (this.nodeMayTakeGlobalLock(value as object, seen)) return true;
+    }
+    return false;
   }
 
   /** Whether `expr` reads the global `rootUpper` anywhere. */
@@ -4516,6 +4629,8 @@ export class CodeGenerator {
    * Returns the C++ expression as a string.
    */
   protected generateExpression(expr: Expression): string {
+    const override = this.argOverrides?.get(expr);
+    if (override !== undefined) return override;
     switch (expr.kind) {
       case "LiteralExpression":
         return this.generateLiteralExpression(expr);
@@ -5783,6 +5898,10 @@ export class CodeGenerator {
       return `${stdFunc.cppName}(${args.join(", ")})`;
     }
 
+    // 2b. A shared global bound to a by-reference parameter.
+    const byRefCall = this.renderGlobalByRefCall(expr);
+    if (byRefCall !== undefined) return byRefCall;
+
     // 3. Check for named arguments that may need reordering
     const hasNamedArgs = expr.arguments.some((arg) => arg.name !== undefined);
     if (hasNamedArgs && this.ast) {
@@ -5857,6 +5976,133 @@ export class CodeGenerator {
     }
 
     return `${expr.functionName}(${args.join(", ")})`;
+  }
+
+  /**
+   * A call of a user function that binds a shared global (the global or a part
+   * of it) to a VAR_IN_OUT or VAR_OUTPUT, or undefined when none does. When
+   * the function takes no global lock, the call runs under the first such
+   * global's lock with the parameter bound to that global's own storage, and
+   * other lock-taking arguments are evaluated first. A global the call does
+   * not hold the lock of is copied in and stored back after the call.
+   */
+  private renderGlobalByRefCall(
+    expr: FunctionCallExpression,
+  ): string | undefined {
+    const nameUpper = expr.functionName.toUpperCase();
+    const byRef = this.functionByRefParams.get(nameUpper);
+    if (!byRef) return undefined;
+    const generics = this.functionGenericParams.get(nameUpper);
+    const order = this.functionParamOrder.get(nameUpper) ?? [];
+    const slotOf = new Map<Argument, string>();
+    const claimed = new Set<string>();
+    for (const arg of expr.arguments) {
+      if (arg.name) claimed.add(arg.name.toUpperCase());
+    }
+    let next = 0;
+    for (const arg of expr.arguments) {
+      if (arg.name) {
+        slotOf.set(arg, arg.name.toUpperCase());
+        continue;
+      }
+      while (next < order.length && claimed.has(order[next]!)) next++;
+      if (next >= order.length) continue;
+      slotOf.set(arg, order[next]!);
+      claimed.add(order[next]!);
+      next++;
+    }
+    const isByRef = (arg: Argument): boolean => {
+      const slot = slotOf.get(arg);
+      return (
+        slot !== undefined && byRef.has(slot) && generics?.has(slot) !== true
+      );
+    };
+    const boundGlobal = (arg: Argument): VariableExpression | undefined =>
+      isByRef(arg) &&
+      arg.value.kind === "VariableExpression" &&
+      this.isGlobalAccess(arg.value) &&
+      this.argOverrides?.has(arg.value) !== true
+        ? arg.value
+        : undefined;
+    const bound = expr.arguments
+      .map(boundGlobal)
+      .filter((g): g is VariableExpression => g !== undefined);
+    if (bound.length === 0) return undefined;
+
+    // A bit or other part of a global is not addressable: always a copy.
+    const lockable = bound.find(
+      (g) => this.splitBitTarget(g).part === undefined,
+    );
+    const lockUpper =
+      lockable === undefined || this.pouMayTakeGlobalLock(nameUpper)
+        ? undefined
+        : lockable.name.toUpperCase();
+    const temps: string[] = [];
+    const after: string[] = [];
+    const overrides = new Map(this.argOverrides ?? []);
+    for (const arg of expr.arguments) {
+      const v = arg.value;
+      const global = boundGlobal(arg);
+      if (global !== undefined) {
+        const upper = global.name.toUpperCase();
+        const ref = this.globalRefOf(upper)!;
+        const { base, part } = this.splitBitTarget(global);
+        if (upper === lockUpper && part === undefined) {
+          overrides.set(v, this.renderLockedTail(global, temps));
+          continue;
+        }
+        const tmp = `__gca${this.tempVarCounter++}`;
+        const tmpType = part === undefined ? "auto" : `IEC_${part.resultType}`;
+        temps.push(
+          `${tmpType} ${tmp} = ${this.renderGlobalRead(global, ref)};`,
+        );
+        overrides.set(v, tmp);
+        if (!ref.composite && !this.hasAccessTail(global)) {
+          after.push(`${ref.acc}write(${tmp});`);
+        } else {
+          const lv = this.hasAccessTail(base)
+            ? this.renderLockedTail(base, after)
+            : "(*__glk)";
+          after.push(
+            `${ref.acc}with_lock([&](auto* __glk){ ${this.renderStore(lv, part, tmp)}; });`,
+          );
+        }
+      } else if (
+        lockUpper !== undefined &&
+        this.argOverrides?.has(v) !== true &&
+        this.mayTakeLock(v)
+      ) {
+        // Evaluated before the lock, so no lock is taken inside it.
+        const tmp = `__gca${this.tempVarCounter++}`;
+        if (isByRef(arg)) {
+          temps.push(`auto* ${tmp} = &(${this.generateExpression(v)});`);
+          overrides.set(v, `(*${tmp})`);
+        } else if (generics?.has(slotOf.get(arg) ?? "") !== true) {
+          temps.push(`auto ${tmp} = ${this.generateExpression(v)};`);
+          overrides.set(v, tmp);
+        }
+      }
+    }
+
+    const saved = this.argOverrides;
+    this.argOverrides = overrides;
+    let call: string;
+    try {
+      call = this.generateFunctionCallExpression(expr);
+    } finally {
+      this.argOverrides = saved;
+    }
+    if (lockUpper !== undefined) {
+      const ref = this.globalRefOf(lockUpper)!;
+      call = `${ref.acc}with_lock([&](auto* __glk){ return ${call}; })`;
+    }
+    if (temps.length === 0 && after.length === 0) return call;
+    if (after.length === 0)
+      return `[&]{ ${temps.join(" ")} return ${call}; }()`;
+    if (this.voidFunctions.has(nameUpper)) {
+      return `[&]{ ${temps.join(" ")} ${call}; ${after.join(" ")} }()`;
+    }
+    return `[&]{ ${temps.join(" ")} auto __r = ${call}; ${after.join(" ")} return __r; }()`;
   }
 
   /**
@@ -6724,14 +6970,50 @@ export class CodeGenerator {
             isDereference: false,
           };
     if (this.isGlobalAccess(instanceExpr)) {
-      this.generateGlobalFBInvocation(
+      this.generateLockedFBInvocation(
         call,
-        instanceExpr,
+        instanceExpr.name.toUpperCase(),
         this.globalRefOf(instanceExpr.name)!,
+        instanceExpr,
         this.getFBInvocationType(
           call.functionName,
           call.instance !== undefined,
         ),
+        indent,
+      );
+      return;
+    }
+
+    // An in-out bound to a shared global is bound to the global's own storage
+    // with the call under that global's lock, when the block takes no global
+    // lock itself (no lock is ever taken inside another).
+    const lockFbType = this.getFBInvocationType(
+      call.functionName,
+      call.instance !== undefined,
+    );
+    const boundGlobal = this.fbInoutBoundGlobal(call, lockFbType);
+    if (
+      boundGlobal !== undefined &&
+      lockFbType !== undefined &&
+      !this.pouMayTakeGlobalLock(lockFbType)
+    ) {
+      let target =
+        call.instance !== undefined
+          ? this.generateExpression(call.instance)
+          : rawName.includes(".")
+            ? this.dottedInstanceName(rawName, call.sourceSpan)
+            : this.instanceBaseName(rawName);
+      if (call.instance !== undefined && this.mayTakeLock(call.instance)) {
+        const ptr = `__gfi${this.tempVarCounter++}`;
+        this.emit(`${indent}auto* ${ptr} = &(${target});`);
+        target = `(*${ptr})`;
+      }
+      this.generateLockedFBInvocation(
+        call,
+        boundGlobal.name.toUpperCase(),
+        this.globalRefOf(boundGlobal.name)!,
+        target,
+        lockFbType,
         indent,
       );
       return;
@@ -6796,13 +7078,35 @@ export class CodeGenerator {
       nextSlot++;
     }
 
+    // An ARRAY[*] in-out bound to a shared global here (the block takes a
+    // global lock, so the call cannot run under this one) views a copy that
+    // is stored back after the call.
+    const vlaGlobalCopies: Array<{ target: VariableExpression; tmp: string }> =
+      [];
+    const vlaParams = fbTypeName
+      ? this.fbVlaInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+
     // Assign input parameters (named or positional)
     let positionalIndex = 0;
     for (const arg of filteredArgs) {
       if (arg.isOutput) continue;
       const paramName = slotOf.get(arg);
+      const v = arg.value;
 
-      if (paramName && refInoutBind?.has(paramName.toUpperCase())) {
+      if (
+        paramName &&
+        vlaParams?.has(paramName.toUpperCase()) === true &&
+        v.kind === "VariableExpression" &&
+        this.isGlobalAccess(v)
+      ) {
+        const tmp = `__gva${this.tempVarCounter++}`;
+        this.emit(`${indent}auto ${tmp} = ${this.generateExpression(v)};`);
+        this.emit(
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${tmp};`,
+        );
+        vlaGlobalCopies.push({ target: v, tmp });
+      } else if (paramName && refInoutBind?.has(paramName.toUpperCase())) {
         this.emit(
           `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${this.generateAddressOf(arg.value)};`,
         );
@@ -6838,6 +7142,15 @@ export class CodeGenerator {
       },
       `${instanceName}.ENO`,
     );
+
+    for (const c of vlaGlobalCopies) {
+      this.emitGlobalStore(
+        c.target,
+        this.globalRefOf(c.target.name)!,
+        c.tmp,
+        indent,
+      );
+    }
 
     // A value inout is stored by value and copied in before the call, so it has
     // to be copied back or the callee's writes are lost.
@@ -6886,15 +7199,79 @@ export class CodeGenerator {
     }
   }
 
-  /**
-   * Call of an FB instance held in a shared global (the global or an element
-   * of it). Under the global's lock: inputs, the call in place, and outputs /
-   * in-outs / ENO read into temporaries, stored after the release.
-   */
-  private generateGlobalFBInvocation(
+  /** Which parameter each argument of a call of `fbTypeName` fills: a named
+   *  one says so; the rest take the slots left, in declaration order. */
+  private fbArgSlots(
+    args: Argument[],
+    fbTypeName: string | undefined,
+  ): Map<Argument, string> {
+    const fbUpper = fbTypeName?.toUpperCase();
+    const slotOf = new Map<Argument, string>();
+    const claimed = new Set<string>();
+    for (const arg of args) {
+      if (arg.name) claimed.add(arg.name.toUpperCase());
+    }
+    const order =
+      (fbUpper !== undefined
+        ? (this.fbParamOrder.get(fbUpper) ?? this.fbInputParams.get(fbUpper))
+        : undefined) ?? [];
+    let nextSlot = 0;
+    for (const arg of args) {
+      if (arg.name) {
+        slotOf.set(arg, arg.name);
+        continue;
+      }
+      while (nextSlot < order.length && claimed.has(order[nextSlot]!))
+        nextSlot++;
+      if (nextSlot >= order.length) continue;
+      slotOf.set(arg, order[nextSlot]!);
+      claimed.add(order[nextSlot]!);
+      nextSlot++;
+    }
+    return slotOf;
+  }
+
+  /** The first argument of an FB call that binds an in-out to a shared
+   *  global (the global or a part of it), as that global's access path. */
+  private fbInoutBoundGlobal(
     call: FunctionCallExpression,
-    instanceExpr: VariableExpression,
+    fbTypeName: string | undefined,
+  ): VariableExpression | undefined {
+    if (fbTypeName === undefined) return undefined;
+    const inouts = this.fbInoutParams.get(fbTypeName.toUpperCase());
+    const refs = this.fbRefInoutParams.get(fbTypeName.toUpperCase());
+    const slots = this.fbArgSlots(call.arguments, fbTypeName);
+    for (const arg of call.arguments) {
+      if (arg.isOutput) continue;
+      const slot = slots.get(arg)?.toUpperCase();
+      if (slot === undefined) continue;
+      if (inouts?.has(slot) !== true && refs?.has(slot) !== true) continue;
+      if (
+        arg.value.kind === "VariableExpression" &&
+        this.isGlobalAccess(arg.value) &&
+        this.splitBitTarget(arg.value).part === undefined
+      ) {
+        return arg.value;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Call of a function block under one shared global's lock (`lockUpper`):
+   * an instance held in that global (`instance` is its access path), or a
+   * local instance (`instance` is its C++) with an in-out bound into it.
+   * In-outs bound into the locked global use its own storage: an ARRAY[*] or
+   * block in-out points at it, a value in-out is copied in and back inside the
+   * lock. Inputs and other lock-taking arguments are evaluated before the
+   * lock; outputs, ENO and in-outs bound elsewhere go through temporaries
+   * stored after the release, so no other global's lock is taken inside.
+   */
+  private generateLockedFBInvocation(
+    call: FunctionCallExpression,
+    lockUpper: string,
     ref: GlobalRef,
+    instance: VariableExpression | string,
     fbTypeName: string | undefined,
     indent: string,
   ): void {
@@ -6903,7 +7280,6 @@ export class CodeGenerator {
         `Internal error: no function block type for the call of '${call.functionName}'.`,
       );
     }
-    const upper = instanceExpr.name.toUpperCase();
     let enArg: Expression | undefined;
     let enoTarget: Expression | undefined;
     const args: Argument[] = [];
@@ -6925,50 +7301,83 @@ export class CodeGenerator {
     };
 
     const fbUpper = fbTypeName.toUpperCase();
-    const inputParamNames = this.fbInputParams.get(fbUpper);
     const inoutParams = this.fbInoutParams.get(fbUpper);
     const vlaInouts = this.fbVlaInoutParams.get(fbUpper);
     const refInouts = this.fbRefInoutParams.get(fbUpper);
-
-    // Which parameter each argument fills, as in generateFBInvocation.
-    const slotOf = new Map<Argument, string>();
-    const claimed = new Set<string>();
-    for (const arg of args) {
-      if (arg.name) claimed.add(arg.name.toUpperCase());
-    }
-    const order = this.fbParamOrder.get(fbUpper) ?? inputParamNames ?? [];
-    let nextSlot = 0;
-    for (const arg of args) {
-      if (arg.name) {
-        slotOf.set(arg, arg.name);
-        continue;
-      }
-      while (nextSlot < order.length && claimed.has(order[nextSlot]!))
-        nextSlot++;
-      if (nextSlot >= order.length) continue;
-      slotOf.set(arg, order[nextSlot]!);
-      claimed.add(order[nextSlot]!);
-      nextSlot++;
-    }
+    const slotOf = this.fbArgSlots(args, fbTypeName);
 
     const inputs: Array<{ member: string; code: string }> = [];
+    // Value in-outs copied back inside the lock, and arguments whose in-out
+    // needs no copy back after it.
+    const lockedBack: Array<{ lv: string; member: string }> = [];
+    const settled = new Set<Argument>();
+    // ARRAY[*] in-outs bound to another global: a copy, stored back after.
+    const afterStores: Array<{ target: VariableExpression; tmp: string }> = [];
     let positionalIndex = 0;
     for (const arg of args) {
       if (arg.isOutput) continue;
       const paramName = slotOf.get(arg);
-      if (paramName && refInouts?.has(paramName.toUpperCase())) {
+      const upper = paramName?.toUpperCase();
+      const isRef = upper !== undefined && refInouts?.has(upper) === true;
+      const isVla = upper !== undefined && vlaInouts?.has(upper) === true;
+      const isInout =
+        isRef ||
+        isVla ||
+        (upper !== undefined && inoutParams?.has(upper) === true);
+      const v = arg.value;
+      const global =
+        v.kind === "VariableExpression" && this.isGlobalAccess(v)
+          ? v
+          : undefined;
+      if (
+        paramName &&
+        isInout &&
+        global?.name.toUpperCase() === lockUpper &&
+        this.splitBitTarget(global).part === undefined
+      ) {
+        const lv = this.renderUnderLock(lockUpper, indent, () =>
+          this.renderAccessTail("(*__glk)", global, lockUpper),
+        );
+        const member = this.fbParamMemberName(paramName, fbTypeName);
+        inputs.push({ member, code: isRef ? `&${lv}` : lv });
+        if (!isRef && !isVla) lockedBack.push({ lv, member });
+        settled.add(arg);
+      } else if (paramName && isRef) {
         // A function-block inout is bound to the caller's instance.
         inputs.push({
           member: this.fbParamMemberName(paramName, fbTypeName),
-          code: this.generateAddressOf(arg.value),
+          code: this.generateAddressOf(v),
         });
-      } else if (paramName && !this.isOutputParam(fbTypeName, paramName)) {
+      } else if (paramName && isVla && global) {
+        const tmp = `__gfa${this.tempVarCounter++}`;
+        this.emit(`${indent}auto ${tmp} = ${this.generateExpression(v)};`);
         inputs.push({
           member: this.fbParamMemberName(paramName, fbTypeName),
-          code: value(
-            arg.value,
-            this.generateArgumentValue(paramName, arg.value, fbTypeName),
-          ),
+          code: tmp,
+        });
+        afterStores.push({ target: global, tmp });
+        settled.add(arg);
+      } else if (paramName && isInout && !global && this.mayTakeLock(v)) {
+        // An index takes a lock: address the argument before the lock.
+        const ptr = `__gfp${this.tempVarCounter++}`;
+        this.emit(`${indent}auto* ${ptr} = &(${this.generateExpression(v)});`);
+        const member = this.fbParamMemberName(paramName, fbTypeName);
+        inputs.push({ member, code: `(*${ptr})` });
+        if (!isVla) lockedBack.push({ lv: `(*${ptr})`, member });
+        settled.add(arg);
+      } else if (paramName && !this.isOutputParam(fbTypeName, paramName)) {
+        // An input reading the locked global reads it inside the lock, so the
+        // call sees one consistent state of it.
+        const code =
+          this.genericParamType(fbTypeName, paramName) === undefined &&
+          this.expressionUsesRoot(v, lockUpper)
+            ? this.renderUnderLock(lockUpper, indent, () =>
+                this.generateExpression(v),
+              )
+            : value(v, this.generateArgumentValue(paramName, v, fbTypeName));
+        inputs.push({
+          member: this.fbParamMemberName(paramName, fbTypeName),
+          code,
         });
         if (!arg.name) positionalIndex++;
       } else {
@@ -6987,6 +7396,7 @@ export class CodeGenerator {
     const captures: Array<{ tmp: string; member: string; target: Expression }> =
       [];
     for (const arg of args) {
+      if (settled.has(arg)) continue;
       let paramName: string | undefined;
       if (arg.isOutput) {
         paramName = arg.name;
@@ -7020,12 +7430,17 @@ export class CodeGenerator {
       this.emit(`${indent}decltype(${fbCpp}::${c.member}) ${c.tmp};`);
     }
 
-    const instance = this.renderUnderLock(upper, indent, () =>
-      this.renderAccessTail("(*__glk)", instanceExpr, upper),
-    );
+    let target: string;
+    if (typeof instance === "string") {
+      target = instance;
+    } else {
+      target = this.renderUnderLock(lockUpper, indent, () =>
+        this.renderAccessTail("(*__glk)", instance, lockUpper),
+      );
+    }
     const inner = indent + this.options.indent;
     this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){`);
-    this.emit(`${inner}auto& __fbi = ${instance};`);
+    this.emit(`${inner}auto& __fbi = ${target};`);
     for (const input of inputs) {
       this.emit(`${inner}__fbi.${input.member} = ${input.code};`);
     }
@@ -7038,10 +7453,21 @@ export class CodeGenerator {
       },
       "__fbi.ENO",
     );
+    for (const b of lockedBack) {
+      this.emit(`${inner}${b.lv} = __fbi.${b.member};`);
+    }
     for (const c of captures) {
       this.emit(`${inner}${c.tmp} = __fbi.${c.member};`);
     }
     this.emit(`${indent}});`);
+    for (const st of afterStores) {
+      this.emitGlobalStore(
+        st.target,
+        this.globalRefOf(st.target.name)!,
+        st.tmp,
+        indent,
+      );
+    }
     for (const c of captures) {
       this.emitCaptureToLvalue(c.target, c.tmp, indent);
     }
