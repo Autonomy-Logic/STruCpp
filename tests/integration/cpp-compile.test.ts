@@ -48,6 +48,68 @@ describeIfGpp('C++ Compilation Tests', () => {
   // Basic program, variable, FB, and function compilation tests removed —
   // covered by st-validation behavioral tests.
 
+  it('should compile ST identifiers that platform headers #define as macros', () => {
+    // <Arduino.h> on ESP32 defines PI, HIGH, ANALOG …, and the Xtensa headers
+    // register names such as WINDOWSTART, all as plain macros. A TU that
+    // includes them before generated.hpp (a C/C++ block, the Arduino glue)
+    // used to expand them inside the declarations: OSCAT's CONSTANTS_MATH has
+    // a member PI. The header saves and removes every identifier it uses and
+    // restores them at its end for a TU that is not STruC++'s own.
+    const source = `
+      TYPE PINS : STRUCT
+        PI : REAL := 3.0;
+        HIGH : BOOL;
+        INPUT : INT;
+        ANALOG : INT;
+        windowStart : TIME;
+      END_STRUCT;
+      END_TYPE
+      PROGRAM MainProgram
+        VAR p : PINS; x : REAL; END_VAR
+        x := p.PI;
+        p.HIGH := x > 1.0;
+        p.ANALOG := p.INPUT + 1;
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain('#pragma push_macro("PI")');
+    expect(result.headerCode).toContain('#pragma pop_macro("PI")');
+
+    const arduinoMacros = [
+      '-DPI=3.1415926535897932384626433832795',
+      '-DHIGH=0x1',
+      '-DINPUT=0x01',
+      '-DANALOG=0xC0',
+      '-DWINDOWSTART=73',
+    ];
+    // The generated code itself, with the macros defined from the start.
+    const generated = compileWithGppHelper({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName: 'arduino_macro_guard',
+      extraFlags: arduinoMacros,
+    });
+    expect(generated.error ?? '').toBe('');
+    expect(generated.success).toBe(true);
+
+    // A C/C++ block's TU: includes the header, then uses the Arduino macros.
+    const block = compileWithGppHelper({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: '#include "generated.hpp"',
+      testName: 'arduino_macro_guard_block',
+      extraFlags: arduinoMacros,
+      mainCode:
+        'static_assert(PI > 3.0 && HIGH == 1 && ANALOG == 0xC0 && WINDOWSTART == 73, "macros restored");\nint main() { return 0; }',
+    });
+    expect(block.error ?? '').toBe('');
+    expect(block.success).toBe(true);
+  });
+
   it('should compile a configuration with resource and task', () => {
     const source = `
       CONFIGURATION TestConfig
@@ -183,7 +245,10 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.headerCode).toContain('inline GlobalVar<IEC_INT> COUNTER');
     expect(result.headerCode).toContain('GlobalVar<IEC_INT>* COUNTER');
     expect(result.cppCode).toContain('COUNTER(&');
-    expect(result.cppCode).toContain('COUNTER->write(');
+    // `counter := counter + 1` is one locked read-modify-write.
+    expect(result.cppCode).toContain(
+      'COUNTER->with_lock([&](auto* __glk){ (*__glk) = (*__glk) + 1; });',
+    );
     // The old bug: a plain value member on the FB. Must NOT appear.
     expect(result.headerCode).not.toContain('    IEC_INT COUNTER;');
 
@@ -210,6 +275,72 @@ describeIfGpp('C++ Compilation Tests', () => {
       }
       expect(ok, `g++/run ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
     }
+  });
+
+  it('takes the global locks and IEC time from the platform (STRUCPP_PLATFORM_THREADS)', () => {
+    // A firmware whose toolchain has no <mutex> or real thread_local (the ARM
+    // Arduino cores) supplies both through four C functions. Host stand-ins
+    // here: a recursive mutex per global, and one time slot.
+    const source = `
+      FUNCTION_BLOCK Bumper
+        VAR_EXTERNAL counter : INT; END_VAR
+        counter := counter + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR b : Bumper; t : TIME; END_VAR
+        b();
+        t := TIME();
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL counter : INT := 0; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    fs.writeFileSync(path.join(tempDir, 'generated.hpp'), result.headerCode);
+    const cpp = path.join(tempDir, 'platform_threads.cpp');
+    fs.writeFileSync(
+      cpp,
+      `${result.cppCode}
+
+#include <mutex>
+static int g_locks = 0;
+static int64_t g_time_slot = 0;
+extern "C" void *strucpp_platform_mutex_create(void) { return new std::recursive_mutex(); }
+extern "C" void strucpp_platform_mutex_lock(void *m) { ++g_locks; static_cast<std::recursive_mutex *>(m)->lock(); }
+extern "C" void strucpp_platform_mutex_unlock(void *m) { static_cast<std::recursive_mutex *>(m)->unlock(); }
+extern "C" bool strucpp_platform_mutex_try_lock(void *m) { return static_cast<std::recursive_mutex *>(m)->try_lock(); }
+extern "C" int64_t *strucpp_platform_current_time_slot(void) { return &g_time_slot; }
+
+int main() {
+  strucpp::BUMPER b; b(); b();
+  g_time_slot = 1234;
+  const bool counted = strucpp::COUNTER.read() == 2 && g_locks > 0;
+  const bool timed = strucpp::TIME().get() == 1234;
+  return counted && timed ? 0 : 1;
+}
+`,
+    );
+    const out = path.join(tempDir, 'platform_threads.out');
+    let ok = true;
+    let diag = '';
+    try {
+      execSync(
+        `g++ -std=c++17 -DSTRUCPP_THREADED -DSTRUCPP_PLATFORM_THREADS -I"${runtimeInclude}" "${cpp}" -o "${out}"`,
+        { stdio: 'pipe' },
+      );
+      execSync(`"${out}"`, { stdio: 'pipe' });
+    } catch (e) {
+      ok = false;
+      diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+    }
+    expect(ok, `g++/run with platform threads failed:\n${diag}`).toBe(true);
   });
 
   it('compiles `=>` FB-output capture into a scalar shared global (SoftMotion bridge pattern)', () => {
@@ -1066,6 +1197,66 @@ describeIfGpp('C++ Compilation Tests', () => {
     expect(result.errors).toHaveLength(0);
     const cpp = compileWithGpp(result.headerCode, result.cppCode, 'macro_collision');
     expect(cpp.success, cpp.error).toBe(true);
+  });
+
+  it('scopes each CASE branch, so a shared-global write in one compiles and runs (threaded + non-threaded)', () => {
+    // A global write declares a temporary; directly under `case N:` a later
+    // label would jump over it ("jump to case label"). A function parameter
+    // named like its own type is renamed in the signature as in the body.
+    const source = `
+      TYPE R : STRUCT x : INT; n : INT; END_STRUCT; END_TYPE
+      FUNCTION Twice : INT
+        VAR_INPUT r : R; END_VAR
+        VAR tmp : R; END_VAR
+        tmp := r;
+        Twice := tmp.x * 2;
+      END_FUNCTION
+      PROGRAM Main
+        VAR_EXTERNAL g : R; END_VAR
+        VAR k : INT := 2; END_VAR
+        CASE k OF
+          1: g.x := 10;
+          2, 3: g.x := 20; g.n := Twice(g);
+        ELSE
+          g.x := 30;
+        END_CASE;
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL g : R; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success, JSON.stringify(result.errors)).toBe(true);
+    expect(result.cppCode).toMatch(/case 3: \{/);
+    expect(result.cppCode).toContain('default: {');
+    expect(result.cppCode).toContain('TWICE(R R_)');
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    const hpp = path.join(tempDir, 'generated.hpp');
+    const cpp = path.join(tempDir, 'case_scope.cpp');
+    fs.writeFileSync(hpp, result.headerCode);
+    fs.writeFileSync(
+      cpp,
+      `${result.cppCode}\n\nint main(){ strucpp::Configuration_CFG cfg; cfg.INST.run(); return strucpp::G.value.X == 20 && strucpp::G.value.N == 40 ? 0 : 1; }\n`,
+    );
+    for (const threaded of [false, true]) {
+      const flag = threaded ? '-DSTRUCPP_THREADED' : '';
+      const out = path.join(tempDir, `case_scope_${threaded}.out`);
+      let ok = true;
+      let diag = '';
+      try {
+        execSync(`g++ -std=${CXX_STD} -pthread ${flag} -I"${runtimeInclude}" -I"${tempDir}" "${cpp}" -o "${out}"`, { stdio: 'pipe' });
+        execSync(`"${out}"`, { stdio: 'pipe' });
+      } catch (e) {
+        ok = false;
+        diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+      }
+      expect(ok, `g++/run ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
+    }
   });
 });
 

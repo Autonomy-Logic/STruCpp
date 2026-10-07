@@ -256,23 +256,35 @@ public:
     explicit IEC_SUBRANGE_Var(value_type val) noexcept 
         : value_{val}, forced_{false}, forced_value_{} {}
     
-    IEC_SUBRANGE_Var(const IEC_SUBRANGE_Var&) = default;
-    IEC_SUBRANGE_Var(IEC_SUBRANGE_Var&&) = default;
-    IEC_SUBRANGE_Var& operator=(const IEC_SUBRANGE_Var&) = default;
-    IEC_SUBRANGE_Var& operator=(IEC_SUBRANGE_Var&&) = default;
+    // Same contract as IECVar, which debug_dispatch.hpp's force_impl/read_impl
+    // reach this class through: a fresh instance starts unforced, and assigning
+    // FROM another goes through set() so the destination's force survives.
+    IEC_SUBRANGE_Var(const IEC_SUBRANGE_Var& other) noexcept
+        : value_{other.get()}, forced_{false}, forced_value_{} {}
+    IEC_SUBRANGE_Var(IEC_SUBRANGE_Var&& other) noexcept
+        : value_{other.get()}, forced_{false}, forced_value_{} {}
+    IEC_SUBRANGE_Var& operator=(const IEC_SUBRANGE_Var& other) noexcept {
+        set(other.get());
+        return *this;
+    }
+    IEC_SUBRANGE_Var& operator=(IEC_SUBRANGE_Var&& other) noexcept {
+        set(other.get());
+        return *this;
+    }
     
     // Get current value (returns forced value if forced)
     value_type get() const noexcept {
         return forced_ ? forced_value_ : value_;
     }
     
-    // Set value (ignored if forced)
+    // Ignored while forced, so a force stays authoritative against the
+    // program's own writes — the same guard IECVar::set carries.
     void set(value_type v) noexcept {
-        value_ = v;
+        if (!forced_) { value_ = v; }
     }
     
     void set(BaseType v) noexcept {
-        value_ = v;
+        if (!forced_) { value_ = v; }
     }
     
     // Get underlying value (ignoring forcing)
@@ -280,15 +292,18 @@ public:
         return value_;
     }
     
-    // Force to a specific value
+    // The raw value follows the force, so external readers reaching the
+    // storage directly see the forced value too. IECVar::force does the same.
     void force(value_type v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;
     }
     
     void force(BaseType v) noexcept {
         forced_ = true;
         forced_value_ = v;
+        value_ = v;
     }
     
     // Remove forcing

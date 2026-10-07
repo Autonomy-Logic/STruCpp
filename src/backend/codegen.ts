@@ -36,7 +36,7 @@ import type {
   Visibility,
 } from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
-import type { LineMapEntry } from "../types.js";
+import type { LineMapEntry, SourceSpan } from "../types.js";
 import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
 import type {
   ProjectModel,
@@ -51,12 +51,14 @@ import type {
 import {
   collectFileScopeGlobals,
   getProjectNamespace,
+  lockedGlobals,
   parseDateLiteralToDays,
   parseDtLiteralToNs,
   parseTimeLiteral,
   parseTodLiteralToNs,
 } from "../project-model.js";
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
+import { TypeClassifier } from "./type-descriptor-gen.js";
 import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
@@ -67,19 +69,27 @@ import {
 } from "./codegen-utils.js";
 import { mangledMemberName, needsMemberMangling } from "./member-mangling.js";
 import {
+  arrayElementTypeName,
+  buildEnumMemberMap,
   getTypeBits,
   getTypeCategory,
+  isAnyDescriptorType,
+  isVarInfoType,
+  isDeclarableGenericType,
   isImplicitlyConvertible,
-  resolveFieldType as resolveFieldTypeUtil,
+  parsePartialAccess,
   resolveAccessType,
   resolveArrayElementAccessType,
   resolveFieldDeclaration as resolveFieldDeclarationUtil,
   type AccessLookup,
   resolveArrayElementType as resolveArrayElementTypeUtil,
   resolveArrayShapeByName,
-  typeName as typeNameUtil,
-  buildEnumMemberMap,
+  resolveFieldType as resolveFieldTypeUtil,
   type EnumMemberEntry,
+  type PartialAccess,
+  TYPE_CLASS_BY_IEC_TYPE,
+  systemTypeClassMember,
+  typeName as typeNameUtil,
 } from "../semantic/type-utils.js";
 import {
   generateInitializerValue,
@@ -102,6 +112,8 @@ interface TypeShape {
   referenceChain?: ReferenceKind[];
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  /** Declared length of an inline array's ELEMENT — `ARRAY [0..3] OF STRING(23)`. */
+  elementMaxLength?: number;
   elementReferenceChain?: ReferenceKind[];
 }
 
@@ -141,6 +153,14 @@ interface LocatedVarDescriptor {
    * initialiser to bind `arr[i]` rather than `arr` (openplc-editor#565).
    */
   elementIndex?: number;
+}
+
+/** How a POU body reaches one `GlobalVar<V>`: its VAR_EXTERNAL pointer. */
+interface GlobalRef {
+  /** Member-access prefix: `G->`. */
+  acc: string;
+  /** Struct / array / FB / derived type: accessed through with_lock(). */
+  composite: boolean;
 }
 
 /**
@@ -377,6 +397,45 @@ export interface CodeGenResult {
 /**
  * C++ code generator for IEC 61131-3 programs.
  */
+
+/** Marks a TU STruC++ generated; see {@link guardedIdentifiers}. */
+export const GENERATED_TU_MACRO = "STRUCPP_GENERATED_TU";
+const MACRO_GUARD_PLACEHOLDER = "// @@STRUCPP_MACRO_GUARD@@";
+
+/** Macros the STruC++ runtime headers define. Never removed. */
+const RUNTIME_MACROS = new Set([
+  "IEC_REGISTER_FUNDAMENTAL_WIDTH",
+  "IEC_REGISTER_SIGNED_FUNDAMENTAL",
+  "IEC_REGISTER_UNSIGNED_FUNDAMENTAL",
+  "STRUCPP_DEBUG_FLASH",
+  "STRUCPP_IEC_GLOBAL_HPP",
+  "STRUCPP_V4_EXPORT",
+]);
+
+/**
+ * The upper-case identifiers a block of generated declarations uses, sorted.
+ * ST identifiers are emitted upper case, so this is every ST name in them
+ * plus runtime type names (IEC_REAL, …), which no platform defines and which
+ * removing as a macro does not touch. Preprocessor lines and comments are
+ * skipped; the runtime's own macros and reserved names are never included.
+ */
+export function guardedIdentifiers(lines: readonly string[]): string[] {
+  const names = new Set<string>();
+  for (const line of lines) {
+    const code = line.replace(/\/\/.*$/, "");
+    if (/^\s*#/.test(code)) continue;
+    for (const m of code.matchAll(
+      /"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\b[A-Z][A-Z0-9_]*\b/g,
+    )) {
+      const name = m[0];
+      if (name.startsWith('"') || name.startsWith("'")) continue;
+      if (RUNTIME_MACROS.has(name) || name.startsWith("STRUCPP_")) continue;
+      names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
 export class CodeGenerator {
   private options: CodeGenOptions;
 
@@ -402,17 +461,16 @@ export class CodeGenerator {
   /** Track located variables for descriptor array generation */
   private locatedVars: LocatedVarDescriptor[] = [];
 
-  /** UPPER(names) of the current PROGRAM's VAR_EXTERNAL globals. Non-empty only
-   *  while emitting a program body; access to these is rewritten to go through
-   *  the GlobalVar pointer (g->read() / g->write() / g->with_lock()). */
-  private programExternals: Set<string> = new Set();
+  /** UPPER(name) → access for the current PROGRAM / FUNCTION_BLOCK body's
+   *  VAR_EXTERNAL globals (set while that body is emitted). */
+  private globalRefs: Map<string, GlobalRef> = new Map();
 
-  /** UPPER(names) of the current PROGRAM's VAR_EXTERNAL globals whose type is
-   *  NOT elementary (struct / array / function-block). Subset of
-   *  programExternals. Scalar externals get full read()/write() codegen;
-   *  composite externals can be declared + debugged but their in-body access is
-   *  gated here (fail-loud) until locked field/element/call codegen lands. */
-  private compositeExternals: Set<string> = new Set();
+  /** Set while an expression is rendered inside one global's with_lock():
+   *  reads of that global render through `(*__glk)`; any other lock-taking
+   *  sub-expression is evaluated by `hoist` into a temporary before the lock. */
+  private lockCtx:
+    | { rootUpper: string; hoist: (code: string) => string }
+    | undefined;
 
   /** Store AST for looking up program bodies when using project model */
   protected ast?: CompilationUnit;
@@ -455,6 +513,21 @@ export class CodeGenerator {
 
   /** Set of known struct/UDT type names (upper case) */
   protected knownStructTypes: Set<string> = new Set();
+  /** UPPER(names) of STRUCT types that got a layout table beside them, so a
+   *  generic argument can hand its callee a descriptor. Not every struct
+   *  qualifies — see type-descriptor-gen.ts. */
+  protected describedStructTypes: Set<string> = new Set();
+  /** UPPER(name) → definition, for walking a STRUCT's members without a
+   *  symbol-table round trip. Populated alongside `knownStructTypes`. */
+  protected structDefs: Map<
+    string,
+    import("../frontend/ast.js").StructDefinition
+  > = new Map();
+
+  /** Classifies a declared type into TYPE_CLASS. Shared with the struct
+   *  descriptors so `__VARINFO(x)` and a member's descriptor answer
+   *  identically for the same type. */
+  protected typeClassifier: TypeClassifier = new TypeClassifier([]);
 
   /** Map of enum type name (upper case) → set of member names (upper case) for :: emission */
   protected enumTypeMembers: Map<string, Set<string>> = new Map();
@@ -484,6 +557,12 @@ export class CodeGenerator {
    *  | "pointer_to") for current scope. Only reference/pointer vars are present;
    *  used e.g. to pick the correct lowering for a REF= rebind. */
   protected currentScopeVarRefKinds: Map<string, string> = new Map();
+
+  /** UPPER(name) -> the spelling the declaration used, for the scope being
+   *  generated. Everything else matches on the folded name; this exists for
+   *  the descriptor strings a callee reads back — `IEC_ANY::NAME` and
+   *  `TYPENAME` — which report the name as declared. */
+  protected currentScopeDeclaredNames: Map<string, string> = new Map();
 
   /** Map of variable name (upper case) → declared type, for current scope. */
   protected currentScopeVarTypeRefs: Map<string, TypeReference> = new Map();
@@ -526,6 +605,18 @@ export class CodeGenerator {
   /** Topologically sorted function blocks (computed once in generate(), used by header + impl) */
   private sortedFBs: CompilationUnit["functionBlocks"] = [];
 
+  /** UPPER(typeName) → the function block classes a structure must follow. */
+  private fbBearingTypeDeps: Map<string, Set<string>> = new Map();
+
+  /** Those types, until the classes they name have been emitted. */
+  private pendingFbBearingTypes: CompilationUnit["types"] = [];
+
+  /** UPPER(name) of every type a library declares, from its `type` chunks. */
+  private libraryTypeNames: Set<string> = new Set();
+
+  /** UPPER(typeName) of every structure that reaches one of those. */
+  private libraryTypeBearingTypes: Set<string> = new Set();
+
   /** Per-archive reachable-chunk emission state.
    *
    *  Built by `addLibraryChunks` — one entry per library the consumer
@@ -544,11 +635,84 @@ export class CodeGenerator {
    *  Used to resolve positional arguments in FB invocations. */
   private fbInputParams: Map<string, string[]> = new Map();
 
+  /** UPPER(fbTypeName) → UPPER(paramName) → its generic type (`ANY`,
+   *  `ANY_INT`, …). Such a parameter takes an `IEC_ANY` built at the call
+   *  site, not the argument's value. Local and library FBs alike. */
+  private fbGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** UPPER(fbTypeName) → its VAR_IN_OUT parameters declared `ARRAY [*] OF …`.
+   *  Such a parameter is an `ArrayView` onto the caller's array, so it needs
+   *  no copy back and cannot have one: view and array are distinct types. */
+  private fbVlaInoutParams: Map<string, Set<string>> = new Map();
+
+  /** Map of UPPER(fbTypeName) → VAR_IN_OUT parameters whose type is a function
+   *  block. Those are pointer members bound to the caller's own instance, so a
+   *  call through one drives the caller's block rather than a copy. */
+  private fbRefInoutParams: Map<string, Set<string>> = new Map();
+
+  /** The FB-typed inout parameters of the POU being generated, so a use of one
+   *  inside the body dereferences the pointer. */
+  private currentRefInouts: Set<string> = new Set();
+
+  /** Map of `UPPER(fbType).UPPER(method)` → its VAR_INPUT parameter names in
+   *  declaration order, so a positional argument can be matched to one. */
+  private methodInputOrder: Map<string, string[]> = new Map();
+
+  /** Map of `UPPER(fbType).UPPER(method)` → UPPER(paramName) → the generic
+   *  type it was declared with.
+   *
+   *  METHOD is one of the three scopes CODESYS declares generics in, so a
+   *  method call has to build the same descriptor a function block call does. */
+  private methodGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Enums an imported library declares, with their members.
+   *
+   *  Merged into the bare-enumerator lookup that `generate()` builds, which is
+   *  otherwise the project's own types only — so a member of a library enum
+   *  would emit unqualified and fail to compile. */
+  private libraryEnumDescriptors: Array<{ name: string; members: string[] }> =
+    [];
+
+  /** Map of UPPER(functionName) → UPPER(paramName) → the generic type it was
+   *  declared with.
+   *
+   *  FUNCTION is the third scope CODESYS declares a generic in, and a call to
+   *  one needs the same descriptor an FB or method call builds. */
+  private functionGenericParams: Map<string, Map<string, string>> = new Map();
+
+  /** Map of UPPER(functionName) → its parameter names in declaration order,
+   *  so a positional argument can be matched to the parameter it fills. */
+  private functionParamOrder: Map<string, string[]> = new Map();
+
+  /** UPPER(functionName) → its VAR_IN_OUT and VAR_OUTPUT parameters (UPPER),
+   *  which the C++ function takes by reference. */
+  private functionByRefParams: Map<string, Set<string>> = new Map();
+
+  /** UPPER names of the functions declared without a return value. */
+  private voidFunctions: Set<string> = new Set();
+
+  /** Code that stands in for an argument expression while a call that binds
+   *  a shared global by reference is rendered (see renderGlobalByRefCall). */
+  private argOverrides: Map<Expression, string> | undefined;
+
+  /** UPPER(POU) → whether running it may take a shared global's lock. */
+  private pouLockMemo: Map<string, boolean> = new Map();
+
+  /** Statements re-caching a string length after this one handed a STRING,
+   *  WSTRING or a STRUCT holding one to a generic parameter. `raw_ptr()` gives
+   *  the characters, not the cached length. Whole statements, because a struct
+   *  syncs via `sync_strings()` and a scalar via `sync_length()`. */
+  private pendingStringSyncs: string[] = [];
+
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
    *  FB inout params are stored as by-value members with copy-in at the call
    *  site; this set drives the matching copy-back after the call so a callee's
    *  mutations propagate to the caller's variable (true inout semantics). */
   private fbInoutParams: Map<string, Set<string>> = new Map();
+
+  /** Map of UPPER(fbTypeName) → every parameter name in declaration order, so
+   *  an argument given without a name can be matched to the slot it fills. */
+  private fbParamOrder: Map<string, string[]> = new Map();
 
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
 
@@ -580,6 +744,20 @@ export class CodeGenerator {
     typeName: string,
     maxLength?: number | string,
   ): string {
+    // Every generic family is one `IEC_ANY` at the ABI; the family only
+    // constrains what the call site may pass. Listed rather than left to the
+    // `IEC_<NAME>` rule below: `IEC_ANY_INT` does not exist, and a dot is not
+    // a C++ name.
+    if (isDeclarableGenericType(typeName) || isAnyDescriptorType(typeName)) {
+      return "IEC_ANY";
+    }
+
+    // `__SYSTEM.VAR_INFO` — same reason as `__SYSTEM.AnyType` above: a dot is
+    // not a C++ name.
+    if (isVarInfoType(typeName)) {
+      return "strucpp::VAR_INFO";
+    }
+
     // Handle VLA synthetic names: __VLA_{ndims}D_{elementType}
     // Use IECVar-wrapped types to match concrete Array1D<IEC_T, ...> elements
     const vlaMatch = VLA_TYPE_NAME.exec(typeName);
@@ -663,6 +841,23 @@ export class CodeGenerator {
   }
 
   /**
+   * The C++ type of a `VAR_EXTERNAL`, which is a POINTER to the canonical
+   * `GlobalVar<V>` rather than a parameter.
+   *
+   * Not `toParamTypeRef`: that widens `STRING(n)`, which a parameter may do
+   * and a pointer may not. All three emission sites use this.
+   */
+  private externalTypeRefCpp(ext: {
+    typeName: string;
+    maxLength?: number | string;
+    arrayDimensions?: Array<{ start: number; end: number }>;
+    elementTypeName?: string;
+    referenceKind?: string;
+  }): string {
+    return this.mapTypeRefToCpp(this.projectVarToTypeRef(ext));
+  }
+
+  /**
    * Convert a project-model record (ProjectVarDeclaration /
    * VarExternalDeclaration) into a TypeReference shape suitable for
    * `mapTypeRefToCpp` / `toParamTypeRef`. Project-model records keep the
@@ -723,7 +918,12 @@ export class CodeGenerator {
           )
         : this.isUserDefinedType(typeRef.elementTypeName)
           ? typeRef.elementTypeName
-          : this.mapVarTypeToCpp(typeRef.elementTypeName);
+          : // The element's own declared length — `ARRAY [0..3] OF STRING(23)`.
+            // Without it every element falls back to the 254-character default.
+            this.mapVarTypeToCpp(
+              typeRef.elementTypeName,
+              typeRef.elementMaxLength,
+            );
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
     } else if (
       typeRef.elementReferenceChain &&
@@ -809,11 +1009,19 @@ export class CodeGenerator {
           new Set(fb.inoutNames.map((n) => n.toUpperCase())),
         );
       }
+      const order = [
+        ...fb.inputNames.map((n) => n.toUpperCase()),
+        ...fb.inoutNames.map((n) => n.toUpperCase()),
+      ];
+      if (order.length > 0) this.fbParamOrder.set(fbUpper, order);
       for (const f of fb.fields) {
         this.libraryFBFieldTypes.set(
           `${fbUpper}.${f.name.toUpperCase()}`,
           f.type,
         );
+        if (isDeclarableGenericType(f.type)) {
+          this.noteGenericParam(fbUpper, f.name, f.type);
+        }
         // Store array metadata for inline array type reconstruction
         if (f.arrayDimensions || f.elementTypeName || f.referenceKind) {
           const ref: LibraryFieldShape = {};
@@ -834,15 +1042,23 @@ export class CodeGenerator {
    * struct types for known-type detection). Private — use registerLibraryArchives().
    */
   private registerLibraryTypes(
-    types: Array<{ name: string; kind: string }>,
+    types: Array<{ name: string; kind: string; members?: string[] }>,
   ): void {
     for (const t of types) {
       const nameUpper = t.name.toUpperCase();
       if (t.kind === "enum") {
-        // Members are not available in the manifest, but we only need to
-        // know the type IS an enum for :: emission in generateVariableExpression
+        // The name alone is enough for `::` emission in
+        // generateVariableExpression; the members, when the archive carries
+        // them, are what lets a bare enumerator be qualified.
+        const members = t.members ?? [];
         if (!this.enumTypeMembers.has(nameUpper)) {
-          this.enumTypeMembers.set(nameUpper, new Set());
+          this.enumTypeMembers.set(
+            nameUpper,
+            new Set(members.map((m) => m.toUpperCase())),
+          );
+        }
+        if (members.length > 0) {
+          this.libraryEnumDescriptors.push({ name: t.name, members });
         }
       }
       this.knownStructTypes.add(nameUpper);
@@ -879,6 +1095,91 @@ export class CodeGenerator {
       if (archive.manifest.types) {
         this.registerLibraryTypes(archive.manifest.types);
       }
+      this.registerLibraryFunctions(archive.manifest.functions);
+    }
+
+    // An FB-typed inout is a pointer, not a copy. Resolved once every archive
+    // is registered, so a type from a later archive still matches.
+    for (const archive of archives) {
+      for (const fb of archive.manifest.functionBlocks) {
+        const fbUpper = fb.name.toUpperCase();
+        for (const io of fb.inouts) {
+          // An `ARRAY [*] OF …` inout is an ArrayView onto the caller's array,
+          // as for a local FB: no copy back (view and array are distinct types).
+          if (io.type.toUpperCase().startsWith("__VLA_")) {
+            let vlas = this.fbVlaInoutParams.get(fbUpper);
+            if (!vlas) {
+              vlas = new Set();
+              this.fbVlaInoutParams.set(fbUpper, vlas);
+            }
+            vlas.add(io.name.toUpperCase());
+            continue;
+          }
+          if (!this.knownFBTypes.has(io.type.toUpperCase())) continue;
+          let refs = this.fbRefInoutParams.get(fbUpper);
+          if (!refs) {
+            refs = new Set();
+            this.fbRefInoutParams.set(fbUpper, refs);
+          }
+          refs.add(io.name.toUpperCase());
+        }
+      }
+    }
+  }
+
+  /** Record that function `key` takes parameter `name` by reference. */
+  private noteFunctionByRefParam(key: string, name: string): void {
+    let set = this.functionByRefParams.get(key);
+    if (!set) {
+      set = new Set();
+      this.functionByRefParams.set(key, set);
+    }
+    set.add(name.toUpperCase());
+  }
+
+  /**
+   * A library function's parameter order and generic slots, from the manifest
+   * rather than the AST. Without the generic slots an argument bound to one is
+   * emitted as the variable itself instead of a descriptor.
+   */
+  private registerLibraryFunctions(
+    functions:
+      | Array<{
+          name: string;
+          returnType?: string;
+          parameters?: Array<{
+            name: string;
+            type: string;
+            direction?: string;
+          }>;
+        }>
+      | undefined,
+  ): void {
+    for (const fn of functions ?? []) {
+      const key = fn.name.toUpperCase();
+      if (fn.returnType?.toUpperCase() === "VOID") this.voidFunctions.add(key);
+      const order: string[] = [];
+      for (const param of fn.parameters ?? []) {
+        order.push(param.name.toUpperCase());
+        if (param.direction === "output" || param.direction === "inout") {
+          this.noteFunctionByRefParam(key, param.name);
+        }
+        // A generic is VAR_INPUT only.
+        if (
+          param.direction !== "output" &&
+          isDeclarableGenericType(param.type)
+        ) {
+          let params = this.functionGenericParams.get(key);
+          if (!params) {
+            params = new Map();
+            this.functionGenericParams.set(key, params);
+          }
+          params.set(param.name.toUpperCase(), param.type.toUpperCase());
+        }
+      }
+      if (order.length > 0 && !this.functionParamOrder.has(key)) {
+        this.functionParamOrder.set(key, order);
+      }
     }
   }
 
@@ -893,6 +1194,12 @@ export class CodeGenerator {
    */
   addLibraryChunks(archive: StlibArchive, reachable: Set<string>): void {
     this.libraryEmissions.push({ archive, reachable });
+    // A user type naming one of these cannot precede the library section that
+    // declares it — see collectLibraryTypeBearingTypes.
+    for (const chunk of archive.chunks ?? []) {
+      if (chunk.kind === "type")
+        this.libraryTypeNames.add(chunk.name.toUpperCase());
+    }
   }
 
   /**
@@ -958,6 +1265,9 @@ export class CodeGenerator {
     );
     this.emit("// Do not edit this file manually.");
     this.emit("");
+    // STruC++'s own TU: the header keeps platform macros named like ST
+    // identifiers removed rather than restoring them at its end.
+    this.emit(`#define ${GENERATED_TU_MACRO}`);
     this.emit(`#include "${this.options.headerFileName}"`);
     for (const extra of this.options.pouIncludes) {
       this.emit(`#include "${extra}"`);
@@ -1005,34 +1315,138 @@ export class CodeGenerator {
     this.tempVarCounter = 0;
     this.ast = ast; // Store AST for looking up program bodies
 
-    // Build set of known FB types from AST (library FB types already registered
-    // via registerLibraryFBTypes() before generate() is called)
+    // Every FB name first, so the parameter scan below resolves a type declared
+    // later in the unit. Library FB types are already registered.
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
+    }
+
+    for (const fb of ast.functionBlocks) {
       // Build ordered input parameter names for positional argument resolution
       const inputNames: string[] = [];
       const inoutNames: string[] = [];
+      const paramOrder: string[] = [];
       for (const block of fb.varBlocks) {
+        if (
+          block.blockType === "VAR_INPUT" ||
+          block.blockType === "VAR_IN_OUT" ||
+          block.blockType === "VAR_OUTPUT"
+        ) {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) paramOrder.push(name.toUpperCase());
+          }
+        }
         if (block.blockType === "VAR_INPUT") {
           for (const decl of block.declarations) {
             for (const name of decl.names) {
               inputNames.push(name.toUpperCase());
+              if (isDeclarableGenericType(decl.type.name)) {
+                this.noteGenericParam(
+                  fb.name.toUpperCase(),
+                  name,
+                  decl.type.name,
+                );
+              }
             }
           }
         } else if (block.blockType === "VAR_IN_OUT") {
           for (const decl of block.declarations) {
+            const isVla = decl.type.name.toUpperCase().startsWith("__VLA_");
+            const isFb = this.knownFBTypes.has(decl.type.name.toUpperCase());
             for (const name of decl.names) {
               inoutNames.push(name.toUpperCase());
+              if (isFb) {
+                let refs = this.fbRefInoutParams.get(fb.name.toUpperCase());
+                if (!refs) {
+                  refs = new Set();
+                  this.fbRefInoutParams.set(fb.name.toUpperCase(), refs);
+                }
+                refs.add(name.toUpperCase());
+              }
+              if (isVla) {
+                let vlas = this.fbVlaInoutParams.get(fb.name.toUpperCase());
+                if (!vlas) {
+                  vlas = new Set();
+                  this.fbVlaInoutParams.set(fb.name.toUpperCase(), vlas);
+                }
+                vlas.add(name.toUpperCase());
+              }
             }
           }
         }
       }
+      // Methods carry their own parameter lists, and their own generics.
+      for (const method of fb.methods ?? []) {
+        const key = `${fb.name.toUpperCase()}.${method.name.toUpperCase()}`;
+        const order: string[] = [];
+        for (const block of method.varBlocks ?? []) {
+          if (block.blockType !== "VAR_INPUT") continue;
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              order.push(name.toUpperCase());
+              if (isDeclarableGenericType(decl.type.name)) {
+                let params = this.methodGenericParams.get(key);
+                if (!params) {
+                  params = new Map();
+                  this.methodGenericParams.set(key, params);
+                }
+                params.set(name.toUpperCase(), decl.type.name.toUpperCase());
+              }
+            }
+          }
+        }
+        if (order.length > 0) this.methodInputOrder.set(key, order);
+      }
+
       if (inputNames.length > 0) {
         this.fbInputParams.set(fb.name.toUpperCase(), inputNames);
       }
       if (inoutNames.length > 0) {
         this.fbInoutParams.set(fb.name.toUpperCase(), new Set(inoutNames));
       }
+      if (paramOrder.length > 0) {
+        this.fbParamOrder.set(fb.name.toUpperCase(), paramOrder);
+      }
+    }
+
+    // Functions declare generics too — the third scope, alongside FB and
+    // METHOD. Every parameter block feeds the order, because an argument list
+    // fills VAR_INPUT, VAR_IN_OUT and VAR_OUTPUT slots in declaration order.
+    for (const func of ast.functions) {
+      const key = func.name.toUpperCase();
+      const order: string[] = [];
+      if (func.returnType.name.toUpperCase() === "VOID") {
+        this.voidFunctions.add(key);
+      }
+      for (const block of func.varBlocks) {
+        if (
+          block.blockType !== "VAR_INPUT" &&
+          block.blockType !== "VAR_IN_OUT" &&
+          block.blockType !== "VAR_OUTPUT"
+        ) {
+          continue;
+        }
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            order.push(name.toUpperCase());
+            if (block.blockType !== "VAR_INPUT") {
+              this.noteFunctionByRefParam(key, name);
+            }
+            if (
+              block.blockType === "VAR_INPUT" &&
+              isDeclarableGenericType(decl.type.name)
+            ) {
+              let params = this.functionGenericParams.get(key);
+              if (!params) {
+                params = new Map();
+                this.functionGenericParams.set(key, params);
+              }
+              params.set(name.toUpperCase(), decl.type.name.toUpperCase());
+            }
+          }
+        }
+      }
+      if (order.length > 0) this.functionParamOrder.set(key, order);
     }
 
     // Build set of known interface types, method name map, and per-interface method sets
@@ -1075,8 +1489,12 @@ export class CodeGenerator {
 
     // Build set of known struct/UDT types and enum member maps
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
+    this.typeClassifier = new TypeClassifier(ast.types);
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
+      if (td.definition.kind === "StructDefinition") {
+        this.structDefs.set(td.name.toUpperCase(), td.definition);
+      }
       if (td.definition.kind === "EnumDefinition") {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
@@ -1086,12 +1504,24 @@ export class CodeGenerator {
         }
       }
     }
-    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
+    // The project's own last, so a name declared on both sides is reported as
+    // ambiguous rather than quietly taking the library's.
+    this.enumMemberToType = buildEnumMemberMap([
+      ...this.libraryEnumDescriptors,
+      ...enumDescriptors,
+    ]);
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
     for (const prog of ast.programs) {
       this.knownProgramTypes.add(prog.name.toUpperCase());
     }
+
+    // Which structures hold a block instance, before the sort consults it.
+    this.fbBearingTypeDeps = this.collectFbBearingTypes(ast);
+
+    // And which reach a type a library declares — both decide where the
+    // structure, and the file-scope global of that structure, can be emitted.
+    this.libraryTypeBearingTypes = this.collectLibraryTypeBearingTypes(ast);
 
     // Topologically sort FBs once (used in both header and implementation)
     this.sortedFBs = this.topologicalSortFBs(ast.functionBlocks);
@@ -1202,6 +1632,16 @@ export class CodeGenerator {
     this.emitHeader("");
     this.emitHeader("#undef OVERFLOW");
 
+    // Every ST identifier is emitted upper case, and platform headers #define
+    // thousands of upper-case words: Arduino's PI and ANALOG, Xtensa register
+    // names such as WINDOWSTART. A TU that includes those headers before this
+    // one (a C/C++ block's TU, the Arduino glue) would expand them inside the
+    // declarations below. So every identifier the declarations use is saved
+    // and removed here, and restored at the end of the header for a TU that is
+    // not STruC++'s own. Filled in once the declarations exist.
+    const macroGuardAt = this.headerOutput.length;
+    this.emitHeader(MACRO_GUARD_PLACEHOLDER);
+
     // Emit global constants (before namespace, so they work as template parameters)
     const globalConsts = Object.entries(this.options.globalConstants);
     if (globalConsts.length > 0) {
@@ -1235,23 +1675,15 @@ export class CodeGenerator {
     // declarations, which is harmless — redundant class declarations are legal.
     this.emitPouForwardDeclarations(ast);
 
-    // Generate user-defined types (Phase 2.2)
-    if (ast.types.length > 0) {
-      const typeRegistry = new TypeRegistry();
-      typeRegistry.registerTypes(ast.types);
-      const typeCodeGen = new TypeCodeGenerator({
-        indent: this.options.indent,
-        lineEnding: this.options.lineEnding,
-        emitChunkMarkers: this.options.emitChunkMarkers ?? false,
-        // Struct fields must mangle by the same rule as everything else that
-        // names them, and only codegen knows the FB / program type names.
-        isUserDefinedType: (t) => this.isUserDefinedType(t),
-      });
-      const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
-      for (const line of typeCode.split(this.options.lineEnding)) {
-        this.emitHeader(line);
-      }
-    }
+    // Generate user-defined types (Phase 2.2). A structure is held back when
+    // it names something the library section has not declared yet: an FB
+    // instance (see emitFbBearingTypes), or a library type, released at the
+    // first flush.
+    const heldBack = (td: CompilationUnit["types"][number]): boolean =>
+      this.fbBearingTypeDeps.has(td.name.toUpperCase()) ||
+      this.libraryTypeBearingTypes.has(td.name.toUpperCase());
+    this.pendingFbBearingTypes = ast.types.filter(heldBack);
+    this.emitTypeDeclarations(ast.types.filter((td) => !heldBack(td)));
 
     // Generate top-level global variables (GVL files)
     if (ast.globalVarBlocks.length > 0) {
@@ -1332,14 +1764,24 @@ export class CodeGenerator {
     // Configuration VAR_GLOBALs as file-scope singletons — emitted before the
     // FB/program classes so their bodies (and FB constructors that bind a
     // VAR_EXTERNAL pointer to a global) can name them.
-    this.emitFileScopeGlobals();
+    this.emitFileScopeGlobals("early");
 
     // Generate function block class declarations (topologically sorted by dependency)
+    const emittedFBs = new Set<string>();
     for (const fb of this.sortedFBs) {
       this.emitHeaderChunkMarker("begin", "functionBlock", fb.name);
       this.generateFBHeaderDeclaration(fb);
       this.emitHeaderChunkMarker("end", "functionBlock", fb.name);
+      emittedFBs.add(fb.name.toUpperCase());
+      this.emitFbBearingTypes(emittedFBs);
     }
+    // Anything still held back names a block that never arrived; emit it rather
+    // than drop it, and let the compiler report the missing type.
+    this.emitTypeDeclarations(this.pendingFbBearingTypes);
+    this.pendingFbBearingTypes = [];
+
+    // Globals of those types follow them.
+    this.emitFileScopeGlobals("late");
 
     // Generate program class declarations
     if (this.projectModel) {
@@ -1396,6 +1838,27 @@ export class CodeGenerator {
     this.generateLocatedVarsDeclaration();
 
     this.emitHeader(`}  // namespace ${ns}`);
+
+    const guarded = guardedIdentifiers(
+      this.headerOutput.slice(macroGuardAt + 1),
+    );
+    const guardLines = [
+      "// ST identifiers that platform headers may #define (see the end of file)",
+      ...guarded.flatMap((m) => [`#pragma push_macro("${m}")`, `#undef ${m}`]),
+    ];
+    this.headerOutput.splice(macroGuardAt, 1, ...guardLines);
+    // Header lines recorded below the placeholder moved down with it.
+    const placeholderLine = macroGuardAt + 1;
+    const shift = guardLines.length - 1;
+    this.currentHeaderLine += shift;
+    for (const entry of this.headerLineMap.values()) {
+      if (entry.cppStartLine > placeholderLine) entry.cppStartLine += shift;
+      if (entry.cppEndLine > placeholderLine) entry.cppEndLine += shift;
+    }
+    this.emitHeader("");
+    this.emitHeader(`#ifndef ${GENERATED_TU_MACRO}`);
+    for (const m of guarded) this.emitHeader(`#pragma pop_macro("${m}")`);
+    this.emitHeader("#endif");
   }
 
   /**
@@ -1547,6 +2010,484 @@ export class CodeGenerator {
     return this.fileScopeGlobalNameCache;
   }
 
+  // ===========================================================================
+  // Shared-global access
+  // ===========================================================================
+
+  /** How the current body reaches global `name`, or undefined when it is not
+   *  one of the body's VAR_EXTERNAL globals. */
+  private globalRefOf(name: string): GlobalRef | undefined {
+    return this.globalRefs.get(name.toUpperCase());
+  }
+
+  /** Access records for a PROGRAM's or FUNCTION_BLOCK's VAR_EXTERNALs. */
+  private externalRefs(
+    externals: Array<{ name: string; typeName: string }>,
+  ): Map<string, GlobalRef> {
+    return new Map(
+      externals.map((e) => [
+        e.name.toUpperCase(),
+        { acc: `${e.name}->`, composite: !isElementaryType(e.typeName) },
+      ]),
+    );
+  }
+
+  /** A direct access to a shared global (not through a dereference). */
+  private isGlobalAccess(expr: VariableExpression): boolean {
+    return !expr.isDereference && this.globalRefOf(expr.name) !== undefined;
+  }
+
+  /** True for a call whose callee is ST code (user or library FUNCTION, a
+   *  method): it may take global locks, so it never runs under one. */
+  private isUserCall(expr: Expression): boolean {
+    if (expr.kind === "MethodCallExpression") return true;
+    if (expr.kind !== "FunctionCallExpression") return false;
+    const upper = expr.functionName.toUpperCase();
+    if (upper.includes(".") || upper === "SUPER") return true;
+    if (["ADR", "REF_LINK", "LOWER_BOUND", "UPPER_BOUND"].includes(upper)) {
+      return false;
+    }
+    return (
+      !this.stdRegistry.resolveConversion(upper) &&
+      !this.stdRegistry.lookup(upper)
+    );
+  }
+
+  /** Whether evaluating `expr` may take a global lock: it reads a global or
+   *  calls ST code. */
+  private mayTakeLock(expr: Expression): boolean {
+    return this.someSubExpression(
+      expr,
+      (e) =>
+        (e.kind === "VariableExpression" && this.isGlobalAccess(e)) ||
+        this.isUserCall(e),
+    );
+  }
+
+  /**
+   * Whether running the FUNCTION_BLOCK or FUNCTION `name` may take a shared
+   * global's lock: it, a block it holds or a function it calls has a
+   * VAR_EXTERNAL; an interface it holds may be anything. Library POUs cannot
+   * reach the project's globals.
+   */
+  private pouMayTakeGlobalLock(name: string): boolean {
+    const upper = name.toUpperCase();
+    const memo = this.pouLockMemo.get(upper);
+    if (memo !== undefined) return memo;
+    this.pouLockMemo.set(upper, false); // recursion guard
+    const ast = this.ast;
+    const pou =
+      ast?.functionBlocks.find((f) => f.name.toUpperCase() === upper) ??
+      ast?.functions.find((f) => f.name.toUpperCase() === upper);
+    let result = false;
+    if (pou) {
+      if (pou.kind === "FunctionBlockDeclaration" && pou.extends) {
+        result = this.pouMayTakeGlobalLock(pou.extends);
+      }
+      result = result || this.nodeMayTakeGlobalLock(pou, new Set());
+    }
+    this.pouLockMemo.set(upper, result);
+    return result;
+  }
+
+  /** Whether a user type may take a shared global's lock when used. */
+  private typeMayTakeGlobalLock(name: string, seen: Set<string>): boolean {
+    const upper = name.toUpperCase();
+    const ast = this.ast;
+    if (!ast || seen.has(upper)) return false;
+    seen.add(upper);
+    if (ast.interfaces.some((i) => i.name.toUpperCase() === upper)) return true;
+    if (
+      ast.functionBlocks.some((f) => f.name.toUpperCase() === upper) ||
+      ast.functions.some((f) => f.name.toUpperCase() === upper)
+    ) {
+      return this.pouMayTakeGlobalLock(upper);
+    }
+    const type = ast.types.find((t) => t.name.toUpperCase() === upper);
+    return type !== undefined && this.nodeMayTakeGlobalLock(type, seen);
+  }
+
+  /** Scan of an AST subtree for {@link pouMayTakeGlobalLock}. */
+  private nodeMayTakeGlobalLock(node: object, seen: Set<string>): boolean {
+    const n = node as {
+      kind?: string;
+      blockType?: string;
+      name?: string;
+      elementTypeName?: string;
+      functionName?: string;
+    };
+    if (n.kind === "VarBlock" && n.blockType === "VAR_EXTERNAL") return true;
+    if (n.kind === "TypeReference") {
+      for (const t of [n.name, n.elementTypeName]) {
+        if (t !== undefined && this.typeMayTakeGlobalLock(t, seen)) return true;
+      }
+    }
+    if (n.kind === "FunctionCallExpression" && n.functionName !== undefined) {
+      const callee = n.functionName.split(".")[0]!;
+      if (
+        this.ast?.functions.some(
+          (f) => f.name.toUpperCase() === callee.toUpperCase(),
+        ) === true &&
+        this.pouMayTakeGlobalLock(callee)
+      ) {
+        return true;
+      }
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === "sourceSpan" || value === null || typeof value !== "object") {
+        continue;
+      }
+      if (this.nodeMayTakeGlobalLock(value as object, seen)) return true;
+    }
+    return false;
+  }
+
+  /** Whether `expr` reads the global `rootUpper` anywhere. */
+  private expressionUsesRoot(expr: Expression, rootUpper: string): boolean {
+    return this.someSubExpression(
+      expr,
+      (e) =>
+        e.kind === "VariableExpression" &&
+        this.isGlobalAccess(e) &&
+        e.name.toUpperCase() === rootUpper,
+    );
+  }
+
+  /** Depth-first search of an expression tree, index expressions included. */
+  private someSubExpression(
+    expr: Expression,
+    pred: (e: Expression) => boolean,
+  ): boolean {
+    if (pred(expr)) return true;
+    const any = (list: Expression[]): boolean =>
+      list.some((e) => this.someSubExpression(e, pred));
+    switch (expr.kind) {
+      case "VariableExpression": {
+        const idx: Expression[] = [...expr.subscripts];
+        for (const step of expr.accessChain ?? []) {
+          if (step.kind === "subscript") idx.push(...step.indices);
+        }
+        return any(idx);
+      }
+      case "BinaryExpression":
+        return any([expr.left, expr.right]);
+      case "UnaryExpression":
+        return any([expr.operand]);
+      case "ParenthesizedExpression":
+        return any([expr.expression]);
+      case "FunctionCallExpression":
+        return (
+          any(expr.arguments.map((a) => a.value)) ||
+          (expr.instance !== undefined && any([expr.instance]))
+        );
+      case "MethodCallExpression":
+        return any([expr.object, ...expr.arguments.map((a) => a.value)]);
+      case "RefExpression":
+      case "DrefExpression":
+        return any([expr.operand]);
+      case "ArrayLiteralExpression":
+        return any(expr.elements);
+      case "NewExpression":
+        return expr.arraySize !== undefined && any([expr.arraySize]);
+      default:
+        return false;
+    }
+  }
+
+  /**
+   * Render code that runs inside `rootUpper`'s with_lock(): reads of that
+   * global go through `(*__glk)`; every other lock-taking sub-expression is
+   * evaluated first into an `auto __gwv_N` temporary emitted at `indent`.
+   */
+  private renderUnderLock<T>(
+    rootUpper: string,
+    indent: string,
+    render: () => T,
+  ): T {
+    const saved = this.lockCtx;
+    this.lockCtx = {
+      rootUpper,
+      hoist: (code: string): string => {
+        const tmp = `__gwv_${this.tempVarCounter++}`;
+        this.emit(`${indent}auto ${tmp} = ${code};`);
+        return tmp;
+      },
+    };
+    try {
+      return render();
+    } finally {
+      this.lockCtx = saved;
+    }
+  }
+
+  /** Inside {@link renderUnderLock}: evaluate `render` outside the lock into a
+   *  temporary and return the temporary's name. */
+  private hoistOutOfLock(render: () => string): string {
+    const ctx = this.lockCtx!;
+    this.lockCtx = undefined;
+    let code: string;
+    try {
+      code = render();
+    } finally {
+      this.lockCtx = ctx;
+    }
+    return ctx.hoist(code);
+  }
+
+  /** Whether a variable expression has anything after its base name. */
+  private hasAccessTail(expr: VariableExpression): boolean {
+    return (
+      (expr.accessChain?.length ?? 0) > 0 ||
+      expr.subscripts.length > 0 ||
+      expr.fieldAccess.length > 0
+    );
+  }
+
+  /** `expr`'s access tail on `(*__glk)`; index expressions that take a lock
+   *  are evaluated first, into `temps`. */
+  private renderLockedTail(expr: VariableExpression, temps: string[]): string {
+    return this.renderAccessTail(
+      "(*__glk)",
+      expr,
+      expr.name.toUpperCase(),
+      (idx) => {
+        const code = this.generateExpression(idx);
+        if (!this.mayTakeLock(idx)) return code;
+        const tmp = `__gi${this.tempVarCounter++}`;
+        temps.push(`auto ${tmp} = ${code};`);
+        return tmp;
+      },
+    );
+  }
+
+  /**
+   * A read of a global: `G->read()` for a scalar, else one with_lock()
+   * returning the addressed part. Lock-taking index expressions are evaluated
+   * first, into temporaries of an immediately-invoked lambda.
+   */
+  private renderGlobalRead(expr: VariableExpression, ref: GlobalRef): string {
+    if (!ref.composite && !this.hasAccessTail(expr)) {
+      return `${ref.acc}read()`;
+    }
+    const temps: string[] = [];
+    const inner = this.renderLockedTail(expr, temps);
+    const locked = `${ref.acc}with_lock([&](auto* __glk){ return ${inner}; })`;
+    if (temps.length === 0) return locked;
+    return `[&]{ ${temps.join(" ")} return ${locked}; }()`;
+  }
+
+  /** Split a target into the part it addresses and a trailing partial-access
+   *  selector (`.3`, `.%B1`), if any. */
+  private splitBitTarget(target: VariableExpression): {
+    base: VariableExpression;
+    part: PartialAccess | undefined;
+  } {
+    const chain = target.accessChain;
+    const step =
+      chain && chain.length > 0 ? chain[chain.length - 1] : undefined;
+    const last =
+      chain && chain.length > 0
+        ? step?.kind === "field"
+          ? step.name
+          : undefined
+        : target.fieldAccess[target.fieldAccess.length - 1];
+    const part = last === undefined ? undefined : parsePartialAccess(last);
+    if (!part) {
+      return { base: target, part: undefined };
+    }
+    const base: VariableExpression = {
+      ...target,
+      fieldAccess: target.fieldAccess.slice(0, -1),
+    };
+    if (chain) {
+      const trimmed = this.trimLastFieldFromAccessChain(chain);
+      if (trimmed) base.accessChain = trimmed;
+      else delete base.accessChain;
+    }
+    return { base, part };
+  }
+
+  /** `lv = <value>`, or the read-modify-write of one part of `lv` (see
+   *  partialAccessWrite). */
+  private renderStore(
+    lv: string,
+    part: PartialAccess | undefined,
+    value: string,
+  ): string {
+    if (part === undefined) return `${lv} = ${value}`;
+    return `${lv} = ${this.partialAccessWrite(lv, value, part)}`;
+  }
+
+  /**
+   * Store rendered `value` (which takes no lock) into a global target:
+   * `G->write(v)` for a whole scalar, else one with_lock() (a bit as one
+   * read-modify-write). Lock-taking indices are evaluated before the lock.
+   */
+  private emitGlobalStore(
+    target: VariableExpression,
+    ref: GlobalRef,
+    value: string,
+    indent: string,
+  ): void {
+    const upper = target.name.toUpperCase();
+    if (!ref.composite && !this.hasAccessTail(target)) {
+      this.emit(`${indent}${ref.acc}write(${value});`);
+      return;
+    }
+    const body = this.renderUnderLock(upper, indent, () => {
+      const { base, part } = this.splitBitTarget(target);
+      return this.renderStore(
+        this.renderAccessTail("(*__glk)", base, upper),
+        part,
+        value,
+      );
+    });
+    this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){ ${body}; });`);
+  }
+
+  /**
+   * Assignment to a global target. When the right-hand side reads the same
+   * global, the whole assignment is one locked step (other lock-taking parts
+   * evaluated first); otherwise the value is computed first and stored under
+   * the lock.
+   */
+  private emitGlobalAssignment(
+    target: VariableExpression,
+    ref: GlobalRef,
+    valueExpr: Expression,
+    indent: string,
+  ): void {
+    const upper = target.name.toUpperCase();
+    if (!this.expressionUsesRoot(valueExpr, upper)) {
+      if (!ref.composite && !this.hasAccessTail(target)) {
+        this.emit(
+          `${indent}${ref.acc}write(${this.generateExpression(valueExpr)});`,
+        );
+        return;
+      }
+      const tmp = `__gwv_${this.tempVarCounter++}`;
+      this.emit(
+        `${indent}auto ${tmp} = ${this.generateExpression(valueExpr)};`,
+      );
+      this.emitGlobalStore(target, ref, tmp, indent);
+      return;
+    }
+    const body = this.renderUnderLock(upper, indent, () => {
+      const value = this.generateExpression(valueExpr);
+      const { base, part } = this.splitBitTarget(target);
+      const lv = this.hasAccessTail(base)
+        ? this.renderAccessTail("(*__glk)", base, upper)
+        : "(*__glk)";
+      return this.renderStore(lv, part, value);
+    });
+    this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){ ${body}; });`);
+  }
+
+  /** The type `expr` names: its variable's type through its subscripts and
+   *  fields, or undefined when unknown. */
+  private accessType(expr: VariableExpression): string | undefined {
+    let type = this.currentScopeVarTypes.get(expr.name.toUpperCase());
+    const steps: AccessStep[] = expr.accessChain ?? [
+      ...(expr.subscripts.length > 0
+        ? [{ kind: "subscript" as const, indices: expr.subscripts }]
+        : []),
+      ...expr.fieldAccess.map((name) => ({ kind: "field" as const, name })),
+    ];
+    for (const step of steps) {
+      if (type === undefined) return undefined;
+      if (step.kind === "subscript") {
+        type = this.ast
+          ? resolveArrayElementTypeUtil(type, this.ast)
+          : undefined;
+      } else if (step.kind === "field") {
+        type = this.resolveMemberType(type, step.name);
+      } else {
+        return undefined;
+      }
+    }
+    return type;
+  }
+
+  /** A method of `typeName` (or of a function block it extends). */
+  private findMethodDecl(
+    typeName: string | undefined,
+    methodName: string,
+  ): MethodDeclaration | undefined {
+    const seen = new Set<string>();
+    let current = typeName;
+    while (
+      current !== undefined &&
+      this.ast !== undefined &&
+      !seen.has(current.toUpperCase())
+    ) {
+      const upper = current.toUpperCase();
+      seen.add(upper);
+      const fb = this.ast.functionBlocks.find(
+        (f) => f.name.toUpperCase() === upper,
+      );
+      if (!fb) return undefined;
+      const method = fb.methods.find(
+        (m) => m.name.toUpperCase() === methodName.toUpperCase(),
+      );
+      if (method) return method;
+      current = fb.extends;
+    }
+    return undefined;
+  }
+
+  /** Whether each positional parameter of a method is passed by reference. */
+  private methodParamByRef(method: MethodDeclaration | undefined): boolean[] {
+    const byRef: boolean[] = [];
+    for (const block of method?.varBlocks ?? []) {
+      const kind = block.blockType;
+      if (
+        kind !== "VAR_INPUT" &&
+        kind !== "VAR_IN_OUT" &&
+        kind !== "VAR_OUTPUT"
+      ) {
+        continue;
+      }
+      for (const decl of block.declarations) {
+        for (let i = 0; i < decl.names.length; i++) {
+          byRef.push(kind !== "VAR_INPUT");
+        }
+      }
+    }
+    return byRef;
+  }
+
+  /**
+   * Call of `method` on a function block instance held in a shared global
+   * (the global, an element or a member of it), under that global's lock.
+   * By-value arguments and indices that take a lock are evaluated first.
+   */
+  private renderGlobalMethodCall(
+    object: VariableExpression,
+    ref: GlobalRef,
+    objectType: string | undefined,
+    method: string,
+    args: Argument[],
+  ): string {
+    const byRef = this.methodParamByRef(
+      this.findMethodDecl(objectType, method),
+    );
+    const temps: string[] = [];
+    // Generic parameters take a descriptor, as in an unlocked method call.
+    const codes = this.generateCallArguments(objectType, method, args);
+    const callArgs = args.map((a, i) => {
+      const code = codes[i]!;
+      if (byRef[i] === true || !this.mayTakeLock(a.value)) return code;
+      const tmp = `__gma${this.tempVarCounter++}`;
+      temps.push(`auto ${tmp} = ${code};`);
+      return tmp;
+    });
+    const target = this.renderLockedTail(object, temps);
+    const call = `${ref.acc}with_lock([&](auto* __glk){ return ${target}.${method}(${callArgs.join(", ")}); })`;
+    return temps.length === 0
+      ? call
+      : `[&]{ ${temps.join(" ")} return ${call}; }()`;
+  }
+
   /**
    * Generate header declaration for a function block.
    */
@@ -1608,11 +2549,20 @@ export class CodeGenerator {
       for (const decl of block.declarations) {
         const cppType = this.mapTypeRefToCpp(decl.type);
         const tag = this.elaboratedTagIfShadowed(decl.type.name, fbMemberNames);
+        // An FB passed as an inout is aliased, not copied: the callee reads and
+        // writes the caller's instance and may call it.
+        const byRef =
+          block.blockType === "VAR_IN_OUT" &&
+          this.knownFBTypes.has(decl.type.name.toUpperCase());
         for (const name of decl.names) {
           const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
           const memberLine = this.currentHeaderLine;
-          this.emitHeader(`    ${tag}${cppType} ${memberName};`);
+          this.emitHeader(
+            byRef
+              ? `    ${tag}${cppType}* ${memberName} = nullptr;`
+              : `    ${tag}${cppType} ${memberName};`,
+          );
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
       }
@@ -1771,22 +2721,25 @@ export class CodeGenerator {
       if (block.blockType === "VAR_INPUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            params.push(`${this.mapTypeRefToCpp(decl.type)} ${name}`);
+            params.push(
+              `${this.mapTypeRefToCpp(decl.type)} ${this.functionVarName(name, decl.type.name)}`,
+            );
           }
         }
       } else if (block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
             // VLA types (ArrayView) are already reference-like; others need &
+            const pname = this.functionVarName(name, decl.type.name);
             if (decl.type.name.startsWith("__VLA_")) {
-              params.push(`${this.mapTypeRefToCpp(decl.type)} ${name}`);
+              params.push(`${this.mapTypeRefToCpp(decl.type)} ${pname}`);
             } else {
               // mapTypeRefToCpp preserves arrayDimensions / elementTypeName
               // (so inline ARRAY params emit Array1D<...>) but we still want
               // STRING/WSTRING maxLength dropped so any string size binds to
               // the &-reference — strip it on a shallow copy of the typeRef.
               params.push(
-                `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+                `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${pname}`,
               );
             }
           }
@@ -1796,13 +2749,22 @@ export class CodeGenerator {
           for (const name of decl.names) {
             // Same metadata-aware lookup as VAR_IN_OUT — see the comment above.
             params.push(
-              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${name}`,
+              `${this.mapTypeRefToCpp(this.toParamTypeRef(decl.type))}& ${this.functionVarName(name, decl.type.name)}`,
             );
           }
         }
       }
     }
     return params;
+  }
+
+  /** The C++ name of a function parameter or local: `<name>_` when it is
+   *  named like its own user type, as the body refers to it (enterScope). */
+  private functionVarName(name: string, typeName: string): string {
+    return this.isUserDefinedType(typeName) &&
+      name.toUpperCase() === typeName.toUpperCase()
+      ? `${name}_`
+      : name;
   }
 
   // ===========================================================================
@@ -2190,20 +3152,15 @@ export class CodeGenerator {
     this.currentFBName = fb.name;
     this.currentFBExtends = fb.extends;
     this.currentFBVarBlocks = fb.varBlocks;
+    this.currentRefInouts =
+      this.fbRefInoutParams.get(fb.name.toUpperCase()) ?? new Set();
     this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
 
     // VAR_EXTERNAL: body access (operator(), methods, properties) is rewritten
     // to go through the GlobalVar pointer (g->read()/write()/with_lock), exactly
     // like a PROGRAM. Set for the whole implementation, cleared at the end.
     const externalDecls = this.collectFBExternals(fb);
-    this.programExternals = new Set(
-      externalDecls.map((e) => e.name.toUpperCase()),
-    );
-    this.compositeExternals = new Set(
-      externalDecls
-        .filter((e) => !isElementaryType(e.typeName))
-        .map((e) => e.name.toUpperCase()),
-    );
+    this.globalRefs = this.externalRefs(externalDecls);
 
     // Constructor with initializer list for variables with defaults
     const fbInits: string[] = [];
@@ -2280,12 +3237,12 @@ export class CodeGenerator {
       this.exitScope();
     }
 
+    this.currentRefInouts = new Set();
     this.currentFBName = undefined;
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
     this.currentFBInterfaceMethods = new Set();
-    this.programExternals = new Set();
-    this.compositeExternals = new Set();
+    this.globalRefs = new Map();
   }
 
   /**
@@ -2312,7 +3269,9 @@ export class CodeGenerator {
               const initValue = decl.initialValue
                 ? ` = ${this.generateInitializer(decl.initialValue, cppType, decl.type.name)}`
                 : "";
-              this.emit(`    ${cppType} ${name}${initValue};`);
+              this.emit(
+                `    ${cppType} ${this.functionVarName(name, decl.type.name)}${initValue};`,
+              );
             }
           }
         }
@@ -2374,7 +3333,7 @@ export class CodeGenerator {
       if (block.blockType === "VAR_INPUT" || block.blockType === "VAR_IN_OUT") {
         for (const decl of block.declarations) {
           for (const name of decl.names) {
-            names.push(name);
+            names.push(this.functionVarName(name, decl.type.name));
           }
         }
       }
@@ -2443,6 +3402,9 @@ export class CodeGenerator {
           ...(decl.elementTypeName !== undefined
             ? { elementTypeName: decl.elementTypeName }
             : {}),
+          ...(decl.elementMaxLength !== undefined
+            ? { elementMaxLength: decl.elementMaxLength }
+            : {}),
           ...(decl.elementReferenceChain !== undefined
             ? { elementReferenceChain: decl.elementReferenceChain }
             : {}),
@@ -2488,19 +3450,13 @@ export class CodeGenerator {
       // projectVarToTypeRef + toParamTypeRef + mapTypeRefToCpp resolve the
       // C++ type the same way the constructor params do (must agree).
       const extTypes = prog.varExternal.map((ext) =>
-        this.mapTypeRefToCpp(
-          this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-        ),
+        this.externalTypeRefCpp(ext),
       );
       this.emitHeader("    // External variables (pointers to shared globals)");
       for (let i = 0; i < prog.varExternal.length; i++) {
         const ext = prog.varExternal[i]!;
         // Every external — scalar or composite — is a pointer to its canonical
-        // GlobalVar<V>. Composite globals (struct / array / function-block) can
-        // be declared and debugged (the located image + debug table reach them
-        // through `.value`); only their in-body ACCESS is currently gated, at
-        // the access sites (see compositeExternals), because correct locked
-        // field / element / call codegen is a follow-up phase.
+        // GlobalVar<V>; body access goes through it under the global's lock.
         this.emitHeader(
           `    GlobalVar<${extTypes[i]!}>* ${ext.name} = nullptr;`,
         );
@@ -2519,9 +3475,7 @@ export class CodeGenerator {
       // configuration owns the storage + mutex; the program just points at it).
       const params = prog.varExternal
         .map((ext) => {
-          const cppType = this.mapTypeRefToCpp(
-            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-          );
+          const cppType = this.externalTypeRefCpp(ext);
           return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
@@ -2580,9 +3534,7 @@ export class CodeGenerator {
       // the linker rejects the definition.
       const params = prog.varExternal
         .map((ext) => {
-          const cppType = this.mapTypeRefToCpp(
-            this.toParamTypeRef(this.projectVarToTypeRef(ext)),
-          );
+          const cppType = this.externalTypeRefCpp(ext);
           return `GlobalVar<${cppType}>* ${ext.name}_ref`;
         })
         .join(", ");
@@ -2650,14 +3602,7 @@ export class CodeGenerator {
     this.emit(`void Program_${prog.name}::run() {`);
     // VAR_EXTERNAL names for this program: body access to these is rewritten to
     // go through the GlobalVar pointer (g->read()/write()/with_lock).
-    this.programExternals = new Set(
-      prog.varExternal.map((ext) => ext.name.toUpperCase()),
-    );
-    this.compositeExternals = new Set(
-      prog.varExternal
-        .filter((ext) => !isElementaryType(ext.typeName))
-        .map((ext) => ext.name.toUpperCase()),
-    );
+    this.globalRefs = this.externalRefs(prog.varExternal);
     if (astProg) {
       this.enterScope(astProg.varBlocks);
     }
@@ -2671,8 +3616,7 @@ export class CodeGenerator {
       this.exitScope();
       this.emitLineDirective(astProg.sourceSpan.endLine);
     }
-    this.programExternals = new Set();
-    this.compositeExternals = new Set();
+    this.globalRefs = new Map();
     const closingBraceLine = this.currentLine;
     this.emit("}");
     this.emit("");
@@ -2722,13 +3666,31 @@ export class CodeGenerator {
     }
   }
 
-  private emitFileScopeGlobals(): void {
+  /**
+   * A global whose type holds a function block instance cannot precede that
+   * class, so it is emitted with the types that were held back.
+   */
+  private globalFollowsBlocks(typeName: string): boolean {
+    const upper = typeName.toUpperCase();
+    // `GlobalVar<V>` holds V by value, so the storage cannot precede the
+    // structure any more than the structure can precede what it names.
+    return (
+      this.knownFBTypes.has(upper) ||
+      this.fbBearingTypeDeps.has(upper) ||
+      this.libraryTypeBearingTypes.has(upper)
+    );
+  }
+
+  private emitFileScopeGlobals(phase: "early" | "late"): void {
     if (!this.projectModel) return;
     const seen = new Set<string>();
     let emittedAny = false;
     for (const config of this.projectModel.configurations) {
       for (const gvar of config.globalVars) {
         const key = gvar.name.toUpperCase();
+        if (this.globalFollowsBlocks(gvar.typeName) !== (phase === "late")) {
+          continue;
+        }
         // Same name across configurations = one canonical global (strucpp
         // already treats them as such); emit its storage once.
         if (seen.has(key)) continue;
@@ -3089,6 +4051,21 @@ export class CodeGenerator {
         this.generateRepeatStatement(stmt, indent);
         isCompound = true;
         break;
+      case "ContinueStatement": {
+        // `continue` is correct where EXIT needs a goto: a switch captures
+        // `break` but never `continue`, so it always reaches the innermost
+        // loop — ST's rule. A FOR still runs its increment, a WHILE or REPEAT
+        // re-tests its condition.
+        if (this.loopExitLabelStack.length > 0) {
+          this.emit(`${indent}continue;`);
+        } else {
+          // CONTINUE outside a loop is invalid IEC ST, and a bare `continue`
+          // would not compile. Emit nothing rather than crash codegen, matching
+          // the defensive branch on EXIT below.
+          this.emit(`${indent}; // CONTINUE outside a loop`);
+        }
+        break;
+      }
       case "ExitStatement": {
         const top = this.loopExitLabelStack[this.loopExitLabelStack.length - 1];
         if (top) {
@@ -3122,8 +4099,28 @@ export class CodeGenerator {
         );
       }
     }
+    this.flushStringSyncs(indent);
     if (!isCompound) {
       this.recordLineMapping(stmt.sourceSpan.startLine, cppStartLine);
+    }
+  }
+
+  /**
+   * Emit `sync_length()` for each STRING or WSTRING variable this statement
+   * handed to a generic parameter.
+   *
+   * `PVALUE` is `raw_ptr()`, the characters only, so the cached length must be
+   * recomputed after the call. Emitted after the statement; duplicates dropped.
+   */
+  private flushStringSyncs(indent: string): void {
+    if (this.pendingStringSyncs.length === 0) return;
+    const pending = this.pendingStringSyncs;
+    this.pendingStringSyncs = [];
+    const seen = new Set<string>();
+    for (const stmt of pending) {
+      if (seen.has(stmt)) continue;
+      seen.add(stmt);
+      this.emit(`${indent}${stmt}`);
     }
   }
 
@@ -3135,8 +4132,40 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
-    // Check for property write: m.Speed := 75 → m.set_Speed(75)
+    // A shared global (VAR_EXTERNAL) target is stored under its own lock.
+    const globalRef =
+      stmt.target.kind === "VariableExpression" &&
+      this.isGlobalAccess(stmt.target)
+        ? this.globalRefOf(stmt.target.name)
+        : undefined;
+
+    // Check for property write: m.Speed := 75 → m.set_Speed(75). On a global
+    // FB instance the setter runs under the instance's lock.
     const propWrite = this.detectPropertyWrite(stmt.target);
+    if (propWrite && globalRef && stmt.target.kind === "VariableExpression") {
+      const target = stmt.target;
+      const upper = target.name.toUpperCase();
+      const tmp = `__gwv_${this.tempVarCounter++}`;
+      this.emit(
+        `${indent}auto ${tmp} = ${this.generateExpression(stmt.value)};`,
+      );
+      const obj = this.renderUnderLock(upper, indent, () => {
+        const base: VariableExpression = {
+          ...target,
+          fieldAccess: target.fieldAccess.slice(0, -1),
+        };
+        if (target.accessChain) {
+          const trimmed = this.trimLastFieldFromAccessChain(target.accessChain);
+          if (trimmed) base.accessChain = trimmed;
+          else delete base.accessChain;
+        }
+        return this.renderAccessTail("(*__glk)", base, upper);
+      });
+      this.emit(
+        `${indent}${globalRef.acc}with_lock([&](auto* __glk){ ${obj}.set_${propWrite.propertyName}(${tmp}); });`,
+      );
+      return;
+    }
     if (propWrite) {
       const value = this.generateExpression(stmt.value);
       this.emit(
@@ -3145,29 +4174,54 @@ export class CodeGenerator {
       return;
     }
 
-    // Composite / array shared-global WRITE (VAR_EXTERNAL to a composite
-    // VAR_GLOBAL): take the global's own mutex and write the canonical directly
-    // through with_lock. The RHS is computed into a temp first, so any
-    // composite-global reads in it take + release their locks before we take the
-    // target's lock — at most one global lock is ever held at a time.
+    // EN/ENO on function call assignment:
+    // result := func(EN := cond, args..., ENO => eno_var);
+    // → if (cond) { result = func(args); eno_var = true; } else { eno_var = false; }
     if (
-      stmt.target.kind === "VariableExpression" &&
-      !stmt.target.isDereference &&
-      this.compositeExternals.has(stmt.target.name.toUpperCase())
+      stmt.value.kind === "FunctionCallExpression" &&
+      this.hasEnEno(stmt.value.arguments)
     ) {
-      this.emitCompositeGlobalWrite(stmt.target, stmt.value, indent);
+      const { enExpr, enoVar, filteredArgs } = this.extractEnEno(
+        stmt.value.arguments,
+      );
+      const target = globalRef ? "" : this.generateExpression(stmt.target);
+      const modifiedCall: FunctionCallExpression = {
+        ...stmt.value,
+        arguments: filteredArgs,
+      };
+      const callExpr = this.generateFunctionCallExpression(modifiedCall);
+      const targetExpr = stmt.target;
+      this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
+        if (!globalRef) {
+          this.emit(`${bi}${target} = ${callExpr};`);
+          return;
+        }
+        // The call runs before the target's lock is taken.
+        const tmp = `__gwv_${this.tempVarCounter++}`;
+        this.emit(`${bi}auto ${tmp} = ${callExpr};`);
+        this.emitCaptureToLvalue(targetExpr, tmp, bi);
+      });
       return;
     }
 
-    // Bit access write: var.N := value → var = (var & ~(1ULL << N)) | ((value ? 1ULL : 0ULL) << N)
-    // Uses 1ULL (64-bit) to avoid UB when bit index >= 32 (e.g., LWORD.33)
-    if (
+    // Shared-global target: one locked step when the value reads the same
+    // global, else the value first and a locked store.
+    if (globalRef && stmt.target.kind === "VariableExpression") {
+      this.emitGlobalAssignment(stmt.target, globalRef, stmt.value, indent);
+      return;
+    }
+
+    // Partial access write: `var.N := v` and `var.%B1 := v` alike become a
+    // read-modify-write of the whole variable. All arithmetic is 64-bit, so a
+    // shift of 32 or more (LWORD.%D1, LWORD.33) is not undefined behaviour.
+    const writePart =
       stmt.target.kind === "VariableExpression" &&
-      stmt.target.fieldAccess.length > 0 &&
-      /^\d+$/.test(stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!)
-    ) {
-      const bitIdx =
-        stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!;
+      stmt.target.fieldAccess.length > 0
+        ? parsePartialAccess(
+            stmt.target.fieldAccess[stmt.target.fieldAccess.length - 1]!,
+          )
+        : undefined;
+    if (stmt.target.kind === "VariableExpression" && writePart) {
       // Build the base variable (without the bit index)
       const baseVar: VariableExpression = {
         ...stmt.target,
@@ -3187,44 +4241,8 @@ export class CodeGenerator {
       const baseCode = this.generateExpression(baseVar);
       const value = this.generateExpression(stmt.value);
       this.emit(
-        `${indent}${baseCode} = (${baseCode} & ~(1ULL << ${bitIdx})) | ((${value} ? 1ULL : 0ULL) << ${bitIdx});`,
+        `${indent}${baseCode} = ${this.partialAccessWrite(baseCode, value, writePart)};`,
       );
-      return;
-    }
-
-    // EN/ENO on function call assignment:
-    // result := func(EN := cond, args..., ENO => eno_var);
-    // → if (cond) { result = func(args); eno_var = true; } else { eno_var = false; }
-    if (
-      stmt.value.kind === "FunctionCallExpression" &&
-      this.hasEnEno(stmt.value.arguments)
-    ) {
-      const { enExpr, enoVar, filteredArgs } = this.extractEnEno(
-        stmt.value.arguments,
-      );
-      const target = this.generateExpression(stmt.target);
-      const modifiedCall: FunctionCallExpression = {
-        ...stmt.value,
-        arguments: filteredArgs,
-      };
-      const callExpr = this.generateFunctionCallExpression(modifiedCall);
-      this.emitEnEnoWrapper(indent, enExpr, enoVar, (bi) => {
-        this.emit(`${bi}${target} = ${callExpr};`);
-      });
-      return;
-    }
-
-    // VAR_EXTERNAL scalar write → lock the shared global and set its value via
-    // the pointer. (Struct/array/FB-instance external writes go through
-    // with_lock at their emission sites.)
-    if (
-      stmt.target.kind === "VariableExpression" &&
-      stmt.target.fieldAccess.length === 0 &&
-      !stmt.target.isDereference &&
-      this.programExternals.has(stmt.target.name.toUpperCase())
-    ) {
-      const value = this.generateExpression(stmt.value);
-      this.emit(`${indent}${stmt.target.name}->write(${value});`);
       return;
     }
 
@@ -3242,55 +4260,6 @@ export class CodeGenerator {
     }
 
     this.emit(`${indent}${target} = ${value};`);
-  }
-
-  /**
-   * Emit a write to a composite / array shared global (VAR_EXTERNAL to a
-   * composite VAR_GLOBAL) under the global's own mutex via with_lock. The RHS is
-   * hoisted to a temp BEFORE the lock is taken so its own composite-global reads
-   * (each a self-contained with_lock) release before this write's lock is
-   * acquired — guaranteeing at most one global lock held at a time. Handles
-   * whole-object, field/element, and bit writes (the bit read-modify-write runs
-   * inside the single lock, so it is atomic). The lock compiles out on
-   * non-STRUCPP_THREADED builds (the guard lives inside GlobalVar::with_lock).
-   */
-  private emitCompositeGlobalWrite(
-    target: VariableExpression,
-    valueExpr: Expression,
-    indent: string,
-  ): void {
-    const nameUpper = target.name.toUpperCase();
-    const ptr = this.resolveVariableBaseName(target.name);
-    const tmp = `__gwv_${this.tempVarCounter++}`;
-    const value = this.generateExpression(valueExpr);
-    this.emit(`${indent}auto ${tmp} = ${value};`);
-
-    const lastField = target.fieldAccess[target.fieldAccess.length - 1];
-    const isBitWrite =
-      target.fieldAccess.length > 0 && /^\d+$/.test(lastField ?? "");
-
-    if (isBitWrite) {
-      // Base without the trailing bit index, rendered on the lock lambda param.
-      const baseVar: VariableExpression = {
-        ...target,
-        fieldAccess: target.fieldAccess.slice(0, -1),
-      };
-      if (target.accessChain) {
-        const trimmed = this.trimLastFieldFromAccessChain(target.accessChain);
-        if (trimmed) baseVar.accessChain = trimmed;
-        else delete baseVar.accessChain;
-      }
-      const lv = this.renderAccessTail("(*__glk)", baseVar, nameUpper);
-      this.emit(
-        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = (${lv} & ~(1ULL << ${lastField})) | ((${tmp} ? 1ULL : 0ULL) << ${lastField}); });`,
-      );
-      return;
-    }
-
-    const lv = this.renderAccessTail("(*__glk)", target, nameUpper);
-    this.emit(
-      `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${tmp}; });`,
-    );
   }
 
   /**
@@ -3450,6 +4419,9 @@ export class CodeGenerator {
     for (const caseElement of stmt.cases) {
       this.emitLineDirective(caseElement.sourceSpan.startLine);
       const caseLabelLine = this.currentLine;
+      // Each branch body is its own block: a declaration in it (a temporary of
+      // a shared-global write, say) must not be jumped over by a later label.
+      const labelLines: string[] = [];
       for (const label of caseElement.labels) {
         if (label.end) {
           // Range: expand to individual case labels
@@ -3457,29 +4429,38 @@ export class CodeGenerator {
           const endVal = this.evaluateLiteralInt(label.end);
           if (startVal !== undefined && endVal !== undefined) {
             for (let i = startVal; i <= endVal; i++) {
-              this.emit(`${innerIndent}case ${i}:`);
+              labelLines.push(`${innerIndent}case ${i}:`);
             }
           } else {
             // Fallback: emit as comment with expression
-            this.emit(
+            labelLines.push(
               `${innerIndent}case ${this.generateExpression(label.start)}: // range to ${this.generateExpression(label.end)}`,
             );
           }
         } else {
-          this.emit(
+          labelLines.push(
             `${innerIndent}case ${this.generateExpression(label.start)}:`,
           );
         }
       }
+      const last = labelLines.length - 1;
+      if (last >= 0 && !labelLines[last]!.includes("//")) {
+        labelLines[last] += " {";
+      } else {
+        labelLines.push(`${innerIndent}{`);
+      }
+      for (const line of labelLines) this.emit(line);
       this.recordLineMapping(caseElement.sourceSpan.startLine, caseLabelLine);
       this.generateStatements(caseElement.statements, bodyIndent);
       this.emit(`${bodyIndent}break;`);
+      this.emit(`${innerIndent}}`);
     }
 
     if (stmt.elseStatements.length > 0) {
-      this.emit(`${innerIndent}default:`);
+      this.emit(`${innerIndent}default: {`);
       this.generateStatements(stmt.elseStatements, bodyIndent);
       this.emit(`${bodyIndent}break;`);
+      this.emit(`${innerIndent}}`);
     }
 
     this.emitLineDirective(stmt.sourceSpan.endLine);
@@ -3648,6 +4629,8 @@ export class CodeGenerator {
    * Returns the C++ expression as a string.
    */
   protected generateExpression(expr: Expression): string {
+    const override = this.argOverrides?.get(expr);
+    if (override !== undefined) return override;
     switch (expr.kind) {
       case "LiteralExpression":
         return this.generateLiteralExpression(expr);
@@ -3769,43 +4752,58 @@ export class CodeGenerator {
   /**
    * Generate C++ for a variable expression.
    */
+  /**
+   * An operand as an LVALUE naming the storage itself, for anything that
+   * aliases it rather than reading it.
+   *
+   * A shared global's read paths hand back a COPY (`read()`, `with_lock`), so
+   * aliasing one points at a temporary that dies with the full expression.
+   * The storage is named instead, which also keeps the operand a plain lvalue
+   * — a `with_lock` lambda inside `sizeof` is C++20, and this targets C++17.
+   * Anything else is already its own storage.
+   */
+  private generateAliasLvalue(expr: Expression): string {
+    if (expr.kind === "VariableExpression" && !expr.isDereference) {
+      const ref = this.globalRefOf(expr.name);
+      if (ref) {
+        return this.renderAccessTail(
+          `${ref.acc}value`,
+          expr,
+          expr.name.toUpperCase(),
+        );
+      }
+    }
+    return this.generateExpression(expr);
+  }
+
+  /**
+   * The address of an operand, for a parameter that aliases it.
+   */
+  private generateAddressOf(expr: Expression): string {
+    return `&${this.generateAliasLvalue(expr)}`;
+  }
+
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
-    // Composite shared global (struct / array / function-block) accessed in a
-    // body: reach its canonical value directly through the GlobalVar pointer
-    // (`g->value` / `g->value.field` / `g->value.field.N`). The per-global mutex
-    // is intentionally bypassed for composites — they are shared within a single
-    // (bus-cycle) task, e.g. a SoftMotion AXIS_REF_SM3 driven by its bridge and
-    // the MC_* blocks in the same scan. Cross-task composite sharing (needing a
-    // lock spanning a whole field/call access) remains a follow-up. The base is
-    // set to `g->value` below (see the `result` assignment); field/subscript/bit
-    // access then builds on it.
-
-    // VAR_EXTERNAL scalar read → lock the shared global and return its value.
-    // read() yields the real IEC type, so it stays deduction-friendly in
-    // std-lib templates (NOT/ADD/...). Composite externals use `->value`
-    // directly (handled at the base below), not read().
-    if (
-      this.programExternals.has(nameUpper) &&
-      !this.compositeExternals.has(nameUpper) &&
-      expr.fieldAccess.length === 0 &&
-      !expr.isDereference
-    ) {
-      return `${expr.name}->read()`;
+    // CODESYS's `__SYSTEM.TYPE_CLASS.TYPE_INT` (the analyzer has checked the member)
+    const typeClassMember = systemTypeClassMember(expr);
+    if (typeClassMember !== undefined) {
+      return `strucpp::TYPE_CLASS::${typeClassMember}`;
     }
 
-    // Composite / array shared-global READ (VAR_EXTERNAL to a composite
-    // VAR_GLOBAL). Take the global's own mutex and read the canonical value
-    // directly through with_lock — a field/element read copies only that
-    // sub-value, never the whole struct. The lock lives inside
-    // GlobalVar::with_lock (compiled out when not STRUCPP_THREADED), and each
-    // with_lock is self-contained (acquire → return → release), so several
-    // composite-global reads in one expression are sequential, never nested.
-    if (this.compositeExternals.has(nameUpper) && !expr.isDereference) {
-      const ptr = this.resolveVariableBaseName(expr.name);
-      const inner = this.renderAccessTail("(*__glk)", expr, nameUpper);
-      return `${ptr}->with_lock([&](auto* __glk){ return ${inner}; })`;
+    // Shared global. Under this global's own lock it reads through `(*__glk)`;
+    // under another global's lock it is read into a temporary before that lock
+    // is taken; otherwise it is one locked read (see renderGlobalRead).
+    const gref = expr.isDereference ? undefined : this.globalRefOf(expr.name);
+    if (gref) {
+      if (this.lockCtx) {
+        if (this.lockCtx.rootUpper === nameUpper) {
+          return this.renderAccessTail("(*__glk)", expr, nameUpper);
+        }
+        return this.hoistOutOfLock(() => this.renderGlobalRead(expr, gref));
+      }
+      return this.renderGlobalRead(expr, gref);
     }
 
     // Handle THIS reference
@@ -3891,7 +4889,11 @@ export class CodeGenerator {
     } else {
       // Check for VAR_INST name mangling
       const mangledName = this.varInstMangledNames.get(nameUpper);
-      if (mangledName) {
+      if (this.currentRefInouts.has(nameUpper)) {
+        // An FB-typed inout is a pointer to the caller's own instance, so a
+        // read, a write or a call through it reaches the caller's block.
+        result = `(*${this.memberMangledNames.get(nameUpper) ?? expr.name})`;
+      } else if (mangledName) {
         result = mangledName;
       } else {
         // Check for member name collision mangling (SENSOR SENSOR → SENSOR SENSOR_)
@@ -3945,12 +4947,18 @@ export class CodeGenerator {
     base: string,
     expr: VariableExpression,
     nameUpper: string,
+    indexCode: (e: Expression) => string = (e) => this.generateExpression(e),
   ): string {
     let result = base;
 
     // Use ordered access chain when available (preserves interleaving)
     if (expr.accessChain && expr.accessChain.length > 0) {
-      return this.generateAccessChain(result, expr.accessChain, nameUpper);
+      return this.generateAccessChain(
+        result,
+        expr.accessChain,
+        nameUpper,
+        indexCode,
+      );
     }
 
     // Legacy path: flat subscripts/fieldAccess/dereference (no interleaving)
@@ -3960,11 +4968,11 @@ export class CodeGenerator {
     // iec_runtime_fault(ArrayBounds) on -fno-exceptions MCU targets — instead of
     // the unchecked operator[]/operator() that silently corrupts memory.
     if (expr.subscripts.length > 1) {
-      const args = expr.subscripts.map((sub) => this.generateExpression(sub));
+      const args = expr.subscripts.map(indexCode);
       result += `.at(${args.join(", ")})`;
     } else {
       for (const sub of expr.subscripts) {
-        result += `.at(${this.generateExpression(sub)})`;
+        result += `.at(${indexCode(sub)})`;
       }
     }
 
@@ -3974,9 +4982,12 @@ export class CodeGenerator {
       for (let i = 0; i < expr.fieldAccess.length; i++) {
         const field = expr.fieldAccess[i]!;
         const isLast = i === expr.fieldAccess.length - 1;
-        // Bit access: numeric field like .0, .15, .31 → ((var >> N) & 1)
-        if (/^\d+$/.test(field)) {
-          result = `((static_cast<uint64_t>(${result}) >> ${field}) & 1)`;
+        // Partial access: `.0`/`.%X0` for a bit, `.%B1`, `.%W0`, `.%D1` for a
+        // wider part. Shifted by the part's width, so index 0 is the least
+        // significant.
+        const part = parsePartialAccess(field);
+        if (part) {
+          result = this.partialAccessRead(result, part);
           continue;
         }
         if (isLast) {
@@ -4026,6 +5037,7 @@ export class CodeGenerator {
     base: string,
     chain: AccessStep[],
     baseNameUpper: string,
+    indexCode: (e: Expression) => string = (e) => this.generateExpression(e),
   ): string {
     let result = base;
     let currentType = this.currentScopeVarTypes.get(baseNameUpper);
@@ -4036,9 +5048,10 @@ export class CodeGenerator {
 
       switch (step.kind) {
         case "field": {
-          // Bit access: numeric field like .0, .15, .31
-          if (/^\d+$/.test(step.name)) {
-            result = `((static_cast<uint64_t>(${result}) >> ${step.name}) & 1)`;
+          // Partial access — see partialAccessRead.
+          const part = parsePartialAccess(step.name);
+          if (part) {
+            result = this.partialAccessRead(result, part);
             continue;
           }
           // Property access on the last step
@@ -4070,12 +5083,10 @@ export class CodeGenerator {
           // MCU targets. operator[] stays unchecked+constexpr for the debug-table
           // generator's &arr[i] address-of expressions; POU bodies use .at().
           if (step.indices.length > 1) {
-            const args = step.indices.map((idx) =>
-              this.generateExpression(idx),
-            );
+            const args = step.indices.map(indexCode);
             result += `.at(${args.join(", ")})`;
           } else if (step.indices.length === 1) {
-            result += `.at(${this.generateExpression(step.indices[0]!)})`;
+            result += `.at(${indexCode(step.indices[0]!)})`;
           }
           break;
         }
@@ -4110,6 +5121,36 @@ export class CodeGenerator {
   };
 
   /**
+   * The runtime function for a DT → TOD or DT → DATE conversion
+   * (IEC 61131-3 table 22: DT_TO_TOD, DT_TO_DATE and their LDT / long-name
+   * forms), or undefined for any other pair.
+   *
+   * A DT is nanoseconds since 1970, a TOD nanoseconds since midnight and a
+   * DATE a day count, so these are not casts: the value has to be split.
+   * The plain TO_TOD / TO_DATE cast returned the whole DT.
+   */
+  private static dateTimeSplitFn(
+    fromUpper: string,
+    toUpper: string,
+  ): string | undefined {
+    const dt = ["DT", "DATE_AND_TIME", "LDT", "LDATE_AND_TIME"];
+    const tod = ["TOD", "TIME_OF_DAY", "LTOD", "LTIME_OF_DAY"];
+    if (!dt.includes(fromUpper)) return undefined;
+    if (tod.includes(toUpper)) return "TOD_OF_DT";
+    if (toUpper === "DATE" || toUpper === "LDATE") return "DATE_OF_DT";
+    return undefined;
+  }
+
+  private static readonly COMPARISON_OPS: ReadonlySet<string> = new Set([
+    "=",
+    "<>",
+    "<",
+    ">",
+    "<=",
+    ">=",
+  ]);
+
+  /**
    * Generate C++ for a binary expression.
    */
   private generateBinaryExpression(expr: BinaryExpression): string {
@@ -4132,6 +5173,12 @@ export class CodeGenerator {
       expr.operator === "OR" ||
       expr.operator === "XOR"
     ) {
+      // BOOL AND BOOL is BOOL. In C++ `bool & bool` promotes to int, which a
+      // template such as NOT, SEL or MAX then deduces as INT and rejects
+      // (`NOT(a > 0.0 AND b > 0.0)`), so a BOOL result is kept a bool.
+      if (this.inferExprType(expr) === "BOOL") {
+        return `static_cast<bool>((${left}) ${cppOp} (${right}))`;
+      }
       return `(${left}) ${cppOp} (${right})`;
     }
 
@@ -4167,11 +5214,42 @@ export class CodeGenerator {
    * Generate C++ for a method call expression (chained method calls).
    * e.g., fb.method1(args).method2(args) → fb.method1(args).method2(args)
    */
+  /**
+   * Arguments for a method call, with a descriptor built for any parameter
+   * declared generic.
+   *
+   * Shared because a method call arrives as either a `MethodCallExpression`
+   * or a `FunctionCallExpression` whose name carries the dot (`inst.Method`),
+   * which is what `x := inst.Method(y)` produces.
+   */
+  private generateCallArguments(
+    ownerType: string | undefined,
+    methodName: string,
+    args: ReadonlyArray<{ name?: string; value: Expression }>,
+  ): string[] {
+    const key = ownerType
+      ? `${ownerType.toUpperCase()}.${methodName.toUpperCase()}`
+      : undefined;
+    const generics = key ? this.methodGenericParams.get(key) : undefined;
+    const order = key ? this.methodInputOrder.get(key) : undefined;
+
+    let positional = 0;
+    return args.map((arg) => {
+      const paramName = arg.name ?? order?.[positional];
+      if (!arg.name) positional++;
+      if (paramName && generics?.has(paramName.toUpperCase())) {
+        const descriptor = this.generateAnyDescriptor(arg.value);
+        if (descriptor) return descriptor;
+      }
+      return this.generateExpression(arg.value);
+    });
+  }
+
   private generateMethodCallExpression(expr: MethodCallExpression): string {
-    const obj = this.generateExpression(expr.object);
-    const args = expr.arguments
-      .map((a) => this.generateExpression(a.value))
-      .join(", ");
+    // ST code never runs under a global's lock: evaluate it before the lock.
+    if (this.lockCtx) {
+      return this.hoistOutOfLock(() => this.generateMethodCallExpression(expr));
+    }
     // Try type-specific resolution first (avoids collisions when two FBs share a method name)
     let resolvedName: string;
     if (expr.object.kind === "VariableExpression") {
@@ -4181,9 +5259,32 @@ export class CodeGenerator {
       resolvedName = varType
         ? this.resolveMethodName(varType, expr.methodName)
         : this.resolveMethodNameGlobal(expr.methodName);
+      // A method of a global FB instance runs under the instance's lock.
+      const ref = this.isGlobalAccess(expr.object)
+        ? this.globalRefOf(expr.object.name)
+        : undefined;
+      if (ref) {
+        return this.renderGlobalMethodCall(
+          expr.object,
+          ref,
+          this.accessType(expr.object),
+          resolvedName,
+          expr.arguments,
+        );
+      }
     } else {
       resolvedName = this.resolveMethodNameGlobal(expr.methodName);
     }
+    const obj = this.generateExpression(expr.object);
+    const ownerTypeForArgs =
+      expr.object.kind === "VariableExpression"
+        ? this.currentScopeVarTypes.get(expr.object.name.toUpperCase())
+        : undefined;
+    const args = this.generateCallArguments(
+      ownerTypeForArgs,
+      expr.methodName,
+      expr.arguments,
+    ).join(", ");
     return `${obj}.${resolvedName}(${args})`;
   }
 
@@ -4246,6 +5347,7 @@ export class CodeGenerator {
       case "UnaryExpression":
         return this.inferExprType(expr.operand);
       case "BinaryExpression": {
+        if (CodeGenerator.COMPARISON_OPS.has(expr.operator)) return "BOOL";
         // For bitwise/arithmetic ops, infer from operands
         const lt = this.inferExprType(expr.left);
         const rt = this.inferExprType(expr.right);
@@ -4353,6 +5455,9 @@ export class CodeGenerator {
       if (!argType) continue;
       const paramType = paramTypes[i]!;
       if (argType === paramType) continue;
+      // A generic parameter takes a descriptor, which is not the argument's
+      // type and must not be cast to one.
+      if (isDeclarableGenericType(paramType)) continue;
       // Bare literals (no typePrefix) are untyped — always castable to param type
       if (
         this.isBareLiteral(expr) ||
@@ -4610,28 +5715,60 @@ export class CodeGenerator {
   protected generateFunctionCallExpression(
     expr: FunctionCallExpression,
   ): string {
+    // ST code never runs under a global's lock: evaluate it before the lock.
+    if (this.lockCtx && this.isUserCall(expr)) {
+      return this.hoistOutOfLock(() =>
+        this.generateFunctionCallExpression(expr),
+      );
+    }
+
     // Handle dotted method calls: THIS.method, SUPER.method, instance.method
     if (expr.functionName.includes(".")) {
       const dotIdx = expr.functionName.indexOf(".");
       const prefix = expr.functionName.substring(0, dotIdx);
       const methodName = expr.functionName.substring(dotIdx + 1);
-      const args = expr.arguments.map((arg) =>
-        this.generateExpression(arg.value),
-      );
 
       // Resolve method name case from declaration
       const varType = this.currentScopeVarTypes.get(prefix.toUpperCase());
+
       const resolvedMethod = varType
         ? this.resolveMethodName(varType, methodName)
         : this.resolveMethodNameGlobal(methodName);
 
+      // A method of a global FB instance runs under the instance's lock.
+      const ref = this.globalRefOf(prefix);
+      if (ref) {
+        return this.renderGlobalMethodCall(
+          {
+            kind: "VariableExpression",
+            sourceSpan: expr.sourceSpan,
+            name: prefix,
+            subscripts: [],
+            fieldAccess: [],
+            isDereference: false,
+          },
+          ref,
+          varType,
+          resolvedMethod,
+          expr.arguments,
+        );
+      }
+
+      // A generic method parameter takes the same descriptor a generic
+      // function block input does — METHOD is one of the three scopes a
+      // generic may be declared in.
+      const args = this.generateCallArguments(
+        varType,
+        methodName,
+        expr.arguments,
+      );
       if (prefix.toUpperCase() === "THIS") {
         return `this->${resolvedMethod}(${args.join(", ")})`;
       } else if (prefix.toUpperCase() === "SUPER" && this.currentFBExtends) {
         return `${this.currentFBExtends}::${resolvedMethod}(${args.join(", ")})`;
       } else {
         // instance.method() call
-        return `${prefix}.${resolvedMethod}(${args.join(", ")})`;
+        return `${this.instanceBaseName(prefix)}.${resolvedMethod}(${args.join(", ")})`;
       }
     }
 
@@ -4653,7 +5790,14 @@ export class CodeGenerator {
       return `&(${args[0] ?? ""})`;
     }
 
-    // 0a. REF_LINK(x) → REF(x) — callable form of the REF() reference operator
+    // 0a. __VARINFO(x) → a strucpp::VAR_INFO describing x.
+    if (nameUpper === "__VARINFO") {
+      const arg = expr.arguments[0]?.value;
+      const info = arg === undefined ? undefined : this.generateVarInfo(arg);
+      if (info !== undefined) return info;
+    }
+
+    // 0b. REF_LINK(x) → REF(x) — callable form of the REF() reference operator
     // (REF is a reserved token and can't take the graphical EN/IN/ENO call
     // form). Assigning the result to a REF_TO variable binds it.
     if (nameUpper === "REF_LINK") {
@@ -4678,6 +5822,13 @@ export class CodeGenerator {
     // 1. Check for *_TO_* conversion pattern (e.g., INT_TO_REAL -> TO_REAL)
     const conversion = this.stdRegistry.resolveConversion(nameUpper);
     if (conversion) {
+      const split = CodeGenerator.dateTimeSplitFn(
+        conversion.fromType.toUpperCase(),
+        conversion.toType.toUpperCase(),
+      );
+      if (split && expr.arguments.length === 1) {
+        return `${split}(${this.generateExpression(expr.arguments[0]!.value)})`;
+      }
       const args = expr.arguments.map((arg, idx) => {
         const generated = this.generateExpression(arg.value);
         if (idx !== 0) return generated;
@@ -4705,6 +5856,22 @@ export class CodeGenerator {
     // 2. Check for standard function (may have different cppName)
     const stdFunc = this.stdRegistry.lookup(nameUpper);
     if (stdFunc) {
+      if (
+        stdFunc.isConversion &&
+        stdFunc.specificReturnType &&
+        expr.arguments.length === 1
+      ) {
+        const fromType = this.inferExprType(expr.arguments[0]!.value);
+        const split = fromType
+          ? CodeGenerator.dateTimeSplitFn(
+              fromType.toUpperCase(),
+              stdFunc.specificReturnType.toUpperCase(),
+            )
+          : undefined;
+        if (split) {
+          return `${split}(${this.generateExpression(expr.arguments[0]!.value)})`;
+        }
+      }
       const args = expr.arguments.map((arg, idx) => {
         let generated = this.generateExpression(arg.value);
         // For the bare `TO_xxx(temporal_var)` spelling, `nameUpper` is
@@ -4731,6 +5898,10 @@ export class CodeGenerator {
       return `${stdFunc.cppName}(${args.join(", ")})`;
     }
 
+    // 2b. A shared global bound to a by-reference parameter.
+    const byRefCall = this.renderGlobalByRefCall(expr);
+    if (byRefCall !== undefined) return byRefCall;
+
     // 3. Check for named arguments that may need reordering
     const hasNamedArgs = expr.arguments.some((arg) => arg.name !== undefined);
     if (hasNamedArgs && this.ast) {
@@ -4741,8 +5912,15 @@ export class CodeGenerator {
     }
 
     // 4. Default: emit as-is (with output argument validation)
+    const generics = this.functionGenericParams.get(nameUpper);
+    const paramOrder = this.functionParamOrder.get(nameUpper);
+    let positionalSlot = 0;
     const args = expr.arguments.map((arg) => {
-      const generated = this.generateExpression(arg.value);
+      const paramName = arg.name ?? paramOrder?.[positionalSlot];
+      if (!arg.name) positionalSlot++;
+      const generated =
+        this.generateGenericArgument(generics, paramName, arg.value) ??
+        this.generateExpression(arg.value);
       if (arg.isOutput && arg.value.kind !== "VariableExpression") {
         this.codegenWarnings.push({
           message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
@@ -4801,6 +5979,133 @@ export class CodeGenerator {
   }
 
   /**
+   * A call of a user function that binds a shared global (the global or a part
+   * of it) to a VAR_IN_OUT or VAR_OUTPUT, or undefined when none does. When
+   * the function takes no global lock, the call runs under the first such
+   * global's lock with the parameter bound to that global's own storage, and
+   * other lock-taking arguments are evaluated first. A global the call does
+   * not hold the lock of is copied in and stored back after the call.
+   */
+  private renderGlobalByRefCall(
+    expr: FunctionCallExpression,
+  ): string | undefined {
+    const nameUpper = expr.functionName.toUpperCase();
+    const byRef = this.functionByRefParams.get(nameUpper);
+    if (!byRef) return undefined;
+    const generics = this.functionGenericParams.get(nameUpper);
+    const order = this.functionParamOrder.get(nameUpper) ?? [];
+    const slotOf = new Map<Argument, string>();
+    const claimed = new Set<string>();
+    for (const arg of expr.arguments) {
+      if (arg.name) claimed.add(arg.name.toUpperCase());
+    }
+    let next = 0;
+    for (const arg of expr.arguments) {
+      if (arg.name) {
+        slotOf.set(arg, arg.name.toUpperCase());
+        continue;
+      }
+      while (next < order.length && claimed.has(order[next]!)) next++;
+      if (next >= order.length) continue;
+      slotOf.set(arg, order[next]!);
+      claimed.add(order[next]!);
+      next++;
+    }
+    const isByRef = (arg: Argument): boolean => {
+      const slot = slotOf.get(arg);
+      return (
+        slot !== undefined && byRef.has(slot) && generics?.has(slot) !== true
+      );
+    };
+    const boundGlobal = (arg: Argument): VariableExpression | undefined =>
+      isByRef(arg) &&
+      arg.value.kind === "VariableExpression" &&
+      this.isGlobalAccess(arg.value) &&
+      this.argOverrides?.has(arg.value) !== true
+        ? arg.value
+        : undefined;
+    const bound = expr.arguments
+      .map(boundGlobal)
+      .filter((g): g is VariableExpression => g !== undefined);
+    if (bound.length === 0) return undefined;
+
+    // A bit or other part of a global is not addressable: always a copy.
+    const lockable = bound.find(
+      (g) => this.splitBitTarget(g).part === undefined,
+    );
+    const lockUpper =
+      lockable === undefined || this.pouMayTakeGlobalLock(nameUpper)
+        ? undefined
+        : lockable.name.toUpperCase();
+    const temps: string[] = [];
+    const after: string[] = [];
+    const overrides = new Map(this.argOverrides ?? []);
+    for (const arg of expr.arguments) {
+      const v = arg.value;
+      const global = boundGlobal(arg);
+      if (global !== undefined) {
+        const upper = global.name.toUpperCase();
+        const ref = this.globalRefOf(upper)!;
+        const { base, part } = this.splitBitTarget(global);
+        if (upper === lockUpper && part === undefined) {
+          overrides.set(v, this.renderLockedTail(global, temps));
+          continue;
+        }
+        const tmp = `__gca${this.tempVarCounter++}`;
+        const tmpType = part === undefined ? "auto" : `IEC_${part.resultType}`;
+        temps.push(
+          `${tmpType} ${tmp} = ${this.renderGlobalRead(global, ref)};`,
+        );
+        overrides.set(v, tmp);
+        if (!ref.composite && !this.hasAccessTail(global)) {
+          after.push(`${ref.acc}write(${tmp});`);
+        } else {
+          const lv = this.hasAccessTail(base)
+            ? this.renderLockedTail(base, after)
+            : "(*__glk)";
+          after.push(
+            `${ref.acc}with_lock([&](auto* __glk){ ${this.renderStore(lv, part, tmp)}; });`,
+          );
+        }
+      } else if (
+        lockUpper !== undefined &&
+        this.argOverrides?.has(v) !== true &&
+        this.mayTakeLock(v)
+      ) {
+        // Evaluated before the lock, so no lock is taken inside it.
+        const tmp = `__gca${this.tempVarCounter++}`;
+        if (isByRef(arg)) {
+          temps.push(`auto* ${tmp} = &(${this.generateExpression(v)});`);
+          overrides.set(v, `(*${tmp})`);
+        } else if (generics?.has(slotOf.get(arg) ?? "") !== true) {
+          temps.push(`auto ${tmp} = ${this.generateExpression(v)};`);
+          overrides.set(v, tmp);
+        }
+      }
+    }
+
+    const saved = this.argOverrides;
+    this.argOverrides = overrides;
+    let call: string;
+    try {
+      call = this.generateFunctionCallExpression(expr);
+    } finally {
+      this.argOverrides = saved;
+    }
+    if (lockUpper !== undefined) {
+      const ref = this.globalRefOf(lockUpper)!;
+      call = `${ref.acc}with_lock([&](auto* __glk){ return ${call}; })`;
+    }
+    if (temps.length === 0 && after.length === 0) return call;
+    if (after.length === 0)
+      return `[&]{ ${temps.join(" ")} return ${call}; }()`;
+    if (this.voidFunctions.has(nameUpper)) {
+      return `[&]{ ${temps.join(" ")} ${call}; ${after.join(" ")} }()`;
+    }
+    return `[&]{ ${temps.join(" ")} auto __r = ${call}; ${after.join(" ")} return __r; }()`;
+  }
+
+  /**
    * Reorder named arguments to match function declaration parameter order.
    * Positional args are placed first (in declaration order, skipping named slots),
    * then named args fill their declared slots. Unfilled parameters get default values.
@@ -4855,14 +6160,17 @@ export class CodeGenerator {
 
     // Build set of parameter slots claimed by named arguments
     // (skip implicit EN/ENO — handled separately by EN/ENO codegen logic)
-    const namedArgs = new Map<string, { expr: string; isOutput: boolean }>();
+    const namedArgs = new Map<
+      string,
+      { value: Expression; isOutput: boolean }
+    >();
     const claimedSlots = new Set<string>();
     for (const arg of expr.arguments) {
       if (arg.name !== undefined) {
         const upperName = arg.name.toUpperCase();
         if (upperName === "EN" || upperName === "ENO") continue;
         namedArgs.set(upperName, {
-          expr: this.generateExpression(arg.value),
+          value: arg.value,
           isOutput: arg.isOutput,
         });
         claimedSlots.add(upperName);
@@ -4903,13 +6211,21 @@ export class CodeGenerator {
       }
     }
 
-    // Collect positional args (preserving source order)
-    const positionalArgs: string[] = [];
+    // Collect positional args (preserving source order). Rendered once the
+    // slot each fills is known, since a generic slot takes a descriptor
+    // instead of the value.
+    const positionalArgs: Expression[] = [];
     for (const arg of expr.arguments) {
       if (arg.name === undefined) {
-        positionalArgs.push(this.generateExpression(arg.value));
+        positionalArgs.push(arg.value);
       }
     }
+    const generics = this.functionGenericParams.get(
+      expr.functionName.toUpperCase(),
+    );
+    const renderArg = (value: Expression, paramName: string): string =>
+      this.generateGenericArgument(generics, paramName, value) ??
+      this.generateExpression(value);
 
     // Assign positional args to unclaimed parameter slots (in declaration order)
     const result: (string | undefined)[] = new Array<string | undefined>(
@@ -4923,7 +6239,7 @@ export class CodeGenerator {
         continue;
       }
       if (positionalIdx < positionalArgs.length) {
-        result[i] = positionalArgs[positionalIdx]!;
+        result[i] = renderArg(positionalArgs[positionalIdx]!, param.name);
         positionalIdx++;
       }
     }
@@ -4933,7 +6249,7 @@ export class CodeGenerator {
       const param = params[i]!;
       const named = namedArgs.get(param.name);
       if (named !== undefined) {
-        result[i] = named.expr;
+        result[i] = renderArg(named.value, param.name);
       }
     }
 
@@ -5144,6 +6460,41 @@ export class CodeGenerator {
   }
 
   /**
+   * Read one part of a bit-field variable.
+   *
+   * `index` counts parts from the least significant end, so the shift is the
+   * part's own width times its index: `Do.%B3` is `(Do >> 24) & 0xFF`. All of
+   * it is done in 64 bits, so a shift of 32 or more is well defined.
+   */
+  private partialAccessRead(base: string, part: PartialAccess): string {
+    const shift = part.index * part.widthBits;
+    const mask =
+      part.widthBits === 1
+        ? "1"
+        : `0x${((1n << BigInt(part.widthBits)) - 1n).toString(16).toUpperCase()}ULL`;
+    return `((static_cast<uint64_t>(${base}) >> ${shift}) & ${mask})`;
+  }
+
+  /**
+   * The right-hand side of a partial-access write: the whole variable with one
+   * part replaced. Clears the part's bits, then ORs the value in masked to the
+   * part's width, so a wider value cannot corrupt its neighbours. A bit keeps
+   * `value ? 1 : 0`.
+   */
+  private partialAccessWrite(
+    base: string,
+    value: string,
+    part: PartialAccess,
+  ): string {
+    const shift = part.index * part.widthBits;
+    if (part.widthBits === 1) {
+      return `(${base} & ~(1ULL << ${shift})) | ((${value} ? 1ULL : 0ULL) << ${shift})`;
+    }
+    const mask = `0x${((1n << BigInt(part.widthBits)) - 1n).toString(16).toUpperCase()}ULL`;
+    return `(${base} & ~(${mask} << ${shift})) | ((static_cast<uint64_t>(${value}) & ${mask}) << ${shift})`;
+  }
+
+  /**
    * Remove the last field step from an access chain (for bit access / property trim).
    * Returns undefined if the chain becomes empty.
    */
@@ -5183,6 +6534,7 @@ export class CodeGenerator {
   ): void {
     this.currentScopeVarTypes.clear();
     this.currentScopeVarRefKinds.clear();
+    this.currentScopeDeclaredNames.clear();
     this.currentScopeVarTypeRefs.clear();
     this.memberMangledNames.clear();
     for (const block of varBlocks) {
@@ -5190,8 +6542,12 @@ export class CodeGenerator {
         const cppType = this.isUserDefinedType(decl.type.name)
           ? decl.type.name
           : `IEC_${decl.type.name}`;
-        for (const name of decl.names) {
+        decl.names.forEach((name, i) => {
           this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
+          const declared = decl.declaredNames?.[i];
+          if (declared !== undefined) {
+            this.currentScopeDeclaredNames.set(name.toUpperCase(), declared);
+          }
           this.currentScopeVarTypeRefs.set(name.toUpperCase(), decl.type);
           if (
             decl.type.referenceKind !== undefined &&
@@ -5213,7 +6569,7 @@ export class CodeGenerator {
           if (this.currentFBInterfaceMethods.has(name.toUpperCase())) {
             this.memberMangledNames.set(name.toUpperCase(), `${name}_`);
           }
-        }
+        });
       }
     }
   }
@@ -5223,6 +6579,161 @@ export class CodeGenerator {
    */
   private exitScope(): void {
     this.currentScopeVarTypes.clear();
+    this.currentScopeDeclaredNames.clear();
+  }
+
+  /** Write out a set of user-defined type declarations. */
+  private emitTypeDeclarations(types: CompilationUnit["types"]): void {
+    if (types.length === 0) return;
+    const typeRegistry = new TypeRegistry();
+    typeRegistry.registerTypes(types);
+    const typeCodeGen = new TypeCodeGenerator({
+      indent: this.options.indent,
+      lineEnding: this.options.lineEnding,
+      emitChunkMarkers: this.options.emitChunkMarkers ?? false,
+      // Struct fields must mangle by the same rule as everything else that
+      // names them, and only codegen knows the FB / program type names.
+      isUserDefinedType: (t): boolean => this.isUserDefinedType(t),
+    });
+    const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
+    for (const t of typeCodeGen.describedTypes)
+      this.describedStructTypes.add(t);
+    // A struct with no layout table is not an error — it compiles and runs, and
+    // a program that never puts it on a generic pin is unaffected. It IS worth
+    // saying, because the symptom otherwise is a null `TYPEDESC` at run time
+    // with nothing anywhere to explain it.
+    for (const u of typeCodeGen.undescribedTypes) {
+      this.codegenWarnings.push({
+        message:
+          `STRUCT '${u.typeName}' has no member layout, so a block given one on ` +
+          `an ANY pin cannot walk it: member '${u.member}' cannot be described — ` +
+          `${u.reason}`,
+      });
+    }
+    for (const line of typeCode.split(this.options.lineEnding)) {
+      this.emitHeader(line);
+    }
+  }
+
+  /** Release each held-back type once every class it holds has been emitted. */
+  private emitFbBearingTypes(emittedFBs: Set<string>): void {
+    const ready = this.pendingFbBearingTypes.filter((td) => {
+      const deps = this.fbBearingTypeDeps.get(td.name.toUpperCase());
+      return !deps || [...deps].every((d) => emittedFBs.has(d));
+    });
+    if (ready.length === 0) return;
+    this.pendingFbBearingTypes = this.pendingFbBearingTypes.filter(
+      (td) => !ready.includes(td),
+    );
+    this.emitTypeDeclarations(ready);
+  }
+
+  /**
+   * Structures that reach a type a LIBRARY declares — an enumeration or a
+   * structure out of a `.stlib`.
+   *
+   * Library chunks are injected after the user's types, so a structure naming
+   * one was emitted before its declaration and C++ reported it undeclared. A
+   * structure holding a library FUNCTION BLOCK never hit this —
+   * `collectFbBearingTypes` already defers that one. Nothing to wait for
+   * beyond the library section, so these carry no dependency set.
+   */
+  private collectLibraryTypeBearingTypes(ast: CompilationUnit): Set<string> {
+    if (this.libraryTypeNames.size === 0) return new Set();
+
+    // Every definition kind can name a library type, not just a structure: an
+    // alias IS a type reference, an array names its element, a subrange or
+    // typed enum names its base. Each is its own declaration, so each can land
+    // ahead of the library section.
+    const referenced = new Map<string, string[]>();
+    for (const td of ast.types) {
+      const names: string[] = [];
+      const definition = td.definition;
+      switch (definition.kind) {
+        case "StructDefinition":
+          for (const field of definition.fields) {
+            names.push(field.type.name);
+            if (field.type.elementTypeName)
+              names.push(field.type.elementTypeName);
+          }
+          break;
+        case "ArrayDefinition":
+          names.push(definition.elementType.name);
+          if (definition.elementType.elementTypeName) {
+            names.push(definition.elementType.elementTypeName);
+          }
+          break;
+        case "SubrangeDefinition":
+          names.push(definition.baseType.name);
+          break;
+        case "EnumDefinition":
+          if (definition.baseType) names.push(definition.baseType.name);
+          break;
+        default:
+          // A bare `TypeReference` is an alias for the type it names.
+          names.push(definition.name);
+          if (definition.elementTypeName)
+            names.push(definition.elementTypeName);
+          break;
+      }
+      referenced.set(
+        td.name.toUpperCase(),
+        names.map((name) => name.toUpperCase()),
+      );
+    }
+
+    const found = new Set<string>();
+    const visit = (name: string, seen: Set<string>): boolean => {
+      if (found.has(name)) return true;
+      if (seen.has(name)) return false;
+      seen.add(name);
+      for (const candidate of referenced.get(name) ?? []) {
+        if (this.libraryTypeNames.has(candidate) || visit(candidate, seen)) {
+          found.add(name);
+          return true;
+        }
+      }
+      return false;
+    };
+    for (const name of referenced.keys()) visit(name, new Set());
+    return found;
+  }
+
+  /**
+   * Structures that reach a function block instance, mapped to the classes
+   * they need declared first. A member held by value needs the complete type,
+   * so such a structure cannot precede the class it holds.
+   */
+  private collectFbBearingTypes(
+    ast: CompilationUnit,
+  ): Map<string, Set<string>> {
+    const fields = new Map<string, VarDeclaration[]>();
+    for (const td of ast.types) {
+      if (td.definition.kind === "StructDefinition") {
+        fields.set(td.name.toUpperCase(), td.definition.fields);
+      }
+    }
+    const found = new Map<string, Set<string>>();
+    const visit = (name: string, seen: Set<string>): Set<string> => {
+      const done = found.get(name);
+      if (done) return done;
+      const blocks = new Set<string>();
+      if (seen.has(name)) return blocks;
+      seen.add(name);
+      for (const field of fields.get(name) ?? []) {
+        const type = field.type.name.toUpperCase();
+        const element = field.type.elementTypeName?.toUpperCase();
+        for (const candidate of [type, element]) {
+          if (candidate === undefined) continue;
+          if (this.knownFBTypes.has(candidate)) blocks.add(candidate);
+          else for (const inner of visit(candidate, seen)) blocks.add(inner);
+        }
+      }
+      if (blocks.size > 0) found.set(name, blocks);
+      return blocks;
+    };
+    for (const name of fields.keys()) visit(name, new Set());
+    return found;
   }
 
   /**
@@ -5249,6 +6760,13 @@ export class CodeGenerator {
           const typeName = decl.type.name.toUpperCase();
           if (fbMap.has(typeName) && typeName !== fb.name.toUpperCase()) {
             fbDeps.add(typeName);
+          }
+          // A structure holding an instance is emitted with those classes, so
+          // a block using it has to follow them too.
+          for (const held of this.fbBearingTypeDeps.get(typeName) ?? []) {
+            if (fbMap.has(held) && held !== fb.name.toUpperCase()) {
+              fbDeps.add(held);
+            }
           }
         }
       }
@@ -5318,7 +6836,17 @@ export class CodeGenerator {
     const declaredType = this.currentScopeVarTypes.get(
       functionName.toUpperCase(),
     );
-    if (!declaredType) return undefined;
+    if (!declaredType) {
+      // A block reached through a structure: walk the members to its type.
+      // A method name resolves to no member, so a method call falls through.
+      if (!functionName.includes(".")) return undefined;
+      const parts = functionName.split(".");
+      let walked = this.currentScopeVarTypes.get(parts[0]!.toUpperCase());
+      for (let i = 1; i < parts.length && walked; i++) {
+        walked = this.resolveMemberType(walked, parts[i]!);
+      }
+      return walked && this.isFBType(walked) ? walked : undefined;
+    }
     const varType = isElementCall
       ? this.ast
         ? resolveArrayElementTypeUtil(declaredType, this.ast)
@@ -5334,10 +6862,6 @@ export class CodeGenerator {
     return undefined;
   }
 
-  /**
-   * Generate code for an FB invocation.
-   * Pattern: assign inputs → call operator() → capture outputs
-   */
   /**
    * Extract implicit EN/ENO arguments from a function/FB call.
    * Returns the EN condition expression, ENO target variable, and the
@@ -5422,34 +6946,92 @@ export class CodeGenerator {
     }
   }
 
+  /**
+   * Generate code for an FB invocation.
+   * Pattern: assign inputs → call operator() → capture outputs
+   */
   private generateFBInvocation(
     call: FunctionCallExpression,
     indent: string,
   ): void {
     const rawName = this.resolveVariableBaseName(call.functionName);
 
-    // Calling a function-block instance that is a shared global: not yet
-    // supported (see generateVariableExpression for the rationale). An FB call
-    // mutates instance state and reads its outputs across several emitted
-    // lines; doing that safely needs a single with_lock() spanning the whole
-    // call, which is a follow-up phase. Fail loudly.
-    if (this.compositeExternals.has(call.functionName.toUpperCase())) {
-      throw new Error(
-        `Shared global '${call.functionName}' is a function-block instance and ` +
-          `is invoked in a program body. Calling a shared function-block global ` +
-          `is not yet supported in the mutex-based shared-global model — scalar ` +
-          `globals only for now.`,
+    // An instance held in a shared global (the global or an element of it) is
+    // called in place under that global's lock.
+    const instanceExpr: VariableExpression =
+      call.instance?.kind === "VariableExpression"
+        ? call.instance
+        : {
+            kind: "VariableExpression",
+            sourceSpan: call.sourceSpan,
+            name: call.functionName,
+            subscripts: [],
+            fieldAccess: [],
+            isDereference: false,
+          };
+    if (this.isGlobalAccess(instanceExpr)) {
+      this.generateLockedFBInvocation(
+        call,
+        instanceExpr.name.toUpperCase(),
+        this.globalRefOf(instanceExpr.name)!,
+        instanceExpr,
+        this.getFBInvocationType(
+          call.functionName,
+          call.instance !== undefined,
+        ),
+        indent,
       );
+      return;
+    }
+
+    // An in-out bound to a shared global is bound to the global's own storage
+    // with the call under that global's lock, when the block takes no global
+    // lock itself (no lock is ever taken inside another).
+    const lockFbType = this.getFBInvocationType(
+      call.functionName,
+      call.instance !== undefined,
+    );
+    const boundGlobal = this.fbInoutBoundGlobal(call, lockFbType);
+    if (
+      boundGlobal !== undefined &&
+      lockFbType !== undefined &&
+      !this.pouMayTakeGlobalLock(lockFbType)
+    ) {
+      let target =
+        call.instance !== undefined
+          ? this.generateExpression(call.instance)
+          : rawName.includes(".")
+            ? this.dottedInstanceName(rawName, call.sourceSpan)
+            : this.instanceBaseName(rawName);
+      if (call.instance !== undefined && this.mayTakeLock(call.instance)) {
+        const ptr = `__gfi${this.tempVarCounter++}`;
+        this.emit(`${indent}auto* ${ptr} = &(${target});`);
+        target = `(*${ptr})`;
+      }
+      this.generateLockedFBInvocation(
+        call,
+        boundGlobal.name.toUpperCase(),
+        this.globalRefOf(boundGlobal.name)!,
+        target,
+        lockFbType,
+        indent,
+      );
+      return;
     }
 
     // `units[0](…)` invokes an element rather than a bare instance: the target
     // is the subscripted expression, and the FB type is the array's element
     // type. Everything below (input assignment, the call, inout copy-back,
     // output capture) then works against that expression unchanged.
+    // A shared global's mutex is bypassed here for the same reason binding one
+    // to an inout bypasses it: the caller holds the instance across the call,
+    // so a lock spanning it would not be the thing protecting it.
     const instanceName =
       call.instance !== undefined
         ? this.generateExpression(call.instance)
-        : (this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName);
+        : rawName.includes(".")
+          ? this.dottedInstanceName(rawName, call.sourceSpan)
+          : this.instanceBaseName(rawName);
 
     // Extract implicit EN/ENO parameters
     const { enExpr, enoVar, filteredArgs } = this.extractEnEno(call.arguments);
@@ -5463,23 +7045,82 @@ export class CodeGenerator {
       ? this.fbInputParams.get(fbTypeName.toUpperCase())
       : undefined;
 
+    // A function-block inout is bound to the caller's instance rather than
+    // given a copy of it.
+    const refInoutBind = fbTypeName
+      ? this.fbRefInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+
+    // Which parameter each argument fills. A named one says so; the rest take
+    // the slots the named ones left, in declaration order.
+    const slotOf = new Map<Argument, string>();
+    const claimed = new Set<string>();
+    for (const arg of filteredArgs) {
+      if (arg.name) claimed.add(arg.name.toUpperCase());
+    }
+    const order =
+      (fbTypeName
+        ? this.fbParamOrder.get(fbTypeName.toUpperCase())
+        : undefined) ??
+      inputParamNames ??
+      [];
+    let nextSlot = 0;
+    for (const arg of filteredArgs) {
+      if (arg.name) {
+        slotOf.set(arg, arg.name);
+        continue;
+      }
+      while (nextSlot < order.length && claimed.has(order[nextSlot]!))
+        nextSlot++;
+      if (nextSlot >= order.length) continue;
+      slotOf.set(arg, order[nextSlot]!);
+      claimed.add(order[nextSlot]!);
+      nextSlot++;
+    }
+
+    // An ARRAY[*] in-out bound to a shared global here (the block takes a
+    // global lock, so the call cannot run under this one) views a copy that
+    // is stored back after the call.
+    const vlaGlobalCopies: Array<{ target: VariableExpression; tmp: string }> =
+      [];
+    const vlaParams = fbTypeName
+      ? this.fbVlaInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+
     // Assign input parameters (named or positional)
     let positionalIndex = 0;
     for (const arg of filteredArgs) {
       if (arg.isOutput) continue;
+      const paramName = slotOf.get(arg);
+      const v = arg.value;
 
-      if (arg.name) {
-        // Named argument: assign directly
+      if (
+        paramName &&
+        vlaParams?.has(paramName.toUpperCase()) === true &&
+        v.kind === "VariableExpression" &&
+        this.isGlobalAccess(v)
+      ) {
+        const tmp = `__gva${this.tempVarCounter++}`;
+        this.emit(`${indent}auto ${tmp} = ${this.generateExpression(v)};`);
         this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${tmp};`,
         );
-      } else if (inputParamNames && positionalIndex < inputParamNames.length) {
-        // Positional argument: map to VAR_INPUT by position
-        const paramName = inputParamNames[positionalIndex];
+        vlaGlobalCopies.push({ target: v, tmp });
+      } else if (paramName && refInoutBind?.has(paramName.toUpperCase())) {
         this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(paramName!, fbTypeName)} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${this.generateAddressOf(arg.value)};`,
+        );
+      } else if (paramName && this.isOutputParam(fbTypeName, paramName)) {
+        // An output filled positionally reads back after the call, not before.
+        this.emit(
+          `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
         );
         positionalIndex++;
+      } else if (paramName) {
+        this.emit(
+          `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${this.generateArgumentValue(paramName, arg.value, fbTypeName)};`,
+        );
+        if (!arg.name) positionalIndex++;
       } else {
         // Positional argument without type info — emit as warning comment
         this.emit(
@@ -5502,22 +7143,44 @@ export class CodeGenerator {
       `${instanceName}.ENO`,
     );
 
-    // Copy VAR_IN_OUT parameters back to the caller's variables. FB inout params
-    // are stored as by-value members and copied IN before the call; without this
-    // copy-OUT the callee's mutations would be discarded (true inout semantics
-    // require both directions). Mirrors the graphical-language convention of
-    // tying an inout pin on both sides. A follow-up strucpp branch replaces this
-    // copy-in/copy-out with by-reference (pointer) inout members.
+    for (const c of vlaGlobalCopies) {
+      this.emitGlobalStore(
+        c.target,
+        this.globalRefOf(c.target.name)!,
+        c.tmp,
+        indent,
+      );
+    }
+
+    // A value inout is stored by value and copied in before the call, so it has
+    // to be copied back or the callee's writes are lost.
     const inoutParams = fbTypeName
       ? this.fbInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+    const vlaInouts = fbTypeName
+      ? this.fbVlaInoutParams.get(fbTypeName.toUpperCase())
+      : undefined;
+    const refInouts = fbTypeName
+      ? this.fbRefInoutParams.get(fbTypeName.toUpperCase())
       : undefined;
     if (inoutParams && inoutParams.size > 0) {
       for (const arg of filteredArgs) {
         if (arg.isOutput) continue;
-        if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
+        const paramName = slotOf.get(arg);
+        if (!paramName) continue;
+        const upper = paramName.toUpperCase();
+        // A variable-length parameter is a view onto the caller's own array,
+        // so the callee's writes already landed there. Copying back would
+        // assign an ArrayView to the array it points at: no such conversion,
+        // and a self-assignment if there were.
+        if (vlaInouts?.has(upper)) continue;
+        // A function-block inout is a pointer at the caller's own instance, so
+        // the callee wrote there directly.
+        if (refInouts?.has(upper)) continue;
+        if (inoutParams.has(upper)) {
           this.emitCaptureToLvalue(
             arg.value,
-            `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
+            `${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)}`,
             indent,
           );
         }
@@ -5536,45 +7199,298 @@ export class CodeGenerator {
     }
   }
 
+  /** Which parameter each argument of a call of `fbTypeName` fills: a named
+   *  one says so; the rest take the slots left, in declaration order. */
+  private fbArgSlots(
+    args: Argument[],
+    fbTypeName: string | undefined,
+  ): Map<Argument, string> {
+    const fbUpper = fbTypeName?.toUpperCase();
+    const slotOf = new Map<Argument, string>();
+    const claimed = new Set<string>();
+    for (const arg of args) {
+      if (arg.name) claimed.add(arg.name.toUpperCase());
+    }
+    const order =
+      (fbUpper !== undefined
+        ? (this.fbParamOrder.get(fbUpper) ?? this.fbInputParams.get(fbUpper))
+        : undefined) ?? [];
+    let nextSlot = 0;
+    for (const arg of args) {
+      if (arg.name) {
+        slotOf.set(arg, arg.name);
+        continue;
+      }
+      while (nextSlot < order.length && claimed.has(order[nextSlot]!))
+        nextSlot++;
+      if (nextSlot >= order.length) continue;
+      slotOf.set(arg, order[nextSlot]!);
+      claimed.add(order[nextSlot]!);
+      nextSlot++;
+    }
+    return slotOf;
+  }
+
+  /** The first argument of an FB call that binds an in-out to a shared
+   *  global (the global or a part of it), as that global's access path. */
+  private fbInoutBoundGlobal(
+    call: FunctionCallExpression,
+    fbTypeName: string | undefined,
+  ): VariableExpression | undefined {
+    if (fbTypeName === undefined) return undefined;
+    const inouts = this.fbInoutParams.get(fbTypeName.toUpperCase());
+    const refs = this.fbRefInoutParams.get(fbTypeName.toUpperCase());
+    const slots = this.fbArgSlots(call.arguments, fbTypeName);
+    for (const arg of call.arguments) {
+      if (arg.isOutput) continue;
+      const slot = slots.get(arg)?.toUpperCase();
+      if (slot === undefined) continue;
+      if (inouts?.has(slot) !== true && refs?.has(slot) !== true) continue;
+      if (
+        arg.value.kind === "VariableExpression" &&
+        this.isGlobalAccess(arg.value) &&
+        this.splitBitTarget(arg.value).part === undefined
+      ) {
+        return arg.value;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * Call of a function block under one shared global's lock (`lockUpper`):
+   * an instance held in that global (`instance` is its access path), or a
+   * local instance (`instance` is its C++) with an in-out bound into it.
+   * In-outs bound into the locked global use its own storage: an ARRAY[*] or
+   * block in-out points at it, a value in-out is copied in and back inside the
+   * lock. Inputs and other lock-taking arguments are evaluated before the
+   * lock; outputs, ENO and in-outs bound elsewhere go through temporaries
+   * stored after the release, so no other global's lock is taken inside.
+   */
+  private generateLockedFBInvocation(
+    call: FunctionCallExpression,
+    lockUpper: string,
+    ref: GlobalRef,
+    instance: VariableExpression | string,
+    fbTypeName: string | undefined,
+    indent: string,
+  ): void {
+    if (fbTypeName === undefined) {
+      throw new Error(
+        `Internal error: no function block type for the call of '${call.functionName}'.`,
+      );
+    }
+    let enArg: Expression | undefined;
+    let enoTarget: Expression | undefined;
+    const args: Argument[] = [];
+    for (const arg of call.arguments) {
+      const n = arg.name?.toUpperCase();
+      if (n === "EN" && !arg.isOutput) enArg = arg.value;
+      else if (n === "ENO" && arg.isOutput) enoTarget = arg.value;
+      else args.push(arg);
+    }
+
+    const value = (
+      e: Expression,
+      code = this.generateExpression(e),
+    ): string => {
+      if (!this.mayTakeLock(e)) return code;
+      const tmp = `__gfa${this.tempVarCounter++}`;
+      this.emit(`${indent}auto ${tmp} = ${code};`);
+      return tmp;
+    };
+
+    const fbUpper = fbTypeName.toUpperCase();
+    const inoutParams = this.fbInoutParams.get(fbUpper);
+    const vlaInouts = this.fbVlaInoutParams.get(fbUpper);
+    const refInouts = this.fbRefInoutParams.get(fbUpper);
+    const slotOf = this.fbArgSlots(args, fbTypeName);
+
+    const inputs: Array<{ member: string; code: string }> = [];
+    // Value in-outs copied back inside the lock, and arguments whose in-out
+    // needs no copy back after it.
+    const lockedBack: Array<{ lv: string; member: string }> = [];
+    const settled = new Set<Argument>();
+    // ARRAY[*] in-outs bound to another global: a copy, stored back after.
+    const afterStores: Array<{ target: VariableExpression; tmp: string }> = [];
+    let positionalIndex = 0;
+    for (const arg of args) {
+      if (arg.isOutput) continue;
+      const paramName = slotOf.get(arg);
+      const upper = paramName?.toUpperCase();
+      const isRef = upper !== undefined && refInouts?.has(upper) === true;
+      const isVla = upper !== undefined && vlaInouts?.has(upper) === true;
+      const isInout =
+        isRef ||
+        isVla ||
+        (upper !== undefined && inoutParams?.has(upper) === true);
+      const v = arg.value;
+      const global =
+        v.kind === "VariableExpression" && this.isGlobalAccess(v)
+          ? v
+          : undefined;
+      if (
+        paramName &&
+        isInout &&
+        global?.name.toUpperCase() === lockUpper &&
+        this.splitBitTarget(global).part === undefined
+      ) {
+        const lv = this.renderUnderLock(lockUpper, indent, () =>
+          this.renderAccessTail("(*__glk)", global, lockUpper),
+        );
+        const member = this.fbParamMemberName(paramName, fbTypeName);
+        inputs.push({ member, code: isRef ? `&${lv}` : lv });
+        if (!isRef && !isVla) lockedBack.push({ lv, member });
+        settled.add(arg);
+      } else if (paramName && isRef) {
+        // A function-block inout is bound to the caller's instance.
+        inputs.push({
+          member: this.fbParamMemberName(paramName, fbTypeName),
+          code: this.generateAddressOf(v),
+        });
+      } else if (paramName && isVla && global) {
+        const tmp = `__gfa${this.tempVarCounter++}`;
+        this.emit(`${indent}auto ${tmp} = ${this.generateExpression(v)};`);
+        inputs.push({
+          member: this.fbParamMemberName(paramName, fbTypeName),
+          code: tmp,
+        });
+        afterStores.push({ target: global, tmp });
+        settled.add(arg);
+      } else if (paramName && isInout && !global && this.mayTakeLock(v)) {
+        // An index takes a lock: address the argument before the lock.
+        const ptr = `__gfp${this.tempVarCounter++}`;
+        this.emit(`${indent}auto* ${ptr} = &(${this.generateExpression(v)});`);
+        const member = this.fbParamMemberName(paramName, fbTypeName);
+        inputs.push({ member, code: `(*${ptr})` });
+        if (!isVla) lockedBack.push({ lv: `(*${ptr})`, member });
+        settled.add(arg);
+      } else if (paramName && !this.isOutputParam(fbTypeName, paramName)) {
+        // An input reading the locked global reads it inside the lock, so the
+        // call sees one consistent state of it.
+        const code =
+          this.genericParamType(fbTypeName, paramName) === undefined &&
+          this.expressionUsesRoot(v, lockUpper)
+            ? this.renderUnderLock(lockUpper, indent, () =>
+                this.generateExpression(v),
+              )
+            : value(v, this.generateArgumentValue(paramName, v, fbTypeName));
+        inputs.push({
+          member: this.fbParamMemberName(paramName, fbTypeName),
+          code,
+        });
+        if (!arg.name) positionalIndex++;
+      } else {
+        this.emit(
+          `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
+        );
+        positionalIndex++;
+      }
+    }
+    const en = enArg !== undefined ? value(enArg) : null;
+
+    // Values read out under the lock, stored to the caller's variables after.
+    // A variable-length or function-block inout already wrote to the caller's
+    // own storage, so it is not copied back.
+    const fbCpp = this.mapVarTypeToCpp(fbTypeName);
+    const captures: Array<{ tmp: string; member: string; target: Expression }> =
+      [];
+    for (const arg of args) {
+      if (settled.has(arg)) continue;
+      let paramName: string | undefined;
+      if (arg.isOutput) {
+        paramName = arg.name;
+      } else {
+        const slot = slotOf.get(arg);
+        const upper = slot?.toUpperCase();
+        if (
+          upper !== undefined &&
+          inoutParams?.has(upper) === true &&
+          vlaInouts?.has(upper) !== true &&
+          refInouts?.has(upper) !== true
+        ) {
+          paramName = slot;
+        }
+      }
+      if (paramName === undefined) continue;
+      captures.push({
+        tmp: `__gfo${this.tempVarCounter++}`,
+        member: this.fbParamMemberName(paramName, fbTypeName),
+        target: arg.value,
+      });
+    }
+    if (enoTarget !== undefined) {
+      captures.push({
+        tmp: `__gfo${this.tempVarCounter++}`,
+        member: "ENO",
+        target: enoTarget,
+      });
+    }
+    for (const c of captures) {
+      this.emit(`${indent}decltype(${fbCpp}::${c.member}) ${c.tmp};`);
+    }
+
+    let target: string;
+    if (typeof instance === "string") {
+      target = instance;
+    } else {
+      target = this.renderUnderLock(lockUpper, indent, () =>
+        this.renderAccessTail("(*__glk)", instance, lockUpper),
+      );
+    }
+    const inner = indent + this.options.indent;
+    this.emit(`${indent}${ref.acc}with_lock([&](auto* __glk){`);
+    this.emit(`${inner}auto& __fbi = ${target};`);
+    for (const input of inputs) {
+      this.emit(`${inner}__fbi.${input.member} = ${input.code};`);
+    }
+    this.emitEnEnoWrapper(
+      inner,
+      en,
+      null,
+      (bi) => {
+        this.emitPOUCallLine("__fbi", call.functionName, bi);
+      },
+      "__fbi.ENO",
+    );
+    for (const b of lockedBack) {
+      this.emit(`${inner}${b.lv} = __fbi.${b.member};`);
+    }
+    for (const c of captures) {
+      this.emit(`${inner}${c.tmp} = __fbi.${c.member};`);
+    }
+    this.emit(`${indent}});`);
+    for (const st of afterStores) {
+      this.emitGlobalStore(
+        st.target,
+        this.globalRefOf(st.target.name)!,
+        st.tmp,
+        indent,
+      );
+    }
+    for (const c of captures) {
+      this.emitCaptureToLvalue(c.target, c.tmp, indent);
+    }
+  }
+
   /**
    * Emit `<target> = <source>` where `source` is an already-rendered C++
-   * expression. If `target` is a composite / array shared global (VAR_EXTERNAL
-   * to a composite VAR_GLOBAL), the write goes through the global's mutex via
-   * with_lock (a with_lock read result is an rvalue and can't be assigned to).
-   * Used for FB VAR_IN_OUT copy-back and `=>` output capture.
+   * expression that takes no lock. A shared-global target is stored under its
+   * lock (`write()` / with_lock). Used for FB VAR_IN_OUT copy-back and `=>`
+   * output capture.
    */
   private emitCaptureToLvalue(
     target: Expression,
     source: string,
     indent: string,
   ): void {
-    if (
-      target.kind === "VariableExpression" &&
-      !target.isDereference &&
-      this.compositeExternals.has(target.name.toUpperCase())
-    ) {
-      const ptr = this.resolveVariableBaseName(target.name);
-      const lv = this.renderAccessTail(
-        "(*__glk)",
+    if (target.kind === "VariableExpression" && this.isGlobalAccess(target)) {
+      this.emitGlobalStore(
         target,
-        target.name.toUpperCase(),
+        this.globalRefOf(target.name)!,
+        source,
+        indent,
       );
-      this.emit(
-        `${indent}${ptr}->with_lock([&](auto* __glk){ ${lv} = ${source}; });`,
-      );
-      return;
-    }
-    // Scalar VAR_EXTERNAL capture → the shared global is a pointer, so its value
-    // is read via `->read()` (an rvalue) and written via `->write()`. Assigning
-    // to `->read()` fails to compile, so route the write through the pointer,
-    // mirroring the scalar-external branch of generateAssignmentStatement.
-    if (
-      target.kind === "VariableExpression" &&
-      target.fieldAccess.length === 0 &&
-      !target.isDereference &&
-      this.programExternals.has(target.name.toUpperCase())
-    ) {
-      this.emit(`${indent}${target.name}->write(${source});`);
       return;
     }
     this.emit(`${indent}${this.generateExpression(target)} = ${source};`);
@@ -5669,10 +7585,472 @@ export class CodeGenerator {
     return name;
   }
 
+  /** Whether a parameter is one of the block's outputs. */
+  private isOutputParam(
+    fbTypeName: string | undefined,
+    paramName: string,
+  ): boolean {
+    if (!fbTypeName) return false;
+    const key = fbTypeName.toUpperCase();
+    const upper = paramName.toUpperCase();
+    if (!this.fbParamOrder.get(key)?.includes(upper)) return false;
+    return (
+      !this.fbInputParams.get(key)?.includes(upper) &&
+      !this.fbInoutParams.get(key)?.has(upper)
+    );
+  }
+
+  /**
+   * The C++ name an FB instance is reached by — a dereference when the instance
+   * is an FB-typed inout, which is held as a pointer.
+   */
+  private instanceBaseName(name: string): string {
+    const raw = this.resolveVariableBaseName(name);
+    const upper = raw.toUpperCase();
+    // A shared global is held behind a pointer, so reach its value.
+    const ref = this.globalRefOf(name);
+    if (ref) return `${ref.acc}value`;
+    const member = this.memberMangledNames.get(upper) ?? raw;
+    return this.currentRefInouts.has(upper) ? `(*${member})` : member;
+  }
+
+  /**
+   * The instance a call names, when it is written as a dotted path. Built as a
+   * variable access so member mangling and the shared-global holder are
+   * rendered the same way they are everywhere else.
+   */
+  private dottedInstanceName(name: string, span: SourceSpan): string {
+    const parts = name.split(".");
+    const head = parts[0]!;
+    const expr: VariableExpression = {
+      kind: "VariableExpression",
+      sourceSpan: span,
+      name: head,
+      subscripts: [],
+      fieldAccess: parts.slice(1),
+      isDereference: false,
+    };
+    return this.renderAccessTail(
+      this.instanceBaseName(head),
+      expr,
+      head.toUpperCase(),
+    );
+  }
+
   /**
    * Emit the call line for a POU (FB or program) invocation.
-   * Subclasses can override to change the call pattern (e.g., ".run()" for programs).
+   * Subclasses can override the call pattern (e.g. ".run()" for programs).
    */
+  /**
+   * What to assign to one FB input member: the argument itself, or a
+   * descriptor addressing it when the parameter was declared generic.
+   */
+  private generateArgumentValue(
+    paramName: string,
+    value: Expression,
+    fbTypeName: string | undefined,
+  ): string {
+    if (this.genericParamType(fbTypeName, paramName)) {
+      const descriptor = this.generateAnyDescriptor(value);
+      if (descriptor) return descriptor;
+    }
+    return this.generateExpression(value);
+  }
+
+  /**
+   * A descriptor for an argument filling a generic parameter, or undefined
+   * when the parameter is not generic.
+   */
+  private generateGenericArgument(
+    generics: Map<string, string> | undefined,
+    paramName: string | undefined,
+    value: Expression,
+  ): string | undefined {
+    if (!generics || !paramName) return undefined;
+    if (!generics.has(paramName.toUpperCase())) return undefined;
+    return this.generateAnyDescriptor(value);
+  }
+
+  /** Record that one FB parameter was declared with a generic type. */
+  private noteGenericParam(
+    fbUpper: string,
+    paramName: string,
+    genericType: string,
+  ): void {
+    let params = this.fbGenericParams.get(fbUpper);
+    if (!params) {
+      params = new Map();
+      this.fbGenericParams.set(fbUpper, params);
+    }
+    params.set(paramName.toUpperCase(), genericType.toUpperCase());
+  }
+
+  /** The generic type a parameter was declared with, or undefined. */
+  private genericParamType(
+    fbTypeName: string | undefined,
+    paramName: string,
+  ): string | undefined {
+    if (!fbTypeName) return undefined;
+    return this.fbGenericParams
+      .get(fbTypeName.toUpperCase())
+      ?.get(paramName.toUpperCase());
+  }
+
+  /**
+   * `__VARINFO(x)` — CODESYS's `__SYSTEM.VAR_INFO` for one named variable.
+   *
+   * Resolved at the call site, like the `ANY` descriptor: only codegen knows
+   * the IEC type name, and a trait keyed on the C++ payload could not tell
+   * `BYTE` from `USINT`. `AREA` -1, `BITADDRESS` 0, `BITNR` -1, `BYTEOFFSET`
+   * 0 — see iec_varinfo.hpp.
+   */
+  private generateVarInfo(expr: Expression): string | undefined {
+    const declaredType = this.inferExprType(expr);
+    if (declaredType === undefined || declaredType === "") return undefined;
+
+    const value = this.generateAliasLvalue(expr);
+    const typeName = this.cppNameLiteral(
+      this.declaredTypeDisplayName(declaredType),
+    );
+
+    // A POINTER TO / REF_TO / REFERENCE TO variable is an ADDRESS, not a value
+    // of the type it points at. `inferExprType` reports the target, so a
+    // `POINTER TO INT` claimed TYPE_INT without this.
+    const refKind =
+      expr.kind === "VariableExpression"
+        ? this.currentScopeVarRefKinds.get(expr.name.toUpperCase())
+        : undefined;
+    if (refKind !== undefined) {
+      const cls = refKind === "pointer_to" ? "TYPE_POINTER" : "TYPE_REFERENCE";
+      // The type NAME has to say it is a pointer too. `inferExprType` reports
+      // the target, so "INT" alone would read as an INT beside a
+      // TYPE_POINTER class — two fields telling different stories.
+      const refName = this.cppNameLiteral(
+        `${refKind === "pointer_to" ? "POINTER TO" : "REFERENCE TO"} ` +
+          this.declaredTypeDisplayName(declaredType),
+      );
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(sizeof(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::${cls}, ${refName}, 0, ` +
+        `strucpp::TYPE_CLASS::${cls}, ` +
+        `static_cast<uint32_t>(sizeof(${value}) * 8) }`
+      );
+    }
+
+    // An array, inline (`__INLINE_ARRAY_*`) or declared as its own TYPE. The
+    // named case only became reachable once the classifier was shared: before
+    // that, an ARRAY declared as a TYPE reported TYPE_USERDEF with no count.
+    const element =
+      arrayElementTypeName(declaredType) ??
+      this.typeClassifier.namedArrayElement(declaredType)?.name;
+    if (element !== undefined) {
+      const payload = this.typeCodeGen.mapTypeToCpp(element);
+      const elem = this.typeClassifier.classify(element);
+      const base =
+        elem === undefined
+          ? "strucpp::TYPE_CLASS::TYPE_USERDEF"
+          : `strucpp::TYPE_CLASS::${elem.typeClass}`;
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(${value}.elements()), 0, -1, -1, ` +
+        `static_cast<int16_t>(sizeof(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::TYPE_ARRAY, ${typeName}, ` +
+        `static_cast<uint32_t>(${value}.element_count()), ${base}, ` +
+        `static_cast<uint32_t>(sizeof(${payload}) * 8) }`
+      );
+    }
+
+    // `__XWORD` has no single TYPE_CLASS enumerator — its width is the
+    // target's pointer width. Choosing with `sizeof` is right on a 32-bit
+    // controller and a 64-bit runtime alike, and stays a constant expression.
+    if (declaredType.toUpperCase() === "__XWORD") {
+      const cls =
+        "(sizeof(strucpp::XWORD_t) == 8 ? strucpp::TYPE_CLASS::TYPE_LWORD" +
+        " : sizeof(strucpp::XWORD_t) == 4 ? strucpp::TYPE_CLASS::TYPE_DWORD" +
+        " : strucpp::TYPE_CLASS::TYPE_WORD)";
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(strucpp::IEC_SIZEOF(${value}) * 8), 0, ` +
+        `${cls}, ${typeName}, 0, ${cls}, ` +
+        `static_cast<uint32_t>(strucpp::IEC_SIZEOF(${value}) * 8) }`
+      );
+    }
+
+    // The address comes from `&`, not `raw_ptr()`: an alias or subrange in a
+    // POU is declared RAW (`INT_t A;`) and has no `raw_ptr()`. iec_var.hpp
+    // pins `&x` and `x.raw_ptr()` to one address, so `&` serves both.
+    const resolved = this.typeClassifier.classify(declaredType);
+    if (resolved !== undefined && resolved.nestedStruct === undefined) {
+      // An elementary type, an alias or subrange of one, or an enumeration:
+      // each has its own payload pointer.
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(strucpp::IEC_SIZEOF(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::${resolved.typeClass}, ${typeName}, 0, ` +
+        `strucpp::TYPE_CLASS::${resolved.typeClass}, ` +
+        `static_cast<uint32_t>(strucpp::IEC_SIZEOF(${value}) * 8) }`
+      );
+    }
+
+    if (this.isUserDefinedType(declaredType)) {
+      // CODESYS reports TYPE_USERDEF for a DUT and a function block instance
+      // alike; a structure is addressed whole, with no payload pointer.
+      return (
+        `strucpp::VAR_INFO{ reinterpret_cast<uintptr_t>(&${value}), 0, -1, -1, ` +
+        `static_cast<int16_t>(sizeof(${value}) * 8), 0, ` +
+        `strucpp::TYPE_CLASS::TYPE_USERDEF, ${typeName}, 0, ` +
+        `strucpp::TYPE_CLASS::TYPE_USERDEF, ` +
+        `static_cast<uint32_t>(sizeof(${value}) * 8) }`
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * `&<TYPE>__TYPEDESC` for a struct that has a layout table, else `nullptr`.
+   *
+   * Only a STRUCT gets one. IEC 61131-3 §6.4.3 scopes ANY_DERIVED to the DATA
+   * types of Table 11 and an FB is a POU, and a generated FB class may carry a
+   * vptr or an EXTENDS base subobject, where `offsetof` is unanswerable.
+   */
+  /**
+   * Queue a `sync_strings()` for a struct that carries a string member.
+   *
+   * The scalar case one branch up, one level deeper: writing a STRING MEMBER
+   * through the descriptor writes characters and leaves the cached length as
+   * it was. Skipped when the struct holds no strings; one call however many it
+   * holds, since the walk is the runtime's.
+   */
+  private noteStructStringSync(value: string, typeName: string): void {
+    if (!this.structHoldsString(typeName)) return;
+    this.pendingStringSyncs.push(
+      `strucpp::sync_strings(&${value}, &${typeName}__TYPEDESC);`,
+    );
+  }
+
+  /** Whether a STRUCT has a STRING or WSTRING anywhere beneath it. */
+  private structHoldsString(typeName: string, depth = 0): boolean {
+    if (depth > 16) return false; // a cycle; the analyzer reports it
+    const def = this.structDefs.get(typeName.toUpperCase());
+    if (!def) return false;
+    for (const field of def.fields) {
+      const names = [
+        field.type.name,
+        ...(field.type.elementTypeName !== undefined
+          ? [field.type.elementTypeName]
+          : []),
+      ];
+      for (const name of names) {
+        const upper = name.toUpperCase();
+        if (upper === "STRING" || upper === "WSTRING") return true;
+        if (this.structHoldsString(name, depth + 1)) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The argument as declared: "Plant", "motor.speedRpm", "profile[2]".
+   *
+   * Rebuilt from the AST, not sliced from the source, which would carry
+   * whatever sat between the tokens. A non-constant subscript renders `[*]`.
+   */
+  private argumentSourceName(expr: Expression): string | undefined {
+    if (expr.kind !== "VariableExpression") return undefined;
+    const v = expr;
+    // The DECLARATION's spelling, not the call site's. `Plant.spPressureAlt`
+    // and `PLANT.SPPRESSUREALT` are one variable to IEC 61131-3 §6.1.2, so
+    // taking the call site would report one variable under two spellings
+    // depending on how the pin happened to be typed.
+    let cursorType = this.currentScopeVarTypes.get(v.name.toUpperCase());
+    let text =
+      this.currentScopeDeclaredNames.get(v.name.toUpperCase()) ??
+      v.name.toUpperCase();
+
+    const renderIndex = (e: Expression): string =>
+      e.kind === "LiteralExpression" ? String(e.value) : "*";
+
+    /** Step into a member, returning its declared spelling and its type. */
+    const field = (name: string): string => {
+      const def =
+        cursorType === undefined
+          ? undefined
+          : this.structDefs.get(cursorType.toUpperCase());
+      const upper = name.toUpperCase();
+      for (const decl of def?.fields ?? []) {
+        const i = decl.names.findIndex((n) => n.toUpperCase() === upper);
+        if (i === -1) continue;
+        cursorType = decl.type.name;
+        return decl.declaredNames?.[i] ?? decl.names[i]!;
+      }
+      // A function block member, or a type this pass never saw laid out.
+      // Folded is the only spelling on hand, and it still names the member.
+      cursorType = undefined;
+      return upper;
+    };
+
+    if (v.accessChain !== undefined && v.accessChain.length > 0) {
+      for (const step of v.accessChain) {
+        if (step.kind === "field") text += `.${field(step.name)}`;
+        else if (step.kind === "subscript") {
+          text += `[${step.indices.map(renderIndex).join(",")}]`;
+        } else text += "^";
+      }
+      return text;
+    }
+    // Older AST shape: subscripts then fields, which is the order the parser
+    // produced before accessChain preserved the interleaving.
+    if (v.subscripts.length > 0) {
+      text += `[${v.subscripts.map(renderIndex).join(",")}]`;
+    }
+    for (const f of v.fieldAccess) text += `.${field(f)}`;
+    return text;
+  }
+
+  /** A C++ string literal, or `nullptr` when there is nothing to say. */
+  private cppNameLiteral(text: string | undefined): string {
+    if (text === undefined || text === "") return "nullptr";
+    return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+
+  /**
+   * `NAME` and `TYPENAME` for a generic argument, as a trailing field list.
+   *
+   * Emitted for every argument kind, not just a struct: a scalar wired to an
+   * `ANY` pin is otherwise anonymous, and a block that has to name what it was
+   * handed has nothing to name it with.
+   */
+  private anyIdentityFields(expr: Expression, declaredType: string): string {
+    return (
+      `${this.cppNameLiteral(this.argumentSourceName(expr))}, ` +
+      `${this.cppNameLiteral(this.declaredTypeDisplayName(declaredType))}`
+    );
+  }
+
+  /**
+   * The declared type as an engineer would write it.
+   *
+   * An inline or variable-length array carries a synthetic name
+   * (`__INLINE_ARRAY_INT`, `__VLA_1D_WORD`) that means nothing to a callee
+   * reading `TYPENAME`, so it renders back into `ARRAY OF INT`.
+   */
+  private declaredTypeDisplayName(declaredType: string): string {
+    const element = arrayElementTypeName(declaredType);
+    const name = element ?? declaredType;
+    const declared = this.typeClassifier.declaredTypeName(name);
+    // `declaredTypeName` returns its argument untouched for a name with no
+    // TYPE declaration — an elementary type, a word of the standard's grammar
+    // (IEC 61131-3 Table 10). Those stay folded, as CODESYS reports them.
+    const shown = declared === name ? name.toUpperCase() : declared;
+    return element === undefined ? shown : `ARRAY OF ${shown}`;
+  }
+
+  private typeDescriptorArg(typeName: string | undefined): string {
+    if (typeName === undefined || typeName === "") return "nullptr";
+    const upper = typeName.toUpperCase();
+    if (!this.knownStructTypes.has(upper)) return "nullptr";
+    if (!this.describedStructTypes.has(upper)) return "nullptr";
+    return `&${typeName}__TYPEDESC`;
+  }
+
+  /**
+   * The `IEC_ANY` descriptor for an argument bound to a generic parameter.
+   *
+   * Three fields, as CODESYS defines them: `typeclass` from the DECLARED type
+   * (the C++ payload cannot tell `BYTE` from `USINT`), `pvalue` from
+   * `raw_ptr()` (the payload, which `force()` keeps current), `diSize` from
+   * `IEC_SIZEOF`. Undefined for a type no generic accepts.
+   */
+  private generateAnyDescriptor(expr: Expression): string | undefined {
+    const declaredType = this.inferExprType(expr);
+    if (!declaredType) return undefined;
+
+    // An IEC_ANY aliases its operand: it hands the callee a pointer the
+    // callee keeps. So the operand has to name the storage, not a read of it
+    // — see generateAliasLvalue.
+    const value = this.generateAliasLvalue(expr);
+    const element = arrayElementTypeName(declaredType);
+    if (element) {
+      return this.anyDescriptorForArray(
+        value,
+        element,
+        this.anyIdentityFields(expr, declaredType),
+      );
+    }
+
+    const typeClass = TYPE_CLASS_BY_IEC_TYPE[declaredType.toUpperCase()];
+    if (typeClass) {
+      if (typeClass === "TYPE_STRING" || typeClass === "TYPE_WSTRING") {
+        // The characters travel through raw_ptr(); the cached length does not.
+        this.pendingStringSyncs.push(`${value}.sync_length();`);
+      }
+      return (
+        `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::${typeClass}, ` +
+        `reinterpret_cast<uint8_t*>(${value}.raw_ptr()), ` +
+        `static_cast<int32_t>(strucpp::IEC_SIZEOF(${value})), 1, ` +
+        `static_cast<int32_t>(sizeof(${value})), ` +
+        `strucpp::TYPE_CLASS::${typeClass}, nullptr, ` +
+        `${this.anyIdentityFields(expr, declaredType)} }`
+      );
+    }
+
+    // A structure is TYPE_USERDEF and addressed whole; an enumeration is
+    // TYPE_ENUM and has a payload pointer.
+    if (this.isUserDefinedType(declaredType)) {
+      const isEnum = this.enumTypeMembers.has(declaredType.toUpperCase());
+      const cls = isEnum ? "TYPE_ENUM" : "TYPE_USERDEF";
+      const ptr = isEnum
+        ? `reinterpret_cast<uint8_t*>(${value}.raw_ptr())`
+        : `reinterpret_cast<uint8_t*>(&${value})`;
+      const size = isEnum
+        ? `static_cast<int32_t>(strucpp::IEC_SIZEOF(${value}))`
+        : `static_cast<int32_t>(sizeof(${value}))`;
+      // An enumeration has no members to describe; a structure does.
+      const desc = isEnum ? "nullptr" : this.typeDescriptorArg(declaredType);
+      if (desc !== "nullptr") this.noteStructStringSync(value, declaredType);
+      return (
+        `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::${cls}, ${ptr}, ${size}, 1, ` +
+        `static_cast<int32_t>(sizeof(${value})), strucpp::TYPE_CLASS::${cls}, ` +
+        `${desc}, ${this.anyIdentityFields(expr, declaredType)} }`
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * The descriptor for an array argument: `TYPE_ARRAY` whatever the elements
+   * are, `DISIZE` the payload packed, `DISTRIDE` the wrapper's width.
+   */
+  private anyDescriptorForArray(
+    value: string,
+    elementTypeName: string,
+    identity = "nullptr, nullptr",
+  ): string {
+    const payload = this.typeCodeGen.mapTypeToCpp(elementTypeName);
+    const wrapper = this.typeCodeGen.mapStructFieldTypeToCpp(elementTypeName);
+    const count = `static_cast<int32_t>(${value}.element_count())`;
+    const elementClass = TYPE_CLASS_BY_IEC_TYPE[elementTypeName.toUpperCase()];
+    const base = elementClass
+      ? `reinterpret_cast<uint8_t*>(${value}.elements()->raw_ptr())`
+      : `reinterpret_cast<uint8_t*>(${value}.elements())`;
+    // The element's class is known here and nowhere downstream: TYPECLASS says
+    // only TYPE_ARRAY, and the width cannot separate WORD from UINT.
+    const elemClass = elementClass
+      ? `strucpp::TYPE_CLASS::${elementClass}`
+      : this.enumTypeMembers.has(elementTypeName.toUpperCase())
+        ? "strucpp::TYPE_CLASS::TYPE_ENUM"
+        : "strucpp::TYPE_CLASS::TYPE_USERDEF";
+    // For an array of structures the layout that matters is the ELEMENT's —
+    // DICOUNT and DISTRIDE already say how to step between them.
+    const desc = this.typeDescriptorArg(elementTypeName);
+    return (
+      `strucpp::IEC_ANY{ strucpp::TYPE_CLASS::TYPE_ARRAY, ${base}, ` +
+      `static_cast<int32_t>(${value}.element_count() * sizeof(${payload})), ` +
+      `${count}, static_cast<int32_t>(sizeof(${wrapper})), ${elemClass}, ` +
+      `${desc}, ${identity} }`
+    );
+  }
+
   protected emitPOUCallLine(
     instanceName: string,
     _rawName: string,
@@ -6191,8 +8569,62 @@ export class CodeGenerator {
     this.emit(
       'extern "C" uint32_t strucpp_get_located_global_count(void) { return locatedGlobalsCount; }',
     );
+    this.emit("");
+    this.generateGlobalLockHooks(globals);
     this.emit("#endif  // STRUCPP_THREADED");
     this.emit("");
+  }
+
+  /**
+   * The C-linkage hooks a runtime service uses to take a global's lock by
+   * index `g` (see {@link lockedGlobals} for the order), and to find the global
+   * a located-global entry belongs to. Emitted inside the STRUCPP_THREADED
+   * block of the configuration TU.
+   */
+  private generateGlobalLockHooks(located: LocatedVarDescriptor[]): void {
+    const globals = lockedGlobals(this.projectModel);
+    const index = new Map(globals.map((g, i) => [g.key, i]));
+    this.emit("// Each CONFIGURATION global's lock, by index.");
+    this.emit("static detail::GlobalMutex *strucpp_global_mutex(uint32_t g) {");
+    if (globals.length === 0) {
+      this.emit("    (void)g;");
+      this.emit("    return nullptr;");
+    } else {
+      this.emit("    switch (g) {");
+      globals.forEach((g, i) =>
+        this.emit(`        case ${i}: return ${g.name}.lock_handle();`),
+      );
+      this.emit("        default: return nullptr;");
+      this.emit("    }");
+    }
+    this.emit("}");
+    this.emit(
+      `extern "C" uint32_t strucpp_global_count(void) { return ${globals.length}; }`,
+    );
+    this.emit(
+      'extern "C" bool strucpp_global_try_lock(uint32_t g) { return detail::global_try_lock(strucpp_global_mutex(g)); }',
+    );
+    this.emit(
+      'extern "C" void strucpp_global_lock(uint32_t g) { detail::global_lock(strucpp_global_mutex(g)); }',
+    );
+    this.emit(
+      'extern "C" void strucpp_global_unlock(uint32_t g) { detail::global_unlock(strucpp_global_mutex(g)); }',
+    );
+    this.emit("// locatedGlobals[k] -> the index of the global it is in.");
+    this.emit('extern "C" int32_t strucpp_located_global_index(uint32_t k) {');
+    if (located.length === 0) {
+      this.emit("    (void)k;");
+      this.emit("    return -1;");
+    } else {
+      const entries = located.map(
+        (v) => index.get(v.varName.toUpperCase()) ?? -1,
+      );
+      this.emit(
+        `    static const int32_t index[${entries.length}] = {${entries.join(", ")}};`,
+      );
+      this.emit(`    return k < ${entries.length} ? index[k] : -1;`);
+    }
+    this.emit("}");
   }
 
   /**

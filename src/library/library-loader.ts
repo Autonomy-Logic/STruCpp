@@ -17,6 +17,7 @@ import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
+  EnumType,
   IECType,
   ReferenceKind,
   StructDefinition,
@@ -93,6 +94,7 @@ function buildLibraryTypeDefinition(
         kind: "VarDeclaration" as const,
         sourceSpan: createDefaultSourceSpan(),
         names: [f.name],
+        declaredNames: [f.declaredName ?? f.name],
         type: {
           kind: "TypeReference" as const,
           sourceSpan: createDefaultSourceSpan(),
@@ -261,6 +263,11 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: types[${i}].fields must be an array`,
         );
       }
+      if (t.members !== undefined && !Array.isArray(t.members)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: types[${i}].members must be an array`,
+        );
+      }
       types.push(t as unknown as LibraryManifest["types"][0]);
     }
   }
@@ -368,6 +375,40 @@ export function registerLibrarySymbols(
     // For a struct with exported fields, register a real StructType carrying its
     // member types, so member access on a dependency struct (e.g. `MATH.PI`)
     // resolves to the field's type rather than staying untyped.
+    // An enum registers with its members, so a consuming compilation can
+    // resolve a bare enumerator to this type. Without them the name is known
+    // but nothing may be written into it.
+    if (t.kind === "enum") {
+      try {
+        symbolTables.globalScope.define({
+          name: t.name,
+          kind: "type",
+          declaration: {
+            kind: "TypeDeclaration",
+            sourceSpan: createDefaultSourceSpan(),
+            name: t.name,
+            definition: {
+              kind: "EnumDefinition",
+              sourceSpan: createDefaultSourceSpan(),
+              members: (t.members ?? []).map((member) => ({
+                kind: "EnumMember" as const,
+                name: member,
+                sourceSpan: createDefaultSourceSpan(),
+              })),
+            },
+          },
+          resolvedType: {
+            typeKind: "enum",
+            name: t.name,
+            values: [...(t.members ?? [])],
+          } as EnumType,
+        });
+      } catch (e) {
+        if (!(e instanceof DuplicateSymbolError)) throw e;
+      }
+      continue;
+    }
+
     const resolvedType: IECType =
       t.kind === "struct" && t.fields
         ? ({
@@ -400,6 +441,7 @@ export function registerLibrarySymbols(
           kind: "TypeDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           name: t.name,
+          declaredName: t.declaredName ?? t.name,
           // A struct with exported fields gets a REAL StructDefinition, not the
           // self-referential alias the other kinds fall back to.
           //

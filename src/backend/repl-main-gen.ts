@@ -13,6 +13,7 @@ import type { ProjectModel } from "../project-model.js";
 import type { LineMapEntry } from "../types.js";
 import { getProjectNamespace } from "../project-model.js";
 import { mangledMemberName, userDefinedTypeNames } from "./member-mangling.js";
+import { GENERATED_TU_MACRO } from "./codegen.js";
 
 /**
  * Escape ST source for embedding in a C++ raw string literal with delimiter STRUCPP_SRC.
@@ -118,6 +119,7 @@ export function generateReplMain(
   const ns = getProjectNamespace(projectModel);
 
   // Includes
+  lines.push(`#define ${GENERATED_TU_MACRO}`);
   lines.push(`#include "${options.headerFileName}"`);
   lines.push('#include "iec_repl.hpp"');
   lines.push('#include "iec_cyclic.hpp"');
