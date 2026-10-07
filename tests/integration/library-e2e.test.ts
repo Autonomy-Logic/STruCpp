@@ -190,6 +190,44 @@ int main() {
     expect(stdout).toBe("2 7");
   });
 
+  it("passes an empty array (ARRAY[1..0]) to an ARRAY [*] in-out", () => {
+    // The view took &arr[lower], and libstdc++'s zero-size std::array traps on
+    // operator[] (SIGILL). An empty array is a legal argument: the block sees
+    // UPPER_BOUND < LOWER_BOUND and loops zero times.
+    const source = `
+      FUNCTION_BLOCK Counter
+        VAR_IN_OUT Items : ARRAY[*] OF INT; END_VAR
+        VAR_OUTPUT N : DINT; END_VAR
+        N := UPPER_BOUND(Items, 1) - LOWER_BOUND(Items, 1) + 1;
+      END_FUNCTION_BLOCK
+      PROGRAM Main
+        VAR c : Counter; e : ARRAY[1..0] OF INT; END_VAR
+        c(Items := e);
+      END_PROGRAM
+    `;
+    const result = compile(source);
+    expect(result.success).toBe(true);
+    const mainCode = `
+#include "generated.hpp"
+#include <iostream>
+int main() {
+    strucpp::Program_MAIN prog;
+    prog.run();
+    std::cout << static_cast<long long>(prog.C.N) << std::endl;
+    return 0;
+}
+`;
+    const stdout = compileAndRunStandalone({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName: "empty_array_vla",
+      mainCode,
+    });
+    expect(stdout).toBe("0");
+  });
+
   it("builds a custom library and runs tests against it via test framework", () => {
     // 1. Build custom FB library
     const libResult = compileStlib(

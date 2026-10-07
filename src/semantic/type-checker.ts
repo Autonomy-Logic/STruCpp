@@ -28,7 +28,7 @@ import type {
   FunctionBlockDeclaration,
   MethodDeclaration,
 } from "../frontend/ast.js";
-import type { SymbolTables, Scope } from "./symbol-table.js";
+import type { SymbolTables, Scope, VariableSymbol } from "./symbol-table.js";
 import type { StdFunctionRegistry } from "./std-function-registry.js";
 import type { CompileError } from "../types.js";
 import {
@@ -690,6 +690,11 @@ export class TypeChecker {
           if (firstArgType) returnType = firstArgType;
         }
       }
+      if (returnType && isGenericGroupType(returnType)) {
+        returnType =
+          this.derivedGenericResult(expr, funcSymbol.parameters, returnType) ??
+          returnType;
+      }
       expr.resolvedType = returnType;
       return returnType;
     }
@@ -822,6 +827,41 @@ export class TypeChecker {
       expr.sourceSpan.file,
     );
     return undefined;
+  }
+
+  /**
+   * The result of a generic function whose parameters of the result's generic
+   * type all receive one derived type (SEL or MUX of an enumeration): that
+   * type. Elementary operands keep the generic result.
+   */
+  private derivedGenericResult(
+    expr: FunctionCallExpression,
+    params: VariableSymbol[],
+    returnType: IECType,
+  ): IECType | undefined {
+    const generic = typeNameUtil(returnType).toUpperCase();
+    const userArgs = stripEnEno(expr.arguments);
+    let found: IECType | undefined;
+    let position = 0;
+    for (const arg of userArgs) {
+      const param =
+        arg.name !== undefined
+          ? params.find((p) => p.name.toUpperCase() === arg.name!.toUpperCase())
+          : params[position++];
+      if (param?.type === undefined) continue;
+      if (typeNameUtil(param.type).toUpperCase() !== generic) continue;
+      const argType = arg.value.resolvedType;
+      if (argType === undefined || isGenericGroupType(argType)) continue;
+      if (argType.typeKind === "elementary") return undefined;
+      if (found === undefined) found = argType;
+      else if (
+        typeNameUtil(found).toUpperCase() !==
+        typeNameUtil(argType).toUpperCase()
+      ) {
+        return undefined;
+      }
+    }
+    return found;
   }
 
   /**

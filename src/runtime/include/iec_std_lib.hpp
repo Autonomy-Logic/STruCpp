@@ -454,10 +454,20 @@ inline auto LIMIT(T1 mn, T2 in, T3 mx) noexcept
 }
 
 template<typename T, typename U,
-    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value &&
+                     !is_same_iec_enum_v<T, U>, int> = 0>
 inline auto SEL(IEC_BOOL g, T in0, U in1) noexcept {
     using CT = std::common_type_t<decltype(iec_unwrap(in0)), decltype(iec_unwrap(in1))>;
     return iec_unwrap(g) ? static_cast<CT>(iec_unwrap(in1)) : static_cast<CT>(iec_unwrap(in0));
+}
+
+// SEL of one enumeration given in two spellings (a variable and an enumerator):
+// IEC 61131-3 Table 38 admits SEL on an enumerated type.
+template<typename T, typename U,
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value &&
+                     is_same_iec_enum_v<T, U>, int> = 0>
+inline auto SEL(IEC_BOOL g, const T& in0, const U& in1) noexcept {
+    return iec_unwrap(g) ? iec_enum_value(in1) : iec_enum_value(in0);
 }
 
 /**
@@ -835,13 +845,36 @@ inline ToVal iec_convert_value(FromVal value) noexcept {
                                      std::is_integral<ToVal>::value>{});
 }
 
+namespace detail {
+// The value a conversion starts from: the payload of an IEC wrapper, and for
+// an enumeration its numeric value (the ordinal, or the declared value).
+template<typename T>
+inline auto iec_convert_source(const T& v) noexcept
+    -> std::enable_if_t<!std::is_enum<T>::value, decltype(iec_unwrap(v))> {
+    return iec_unwrap(v);
+}
+template<typename E>
+inline auto iec_convert_source(E v) noexcept
+    -> std::enable_if_t<std::is_enum<E>::value, typename std::underlying_type<E>::type> {
+    return static_cast<typename std::underlying_type<E>::type>(v);
+}
+template<typename E>
+inline typename std::underlying_type<E>::type iec_convert_source(const IEC_ENUM_Value<E>& v) noexcept {
+    return static_cast<typename std::underlying_type<E>::type>(v.get());
+}
+template<typename E>
+inline typename std::underlying_type<E>::type iec_convert_source(const IEC_ENUM_Var<E>& v) noexcept {
+    return static_cast<typename std::underlying_type<E>::type>(static_cast<E>(v.get()));
+}
+}  // namespace detail
+
 /**
  * Generic type conversion (IECVar → IECVar)
  */
 template<typename To, typename From>
 inline auto CONVERT(From value) noexcept
     -> std::enable_if_t<!std::is_arithmetic<From>::value, To> {
-    return To(iec_convert_value<typename To::value_type>(iec_unwrap(value)));
+    return To(iec_convert_value<typename To::value_type>(detail::iec_convert_source(value)));
 }
 
 /**

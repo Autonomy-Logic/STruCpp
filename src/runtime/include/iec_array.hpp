@@ -487,9 +487,11 @@ public:
     ArrayView1D() noexcept : data_(nullptr), lower_(0), upper_(-1) {}
 
     // Construct from any IEC_ARRAY_1D with matching element type
+    // `data()`, not `&arr[lower]`: an empty array (ARRAY[1..0]) has no element
+    // to index, and libstdc++'s zero-size std::array traps on operator[].
     template<typename Bounds>
     ArrayView1D(IEC_ARRAY_1D<T, Bounds>& arr)
-        : data_(&arr[Bounds::lower])
+        : data_(arr.data())
         , lower_(Bounds::lower)
         , upper_(Bounds::upper) {}
 

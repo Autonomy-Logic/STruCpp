@@ -1129,6 +1129,66 @@ describeIfGpp('C++ Compilation Tests', () => {
     const cpp = compileWithGpp(result.headerCode, result.cppCode, 'macro_collision');
     expect(cpp.success, cpp.error).toBe(true);
   });
+
+  it('scopes each CASE branch, so a shared-global write in one compiles and runs (threaded + non-threaded)', () => {
+    // A global write declares a temporary; directly under `case N:` a later
+    // label would jump over it ("jump to case label"). A function parameter
+    // named like its own type is renamed in the signature as in the body.
+    const source = `
+      TYPE R : STRUCT x : INT; n : INT; END_STRUCT; END_TYPE
+      FUNCTION Twice : INT
+        VAR_INPUT r : R; END_VAR
+        VAR tmp : R; END_VAR
+        tmp := r;
+        Twice := tmp.x * 2;
+      END_FUNCTION
+      PROGRAM Main
+        VAR_EXTERNAL g : R; END_VAR
+        VAR k : INT := 2; END_VAR
+        CASE k OF
+          1: g.x := 10;
+          2, 3: g.x := 20; g.n := Twice(g);
+        ELSE
+          g.x := 30;
+        END_CASE;
+      END_PROGRAM
+      CONFIGURATION Cfg
+        VAR_GLOBAL g : R; END_VAR
+        RESOURCE Res ON PLC
+          TASK t(INTERVAL := T#10ms, PRIORITY := 0);
+          PROGRAM inst WITH t : Main;
+        END_RESOURCE
+      END_CONFIGURATION
+    `;
+    const result = compile(source);
+    expect(result.success, JSON.stringify(result.errors)).toBe(true);
+    expect(result.cppCode).toMatch(/case 3: \{/);
+    expect(result.cppCode).toContain('default: {');
+    expect(result.cppCode).toContain('TWICE(R R_)');
+
+    const runtimeInclude = path.resolve(__dirname, '../../src/runtime/include');
+    const hpp = path.join(tempDir, 'generated.hpp');
+    const cpp = path.join(tempDir, 'case_scope.cpp');
+    fs.writeFileSync(hpp, result.headerCode);
+    fs.writeFileSync(
+      cpp,
+      `${result.cppCode}\n\nint main(){ strucpp::Configuration_CFG cfg; cfg.INST.run(); return strucpp::G.value.X == 20 && strucpp::G.value.N == 40 ? 0 : 1; }\n`,
+    );
+    for (const threaded of [false, true]) {
+      const flag = threaded ? '-DSTRUCPP_THREADED' : '';
+      const out = path.join(tempDir, `case_scope_${threaded}.out`);
+      let ok = true;
+      let diag = '';
+      try {
+        execSync(`g++ -std=${CXX_STD} -pthread ${flag} -I"${runtimeInclude}" -I"${tempDir}" "${cpp}" -o "${out}"`, { stdio: 'pipe' });
+        execSync(`"${out}"`, { stdio: 'pipe' });
+      } catch (e) {
+        ok = false;
+        diag = (e as { stderr?: Buffer }).stderr?.toString() ?? String(e);
+      }
+      expect(ok, `g++/run ${threaded ? 'threaded' : 'non-threaded'} failed:\n${diag}`).toBe(true);
+    }
+  });
 });
 
 /**

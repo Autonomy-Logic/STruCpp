@@ -12,9 +12,11 @@
  *    an enumeration in ANY_DERIVED. So `q = GOOD` compiled and `EQ(q, GOOD)`
  *    did not, and an FBD box has no symbol form — leaving §8.1.2 unmet.
  *
- *    Table 38 lists four functions and no more, so GT/GE/LT/LE, MIN, MAX,
- *    LIMIT and TO_INT must keep failing. Asserted here so a later "fix"
- *    cannot quietly widen them.
+ *    Table 38 lists four functions and no more, so GT/GE/LT/LE, MIN, MAX and
+ *    LIMIT must keep failing. Asserted here so a later "fix" cannot quietly
+ *    widen them. A TO_* conversion of an enumeration passes the semantic
+ *    check, so it yields the numeric value (CODESYS does the same) instead of
+ *    failing only in the C++ compiler.
  *
  * 2. `is_any_elementary` and friends specialise on the fixed-width aliases,
  *    and which fundamental type each names is target-specific. On x86-64
@@ -31,6 +33,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { compile } from "../../src/index.js";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import { hasGpp, createPCH, compileWithGpp, compileAndRunStandalone } from "./test-helpers.js";
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
@@ -139,6 +142,40 @@ int main() {
     expect(out).toBe("1 0");
   });
 
+  it("types SEL and MUX of an enumeration as the enumeration, with the standard library loaded", () => {
+    // The library publishes SEL/MUX with a generic ANY result; assigning that
+    // to an enumeration was refused ("Cannot assign ANY to Quality").
+    const src = program(
+      "q2 : Quality := BAD; q3 : Quality; q4 : Quality; sw : BOOL := TRUE; bx : Box;",
+      `q := GOOD;
+  q3 := SEL(sw, q, q2);
+  q4 := MUX(0, q2, q);
+  bx.q := SEL(G := FALSE, IN0 := UNCERTAIN, IN1 := q);`,
+    );
+    const result = compile(src, {
+      programName: "Main",
+      libraries: discoverStlibs(path.resolve(__dirname, "../../libs")),
+    });
+    expect(result.success, JSON.stringify(result.errors)).toBe(true);
+    const out = compileAndRunStandalone({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode ?? "",
+      cppCode: result.cppCode ?? "",
+      testName: "enum_sel_run",
+      mainCode: `
+#include <iostream>
+int main() {
+  using namespace strucpp;
+  Program_MAIN prog;
+  prog.run();
+  std::cout << (prog.Q3 == QUALITY::BAD) << (prog.Q4 == QUALITY::BAD) << (prog.BX.Q == QUALITY::UNCERTAIN) << "\\n";
+  return 0;
+}`,
+    });
+    expect(out).toBe("111");
+  });
+
   // --- what Table 38 does NOT admit ----------------------------------------
 
   it("refuses an ORDERING on an enumeration — Table 38 lists no such function", () => {
@@ -153,9 +190,41 @@ int main() {
     expect(builds("q3 : Quality;", `q3 := LIMIT(q, q, q);`)).toBe(false);
   });
 
-  it("refuses a conversion out of an enumeration — TO_* takes ANY_ELEMENTARY", () => {
-    expect(builds("", `n := TO_INT(q);`)).toBe(false);
-    expect(builds("d : DINT;", `d := TO_DINT(q);`)).toBe(false);
+  it("converts an enumeration to its numeric value with TO_*", () => {
+    const src = `${PRELUDE}
+TYPE Coded : (C_LOW := 10, C_HIGH := 20); END_TYPE
+PROGRAM Main
+VAR
+  q : Quality := BAD;
+  bx : Box;
+  c : Coded := C_HIGH;
+  n : INT; d : DINT; m : INT; r : REAL;
+END_VAR
+  bx.q := UNCERTAIN;
+  n := TO_INT(q);
+  d := TO_DINT(bx.q);
+  m := TO_INT(c);
+  r := TO_REAL(GOOD);
+END_PROGRAM`;
+    const result = compile(src, { programName: "Main" });
+    expect(result.success, JSON.stringify(result.errors)).toBe(true);
+    const out = compileAndRunStandalone({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode ?? "",
+      cppCode: result.cppCode ?? "",
+      testName: "enum_to_int_run",
+      mainCode: `
+#include <iostream>
+int main() {
+  using namespace strucpp;
+  Program_MAIN prog;
+  prog.run();
+  std::cout << prog.N << " " << prog.D << " " << prog.M << " " << prog.R << "\\n";
+  return 0;
+}`,
+    });
+    expect(out).toBe("3 2 20 1");
   });
 
   it("refuses a comparison ACROSS two different enumerations", () => {
