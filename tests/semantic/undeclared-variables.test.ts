@@ -589,3 +589,70 @@ describe("Undeclared Variables - Enum members", () => {
     expect(errors[0]!.message.toUpperCase()).toContain("POINT");
   });
 });
+
+// =============================================================================
+// A function named without a call
+// =============================================================================
+
+describe("Undeclared Variables - Function used as a value", () => {
+  function functionValueErrors(result: ReturnType<typeof analyzeSource>) {
+    return result.errors.filter((e) => e.message.includes("is a function"));
+  }
+
+  it("rejects a bare CURRENT_DT in an assignment", () => {
+    const result = analyzeSource(`
+      PROGRAM Main
+        VAR d : DT; END_VAR
+        d := CURRENT_DT;
+      END_PROGRAM
+    `);
+    expect(functionValueErrors(result).map((e) => e.message)).toEqual([
+      "'CURRENT_DT' is a function, not a variable: call it as 'CURRENT_DT()'",
+    ]);
+    expect(functionValueErrors(result)[0]!.line).toBe(4);
+  });
+
+  it("rejects a bare CURRENT_DT inside an expression", () => {
+    const result = analyzeSource(`
+      PROGRAM Main
+        VAR d : DT; late : BOOL; END_VAR
+        late := CURRENT_DT > d;
+      END_PROGRAM
+    `);
+    expect(functionValueErrors(result)).toHaveLength(1);
+  });
+
+  it("rejects a project function read without a call", () => {
+    const result = analyzeSource(`
+      FUNCTION Twice : INT
+        VAR_INPUT v : INT; END_VAR
+        Twice := v * 2;
+      END_FUNCTION
+      PROGRAM Main
+        VAR x : INT; END_VAR
+        x := Twice;
+      END_PROGRAM
+    `);
+    expect(functionValueErrors(result).map((e) => e.message)).toEqual([
+      "'TWICE' is a function, not a variable: call it as 'TWICE()'",
+    ]);
+  });
+
+  it("accepts a call, a function's own return variable and an enum member", () => {
+    const result = analyzeSource(`
+      TYPE Level : (LOW, MAX); END_TYPE
+      FUNCTION Twice : INT
+        VAR_INPUT v : INT; END_VAR
+        Twice := v * 2;
+        Twice := Twice + 0;
+      END_FUNCTION
+      PROGRAM Main
+        VAR d : DT; x : INT; l : Level; END_VAR
+        d := CURRENT_DT();
+        x := Twice(v := 1);
+        l := MAX;
+      END_PROGRAM
+    `);
+    expect(result.errors.map((e) => e.message)).toEqual([]);
+  });
+});

@@ -84,13 +84,7 @@ function buildLibraryTypeDefinition(
         sourceSpan: createDefaultSourceSpan(),
         names: [f.name],
         declaredNames: [f.declaredName ?? f.name],
-        type: {
-          kind: "TypeReference" as const,
-          sourceSpan: createDefaultSourceSpan(),
-          name: f.type,
-          isReference: false,
-          referenceKind: "none" as const,
-        },
+        type: makeSizedTypeRef(f),
       })),
     };
   }
@@ -101,6 +95,16 @@ function buildLibraryTypeDefinition(
     isReference: false,
     referenceKind: "none",
   };
+}
+
+/** {@link makeTypeRef} plus the declared STRING lengths, which size the member. */
+function makeSizedTypeRef(v: LibraryVarType): TypeReference {
+  const ref = makeTypeRef(v);
+  if (typeof v.maxLength === "number") ref.maxLength = v.maxLength;
+  if (typeof v.elementMaxLength === "number") {
+    ref.elementMaxLength = v.elementMaxLength;
+  }
+  return ref;
 }
 
 function makeVarSymbol(
@@ -116,7 +120,7 @@ function makeVarSymbol(
     kind: "VarDeclaration",
     sourceSpan: createDefaultSourceSpan(),
     names: [v.name],
-    type: makeTypeRef(v),
+    type: makeSizedTypeRef(v),
   };
   return {
     name: v.name,
@@ -484,6 +488,7 @@ export function registerLibrarySymbols(
         // surface only, with a warning naming the block.
         locals: (fb.locals ?? []).map((l) => makeVarSymbol(l, "local")),
         libraryName: manifest.name,
+        ...(fb.inoutsByReference === true ? { inoutsByReference: true } : {}),
       });
     } catch (e) {
       if (!(e instanceof DuplicateSymbolError)) throw e;

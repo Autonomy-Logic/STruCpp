@@ -141,17 +141,17 @@ public:
     }
     
     // Get current value (returns forced value if forced)
-    value_type get() const noexcept {
+    STRUCPP_ACCESSOR value_type get() const noexcept {
         return forced_ ? forced_value_ : value_;
     }
     
     // Ignored while forced, so a force stays authoritative against the
     // program's own writes — the same guard IECVar::set carries.
-    void set(value_type v) noexcept {
+    STRUCPP_ACCESSOR void set(value_type v) noexcept {
         if (!forced_) { value_ = v; }
     }
     
-    void set(EnumType v) noexcept {
+    STRUCPP_ACCESSOR void set(EnumType v) noexcept {
         if (!forced_) { value_ = v; }
     }
     

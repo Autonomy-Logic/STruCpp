@@ -3,7 +3,8 @@
  *
  * STruC++ emits the two kinds of global differently:
  *
- *   - a CONFIGURATION VAR_GLOBAL becomes `inline GlobalVar<V>` (value + mutex),
+ *   - a CONFIGURATION VAR_GLOBAL becomes a file-scope `GlobalVar<V>` (value +
+ *     mutex), declared `extern` in the header and defined in configuration.cpp,
  *     reached by each POU through a `GlobalVar<V>*` member;
  *   - a file-level VAR_GLOBAL (a GVL) becomes plain file-scope storage that every
  *     POU in the unit already reaches by name.
@@ -171,7 +172,8 @@ describe("VAR_EXTERNAL against a file-level VAR_GLOBAL", () => {
     `);
     expect(errorMessages(result)).toEqual([]);
     expect(result.success).toBe(true);
-    expect(result.headerCode).toContain("inline GlobalVar<IEC_REAL> GX{1.0};");
+    expect(result.headerCode).toContain("extern GlobalVar<IEC_REAL> GX;");
+    expect(result.cppCode).toContain("GlobalVar<IEC_REAL> GX{1.0};");
     expect(result.headerCode).toContain("GlobalVar<IEC_REAL>* GX = nullptr;");
     expect(result.cppCode).toContain("GX->write(2.0);");
   });

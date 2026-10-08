@@ -22,6 +22,7 @@ import {
   nativeLanguageFor,
   partitionLibrarySources,
   projectNativeHeaderToSt,
+  unescapeCommentText,
 } from "../../src/library/native-sources.js";
 
 const CPP_BLOCK = `(* Scales an INT by a gain *)
@@ -132,6 +133,48 @@ describe("projectNativeHeaderToSt", () => {
     // The body must never reach the parser — that is what lets a Python body
     // live in a library at all.
     expect(out.st).not.toContain("void loop");
+  });
+
+  // The editor breaks comment delimiters in the documentation it writes, so
+  // the text cannot close the header comment: `*)` → `*\)`, `(*` → `(\*`, and a
+  // run of backslashes between the two characters gains one more.
+  it("restores comment delimiters the editor escaped in the documentation", () => {
+    const written = String.raw`(* Reads a gauge (\*bar*\) and a vacuum *\) note.
+A literal *\\) and (\\* stay one backslash short. *)
+`;
+    const out = projectNativeHeaderToSt({
+      fileName: "CPP_SCALE.cpp",
+      source: written + CPP_BLOCK.slice(CPP_BLOCK.indexOf("FUNCTION_BLOCK")),
+      language: "cpp",
+    });
+    if ("message" in out) throw new Error(out.message);
+    expect(out.name).toBe("CPP_SCALE");
+    expect(out.documentation).toBe(
+      String.raw`Reads a gauge (*bar*) and a vacuum *) note.
+A literal *\) and (\* stay one backslash short.`,
+    );
+  });
+
+  it("reads back exactly what the editor's escaping wrote", () => {
+    // The editor's escapeCommentText (openplc-editor comment-text.ts).
+    const escape = (text: string): string =>
+      text.replace(/\((\\*)\*/g, "(\\$1*").replace(/\*(\\*)\)/g, "*\\$1)");
+    for (const text of [
+      "(*)",
+      "*)(*",
+      String.raw`a *\) b (\\* c`,
+      "(* nested (* twice *) *)",
+      "plain text",
+    ]) {
+      expect(escape(text)).not.toMatch(/\(\*|\*\)/);
+      expect(unescapeCommentText(escape(text))).toBe(text);
+    }
+  });
+
+  it("leaves documentation without delimiters unchanged", () => {
+    expect(unescapeCommentText(String.raw`C:\path\to * (x) \)`)).toBe(
+      String.raw`C:\path\to * (x) \)`,
+    );
   });
 
   it("rejects a file with no ST header, naming it", () => {

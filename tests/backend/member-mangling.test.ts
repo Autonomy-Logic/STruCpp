@@ -268,8 +268,8 @@ PROGRAM Main
 VAR s : Sensor; tally : Reading; got : Reading; END_VAR
   s(gain := 1.0, acc := tally, Reading => got);
 END_PROGRAM`);
-    // copy-out of the inout, and the => capture, both name the mangled member
-    expect(cpp).toContain("TALLY = S.ACC;");
+    // the in-out binding and the => capture both name the (mangled) member
+    expect(cpp).toMatch(/strucpp::iec_inout_bind\(S\.ACC, \*__io\d+\);/);
     expect(cpp).toContain("GOT = S.READING_;");
   });
 

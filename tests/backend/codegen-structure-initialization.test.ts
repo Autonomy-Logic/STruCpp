@@ -121,8 +121,9 @@ describe("structure initializers — CONFIGURATION VAR_GLOBAL", () => {
       END_CONFIGURATION
     `);
     expectOk(result);
-    expect(result.headerCode).toContain(
-      "inline GlobalVar<POINT> ORIGIN{strucpp::iec_struct_init<POINT>([](auto& v0) { v0.X = 1.0; v0.Y = 2.0; })};",
+    expect(result.headerCode).toContain("extern GlobalVar<POINT> ORIGIN;");
+    expect(result.cppCode).toContain(
+      "GlobalVar<POINT> ORIGIN{strucpp::iec_struct_init<POINT>([](auto& v0) { v0.X = 1.0; v0.Y = 2.0; })};",
     );
   });
 
@@ -137,8 +138,8 @@ describe("structure initializers — CONFIGURATION VAR_GLOBAL", () => {
       END_CONFIGURATION
     `);
     expectOk(result);
-    expect(result.headerCode).toContain(
-      "inline GlobalVar<Array1D<IEC_INT, 0, 2>> ARR{Array1D<IEC_INT, 0, 2>{1, 2, 3}};",
+    expect(result.cppCode).toContain(
+      "GlobalVar<Array1D<IEC_INT, 0, 2>> ARR{Array1D<IEC_INT, 0, 2>{1, 2, 3}};",
     );
   });
 });

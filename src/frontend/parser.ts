@@ -1913,6 +1913,7 @@ export class STParser extends CstParser {
       { ALT: () => this.CONSUME(tokens.TRUE) },
       { ALT: () => this.CONSUME(tokens.FALSE) },
       { ALT: () => this.CONSUME(tokens.TypedLiteral) },
+      { ALT: () => this.CONSUME(tokens.TypedStringLiteral) },
       { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
       { ALT: () => this.CONSUME(tokens.RealLiteral) },
       { ALT: () => this.CONSUME(tokens.StringLiteral) },

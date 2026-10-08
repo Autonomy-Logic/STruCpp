@@ -483,6 +483,31 @@ constexpr PtrOps ptr_ops[TAG__COUNT] = {
 // (Mega) or because the same code is benign-but-correct when flash is
 // ≤64 KB (32u4: ELPM with RAMPZ=0 behaves as LPM).
 // ---------------------------------------------------------------------------
+/**
+ * The variable an INDIRECT leaf names right now: the in-out's binding plus the
+ * leaf's offset inside it. Null when the binding is null, which every handler
+ * already treats as "no such leaf". The IndirectRef lives with the tables (in
+ * PROGMEM on AVR, read with the same near accessors as the entries).
+ */
+inline void* resolve_indirect(const void* p) noexcept {
+    if (!p) return nullptr;
+#if defined(__AVR__)
+    const uint8_t* r = static_cast<const uint8_t*>(p);
+    const uintptr_t binding = pgm_read_word(r);
+    const uintptr_t base = pgm_read_word(r + sizeof(void*));
+    const uintptr_t leaf = pgm_read_word(r + 2 * sizeof(void*));
+    void* target = *reinterpret_cast<void* const*>(binding);
+#else
+    const IndirectRef* r = static_cast<const IndirectRef*>(p);
+    const uintptr_t base = reinterpret_cast<uintptr_t>(r->proto_base);
+    const uintptr_t leaf = reinterpret_cast<uintptr_t>(r->proto_leaf);
+    void* target;
+    std::memcpy(&target, r->binding, sizeof target);
+#endif
+    if (!target) return nullptr;
+    return static_cast<uint8_t*>(target) + (leaf - base);
+}
+
 inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     Entry out{nullptr, 0, 0, 0};
     if (arr >= debug_array_count) return out;
@@ -539,6 +564,7 @@ inline Entry read_entry(uint8_t arr, uint16_t elem) noexcept {
     if (elem >= count) return out;
     out = debug_arrays[arr][elem];
 #endif
+    if (out.flags & LEAF_FLAG_INDIRECT) out.ptr = resolve_indirect(out.ptr);
     return out;
 }
 

@@ -24,21 +24,39 @@ const build = (types: string, vars: string, arg: string) => {
   return result;
 };
 
-/** The generated header's declaration lines for one type's member table. */
+/**
+ * `text` with every `<TYPE>__STRINGS + n` put back as the string literal it
+ * points at. A table keeps its names in a char array of its own (see
+ * `type-descriptor-gen.ts`); the assertions below read them as text.
+ */
+const unpool = (cpp: string, text: string): string =>
+  text.replace(/(\w+)__STRINGS \+ (\d+)/g, (_m, type: string, off: string) => {
+    const start = cpp.indexOf(`static const char ${type}__STRINGS[] =`);
+    const end = cpp.indexOf(";", start);
+    const pieces = [...cpp.slice(start, end).matchAll(/"((?:[^"\\]|\\.)*)\\0"/g)];
+    let at = 0;
+    for (const p of pieces) {
+      const t = p[1]!;
+      if (at === Number(off)) return `"${t}"`;
+      at += t.replace(/\\(.)/g, "$1").length + 1;
+    }
+    return _m;
+  });
+
+/** The rows of one type's member table, as defined in configuration.cpp. */
 const memberRows = (
   types: string,
   vars: string,
   arg: string,
   typeName: string,
 ) => {
-  const header = build(types, vars, arg).headerCode ?? "";
-  const start = header.indexOf(
+  const cpp = build(types, vars, arg).cppCode ?? "";
+  const start = cpp.indexOf(
     `const strucpp::MemberDesc ${typeName}__MEMBERS[] = {`,
   );
   if (start < 0) return [];
-  const end = header.indexOf("\n};", start);
-  return header
-    .slice(start, end)
+  const end = cpp.indexOf("\n};", start);
+  return unpool(cpp, cpp.slice(start, end))
     .split("\n")
     .slice(1)
     .map((l) => l.trim())
@@ -115,16 +133,35 @@ END_STRUCT END_TYPE\n`,
   it("gives the TYPE its declared case too", () => {
     // The C++ SYMBOL stays folded — `TAGS__TYPEDESC` is a name only the
     // generated code uses. The string inside it is the reported one.
-    const header =
+    const cpp =
       build(
         `TYPE Tags : STRUCT spPressureAlt : REAL; END_STRUCT END_TYPE\n`,
         "v : Tags;",
         "v",
-      ).headerCode ?? "";
-    expect(header).toContain("const strucpp::TypeDesc TAGS__TYPEDESC = {");
-    expect(header.slice(header.indexOf("TAGS__TYPEDESC = {"))).toContain(
+      ).cppCode ?? "";
+    expect(cpp).toContain("const strucpp::TypeDesc TAGS__TYPEDESC = {");
+    expect(unpool(cpp, cpp.slice(cpp.indexOf("TAGS__TYPEDESC = {")))).toContain(
       '"Tags", TAGS__MEMBERS',
     );
+  });
+
+  it("declares each table in the header and defines it once, in configuration.cpp", () => {
+    // Defined in the header, a namespace-scope `const` has internal linkage:
+    // every translation unit that took the table's address kept a copy of it
+    // and of its member array. The header now only declares it.
+    const result = build(STATION, "v : STATION;", "v");
+    const header = result.headerCode ?? "";
+    for (const t of ["STATION", "INNER"]) {
+      expect(header).toContain(`extern const strucpp::TypeDesc ${t}__TYPEDESC;`);
+      expect(header).not.toContain(`const strucpp::TypeDesc ${t}__TYPEDESC =`);
+      expect(header).not.toContain(`${t}__MEMBERS[]`);
+      const defining = result.cppFiles
+        .filter((f) =>
+          f.content.includes(`const strucpp::TypeDesc ${t}__TYPEDESC = {`),
+        )
+        .map((f) => f.name);
+      expect(defining).toEqual(["configuration.cpp"]);
+    }
   });
 
   it("folds nothing and resolves everything, however the pin is typed", () => {

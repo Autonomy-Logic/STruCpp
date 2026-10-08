@@ -284,4 +284,26 @@ concept IECAnyDate = std::is_same<typename IECTypeCategory<T>::type, AnyDateTag>
 
 #endif // C++20
 
+/**
+ * Capacity of a CONCAT result: room for the whole joined string.
+ *
+ * IEC 61131-3 Table 34, feature 5: `A:= CONCAT('AB','CD','E');` "is equivalent
+ * to A:= 'ABCDE'" — the result is every input, in order. The only limits the
+ * standard puts on it are the Implementer specific maximum string length
+ * (6.6.2.5.11: producing a longer string "shall be an error") and, on
+ * assignment, the target's declared length (6.6.1.2.2: a source longer than
+ * the target gives an "Implementer specific" result; STruC++ keeps the leading
+ * characters). So the capacity is the inputs' capacities added, capped at
+ * STRUCPP_STRING_MAX_LENGTH — the longest STRING STruC++ represents (its length
+ * is a uint16_t). It used to be the LONGER input's capacity, which cut
+ * `CONCAT(a, b)` of two full STRING(10)s to 10 characters even when assigned
+ * to a STRING(30).
+ */
+#ifndef STRUCPP_STRING_MAX_LENGTH
+#define STRUCPP_STRING_MAX_LENGTH 65535
+#endif
+constexpr size_t iec_concat_capacity(size_t a, size_t b) noexcept {
+    return a + b > STRUCPP_STRING_MAX_LENGTH ? size_t{STRUCPP_STRING_MAX_LENGTH} : a + b;
+}
+
 } // namespace strucpp

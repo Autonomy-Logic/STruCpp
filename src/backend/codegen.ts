@@ -57,6 +57,7 @@ import {
 import { isElementaryType, TypeRegistry } from "../semantic/type-registry.js";
 import { TypeClassifier } from "./type-descriptor-gen.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
+import { chunkDefinesTypeDesc } from "./type-descriptor-gen.js";
 import {
   formatArrayType,
   formatIntegerLiteral,
@@ -64,6 +65,7 @@ import {
   translateIECString,
 } from "./codegen-utils.js";
 import { mangledMemberName, needsMemberMangling } from "./member-mangling.js";
+import { walkAST } from "../ast-utils.js";
 import {
   arrayElementTypeName,
   buildEnumMemberMap,
@@ -570,12 +572,39 @@ export class CodeGenerator {
 
   /** Those types, until the classes they name have been emitted. */
   private pendingFbBearingTypes: CompilationUnit["types"] = [];
+  /**
+   * The one definition of each configuration VAR_GLOBAL, emitted into
+   * configuration.cpp. The header only declares them — see
+   * emitFileScopeGlobals.
+   */
+  private fileScopeGlobalDefinitions: string[] = [];
+  /** Upper-cased names of every variable the unit declares (see runtimeFunction). */
+  private declaredVariableNames = new Set<string>();
 
   /** UPPER(name) of every type a library declares, from its `type` chunks. */
   private libraryTypeNames: Set<string> = new Set();
 
   /** UPPER(typeName) of every structure that reaches one of those. */
   private libraryTypeBearingTypes: Set<string> = new Set();
+
+  /** UPPER(name) → a library STRUCT whose emitted chunk defines its layout
+   *  table, so a project STRUCT holding one can point at it. */
+  private libraryDescribedStructs: Map<
+    string,
+    import("./type-descriptor-gen.js").ExternalStruct
+  > = new Map();
+
+  /** The layout-table definitions of the project's STRUCTs, declared `extern`
+   *  in the header and defined once in configuration.cpp. */
+  private typeDescriptorDefinitions: Array<{
+    typeName: string;
+    lines: string[];
+  }> = [];
+
+  /** Project STRUCTs given a layout table by an earlier type batch. */
+  private describedProjectStructs: Array<
+    import("./type-descriptor-gen.js").ExternalStruct
+  > = [];
 
   /** Per-archive reachable-chunk emission state.
    *
@@ -613,6 +642,19 @@ export class CodeGenerator {
   /** The FB-typed inout parameters of the POU being generated, so a use of one
    *  inside the body dereferences the pointer. */
   private currentRefInouts: Set<string> = new Set();
+
+  /** The value (not FB-typed, not `ARRAY [*]`) in-outs of the FB being
+   *  generated: `strucpp::InOut<V>` members, reached through `.var()`. */
+  private currentValueInouts: Set<string> = new Set();
+
+  /** UPPER(FB type) of library blocks from an archive built before in-outs
+   *  were bound by reference: their in-outs are plain members, so a call copies
+   *  them in and back as it always did. */
+  private fbInoutsByCopy: Set<string> = new Set();
+
+  /** Warnings about the archives themselves, raised when they are registered
+   *  (before `generate`, which starts its own warning list). */
+  private libraryArchiveWarnings: Array<{ message: string }> = [];
 
   /** Map of `UPPER(fbType).UPPER(method)` → its VAR_INPUT parameter names in
    *  declaration order, so a positional argument can be matched to one. */
@@ -1075,6 +1117,29 @@ export class CodeGenerator {
       this.registerLibraryFunctions(archive.manifest.functions);
     }
 
+    // A block from an archive built before in-outs were bound by reference
+    // holds plain copies: its calls keep copying them in and back. Said once
+    // per library, so the older build is visible rather than silent.
+    for (const archive of archives) {
+      const byCopy = archive.manifest.functionBlocks.filter(
+        (fb) =>
+          fb.implementation === undefined &&
+          fb.inouts.length > 0 &&
+          fb.inoutsByReference !== true,
+      );
+      for (const fb of byCopy) this.fbInoutsByCopy.add(fb.name.toUpperCase());
+      if (byCopy.length > 0) {
+        this.libraryArchiveWarnings.push({
+          message:
+            `Library '${archive.manifest.name}' was built before VAR_IN_OUT was ` +
+            `bound by reference: calls to ${byCopy.map((fb) => fb.name).join(", ")} ` +
+            `copy their in-outs in and back, and the debugger shows the copy. ` +
+            `Rebuild the library with this STruC++ to bind them to the caller's ` +
+            `variable (IEC 61131-3 §3.48).`,
+        });
+      }
+    }
+
     // An FB-typed inout is a pointer, not a copy. Resolved once every archive
     // is registered, so a type from a later archive still matches.
     for (const archive of archives) {
@@ -1158,9 +1223,29 @@ export class CodeGenerator {
     this.libraryEmissions.push({ archive, reachable });
     // A user type naming one of these cannot precede the library section that
     // declares it — see collectLibraryTypeBearingTypes.
+    const declaredNames = new Map(
+      (archive.manifest.types ?? []).map((t) => [
+        t.name.toUpperCase(),
+        t.declaredName,
+      ]),
+    );
     for (const chunk of archive.chunks ?? []) {
       if (chunk.kind === "type")
         this.libraryTypeNames.add(chunk.name.toUpperCase());
+      // Only a table the library actually emitted: an older archive, or a
+      // struct its compiler could not describe, has none to point at.
+      if (
+        chunk.kind === "type" &&
+        reachable.has(chunk.name) &&
+        chunkDefinesTypeDesc(chunk.name, chunk.header, chunk.cpp)
+      ) {
+        const upper = chunk.name.toUpperCase();
+        const declaredName = declaredNames.get(upper);
+        this.libraryDescribedStructs.set(upper, {
+          name: chunk.name,
+          ...(declaredName !== undefined ? { declaredName } : {}),
+        });
+      }
     }
   }
 
@@ -1262,21 +1347,17 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate C++ code from a compilation unit.
+   * The parameter lists of the unit's function blocks and functions: input
+   * order for positional arguments, the VAR_IN_OUT parameters a call copies
+   * back (by-value), binds by pointer (an FB instance) or views
+   * (`ARRAY [*]`), and the generic parameters.
+   *
+   * Shared with the test runner's generator (`TestCodeGenerator.initFromAST`),
+   * which emits FB calls through the same `generateFBInvocation` and so needs
+   * the same maps: without them a test's call never copied an in-out back to
+   * the caller's variable (IEC 61131-3 §3.48: an in-out also RETURNS a value).
    */
-  generate(ast: CompilationUnit): CodeGenResult {
-    this.outputFiles = new Map();
-    this.output = [];
-    this.headerOutput = [];
-    this.lineMap = new Map();
-    this.headerLineMap = new Map();
-    this.currentLine = 1;
-    this.currentHeaderLine = 1;
-    this.locatedVars = [];
-    this.codegenWarnings = [];
-    this.tempVarCounter = 0;
-    this.ast = ast; // Store AST for looking up program bodies
-
+  protected registerPouParameters(ast: CompilationUnit): void {
     // Every FB name first, so the parameter scan below resolves a type declared
     // later in the unit. Library FB types are already registered.
     for (const fb of ast.functionBlocks) {
@@ -1404,6 +1485,25 @@ export class CodeGenerator {
       }
       if (order.length > 0) this.functionParamOrder.set(key, order);
     }
+  }
+
+  /**
+   * Generate C++ code from a compilation unit.
+   */
+  generate(ast: CompilationUnit): CodeGenResult {
+    this.outputFiles = new Map();
+    this.output = [];
+    this.headerOutput = [];
+    this.lineMap = new Map();
+    this.headerLineMap = new Map();
+    this.currentLine = 1;
+    this.currentHeaderLine = 1;
+    this.locatedVars = [];
+    this.codegenWarnings = [];
+    this.tempVarCounter = 0;
+    this.ast = ast; // Store AST for looking up program bodies
+
+    this.registerPouParameters(ast);
 
     // Build set of known interface types, method name map, and per-interface method sets
     for (const iface of ast.interfaces) {
@@ -1445,7 +1545,9 @@ export class CodeGenerator {
 
     // Build set of known struct/UDT types and enum member maps
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
-    this.typeClassifier = new TypeClassifier(ast.types);
+    this.typeClassifier = new TypeClassifier(ast.types, [
+      ...this.libraryDescribedStructs.values(),
+    ]);
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
       if (td.definition.kind === "StructDefinition") {
@@ -1480,6 +1582,14 @@ export class CodeGenerator {
     // Topologically sort FBs once (used in both header and implementation)
     this.sortedFBs = this.topologicalSortFBs(ast.functionBlocks);
 
+    this.declaredVariableNames = new Set<string>();
+    walkAST(ast, (node) => {
+      if (node.kind !== "VarDeclaration") return;
+      for (const name of (node as VarDeclaration).names) {
+        this.declaredVariableNames.add(name.toUpperCase());
+      }
+    });
+
     // Generate header
     this.generateHeader(ast);
 
@@ -1500,7 +1610,7 @@ export class CodeGenerator {
       headerCode: this.headerOutput.join(eol),
       lineMap: this.lineMap,
       headerLineMap: this.headerLineMap,
-      warnings: this.codegenWarnings,
+      warnings: [...this.libraryArchiveWarnings, ...this.codegenWarnings],
     };
   }
 
@@ -1839,6 +1949,31 @@ export class CodeGenerator {
     //    definition of …").
     this.startTranslationUnit("configuration.cpp");
 
+    // The storage of the configuration VAR_GLOBALs the header declares.
+    if (this.fileScopeGlobalDefinitions.length > 0) {
+      this.emit(
+        "// Configuration VAR_GLOBAL storage (declared in the header).",
+      );
+      for (const definition of this.fileScopeGlobalDefinitions) {
+        this.emit(definition);
+      }
+      this.emit("");
+    }
+
+    // The STRUCT layout tables the header declares `extern`: one definition
+    // for the whole program instead of a copy in every TU that names one. In
+    // a library build each sits in its type's chunk, so a consumer that pulls
+    // the type emits the table into its own configuration.cpp.
+    if (this.typeDescriptorDefinitions.length > 0) {
+      this.emit("// STRUCT layout tables (declared in the header).");
+      for (const { typeName, lines } of this.typeDescriptorDefinitions) {
+        this.emitCppChunkMarker("begin", "type", typeName);
+        for (const line of lines) this.emit(line);
+        this.emitCppChunkMarker("end", "type", typeName);
+      }
+      this.emit("");
+    }
+
     // Inject reachable library chunks (cpp side). Same per-archive
     // iteration order as the header side; only chunks whose `cpp`
     // slice is non-empty get emitted (types and inline globals are
@@ -2030,6 +2165,12 @@ export class CodeGenerator {
         const byRef =
           block.blockType === "VAR_IN_OUT" &&
           this.knownFBTypes.has(decl.type.name.toUpperCase());
+        // A value in-out is the caller's variable, bound by reference at the
+        // call (IEC 61131-3 §3.48) — see strucpp::InOut in iec_var.hpp.
+        const valueInout =
+          block.blockType === "VAR_IN_OUT" &&
+          !byRef &&
+          !decl.type.name.toUpperCase().startsWith("__VLA_");
         for (const name of decl.names) {
           const memberName = this.mangleMemberIfNeeded(name, decl.type.name);
           this.emitHeaderLineDirective(decl.sourceSpan.startLine);
@@ -2037,7 +2178,9 @@ export class CodeGenerator {
           this.emitHeader(
             byRef
               ? `    ${tag}${cppType}* ${memberName} = nullptr;`
-              : `    ${tag}${cppType} ${memberName};`,
+              : valueInout
+                ? `    strucpp::InOut<${tag}${cppType}> ${memberName};`
+                : `    ${tag}${cppType} ${memberName};`,
           );
           this.recordHeaderLineMapping(decl.sourceSpan.startLine, memberLine);
         }
@@ -2630,6 +2773,7 @@ export class CodeGenerator {
     this.currentFBVarBlocks = fb.varBlocks;
     this.currentRefInouts =
       this.fbRefInoutParams.get(fb.name.toUpperCase()) ?? new Set();
+    this.currentValueInouts = this.valueInoutsOf(fb.name);
     this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
 
     // VAR_EXTERNAL: body access (operator(), methods, properties) is rewritten
@@ -2721,6 +2865,7 @@ export class CodeGenerator {
     }
 
     this.currentRefInouts = new Set();
+    this.currentValueInouts = new Set();
     this.currentFBName = undefined;
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
@@ -3116,8 +3261,9 @@ export class CodeGenerator {
   }
 
   /**
-   * Emit configuration VAR_GLOBALs as file-scope `inline GlobalVar<V>`
-   * singletons — one per unique name — instead of configuration-class members.
+   * Emit configuration VAR_GLOBALs as file-scope `GlobalVar<V>` singletons —
+   * one per unique name, declared `extern` in the header and defined once in
+   * configuration.cpp — instead of configuration-class members.
    *
    * File scope makes the single canonical storage (value + its own mutex)
    * reachable from every POU regardless of nesting: a program keeps receiving a
@@ -3172,6 +3318,7 @@ export class CodeGenerator {
   }
 
   private emitFileScopeGlobals(phase: "early" | "late"): void {
+    if (phase === "early") this.fileScopeGlobalDefinitions = [];
     if (!this.projectModel) return;
     const seen = new Set<string>();
     let emittedAny = false;
@@ -3204,9 +3351,15 @@ export class CodeGenerator {
           );
           emittedAny = true;
         }
-        // Must stay a real object — generated_debug.cpp takes `&name` into PROGMEM.
-        this.emitHeader(
-          `inline GlobalVar<${cppType}> ${gvar.name}{${initVal}};`,
+        // Declared here, defined once in configuration.cpp. An `inline`
+        // definition in the header gave every translation unit that includes
+        // it its own guarded copy of every global's constructor — GlobalVar's
+        // is not constexpr — which on a board build cost several KB of flash
+        // per POU. Still a real object: generated_debug.cpp takes `&name`
+        // into PROGMEM.
+        this.emitHeader(`extern GlobalVar<${cppType}> ${gvar.name};`);
+        this.fileScopeGlobalDefinitions.push(
+          `GlobalVar<${cppType}> ${gvar.name}{${initVal}};`,
         );
 
         // A located VAR_GLOBAL (`AT %IX/%QX/%MW ...`) enters the located-vars
@@ -4400,6 +4553,9 @@ export class CodeGenerator {
         // An FB-typed inout is a pointer to the caller's own instance, so a
         // read, a write or a call through it reaches the caller's block.
         result = `(*${this.memberMangledNames.get(nameUpper) ?? expr.name})`;
+      } else if (this.currentValueInouts.has(nameUpper)) {
+        // A value in-out is the caller's variable (strucpp::InOut).
+        result = `${this.memberMangledNames.get(nameUpper) ?? expr.name}.var()`;
       } else if (mangledName) {
         result = mangledName;
       } else {
@@ -5287,7 +5443,7 @@ export class CodeGenerator {
         conversion.toType.toUpperCase(),
       );
       if (split && expr.arguments.length === 1) {
-        return `${split}(${this.generateExpression(expr.arguments[0]!.value)})`;
+        return `${this.runtimeFunction(split)}(${this.generateExpression(expr.arguments[0]!.value)})`;
       }
       const args = expr.arguments.map((arg, idx) => {
         const generated = this.generateExpression(arg.value);
@@ -5310,7 +5466,7 @@ export class CodeGenerator {
           conversion.toType.toUpperCase(),
         );
       });
-      return `${conversion.cppName}(${args.join(", ")})`;
+      return `${this.runtimeFunction(conversion.cppName)}(${args.join(", ")})`;
     }
 
     // 2. Check for standard function (may have different cppName)
@@ -5329,7 +5485,7 @@ export class CodeGenerator {
             )
           : undefined;
         if (split) {
-          return `${split}(${this.generateExpression(expr.arguments[0]!.value)})`;
+          return `${this.runtimeFunction(split)}(${this.generateExpression(expr.arguments[0]!.value)})`;
         }
       }
       const args = expr.arguments.map((arg, idx) => {
@@ -5355,7 +5511,7 @@ export class CodeGenerator {
         return generated;
       });
       this.harmonizeStdFuncArgs(args, expr.arguments, stdFunc);
-      return `${stdFunc.cppName}(${args.join(", ")})`;
+      return `${this.runtimeFunction(stdFunc.cppName)}(${args.join(", ")})`;
     }
 
     // 3. Check for named arguments that may need reordering
@@ -5921,10 +6077,27 @@ export class CodeGenerator {
       // Struct fields must mangle by the same rule as everything else that
       // names them, and only codegen knows the FB / program type names.
       isUserDefinedType: (t): boolean => this.isUserDefinedType(t),
+      // Types are emitted in batches: a struct here may nest one with a layout
+      // table from a library or from an earlier batch.
+      externalStructs: [
+        ...this.libraryDescribedStructs.values(),
+        ...this.describedProjectStructs,
+      ],
     });
     const typeCode = typeCodeGen.generateFromRegistry(typeRegistry);
     for (const t of typeCodeGen.describedTypes)
       this.describedStructTypes.add(t);
+    this.typeDescriptorDefinitions.push(...typeCodeGen.descriptorDefinitions);
+    for (const t of types) {
+      if (typeCodeGen.describedTypes.has(t.name.toUpperCase())) {
+        this.describedProjectStructs.push({
+          name: t.name,
+          ...(t.declaredName !== undefined
+            ? { declaredName: t.declaredName }
+            : {}),
+        });
+      }
+    }
     // A struct with no layout table is not an error — it compiles and runs, and
     // a program that never puts it on a generic pin is unaffected. It IS worth
     // saying, because the symptom otherwise is a null `TYPEDESC` at run time
@@ -6315,6 +6488,16 @@ export class CodeGenerator {
       ? this.fbRefInoutParams.get(fbTypeName.toUpperCase())
       : undefined;
 
+    // Value in-outs bound to the caller's variable itself (by reference): the
+    // address is taken ONCE, before the call, so an index the call changes
+    // does not move the binding, and two in-outs naming one variable are one
+    // variable. `copied` is true only where the actual could not be bound (a
+    // different type), and then it is copied back after the call.
+    const boundInouts = new Map<Argument, { ptr: string; copied: string }>();
+    const valueInouts = fbTypeName
+      ? this.valueInoutsOf(fbTypeName)
+      : new Set<string>();
+
     // Which parameter each argument fills. A named one says so; the rest take
     // the slots the named ones left, in declaration order.
     const slotOf = new Map<Argument, string>();
@@ -6352,6 +6535,21 @@ export class CodeGenerator {
         this.emit(
           `${indent}${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)} = ${this.generateAddressOf(arg.value)};`,
         );
+      } else if (
+        paramName &&
+        valueInouts.has(paramName.toUpperCase()) &&
+        this.inoutBindsByReference(arg.value)
+      ) {
+        const ptr = `__io${this.tempVarCounter++}`;
+        const copied = `__ioc${this.tempVarCounter++}`;
+        this.emit(
+          `${indent}auto* ${ptr} = ${this.generateAddressOf(arg.value)};`,
+        );
+        this.emit(
+          `${indent}const bool ${copied} = strucpp::iec_inout_bind(${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)}, *${ptr});`,
+        );
+        boundInouts.set(arg, { ptr, copied });
+        if (!arg.name) positionalIndex++;
       } else if (paramName && this.isOutputParam(fbTypeName, paramName)) {
         // An output filled positionally reads back after the call, not before.
         this.emit(
@@ -6410,12 +6608,33 @@ export class CodeGenerator {
         // A function-block inout is a pointer at the caller's own instance, so
         // the callee wrote there directly.
         if (refInouts?.has(upper)) continue;
-        if (inoutParams.has(upper)) {
-          this.emitCaptureToLvalue(
-            arg.value,
-            `${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)}`,
-            indent,
+        const bound = boundInouts.get(arg);
+        if (bound) {
+          // Bound by reference: the callee wrote the caller's variable. Only a
+          // copied-in actual (another type) is copied back, through the
+          // address taken before the call.
+          this.emit(
+            `${indent}if (${bound.copied}) strucpp::iec_inout_back(${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)}, *${bound.ptr});`,
           );
+          continue;
+        }
+        // A value in-out copied in (not bound) is copied back from its copy.
+        // A structure converts from the slot in one step (InOut's V&); any
+        // other type names the copy, since its own conversions and templated
+        // assignments (a STRING of another length) would need a second step.
+        const actualType = this.inferExprType(arg.value);
+        const viaSlot =
+          valueInouts.has(upper) &&
+          (actualType === undefined || !this.structDefs.has(actualType));
+        const copiedFrom = `${instanceName}.${this.fbParamMemberName(paramName, fbTypeName)}${viaSlot ? ".var()" : ""}`;
+        if (
+          inoutParams.has(upper) &&
+          this.emitBitCapture(arg.value, copiedFrom, indent)
+        ) {
+          continue;
+        }
+        if (inoutParams.has(upper)) {
+          this.emitCaptureToLvalue(arg.value, copiedFrom, indent);
         }
       }
     }
@@ -6563,6 +6782,95 @@ export class CodeGenerator {
    */
   protected resolveVariableBaseName(name: string): string {
     return name;
+  }
+
+  /**
+   * The value in-outs of an FB type: not FB-typed (a pointer), not
+   * `ARRAY [*]` (a view). Empty for a library block from an archive built
+   * before in-outs were bound by reference — its members are plain copies.
+   */
+  private valueInoutsOf(fbTypeName: string): Set<string> {
+    const upper = fbTypeName.toUpperCase();
+    const all = this.fbInoutParams.get(upper);
+    if (!all || this.fbInoutsByCopy.has(upper)) return new Set();
+    const refs = this.fbRefInoutParams.get(upper);
+    const vlas = this.fbVlaInoutParams.get(upper);
+    return new Set([...all].filter((n) => !refs?.has(n) && !vlas?.has(n)));
+  }
+
+  /**
+   * Whether an in-out actual is bound by reference: a variable (or element,
+   * or member) whose storage can be addressed. A bit or other partial access
+   * (`w.3`, `w.%B1`) cannot be, and a shared global (VAR_EXTERNAL) is copied
+   * in and back, so the call never holds a reference to it outside its lock
+   * (the copy-in / locked copy-back the thread-safe globals use).
+   */
+  private inoutBindsByReference(actual: Expression): boolean {
+    if (actual.kind !== "VariableExpression") return false;
+    if (this.isSharedGlobalName(actual.name)) return false;
+    const fields = [
+      ...actual.fieldAccess,
+      ...(actual.accessChain ?? []).flatMap((st) =>
+        st.kind === "field" ? [st.name] : [],
+      ),
+    ];
+    return !fields.some((f) => parsePartialAccess(f) !== undefined);
+  }
+
+  /**
+   * Copy a value back into a partial access (`w.3`, `w.%B1`) of a local
+   * variable: a read-modify-write of the whole variable, as an assignment to it
+   * is. Returns false (nothing emitted) for any other target, which the caller
+   * stores as before. An in-out bound to a bit cannot be a reference, so it is
+   * copied in and back; the copy-back used to assign to the bit's rvalue.
+   */
+  private emitBitCapture(
+    target: Expression,
+    source: string,
+    indent: string,
+  ): boolean {
+    if (target.kind !== "VariableExpression" || target.isDereference)
+      return false;
+    if (this.isSharedGlobalName(target.name)) return false;
+    const last = target.fieldAccess[target.fieldAccess.length - 1];
+    const part = last !== undefined ? parsePartialAccess(last) : undefined;
+    if (!part) return false;
+    const baseVar: VariableExpression = {
+      ...target,
+      fieldAccess: target.fieldAccess.slice(0, -1),
+    };
+    if (target.accessChain) {
+      const trimmed = this.trimLastFieldFromAccessChain(target.accessChain);
+      if (trimmed) baseVar.accessChain = trimmed;
+      else delete baseVar.accessChain;
+    }
+    const baseCode = this.generateExpression(baseVar);
+    this.emit(
+      `${indent}${baseCode} = ${this.partialAccessWrite(baseCode, source, part)};`,
+    );
+    return true;
+  }
+
+  /**
+   * Whether `name` reaches a shared global (VAR_EXTERNAL) in the POU being
+   * generated. This branch tracks them as `programExternals` /
+   * `compositeExternals`; the thread-safe-globals line (dev-build) resolves
+   * them through `globalRefOf`. Asked of whichever this build has, so the same
+   * change applies on both until the two meet.
+   */
+  private isSharedGlobalName(name: string): boolean {
+    const self = this as unknown as {
+      programExternals?: Set<string>;
+      compositeExternals?: Set<string>;
+      globalRefOf?: (n: string) => unknown;
+    };
+    const upper = name.toUpperCase();
+    if (self.programExternals?.has(upper) === true) return true;
+    if (self.compositeExternals?.has(upper) === true) return true;
+    return (
+      typeof self.globalRefOf === "function" &&
+      self.globalRefOf.call(this, name) !== undefined
+    );
   }
 
   /** Whether a parameter is one of the block's outputs. */
@@ -6928,8 +7236,15 @@ export class CodeGenerator {
     if (typeName === undefined || typeName === "") return "nullptr";
     const upper = typeName.toUpperCase();
     if (!this.knownStructTypes.has(upper)) return "nullptr";
-    if (!this.describedStructTypes.has(upper)) return "nullptr";
-    return `&${typeName}__TYPEDESC`;
+    if (this.describedStructTypes.has(upper)) return `&${typeName}__TYPEDESC`;
+    // A STRUCT a LIBRARY declares, whose table its archive chunk defines.
+    // Only the project's own were looked for here, so a library struct - a
+    // settings record the library ships for its own blocks to read - reached
+    // an ANY pin with a null TYPEDESC, alone or as an array's elements, and
+    // the block had nothing to walk.
+    const library = this.libraryDescribedStructs.get(upper);
+    if (library !== undefined) return `&${library.name}__TYPEDESC`;
+    return "nullptr";
   }
 
   /**
@@ -7073,6 +7388,21 @@ export class CodeGenerator {
     // (empty string) and are skipped, so their own default constructor runs.
     const typeDefault = this.getTypeDefaultValue(decl.typeName);
     return typeDefault === "" ? undefined : typeDefault;
+  }
+
+  /**
+   * How generated code names a runtime function it calls.
+   *
+   * IEC 61131-3 keeps functions and variables in separate namespaces, so a
+   * variable may be called `sel`, `max` or `to_int` while the POU calls SEL,
+   * MAX or TO_INT. C++ does not: the member or local hides the function. Where
+   * the unit declares a variable of that name anywhere, the call is qualified
+   * with the runtime's namespace; everywhere else it stays as it was.
+   */
+  private runtimeFunction(cppName: string): string {
+    return this.declaredVariableNames.has(cppName.toUpperCase())
+      ? `strucpp::${cppName}`
+      : cppName;
   }
 
   /**

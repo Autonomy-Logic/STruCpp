@@ -13,9 +13,25 @@
  * compiler knows the target's padding, and a member is a WRAPPER whose PAYLOAD
  * the descriptor must address; asking the wrapper keeps the two in step.
  *
- * The tables are `const` at namespace scope, so internal linkage: each
- * including TU gets its own copy, with no ODR question and no rule about which
- * .cpp owns a shared type. `--gc-sections` drops the unreferenced ones.
+ * Each table is defined ONCE, in configuration.cpp, and declared `extern` in
+ * generated.hpp beside its struct. Defined in the header, a namespace-scope
+ * `const` has internal linkage, so every translation unit that took a table's
+ * address (one per POU on a board build, plus the C/C++ blocks) carried its
+ * own copy of it and of its member array — the same cost the configuration
+ * globals had before they moved to configuration.cpp. The table is
+ * constant-initialised (addresses, `offsetof`, `sizeof`), so moving it changes
+ * no value and adds no start-up order question.
+ *
+ * The names a table points at (member and type names) live in one `static`
+ * char array of the table's own rather than in string literals: a toolchain
+ * pools every literal of a translation unit into one mergeable section that
+ * `--gc-sections` keeps or drops whole, so with every table now defined in
+ * configuration.cpp the names of tables nothing uses would have stayed in
+ * flash. In its own array they go wherever the table goes. The text is the
+ * same; only where it is stored changed.
+ *
+ * Library archives built before the move still carry the definition in their
+ * header chunk; `chunkDefinesTypeDesc` accepts both forms.
  */
 
 import type {
@@ -59,10 +75,20 @@ export interface ResolvedMember {
   byteSize: string;
 }
 
+/** A STRUCT declared by a library, whose `<NAME>__TYPEDESC` its chunk defines. */
+export interface ExternalStruct {
+  /** The C++ (and folded ST) name. */
+  name: string;
+  /** The spelling its TYPE declaration used, for `TYPENAME`. */
+  declaredName?: string;
+}
+
 export interface TypeDescriptorContext {
   /** Every type declaration in scope, for following aliases and finding
    *  nested definitions. */
   types: readonly TypeDeclaration[];
+  /** Library STRUCTs a member here may nest, described by their own chunks. */
+  externalStructs?: readonly ExternalStruct[];
   /** The C++ spelling of a struct field's declared type — the SAME function
    *  `generateStructType` uses, so the descriptor describes what was actually
    *  emitted rather than a second, independent guess at it. */
@@ -83,8 +109,44 @@ export function typeDescSymbol(typeName: string): string {
   return `${typeName}__TYPEDESC`;
 }
 
+/** The header's declaration of a struct's table: `extern`, so the definition
+ *  in configuration.cpp has external linkage and is the only copy. */
+export function typeDescDeclaration(typeName: string): string {
+  return `extern const strucpp::TypeDesc ${typeDescSymbol(typeName)};`;
+}
+
+/** How the table's definition starts — what a library chunk is searched for. */
+function typeDescDefinitionStart(typeName: string): string {
+  return `const strucpp::TypeDesc ${typeDescSymbol(typeName)} =`;
+}
+
+/**
+ * Whether a library type chunk carries a layout table for its STRUCT.
+ *
+ * Two forms exist: an archive built before the table moved to one translation
+ * unit defines it in the chunk's HEADER (each including TU keeps its own
+ * internal-linkage copy, which still works); a newer one declares it `extern`
+ * in the header and defines it in the chunk's CPP, which the consumer emits
+ * into its configuration.cpp.
+ */
+export function chunkDefinesTypeDesc(
+  typeName: string,
+  header: string,
+  cpp: string,
+): boolean {
+  const definition = typeDescDefinitionStart(typeName);
+  return (
+    header.includes(definition) ||
+    (header.includes(typeDescDeclaration(typeName)) && cpp.includes(definition))
+  );
+}
+
 function membersSymbol(typeName: string): string {
   return `${typeName}__MEMBERS`;
+}
+
+function stringsSymbol(typeName: string): string {
+  return `${typeName}__STRINGS`;
 }
 
 /**
@@ -112,8 +174,18 @@ export class TypeClassifier {
   private aliases = new Map<string, TypeReference>();
   /** Folded type name -> the spelling its TYPE declaration used. */
   private declaredNames = new Map<string, string>();
+  /** Folded name -> C++ name of a library STRUCT whose layout table exists. */
+  private externalStructs = new Map<string, string>();
 
-  constructor(types: readonly TypeDeclaration[]) {
+  constructor(
+    types: readonly TypeDeclaration[],
+    externalStructs: readonly ExternalStruct[] = [],
+  ) {
+    for (const ext of externalStructs) {
+      const upper = ext.name.toUpperCase();
+      this.externalStructs.set(upper, ext.name);
+      this.declaredNames.set(upper, ext.declaredName ?? ext.name);
+    }
     for (const type of types) {
       const upper = type.name.toUpperCase();
       this.declaredNames.set(upper, type.declaredName ?? type.name);
@@ -152,7 +224,8 @@ export class TypeClassifier {
   }
 
   isStruct(typeName: string): boolean {
-    return this.structs.has(typeName.toUpperCase());
+    const upper = typeName.toUpperCase();
+    return this.structs.has(upper) || this.externalStructs.has(upper);
   }
 
   structDef(typeName: string): StructDefinition | undefined {
@@ -209,6 +282,17 @@ export class TypeClassifier {
       };
     }
 
+    // A library STRUCT: its own chunk carries the table this one points at.
+    const external = this.externalStructs.get(upper);
+    if (external !== undefined) {
+      return {
+        typeClass: "TYPE_USERDEF",
+        typeName: this.declaredTypeName(resolvedName),
+        cap: 0,
+        nestedStruct: external,
+      };
+    }
+
     if (this.enums.has(upper)) {
       const def = this.enums.get(upper);
       // TYPE_ENUM says it is an enumeration; the payload is the underlying
@@ -262,8 +346,30 @@ export class TypeDescriptorGenerator {
     reason: string;
   }> = [];
 
+  /** The name pool of the table being generated: each text once, at the
+   *  offset `poolText` hands out. */
+  private pool: {
+    texts: string[];
+    offsets: Map<string, number>;
+    size: number;
+  } = { texts: [], offsets: new Map(), size: 0 };
+  private poolOwner = "";
+
   constructor(private readonly ctx: TypeDescriptorContext) {
-    this.types = new TypeClassifier(ctx.types);
+    this.types = new TypeClassifier(ctx.types, ctx.externalStructs);
+  }
+
+  /** `<NAME>__STRINGS + n`: where `text` sits in the current table's pool. */
+  private poolText(text: string): string {
+    let offset = this.pool.offsets.get(text);
+    if (offset === undefined) {
+      offset = this.pool.size;
+      this.pool.offsets.set(text, offset);
+      this.pool.texts.push(text);
+      // One byte per char: ST names and type spellings are ASCII.
+      this.pool.size += text.length + 1;
+    }
+    return `${stringsSymbol(this.poolOwner)} + ${offset}`;
   }
 
   /** Whether a STRUCT type gets a descriptor at all. */
@@ -272,13 +378,17 @@ export class TypeDescriptorGenerator {
   }
 
   /**
-   * The descriptor tables for one STRUCT, as lines of C++.
+   * The descriptor tables for one STRUCT, as lines of C++: the DEFINITIONS,
+   * which belong in configuration.cpp. The header carries only
+   * `typeDescDeclaration(typeName)`.
    *
    * Empty when any member cannot be described: a callee trusts `MEMBERCOUNT`,
    * so a short table reads as a struct that simply lacks the member.
    */
   generate(typeName: string, def: StructDefinition): string[] {
     const rows: string[] = [];
+    this.pool = { texts: [], offsets: new Map(), size: 0 };
+    this.poolOwner = typeName;
 
     for (const field of def.fields) {
       for (let i = 0; i < field.names.length; i++) {
@@ -305,17 +415,24 @@ export class TypeDescriptorGenerator {
     if (rows.length === 0) return [];
 
     const ind = this.ctx.indent;
+    const typeNameRef = this.poolText(this.types.declaredTypeName(typeName));
     const lines: string[] = [];
     lines.push(
       `// Member layout of ${typeName}, for a block handed one on an ANY pin.`,
       `// Offsets address each member's payload, not the wrapper around it.`,
+      // Every name the table points at, NUL-separated (see the file comment).
+      `static const char ${stringsSymbol(typeName)}[] =`,
+      ...this.pool.texts.map(
+        (t, i) =>
+          `${ind}${cppStringLiteral(t).slice(0, -1)}\\0"${i === this.pool.texts.length - 1 ? ";" : ""}`,
+      ),
       `const strucpp::MemberDesc ${membersSymbol(typeName)}[] = {`,
     );
     for (const row of rows) lines.push(`${ind}${row}`);
     lines.push(
       "};",
-      `const strucpp::TypeDesc ${typeDescSymbol(typeName)} = {`,
-      `${ind}${cppStringLiteral(this.types.declaredTypeName(typeName))}, ${membersSymbol(typeName)},`,
+      `${typeDescDefinitionStart(typeName)} {`,
+      `${ind}${typeNameRef}, ${membersSymbol(typeName)},`,
       `${ind}static_cast<uint32_t>(sizeof(${typeName})),`,
       `${ind}static_cast<uint16_t>(${rows.length}),`,
       "};",
@@ -445,8 +562,8 @@ export class TypeDescriptorGenerator {
     const nested =
       f.nested === undefined ? "nullptr" : `&${typeDescSymbol(f.nested)}`;
     return (
-      `{ ${cppStringLiteral(f.name)}, ` +
-      `${cppStringLiteral(f.typeName)}, ${nested}, ` +
+      `{ ${this.poolText(f.name)}, ` +
+      `${this.poolText(f.typeName)}, ${nested}, ` +
       `static_cast<uint32_t>(${f.offset}), ` +
       `static_cast<uint32_t>(${f.count}), ` +
       `static_cast<uint32_t>(${f.bitSize}), ` +

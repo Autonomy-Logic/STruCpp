@@ -34,6 +34,12 @@ export interface StdFunctionParam {
   constraint: TypeConstraint;
   specificType?: string;
   isByRef: boolean;
+  /**
+   * Other formal names a call may bind this parameter by. IEC 61131-3 names
+   * ATAN2's inputs Y and X; the pins have always been IN1 and IN2, so both
+   * spellings bind.
+   */
+  aliases?: readonly string[];
 }
 
 /**
@@ -80,6 +86,73 @@ export interface ConversionInfo {
   fromType: string;
   toType: string;
   cppName: string;
+}
+
+/** The formal parameters a call to a standard function binds to. */
+export interface StdSignature {
+  params: ReadonlyArray<{ name: string; aliases?: readonly string[] }>;
+  isVariadic: boolean;
+}
+
+/** A `*_TO_*` conversion takes one input, IN. */
+const CONVERSION_SIGNATURE: StdSignature = {
+  params: [{ name: "IN" }],
+  isVariadic: false,
+};
+
+/**
+ * The numbered parameter an extensible function grows from: its last one,
+ * `IN2` of ADD, `IN1` of MUX. IEC 61131-3 names the extra inputs by counting
+ * on from it — ADD(IN1, IN2, IN3, …), MUX(K, IN0, IN1, IN2, …).
+ */
+function extensibleTail(
+  sig: StdSignature,
+): { prefix: string; number: number; index: number } | undefined {
+  if (!sig.isVariadic || sig.params.length === 0) return undefined;
+  const index = sig.params.length - 1;
+  const match = /^(.*?)(\d+)$/.exec(sig.params[index]!.name.toUpperCase());
+  if (!match) return undefined;
+  return { prefix: match[1]!, number: Number(match[2]), index };
+}
+
+/**
+ * The position of a formal parameter in a call, or undefined when the
+ * function has no parameter of that name.
+ */
+export function stdParamIndex(
+  sig: StdSignature,
+  name: string,
+): number | undefined {
+  const upper = name.toUpperCase();
+  const fixed = sig.params.findIndex(
+    (p) => p.name.toUpperCase() === upper || (p.aliases ?? []).includes(upper),
+  );
+  if (fixed >= 0) return fixed;
+  const tail = extensibleTail(sig);
+  if (tail === undefined || !upper.startsWith(tail.prefix)) return undefined;
+  const digits = upper.slice(tail.prefix.length);
+  if (!/^[1-9]\d*$/.test(digits)) return undefined;
+  const index = tail.index + Number(digits) - tail.number;
+  return index >= sig.params.length ? index : undefined;
+}
+
+/** The formal parameter name at a position of a call. */
+export function stdParamNameAt(
+  sig: StdSignature,
+  index: number,
+): string | undefined {
+  if (index < sig.params.length) return sig.params[index]!.name.toUpperCase();
+  const tail = extensibleTail(sig);
+  if (tail === undefined) return undefined;
+  return `${tail.prefix}${tail.number + index - tail.index}`;
+}
+
+/** The parameter list as a diagnostic shows it: `IN1, IN2, …` when extensible. */
+export function describeStdParams(sig: StdSignature): string {
+  const names = sig.params.map((p) => p.name.toUpperCase());
+  return extensibleTail(sig) !== undefined
+    ? `${names.join(", ")}, …`
+    : names.join(", ");
 }
 
 // =============================================================================
@@ -168,6 +241,17 @@ export class StdFunctionRegistry {
       toType,
       cppName: `TO_${toType}`,
     };
+  }
+
+  /**
+   * The formal parameters of a standard function or a `*_TO_*` conversion, or
+   * undefined when the name is neither.
+   */
+  signature(name: string): StdSignature | undefined {
+    const desc = this.lookup(name);
+    if (desc) return { params: desc.params, isVariadic: desc.isVariadic };
+    if (this.resolveConversion(name)) return CONVERSION_SIGNATURE;
+    return undefined;
   }
 
   /**
@@ -283,8 +367,18 @@ export class StdFunctionRegistry {
       returnConstraint: "ANY_REAL",
       returnMatchesFirstParam: true,
       params: [
-        { name: "IN1", constraint: "ANY_REAL", isByRef: false },
-        { name: "IN2", constraint: "ANY_REAL", isByRef: false },
+        {
+          name: "IN1",
+          constraint: "ANY_REAL",
+          isByRef: false,
+          aliases: ["Y"],
+        },
+        {
+          name: "IN2",
+          constraint: "ANY_REAL",
+          isByRef: false,
+          aliases: ["X"],
+        },
       ],
       isVariadic: false,
       isConversion: false,

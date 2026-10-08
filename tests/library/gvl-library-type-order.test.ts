@@ -147,7 +147,7 @@ describe("a global list holding a library-declared type", () => {
     // library section without moving its storage would just relocate the
     // error.
     const header = headerFor("m : LibMode;");
-    expect(header.indexOf("inline GlobalVar<GVL_TYPE> GVL")).toBeGreaterThan(
+    expect(header.indexOf("extern GlobalVar<GVL_TYPE> GVL;")).toBeGreaterThan(
       header.indexOf("struct GVL_TYPE"),
     );
   });

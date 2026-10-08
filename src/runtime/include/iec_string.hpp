@@ -798,25 +798,28 @@ inline IECString<MaxLen> MID(const IECString<MaxLen>& s, size_t len, size_t pos)
     return s.substr(pos - 1, len);
 }
 
+// Capacity: iec_concat_capacity (iec_types.hpp).
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2) noexcept {
-    constexpr size_t ResultLen = MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2;
+    constexpr size_t ResultLen = iec_concat_capacity(MaxLen1, MaxLen2);
     IECString<ResultLen> result(s1);
     result.append(s2);
     return result;
 }
 
-// Variadic CONCAT for 3+ arguments (IEC 61131-3 extensible function)
-template<size_t MaxLen1, size_t MaxLen2, typename... Args>
-inline auto
-CONCAT(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2, const Args&... rest) noexcept {
-    return CONCAT(CONCAT(s1, s2), rest...);
-}
+// The extensible CONCAT (3+ inputs) is with the any-string forms below.
 
-template<size_t MaxLen>
-inline IECString<MaxLen> INSERT(const IECString<MaxLen>& s1, const IECString<MaxLen>& s2, size_t pos) noexcept {
-    IECString<MaxLen> result(s1);
+// INSERT and REPLACE keep the whole result — IEC 61131-3 Table 34, features 6
+// and 8: `INSERT(IN1:='ABC', IN2:='XY', P=2)` "is equivalent to A:= 'ABXYC'",
+// `REPLACE(IN1:='ABCDE', IN2:='X', L:=2, P:=3)` to 'ABXE'. The room is IN1's and
+// IN2's declared lengths added (iec_concat_capacity, as for CONCAT); only the
+// destination's declared length truncates (6.6.1.2.2). It used to be IN1's
+// length alone, so INSERT of a STRING(10) into a STRING(5) lost characters even
+// when the result was assigned to a STRING(30).
+template<size_t MaxLen, size_t MaxLen2>
+inline IECString<iec_concat_capacity(MaxLen, MaxLen2)> INSERT(const IECString<MaxLen>& s1, const IECString<MaxLen2>& s2, size_t pos) noexcept {
+    IECString<iec_concat_capacity(MaxLen, MaxLen2)> result(s1);
     // INSERT places IN2 AFTER the P-th character: INSERT('ABC','XY',2) is
     // 'ABXYC'; `pos - 1` would answer 'AXYBC'. DELETE_STR below keeps its
     // `pos - 1` correctly — it begins AT the P-th character.
@@ -832,9 +835,9 @@ inline IECString<MaxLen> DELETE_STR(const IECString<MaxLen>& s, size_t len, size
     return result;
 }
 
-template<size_t MaxLen>
-inline IECString<MaxLen> REPLACE(const IECString<MaxLen>& s1, const IECString<MaxLen>& s2, size_t len, size_t pos) noexcept {
-    IECString<MaxLen> result(s1);
+template<size_t MaxLen, size_t MaxLen2>
+inline IECString<iec_concat_capacity(MaxLen, MaxLen2)> REPLACE(const IECString<MaxLen>& s1, const IECString<MaxLen2>& s2, size_t len, size_t pos) noexcept {
+    IECString<iec_concat_capacity(MaxLen, MaxLen2)> result(s1);
     if (pos == 0) pos = 1;
     result.replace(pos - 1, len, s2.c_str());
     return result;
@@ -842,23 +845,23 @@ inline IECString<MaxLen> REPLACE(const IECString<MaxLen>& s1, const IECString<Ma
 
 // const char* overloads for string functions (codegen may emit string literals)
 template<size_t MaxLen>
-inline IECString<MaxLen> REPLACE(const IECString<MaxLen>& s1, const char* s2, size_t len, size_t pos) noexcept {
-    return REPLACE(s1, IECString<MaxLen>(s2), len, pos);
+inline auto REPLACE(const IECString<MaxLen>& s1, const char* s2, size_t len, size_t pos) noexcept {
+    return REPLACE(s1, IECString<254>(s2), len, pos);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> REPLACE(const IECStringVar<MaxLen>& s1, const char* s2, size_t len, size_t pos) noexcept {
-    return REPLACE(s1.get(), IECString<MaxLen>(s2), len, pos);
+inline auto REPLACE(const IECStringVar<MaxLen>& s1, const char* s2, size_t len, size_t pos) noexcept {
+    return REPLACE(s1.get(), IECString<254>(s2), len, pos);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> INSERT(const IECString<MaxLen>& s1, const char* s2, size_t pos) noexcept {
-    return INSERT(s1, IECString<MaxLen>(s2), pos);
+inline auto INSERT(const IECString<MaxLen>& s1, const char* s2, size_t pos) noexcept {
+    return INSERT(s1, IECString<254>(s2), pos);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> INSERT(const IECStringVar<MaxLen>& s1, const char* s2, size_t pos) noexcept {
-    return INSERT(s1.get(), IECString<MaxLen>(s2), pos);
+inline auto INSERT(const IECStringVar<MaxLen>& s1, const char* s2, size_t pos) noexcept {
+    return INSERT(s1.get(), IECString<254>(s2), pos);
 }
 
 template<size_t MaxLen>
@@ -898,35 +901,35 @@ inline IECString<MaxLen> MID(const IECStringVar<MaxLen>& s, size_t len, size_t p
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECStringVar<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2) noexcept {
     return CONCAT(s1.get(), s2.get());
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECStringVar<MaxLen1>& s1, const IECString<MaxLen2>& s2) noexcept {
     return CONCAT(s1.get(), s2);
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECString<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2) noexcept {
     return CONCAT(s1, s2.get());
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> INSERT(const IECStringVar<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t pos) noexcept {
+inline auto INSERT(const IECStringVar<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t pos) noexcept {
     return INSERT(s1.get(), s2.get(), pos);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> INSERT(const IECStringVar<MaxLen>& s1, const IECString<MaxLen>& s2, size_t pos) noexcept {
+inline auto INSERT(const IECStringVar<MaxLen>& s1, const IECString<MaxLen>& s2, size_t pos) noexcept {
     return INSERT(s1.get(), s2, pos);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> INSERT(const IECString<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t pos) noexcept {
+inline auto INSERT(const IECString<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t pos) noexcept {
     return INSERT(s1, s2.get(), pos);
 }
 
@@ -936,17 +939,17 @@ inline IECString<MaxLen> DELETE_STR(const IECStringVar<MaxLen>& s, size_t len, s
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> REPLACE(const IECStringVar<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t len, size_t pos) noexcept {
+inline auto REPLACE(const IECStringVar<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t len, size_t pos) noexcept {
     return REPLACE(s1.get(), s2.get(), len, pos);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> REPLACE(const IECStringVar<MaxLen>& s1, const IECString<MaxLen>& s2, size_t len, size_t pos) noexcept {
+inline auto REPLACE(const IECStringVar<MaxLen>& s1, const IECString<MaxLen>& s2, size_t len, size_t pos) noexcept {
     return REPLACE(s1.get(), s2, len, pos);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> REPLACE(const IECString<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t len, size_t pos) noexcept {
+inline auto REPLACE(const IECString<MaxLen>& s1, const IECStringVar<MaxLen>& s2, size_t len, size_t pos) noexcept {
     return REPLACE(s1, s2.get(), len, pos);
 }
 
@@ -1011,47 +1014,47 @@ inline size_t FIND(const IECStringVar<MaxLen1>& s1, const IECVar<IECString<MaxLe
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<MaxLen1> REPLACE(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2, size_t len, size_t pos) noexcept {
-    return REPLACE(static_cast<IECString<MaxLen1>>(s1), IECString<MaxLen1>(s2.get().c_str()), len, pos);
+inline auto REPLACE(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2, size_t len, size_t pos) noexcept {
+    return REPLACE(static_cast<IECString<MaxLen1>>(s1), s2.get(), len, pos);
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<MaxLen1> INSERT(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2, size_t pos) noexcept {
-    return INSERT(static_cast<IECString<MaxLen1>>(s1), IECString<MaxLen1>(s2.get().c_str()), pos);
+inline auto INSERT(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2, size_t pos) noexcept {
+    return INSERT(static_cast<IECString<MaxLen1>>(s1), s2.get(), pos);
 }
 
 // Cross-size REPLACE/INSERT: arguments may have different string sizes
 template<size_t MaxLen1, size_t MaxLen2, std::enable_if_t<MaxLen1 != MaxLen2, int> = 0>
-inline IECString<MaxLen1> REPLACE(const IECStringVar<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2, size_t len, size_t pos) noexcept {
-    return REPLACE(s1.get(), IECString<MaxLen1>(s2.get().c_str()), len, pos);
+inline auto REPLACE(const IECStringVar<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2, size_t len, size_t pos) noexcept {
+    return REPLACE(s1.get(), s2.get(), len, pos);
 }
 
 template<size_t MaxLen1, size_t MaxLen2, std::enable_if_t<MaxLen1 != MaxLen2, int> = 0>
-inline IECString<MaxLen1> INSERT(const IECStringVar<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2, size_t pos) noexcept {
-    return INSERT(s1.get(), IECString<MaxLen1>(s2.get().c_str()), pos);
+inline auto INSERT(const IECStringVar<MaxLen1>& s1, const IECStringVar<MaxLen2>& s2, size_t pos) noexcept {
+    return INSERT(s1.get(), s2.get(), pos);
 }
 
 // CONCAT overloads for IECVar<IECString<N>>
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECVar<IECString<MaxLen1>>& s1, const IECString<MaxLen2>& s2) noexcept {
     return CONCAT(static_cast<IECString<MaxLen1>>(s1), s2);
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECString<MaxLen1>& s1, const IECVar<IECString<MaxLen2>>& s2) noexcept {
     return CONCAT(s1, static_cast<IECString<MaxLen2>>(s2));
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECVar<IECString<MaxLen1>>& s1, const IECStringVar<MaxLen2>& s2) noexcept {
     return CONCAT(static_cast<IECString<MaxLen1>>(s1), s2.get());
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)>
+inline IECString<iec_concat_capacity(MaxLen1, MaxLen2)>
 CONCAT(const IECStringVar<MaxLen1>& s1, const IECVar<IECString<MaxLen2>>& s2) noexcept {
     return CONCAT(s1.get(), static_cast<IECString<MaxLen2>>(s2));
 }
@@ -1085,6 +1088,191 @@ template<size_t MaxLen1, size_t MaxLen2>
 inline bool NE_STRING(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2) noexcept {
     return s1 != s2;
 }
+
+// =============================================================================
+// Any mix of string kinds
+// =============================================================================
+//
+// A STRING argument reaches these functions as an IECString, an IECStringVar
+// (a variable), an IECVar<IECString> (a structure field) or a string literal,
+// which C++ sees as `const char[N]`. Template deduction does not convert, so
+// the overloads above cover the common pairs and every other mix — a literal
+// first, `MID('ABCDEFG', 3, 2)`, two literals, strings of different sizes —
+// found no function at all. Each function below takes any of them, turns
+// each argument into an IECString and calls the overload above. A literal
+// becomes an IECString<254>, the default STRING, or its own length when that
+// is longer.
+
+template<typename T> struct iec_string_arg { static constexpr bool value = false; };
+template<size_t N> struct iec_string_arg<IECString<N>> {
+    static constexpr bool value = true;
+    static constexpr size_t length = N;
+    static const IECString<N>& get(const IECString<N>& s) noexcept { return s; }
+};
+template<size_t N> struct iec_string_arg<IECStringVar<N>> {
+    static constexpr bool value = true;
+    static constexpr size_t length = N;
+    static IECString<N> get(const IECStringVar<N>& s) noexcept { return s.get(); }
+};
+template<size_t N> struct iec_string_arg<IECVar<IECString<N>>> {
+    static constexpr bool value = true;
+    static constexpr size_t length = N;
+    static IECString<N> get(const IECVar<IECString<N>>& s) noexcept {
+        return static_cast<IECString<N>>(s);
+    }
+};
+template<size_t K> struct iec_string_arg<char[K]> {
+    static constexpr bool value = true;
+    static constexpr size_t length = K - 1 > 254 ? K - 1 : 254;
+    static IECString<length> get(const char (&s)[K]) noexcept { return IECString<length>(s); }
+};
+template<> struct iec_string_arg<const char*> {
+    static constexpr bool value = true;
+    static constexpr size_t length = 254;
+    static IECString<254> get(const char* s) noexcept { return IECString<254>(s); }
+};
+template<> struct iec_string_arg<char*> : iec_string_arg<const char*> {};
+
+template<typename T>
+using iec_string_arg_t = iec_string_arg<std::remove_cv_t<T>>;
+
+template<typename... Ts> struct iec_all_string_args : std::true_type {};
+template<typename T, typename... Ts> struct iec_all_string_args<T, Ts...>
+    : std::integral_constant<bool, iec_string_arg_t<T>::value && iec_all_string_args<Ts...>::value> {};
+
+template<typename... Ts>
+using enable_if_string_args = std::enable_if_t<iec_all_string_args<Ts...>::value, int>;
+
+/** The argument as an IECString of its own size. */
+template<typename T>
+inline auto iec_as_string(const T& s) noexcept -> decltype(iec_string_arg_t<T>::get(s)) {
+    return iec_string_arg_t<T>::get(s);
+}
+
+template<typename S, enable_if_string_args<S> = 0>
+inline size_t LEN(const S& s) noexcept { return LEN(iec_as_string(s)); }
+
+template<typename S, enable_if_string_args<S> = 0>
+inline auto LEFT(const S& s, size_t len) noexcept { return LEFT(iec_as_string(s), len); }
+
+template<typename S, enable_if_string_args<S> = 0>
+inline auto RIGHT(const S& s, size_t len) noexcept { return RIGHT(iec_as_string(s), len); }
+
+template<typename S, enable_if_string_args<S> = 0>
+inline auto MID(const S& s, size_t len, size_t pos) noexcept {
+    return MID(iec_as_string(s), len, pos);
+}
+
+template<typename S, enable_if_string_args<S> = 0>
+inline auto DELETE_STR(const S& s, size_t len, size_t pos) noexcept {
+    return DELETE_STR(iec_as_string(s), len, pos);
+}
+
+template<typename A, typename B, enable_if_string_args<A, B> = 0>
+inline auto INSERT(const A& s1, const B& s2, size_t pos) noexcept {
+    return INSERT(iec_as_string(s1), iec_as_string(s2), pos);
+}
+
+template<typename A, typename B, enable_if_string_args<A, B> = 0>
+inline auto REPLACE(const A& s1, const B& s2, size_t len, size_t pos) noexcept {
+    return REPLACE(iec_as_string(s1), iec_as_string(s2), len, pos);
+}
+
+template<typename A, typename B, enable_if_string_args<A, B> = 0>
+inline size_t FIND(const A& s1, const B& s2) noexcept {
+    return FIND(iec_as_string(s1), iec_as_string(s2));
+}
+
+/** Room a CONCAT input takes in the result: its declared length, or a
+ *  literal's own length. */
+template<typename T> struct iec_concat_room { static constexpr size_t value = iec_string_arg_t<T>::length; };
+template<size_t K> struct iec_concat_room<char[K]> { static constexpr size_t value = K - 1; };
+template<size_t K> struct iec_concat_room<const char[K]> { static constexpr size_t value = K - 1; };
+
+template<typename A, typename B, enable_if_string_args<A, B> = 0>
+inline auto CONCAT(const A& s1, const B& s2) noexcept {
+    IECString<iec_concat_capacity(iec_concat_room<A>::value, iec_concat_room<B>::value)> result(
+        iec_as_string(s1));
+    result.append(iec_as_string(s2));
+    return result;
+}
+
+// Extensible CONCAT (IEC 61131-3): CONCAT(IN1, IN2, IN3, …).
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_string_args<A, B, C, Rest...> = 0>
+inline auto CONCAT(const A& s1, const B& s2, const C& s3, const Rest&... rest) noexcept {
+    return CONCAT(CONCAT(s1, s2), s3, rest...);
+}
+
+// Comparison functions on STRING (IEC 61131-3 Table 33 takes ANY_ELEMENTARY,
+// which includes STRING). The numeric forms in iec_std_lib.hpp do not accept
+// strings; GT, GE, EQ, LE and LT extend to more inputs, NE takes two.
+#define STRUCPP_STRING_COMPARE(NAME, OP)                                            \
+    template<typename A, typename B, enable_if_string_args<A, B> = 0>              \
+    inline bool NAME(const A& s1, const B& s2) noexcept {                         \
+        return iec_as_string(s1) OP iec_as_string(s2);                            \
+    }
+#define STRUCPP_STRING_COMPARE_EXTENSIBLE(NAME)                                     \
+    template<typename A, typename B, typename C, typename... Rest,                 \
+             enable_if_string_args<A, B, C, Rest...> = 0>                          \
+    inline bool NAME(const A& s1, const B& s2, const C& s3, const Rest&... rest) noexcept { \
+        return NAME(s1, s2) && NAME(s2, s3, rest...);                             \
+    }
+STRUCPP_STRING_COMPARE(GT, >)
+STRUCPP_STRING_COMPARE(GE, >=)
+STRUCPP_STRING_COMPARE(EQ, ==)
+STRUCPP_STRING_COMPARE(LE, <=)
+STRUCPP_STRING_COMPARE(LT, <)
+STRUCPP_STRING_COMPARE(NE, !=)
+STRUCPP_STRING_COMPARE_EXTENSIBLE(GT)
+STRUCPP_STRING_COMPARE_EXTENSIBLE(GE)
+STRUCPP_STRING_COMPARE_EXTENSIBLE(EQ)
+STRUCPP_STRING_COMPARE_EXTENSIBLE(LE)
+STRUCPP_STRING_COMPARE_EXTENSIBLE(LT)
+#undef STRUCPP_STRING_COMPARE
+
+// MAX, MIN and LIMIT on STRING (ANY_ELEMENTARY in IEC 61131-3 Table 24). The
+// result is as long as the longest input.
+/** The longer of two strings' types: MAX / MIN return one input whole. */
+template<typename X, typename Y>
+using iec_longer_string_t = IECString<(std::decay_t<X>::max_length > std::decay_t<Y>::max_length
+                                           ? std::decay_t<X>::max_length
+                                           : std::decay_t<Y>::max_length)>;
+
+template<typename A, typename B, enable_if_string_args<A, B> = 0>
+inline auto MAX(const A& a, const B& b) noexcept {
+    const auto x = iec_as_string(a);
+    const auto y = iec_as_string(b);
+    using R = iec_longer_string_t<decltype(x), decltype(y)>;
+    return x < y ? R(y) : R(x);
+}
+
+template<typename A, typename B, enable_if_string_args<A, B> = 0>
+inline auto MIN(const A& a, const B& b) noexcept {
+    const auto x = iec_as_string(a);
+    const auto y = iec_as_string(b);
+    using R = iec_longer_string_t<decltype(x), decltype(y)>;
+    return y < x ? R(y) : R(x);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_string_args<A, B, C, Rest...> = 0>
+inline auto MAX(const A& a, const B& b, const C& c, const Rest&... rest) noexcept {
+    return MAX(MAX(a, b), c, rest...);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_string_args<A, B, C, Rest...> = 0>
+inline auto MIN(const A& a, const B& b, const C& c, const Rest&... rest) noexcept {
+    return MIN(MIN(a, b), c, rest...);
+}
+
+/** OUT := MIN(MAX(IN, MN), MX), as for numbers. */
+template<typename A, typename B, typename C, enable_if_string_args<A, B, C> = 0>
+inline auto LIMIT(const A& mn, const B& in, const C& mx) noexcept {
+    return MIN(MAX(in, mn), mx);
+}
+#undef STRUCPP_STRING_COMPARE_EXTENSIBLE
 
 // =============================================================================
 // TO_STRING Conversions
@@ -1209,26 +1397,26 @@ inline IECString<N> UPPERCASE(const IECStringVar<N>& s) noexcept {
 
 // CONCAT with const char* overloads (codegen may mix string literals with IECString)
 template<size_t MaxLen>
-inline IECString<MaxLen> CONCAT(const IECString<MaxLen>& s1, const char* s2) noexcept {
-    IECString<MaxLen> result(s1);
+inline IECString<iec_concat_capacity(MaxLen, 254)> CONCAT(const IECString<MaxLen>& s1, const char* s2) noexcept {
+    IECString<iec_concat_capacity(MaxLen, 254)> result(s1);
     result.append(s2);
     return result;
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> CONCAT(const char* s1, const IECString<MaxLen>& s2) noexcept {
-    IECString<MaxLen> result(s1);
+inline IECString<iec_concat_capacity(254, MaxLen)> CONCAT(const char* s1, const IECString<MaxLen>& s2) noexcept {
+    IECString<iec_concat_capacity(254, MaxLen)> result(s1);
     result.append(s2);
     return result;
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> CONCAT(const IECStringVar<MaxLen>& s1, const char* s2) noexcept {
+inline IECString<iec_concat_capacity(MaxLen, 254)> CONCAT(const IECStringVar<MaxLen>& s1, const char* s2) noexcept {
     return CONCAT(s1.get(), s2);
 }
 
 template<size_t MaxLen>
-inline IECString<MaxLen> CONCAT(const char* s1, const IECStringVar<MaxLen>& s2) noexcept {
+inline IECString<iec_concat_capacity(254, MaxLen)> CONCAT(const char* s1, const IECStringVar<MaxLen>& s2) noexcept {
     return CONCAT(s1, s2.get());
 }
 

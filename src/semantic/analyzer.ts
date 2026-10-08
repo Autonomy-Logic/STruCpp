@@ -8,6 +8,8 @@
  */
 
 import type {
+  AccessStep,
+  ASTNode,
   Argument,
   AssignmentStatement,
   ArrayLiteralExpression,
@@ -35,7 +37,11 @@ import type {
 import type { CompileError, SourceSpan } from "../types.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
-import type { FunctionBlockSymbol, FunctionSymbol } from "./symbol-table.js";
+import type {
+  FunctionBlockSymbol,
+  FunctionSymbol,
+  VariableSymbol,
+} from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 import {
   arrayDimSize,
@@ -62,6 +68,7 @@ import {
 } from "./type-utils.js";
 import {
   isEnArgument,
+  isEnEnoArgument,
   isEnoArgument,
   stripEnEno,
   walkAST,
@@ -71,6 +78,12 @@ import {
   IEC_INTEGER_MAX,
   IEC_INTEGER_MIN,
 } from "../literal-utils.js";
+import {
+  describeStdParams,
+  stdParamIndex,
+  stdParamNameAt,
+  type StdSignature,
+} from "./std-function-registry.js";
 
 // =============================================================================
 // Located Variable Address Parsing
@@ -339,6 +352,16 @@ interface InOutSlot {
   type: string;
 }
 
+/** What a call invokes, as a diagnostic names it, and its parameters. */
+interface Callee {
+  what: string;
+  slots: InOutSlot[];
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function slot(name: string, kind: InOutSlot["kind"], type: string): InOutSlot {
   return { name: name.toUpperCase(), kind, type: type.toUpperCase() };
 }
@@ -387,6 +410,29 @@ export class SemanticAnalyzer {
 
     // Pass 1: Build symbol tables
     this.buildSymbolTables(ast);
+
+    // Standard calls are read by position from here on.
+    this.bindStdFunctionArguments([ast]);
+
+    // Initial values hold constants' values, not references to them.
+    this.foldConstantInitializers(ast);
+
+    this.checkGlobalNamesAgainstStdFunctions(ast);
+
+    // BOOL#<n> is 0 or 1 (IEC 61131-3 §6.3.2).
+    walkAST(ast, (node) => {
+      if (node.kind !== "LiteralExpression") return;
+      const lit = node as LiteralExpression;
+      if (lit.typePrefix !== "BOOL" || lit.value === 0 || lit.value === 1) {
+        return;
+      }
+      this.addError(
+        `'${lit.rawValue}' is not a BOOL: write BOOL#0, BOOL#1, BOOL#TRUE or BOOL#FALSE`,
+        lit.sourceSpan.startLine,
+        lit.sourceSpan.startCol,
+        lit.sourceSpan.file,
+      );
+    });
 
     // Reported before the gates below so a type error in any merged source cannot hide
     // an undefined type — and excluded from them, so the reverse cannot happen either.
@@ -1410,6 +1456,332 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * A global variable may not take the C++ name of a standard function.
+   *
+   * IEC 61131-3 keeps variables and functions apart, and a local variable,
+   * a block's member or a structure field named `max`, `sel` or `to_int`
+   * compiles: the generated code calls the function by its qualified name. A
+   * global is different. Its storage is declared in the same C++ namespace as
+   * the runtime's standard functions, where one name cannot be both, so it is
+   * reported here rather than as a C++ error in a board build.
+   */
+  private checkGlobalNamesAgainstStdFunctions(ast: CompilationUnit): void {
+    const taken = new Map<string, string>();
+    for (const desc of this.stdRegistry.getAll()) {
+      taken.set(desc.cppName.toUpperCase(), desc.name.toUpperCase());
+    }
+    for (const type of Object.keys(ELEMENTARY_TYPES)) {
+      taken.set(`TO_${type}`, `TO_${type}`);
+    }
+    const blocks = [
+      ...ast.globalVarBlocks,
+      ...ast.configurations.flatMap((c) => c.varBlocks),
+    ].filter((b) => b.blockType === "VAR_GLOBAL");
+    for (const block of blocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          const fn = taken.get(name.toUpperCase());
+          if (fn === undefined) continue;
+          this.addError(
+            `A global variable cannot be named '${name}': the standard function ${fn} has that name in the generated code. Rename the global (a local variable may use the name)`,
+            decl.sourceSpan.startLine,
+            decl.sourceSpan.startCol,
+            decl.sourceSpan.file,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Replace every reference to a constant in an initial value with the
+   * constant's own initial value: `x : INT := K` becomes `x : INT := 7`.
+   *
+   * An initial value is set when the instance is constructed, and a reference
+   * there read whatever K was at that moment. For a VAR_EXTERNAL that was the
+   * pointer member, not yet bound, so the C++ did not compile in a program
+   * (`X(K)` from a `GlobalVar*`) and in a function block it read the global
+   * during static initialisation, before the global's own definition — in
+   * another translation unit — need have run. A constant's value is known
+   * here, so it is written in. Covers the POU's own VAR CONSTANT, a
+   * VAR_EXTERNAL [CONSTANT] whose global is a CONFIGURATION or top-level
+   * VAR_GLOBAL CONSTANT, and a top-level VAR_GLOBAL CONSTANT named directly,
+   * including inside structure and array initialisers. An initial value that
+   * reads a global variable that is not CONSTANT is an error: IEC 61131-3
+   * requires a constant there, and nothing would make the read well defined.
+   */
+  private foldConstantInitializers(ast: CompilationUnit): void {
+    const globalConstants = new Map<string, Expression>();
+    const globalVariables = new Set<string>();
+    const collect = (
+      blocks: VarBlock[],
+      into: Map<string, Expression>,
+    ): void => {
+      for (const block of blocks) {
+        if (block.blockType !== "VAR_GLOBAL") continue;
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            if (block.isConstant && decl.initialValue !== undefined) {
+              into.set(name.toUpperCase(), decl.initialValue);
+            } else if (block.blockType === "VAR_GLOBAL") {
+              globalVariables.add(name.toUpperCase());
+            }
+          }
+        }
+      }
+    };
+    collect(ast.globalVarBlocks, globalConstants);
+    for (const config of ast.configurations) {
+      collect(config.varBlocks, globalConstants);
+    }
+
+    // The globals' own initial values may name other global constants.
+    this.foldInitializersIn(
+      [
+        ...ast.globalVarBlocks,
+        ...ast.configurations.flatMap((c) => c.varBlocks),
+      ],
+      globalConstants,
+      new Set(),
+    );
+
+    // What each set of declarations sees, and which of them to fold: a
+    // method sees its block's declarations as well as its own.
+    const pous: Array<{ blocks: VarBlock[]; own: VarBlock[] }> = [
+      ...ast.programs.map((p) => ({ blocks: p.varBlocks, own: p.varBlocks })),
+      ...ast.functions.map((f) => ({ blocks: f.varBlocks, own: f.varBlocks })),
+      ...ast.functionBlocks.flatMap((fb) => [
+        { blocks: fb.varBlocks, own: fb.varBlocks },
+        ...fb.methods.map((m) => ({
+          blocks: [...fb.varBlocks, ...m.varBlocks],
+          own: m.varBlocks,
+        })),
+      ]),
+    ];
+    for (const { blocks, own } of pous) {
+      const constants = new Map<string, Expression>();
+      const externalVariables = new Set<string>();
+      // Top-level constants are visible unless a declaration here hides them.
+      const declared = new Set(
+        blocks.flatMap((b) =>
+          b.declarations.flatMap((d) => d.names.map((n) => n.toUpperCase())),
+        ),
+      );
+      for (const [name, value] of globalConstants) {
+        if (!declared.has(name)) constants.set(name, value);
+      }
+      for (const block of blocks) {
+        for (const decl of block.declarations) {
+          for (const name of decl.names) {
+            const upper = name.toUpperCase();
+            if (block.blockType === "VAR_EXTERNAL") {
+              const value = globalConstants.get(upper);
+              if (value !== undefined) constants.set(upper, value);
+              else if (globalVariables.has(upper)) externalVariables.add(upper);
+            } else if (block.isConstant && decl.initialValue !== undefined) {
+              constants.set(upper, decl.initialValue);
+            }
+          }
+        }
+      }
+      this.foldInitializersIn(own, constants, externalVariables);
+    }
+  }
+
+  private foldInitializersIn(
+    blocks: VarBlock[],
+    constants: ReadonlyMap<string, Expression>,
+    externalVariables: ReadonlySet<string>,
+  ): void {
+    for (const block of blocks) {
+      if (block.blockType === "VAR_EXTERNAL") continue;
+      for (const decl of block.declarations) {
+        if (decl.initialValue === undefined) continue;
+        this.foldConstants(
+          decl.initialValue,
+          constants,
+          externalVariables,
+          new Set(decl.names.map((n) => n.toUpperCase())),
+        );
+      }
+    }
+  }
+
+  /** Fold the constants in one expression tree, in place. */
+  private foldConstants(
+    root: Expression,
+    constants: ReadonlyMap<string, Expression>,
+    externalVariables: ReadonlySet<string>,
+    folding: ReadonlySet<string>,
+  ): void {
+    walkAST(root, (node) => {
+      if (node.kind !== "VariableExpression") return;
+      const ref = node as VariableExpression;
+      const upper = ref.name.toUpperCase();
+      const plain =
+        ref.subscripts.length === 0 &&
+        ref.fieldAccess.length === 0 &&
+        !ref.isDereference;
+      if (externalVariables.has(upper)) {
+        this.addError(
+          `An initial value must be a constant: '${ref.name}' is a global variable, not CONSTANT`,
+          ref.sourceSpan.startLine,
+          ref.sourceSpan.startCol,
+          ref.sourceSpan.file,
+        );
+        return false;
+      }
+      const value = constants.get(upper);
+      if (value === undefined || !plain || folding.has(upper)) return;
+      const span = ref.sourceSpan;
+      const copy = structuredClone(value);
+      this.foldConstants(
+        copy,
+        constants,
+        externalVariables,
+        new Set([...folding, upper]),
+      );
+      // In place, so every holder of this node — the project model included —
+      // sees the value.
+      for (const key of Object.keys(ref)) {
+        delete (ref as unknown as Record<string, unknown>)[key];
+      }
+      Object.assign(ref, copy, { sourceSpan: span });
+      return false;
+    });
+  }
+
+  /**
+   * Bind the named arguments of every standard-function call to the
+   * function's formal parameters (IEC 61131-3), and leave them in formal
+   * order. Everything after this — type checking, the argument checks and
+   * code generation — reads a standard call's arguments by position, so
+   * `LIMIT(IN := x, MN := 0, MX := 10)` would otherwise hand x to MN.
+   */
+  private bindStdFunctionArguments(roots: ASTNode[]): void {
+    // A block instance named like a standard function is the block being
+    // called. Any other variable of that name leaves the call standard.
+    const instances = new Set<string>();
+    for (const root of roots) {
+      walkAST(root, (node) => {
+        if (node.kind !== "VarDeclaration") return;
+        const decl = node as VarDeclaration;
+        const typeName = arrayElementTypeName(decl.type.name) ?? decl.type.name;
+        if (!this.symbolTables.lookupFunctionBlock(typeName)) return;
+        for (const n of decl.names) instances.add(n.toUpperCase());
+      });
+    }
+    for (const root of roots) {
+      walkAST(root, (node) => {
+        if (node.kind !== "FunctionCallExpression") return;
+        const call = node as FunctionCallExpression;
+        if (call.instance !== undefined || call.functionName.includes(".")) {
+          return;
+        }
+        if (instances.has(call.functionName.toUpperCase())) return;
+        const sig = this.stdRegistry.signature(call.functionName);
+        if (sig) this.bindStdCall(call, sig);
+      });
+    }
+  }
+
+  private bindStdCall(call: FunctionCallExpression, sig: StdSignature): void {
+    const callee = call.functionName.toUpperCase();
+    const bound = new Map<number, Argument>();
+    let named = false;
+    let positional = 0;
+    let ok = true;
+    const report = (
+      node: ASTNode & { sourceSpan: SourceSpan },
+      message: string,
+    ): void => {
+      ok = false;
+      const span = node.sourceSpan;
+      this.addError(message, span.startLine, span.startCol, span.file);
+    };
+
+    for (const arg of call.arguments) {
+      if (isEnEnoArgument(arg)) continue;
+      if (arg.name === undefined) {
+        if (named) {
+          report(
+            arg,
+            `'${callee}' has an argument without a name after a named one: name every argument, or give them all in order`,
+          );
+        } else {
+          bound.set(positional++, arg);
+        }
+        continue;
+      }
+      named = true;
+      const formal = arg.name.toUpperCase();
+      if (formal === "EN" || formal === "ENO") {
+        report(
+          arg,
+          formal === "EN"
+            ? `'EN' is the implicit input of function '${callee}': assign it with ':='`
+            : `'ENO' is the implicit output of function '${callee}': read it with '=>'`,
+        );
+        continue;
+      }
+      const index = stdParamIndex(sig, formal);
+      if (index === undefined) {
+        report(
+          arg,
+          arg.isOutput
+            ? `Function '${callee}' has no output '${formal}' (it has no outputs)`
+            : `Function '${callee}' has no input '${formal}' (its inputs are ${describeStdParams(sig)})`,
+        );
+      } else if (arg.isOutput) {
+        report(
+          arg,
+          `'${formal}' is an input of function '${callee}': assign it with ':=', not '=>'`,
+        );
+      } else if (bound.has(index)) {
+        report(
+          arg,
+          index < positional
+            ? `Function '${callee}' is given input '${formal}' twice: by position and by name`
+            : `Function '${callee}' is given input '${formal}' twice`,
+        );
+      } else {
+        bound.set(index, arg);
+      }
+    }
+    if (!ok || !named) return;
+
+    // Every input must be given. An extensible function — ADD, AND, MAX,
+    // CONCAT, GT, … — may skip one of its numbered inputs: the rest close up
+    // in order, as a ladder block with an unwired pin compiles, and the
+    // argument count is checked later. MUX may not: its inputs are chosen by
+    // number, so closing up would select the wrong one.
+    const closesUp = sig.isVariadic && callee !== "MUX";
+    const last = Math.max(sig.params.length - 1, ...bound.keys());
+    const missing: string[] = [];
+    for (let i = 0; i <= last && !closesUp; i++) {
+      if (!bound.has(i)) missing.push(stdParamNameAt(sig, i) ?? `#${i + 1}`);
+    }
+    if (missing.length > 0) {
+      report(
+        call,
+        `Function '${callee}' is missing input${missing.length > 1 ? "s" : ""} ${missing.join(", ")}`,
+      );
+      return;
+    }
+
+    const ordered = [...bound.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, arg]) => arg);
+    call.arguments.splice(
+      0,
+      call.arguments.length,
+      ...call.arguments.filter(isEnArgument),
+      ...ordered,
+      ...call.arguments.filter(isEnoArgument),
+    );
+  }
+
+  /**
    * How a call must map an in-out, and where an in-out may be used.
    */
   private validateInOutUsage(ast: CompilationUnit): void {
@@ -1438,6 +1810,7 @@ export class SemanticAnalyzer {
       walkAST(stmt, (node) => {
         if (node.kind === "FunctionCallExpression") {
           const call = node as FunctionCallExpression;
+          this.checkCallParameterNames(call, scope);
           this.checkCallInOuts(call, scope);
           this.checkPassedInstanceCall(call, scope);
         } else if (node.kind === "VariableExpression") {
@@ -1527,18 +1900,44 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * A block's parameters in declaration order. A library block carries its
-   * interface as three lists instead of a declaration, so both shapes are read.
+   * A block's parameters in declaration order, its parents' first. A library
+   * block carries its interface as three lists instead of a declaration, so
+   * both shapes are read.
    */
   private fbSlots(fb: FunctionBlockSymbol): InOutSlot[] {
-    if (fb.declaration.varBlocks.length > 0) {
-      return this.slotsFromVarBlocks(fb.declaration.varBlocks);
+    const slots: InOutSlot[] = [];
+    for (const block of this.fbLineage(fb).reverse()) {
+      if (block.declaration.varBlocks.length > 0) {
+        slots.push(...this.slotsFromVarBlocks(block.declaration.varBlocks));
+        continue;
+      }
+      const flat = (
+        vars: VariableSymbol[],
+        kind: InOutSlot["kind"],
+      ): InOutSlot[] =>
+        vars.map((v) => slot(v.name, kind, v.declaration.type.name));
+      slots.push(
+        ...flat(block.inputs, "input"),
+        ...flat(block.inouts, "inout"),
+        ...flat(block.outputs, "output"),
+      );
     }
-    return [
-      ...fb.inputs.map((v) => slot(v.name, "input", v.declaration.type.name)),
-      ...fb.inouts.map((v) => slot(v.name, "inout", v.declaration.type.name)),
-      ...fb.outputs.map((v) => slot(v.name, "output", v.declaration.type.name)),
-    ];
+    return slots;
+  }
+
+  /** A block followed by the blocks it EXTENDS, nearest first. */
+  private fbLineage(fb: FunctionBlockSymbol): FunctionBlockSymbol[] {
+    const lineage: FunctionBlockSymbol[] = [];
+    let block: FunctionBlockSymbol | undefined = fb;
+    while (block && !lineage.includes(block)) {
+      lineage.push(block);
+      const parent: string | undefined = block.declaration.extends;
+      block =
+        parent !== undefined && parent !== ""
+          ? this.symbolTables.lookupFunctionBlock(parent)
+          : undefined;
+    }
+    return lineage;
   }
 
   private slotsFromVarBlocks(blocks: VarBlock[]): InOutSlot[] {
@@ -1561,33 +1960,236 @@ export class SemanticAnalyzer {
     return slots;
   }
 
-  /** The parameters of whatever a call names, or undefined if it names none. */
-  private calleeSlots(name: string, scope: Scope): InOutSlot[] | undefined {
-    const dot = name.indexOf(".");
-    if (dot >= 0) {
-      const owner = this.fbTypeOf(name.substring(0, dot), scope);
-      const wanted = name.substring(dot + 1).toUpperCase();
-      const method = owner?.declaration.methods.find(
-        (m) => m.name.toUpperCase() === wanted,
+  /**
+   * What a call names and its parameters, or undefined when it names nothing
+   * whose interface is known here. The callee may be an instance reached
+   * through fields and elements — `pumps[2](...)`, `cell.timer(...)` — a
+   * method of one, or a function. A standard function is left out: its
+   * named arguments are bound by bindStdFunctionArguments.
+   */
+  private resolveCallee(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): Callee | undefined {
+    let base: string;
+    let path: AccessStep[];
+    if (expr.instance?.kind === "VariableExpression") {
+      base = expr.instance.name;
+      path = expr.instance.accessChain ?? [];
+    } else if (expr.instance) {
+      return undefined;
+    } else {
+      const [head, ...fields] = expr.functionName.split(".");
+      base = head!;
+      path = fields.map((name) => ({ kind: "field", name }));
+    }
+
+    const sym = scope.lookup(base);
+    if (sym?.kind === "function" && path.length === 0) {
+      const name = expr.functionName.toUpperCase();
+      if (
+        this.stdRegistry.lookup(name) ||
+        this.stdRegistry.resolveConversion(name)
+      ) {
+        return undefined;
+      }
+      const slots =
+        sym.declaration.varBlocks.length > 0
+          ? this.slotsFromVarBlocks(sym.declaration.varBlocks)
+          : sym.parameters.map((p) =>
+              slot(
+                p.name,
+                p.isInOut ? "inout" : p.isOutput ? "output" : "input",
+                p.declaration.type.name,
+              ),
+            );
+      return { what: `function '${sym.name}'`, slots };
+    }
+    if (sym?.kind !== "variable") return undefined;
+
+    // A trailing field may name a method of the instance before it.
+    const last = path[path.length - 1];
+    if (last?.kind === "field") {
+      const owner = this.typeAlongPath(
+        sym.declaration.type.name,
+        path.slice(0, -1),
       );
-      return method ? this.slotsFromVarBlocks(method.varBlocks) : undefined;
+      const fb =
+        owner === undefined
+          ? undefined
+          : this.symbolTables.lookupFunctionBlock(owner);
+      const wanted = last.name.toUpperCase();
+      for (const block of fb === undefined ? [] : this.fbLineage(fb)) {
+        const method = block.declaration.methods.find(
+          (m) => m.name.toUpperCase() === wanted,
+        );
+        if (method) {
+          return {
+            what: `method '${block.name}.${method.name}'`,
+            slots: this.slotsFromVarBlocks(method.varBlocks),
+          };
+        }
+      }
     }
 
-    const fb = this.fbTypeOf(name, scope);
-    if (fb) return this.fbSlots(fb);
+    const typeName = this.typeAlongPath(sym.declaration.type.name, path);
+    const fb =
+      typeName === undefined
+        ? undefined
+        : this.symbolTables.lookupFunctionBlock(typeName);
+    if (fb === undefined) return undefined;
+    return { what: `function block '${fb.name}'`, slots: this.fbSlots(fb) };
+  }
 
-    const sym = scope.lookup(name);
-    if (sym?.kind !== "function") return undefined;
-    if (sym.declaration.varBlocks.length > 0) {
-      return this.slotsFromVarBlocks(sym.declaration.varBlocks);
+  /** The parameters of whatever a call names, or undefined if it names none. */
+  private calleeSlots(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): InOutSlot[] | undefined {
+    return this.resolveCallee(expr, scope)?.slots;
+  }
+
+  /**
+   * The type reached from a declared type by following fields and elements,
+   * or undefined once a step leads somewhere this cannot see.
+   */
+  private typeAlongPath(
+    typeName: string,
+    path: readonly AccessStep[],
+  ): string | undefined {
+    let current: string | undefined = typeName;
+    for (const step of path) {
+      if (current === undefined) return undefined;
+      if (step.kind === "dereference") continue;
+      current =
+        step.kind === "subscript"
+          ? this.elementTypeOf(current)
+          : this.memberTypeOf(current, step.name);
     }
-    return sym.parameters.map((p) =>
-      slot(
-        p.name,
-        p.isInOut ? "inout" : p.isOutput ? "output" : "input",
-        p.declaration.type.name,
-      ),
-    );
+    return current;
+  }
+
+  /** A type with its aliases followed to the definition behind them. */
+  private typeDefinitionOf(typeName: string): {
+    name: string;
+    definition: TypeDefinition | undefined;
+  } {
+    let name = typeName;
+    for (let depth = 0; depth < 32; depth++) {
+      const definition =
+        // A built-in system type (`__SYSTEM.AnyType`) registers no declaration.
+        this.symbolTables.lookupType(name)?.declaration?.definition;
+      if (
+        definition?.kind !== "TypeReference" ||
+        definition.name.toUpperCase() === name.toUpperCase()
+      ) {
+        return { name, definition };
+      }
+      name = definition.name;
+    }
+    return { name, definition: undefined };
+  }
+
+  private elementTypeOf(typeName: string): string | undefined {
+    const synthetic = arrayElementTypeName(typeName);
+    if (synthetic !== undefined) return synthetic;
+    const { definition } = this.typeDefinitionOf(typeName);
+    return definition?.kind === "ArrayDefinition"
+      ? definition.elementType.name
+      : undefined;
+  }
+
+  private memberTypeOf(typeName: string, member: string): string | undefined {
+    const wanted = member.toUpperCase();
+    const { name, definition } = this.typeDefinitionOf(typeName);
+    if (definition?.kind === "StructDefinition") {
+      const field = definition.fields.find((f) =>
+        f.names.some((n) => n.toUpperCase() === wanted),
+      );
+      return field?.type.name;
+    }
+    const fb = this.symbolTables.lookupFunctionBlock(name);
+    for (const block of fb === undefined ? [] : this.fbLineage(fb)) {
+      for (const varBlock of block.declaration.varBlocks) {
+        const decl = varBlock.declarations.find((d) =>
+          d.names.some((n) => n.toUpperCase() === wanted),
+        );
+        if (decl) return decl.type.name;
+      }
+      const flat = [
+        ...block.inputs,
+        ...block.outputs,
+        ...block.inouts,
+        ...block.locals,
+      ].find((v) => v.name.toUpperCase() === wanted);
+      if (flat) return flat.declaration.type.name;
+    }
+    return undefined;
+  }
+
+  /**
+   * Every named argument of a call names a parameter of the callee, on the
+   * side it travels: an input or in-out is assigned with `:=`, an output is
+   * read with `=>`. EN and ENO are every POU's implicit input and output
+   * (IEC 61131-3), so they need no declaration. Without this a misspelt pin
+   * passes the check and reaches C++ as a member the block does not have.
+   */
+  private checkCallParameterNames(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): void {
+    const callee = this.resolveCallee(expr, scope);
+    if (!callee) return;
+    const byName = new Map(callee.slots.map((s) => [s.name, s]));
+
+    for (const arg of expr.arguments) {
+      if (arg.name === undefined) continue;
+      const name = arg.name.toUpperCase();
+      const target = byName.get(name);
+      const span = arg.sourceSpan ?? expr.sourceSpan;
+      const report = (message: string): void =>
+        this.addError(message, span.startLine, span.startCol, span.file);
+
+      if (!target) {
+        if (name === "EN") {
+          if (arg.isOutput) {
+            report(
+              `'EN' is the implicit input of ${callee.what}: assign it with ':='`,
+            );
+          }
+        } else if (name === "ENO") {
+          if (!arg.isOutput) {
+            report(
+              `'ENO' is the implicit output of ${callee.what}: read it with '=>'`,
+            );
+          }
+        } else {
+          const side = arg.isOutput ? "output" : "input";
+          const offered = callee.slots
+            .filter((s) =>
+              arg.isOutput ? s.kind === "output" : s.kind !== "output",
+            )
+            .map((s) => s.name);
+          report(
+            `${capitalize(callee.what)} has no ${side} '${name}'` +
+              (offered.length > 0
+                ? ` (its ${side}s are ${offered.join(", ")})`
+                : ` (it has no ${side}s)`),
+          );
+        }
+        continue;
+      }
+      if (target.kind === "input" && arg.isOutput) {
+        report(
+          `'${name}' is an input of ${callee.what}: assign it with ':=', not '=>'`,
+        );
+      } else if (target.kind === "output" && !arg.isOutput) {
+        report(
+          `'${name}' is an output of ${callee.what}: read it with '=>', not ':='`,
+        );
+      }
+      // An in-out captured with '=>' is reported by checkCallInOuts.
+    }
   }
 
   /**
@@ -1595,7 +2197,7 @@ export class SemanticAnalyzer {
    * can write back to.
    */
   private checkCallInOuts(expr: FunctionCallExpression, scope: Scope): void {
-    const slots = this.calleeSlots(expr.functionName, scope);
+    const slots = this.calleeSlots(expr, scope);
     if (!slots || !slots.some((s) => s.kind === "inout")) return;
 
     const byName = new Map<string, Argument>();
@@ -2033,8 +2635,9 @@ export class SemanticAnalyzer {
 
     // ---- CONSTANT ---------------------------------------------------------
     if (block.isConstant) {
-      // CONSTANT requires initializer (except VAR_INPUT — caller provides value)
-      if (blockType !== "VAR_INPUT") {
+      // CONSTANT requires initializer (except VAR_INPUT — caller provides value
+      // — and VAR_EXTERNAL, whose value is the global's)
+      if (blockType !== "VAR_INPUT" && blockType !== "VAR_EXTERNAL") {
         for (const decl of block.declarations) {
           if (!decl.initialValue) {
             const names = decl.names.join(", ");
@@ -2767,6 +3370,10 @@ export class SemanticAnalyzer {
     // Check bit access bounds on variable expressions
     if (expr.kind === "VariableExpression") {
       this.checkBitAccess(expr, varTypeMap, ast, expr.subscripts.length > 0);
+      this.checkMemberAccess(expr, varTypeMap);
+    }
+    if (expr.kind === "FunctionCallExpression") {
+      this.checkCalleeMemberAccess(expr, varTypeMap);
     }
 
     // Validate arguments bound to a generic parameter
@@ -3167,6 +3774,206 @@ export class SemanticAnalyzer {
       );
       return;
     }
+  }
+
+  /**
+   * Every element named in an access path is a member of the type it is
+   * applied to. IEC 61131-3 §6.4.4.6.1: an element of a structured variable is
+   * named by "two or more identifiers or array accesses separated by single
+   * periods", the later identifiers naming "the sequence of element names" of
+   * the data structure; §6.6.3.4, Table 41 features 6a and 7: an instance's
+   * inputs and outputs are reached as `FB_Instance.Input` / `.Output`. A name
+   * the type does not declare names nothing — without this, `s.nosuch := TRUE`
+   * compiled and only the C++ compiler rejected it, with no ST location.
+   *
+   * Applied to reads and writes alike: every expression and assignment target
+   * goes through validateExpression. The path is walked step by step — fields,
+   * array elements and dereferences, nested to any depth — and only a type
+   * whose whole member list is known here is judged; anything else (an
+   * elementary type, a generic, an interface, a library function block, whose
+   * manifest omits inherited members, methods and properties) ends the walk
+   * without a verdict.
+   */
+  private checkMemberAccess(
+    expr: VariableExpression,
+    varTypeMap: Map<string, string>,
+  ): void {
+    let steps: readonly AccessStep[];
+    if (expr.accessChain && expr.accessChain.length > 0) {
+      steps = expr.accessChain;
+    } else if (expr.subscripts.length === 0) {
+      steps = expr.fieldAccess.map((name) => ({ kind: "field", name }));
+    } else {
+      return; // legacy shape: field / subscript interleaving unknown
+    }
+    if (!steps.some((step) => step.kind === "field")) return;
+    const base = this.declaredTypeOfName(expr.name, varTypeMap);
+    if (base === undefined) return;
+    this.checkMemberPath(base, steps, expr.sourceSpan);
+  }
+
+  /**
+   * The same rule for the instance a call names — `cell.timer(...)`,
+   * `pumps[2].valve(...)` — the access paths resolveCallee follows. A trailing
+   * field may name a method of the instance before it, so only the steps up to
+   * the called instance are judged here; the named-argument check reports a
+   * callee that is not a block.
+   */
+  private checkCalleeMemberAccess(
+    expr: FunctionCallExpression,
+    varTypeMap: Map<string, string>,
+  ): void {
+    let baseName: string;
+    let steps: AccessStep[];
+    if (expr.instance?.kind === "VariableExpression") {
+      baseName = expr.instance.name;
+      steps = [...(expr.instance.accessChain ?? [])];
+      if (steps.length === 0 && expr.instance.fieldAccess.length > 0) {
+        if (expr.instance.subscripts.length > 0) return;
+        steps = expr.instance.fieldAccess.map((name) => ({
+          kind: "field",
+          name,
+        }));
+      }
+    } else if (expr.instance) {
+      return;
+    } else {
+      const [head, ...fields] = expr.functionName.split(".");
+      baseName = head!;
+      steps = fields.map((name) => ({ kind: "field", name }));
+    }
+    const last = steps[steps.length - 1];
+    if (last?.kind === "field") {
+      const base = this.declaredTypeOfName(baseName, varTypeMap);
+      if (base === undefined) return;
+      const owner = this.checkMemberPath(
+        base,
+        steps.slice(0, -1),
+        expr.sourceSpan,
+      );
+      if (owner === undefined) return;
+      // The called element itself: a member instance, or a method.
+      const fb = this.symbolTables.lookupFunctionBlock(owner);
+      const wanted = last.name.toUpperCase();
+      const isMethod = (fb === undefined ? [] : this.fbLineage(fb)).some(
+        (block) =>
+          block.declaration.methods.some(
+            (m) => m.name.toUpperCase() === wanted,
+          ),
+      );
+      if (!isMethod) this.checkMemberPath(owner, [last], expr.sourceSpan);
+      return;
+    }
+    if (!steps.some((step) => step.kind === "field")) return;
+    const base = this.declaredTypeOfName(baseName, varTypeMap);
+    if (base === undefined) return;
+    this.checkMemberPath(base, steps, expr.sourceSpan);
+  }
+
+  /** A name's declared type: the POU's own declaration, else a global's. */
+  private declaredTypeOfName(
+    name: string,
+    varTypeMap: Map<string, string>,
+  ): string | undefined {
+    const local = varTypeMap.get(name.toUpperCase());
+    if (local !== undefined) return local;
+    const sym = this.symbolTables.globalScope.lookup(name);
+    return sym?.kind === "variable" ? sym.declaration?.type?.name : undefined;
+  }
+
+  /**
+   * Walk `steps` from `typeName`, reporting the first field that the type it
+   * is applied to does not declare. A type whose member list is not fully
+   * known (a library block) gives no verdict, but a member it does list is
+   * still followed, so `lib_fb.out.nosuch` is judged against `out`'s type.
+   * Returns the type reached, or undefined once a step leads somewhere that
+   * cannot be resolved (or after an error, so one bad path is reported once).
+   */
+  private checkMemberPath(
+    typeName: string,
+    steps: readonly AccessStep[],
+    span: { startLine: number; startCol: number; file?: string },
+  ): string | undefined {
+    let current: string | undefined = typeName;
+    for (const step of steps) {
+      if (current === undefined) return undefined;
+      if (step.kind === "dereference") continue;
+      if (step.kind === "subscript") {
+        current = this.elementTypeOf(current);
+        continue;
+      }
+      // A partial access (`w.3`, `w.%B1`) is checked by checkBitAccess.
+      if (parsePartialAccess(step.name)) return undefined;
+      const owner = this.declaredMembersOf(current);
+      if (owner !== undefined && !owner.members.has(step.name.toUpperCase())) {
+        this.addError(
+          `'${step.name}' is not a member of ${owner.what}`,
+          span.startLine,
+          span.startCol,
+          span.file,
+        );
+        return undefined;
+      }
+      current = this.memberTypeOf(current, step.name);
+    }
+    return current;
+  }
+
+  /**
+   * Every member a structure or function block type declares — or undefined
+   * when that list is not fully known here, so nothing is reported against it.
+   *
+   * A structure's elements come from its declaration, local or from a library
+   * manifest that exports its fields. A user function block's members are its
+   * variables of every section, its methods and properties, those of the
+   * blocks it extends, and the implicit EN / ENO (IEC 61131-3 §6.6.3.2, Table
+   * 40 note 9). A library block is left out: its manifest carries only its
+   * own variables, not what it inherits, nor its methods or properties.
+   */
+  private declaredMembersOf(
+    typeName: string,
+  ): { what: string; members: Set<string> } | undefined {
+    const { name, definition } = this.typeDefinitionOf(typeName);
+    if (definition?.kind === "StructDefinition") {
+      const members = new Set<string>();
+      for (const field of definition.fields) {
+        for (const n of field.names) members.add(n.toUpperCase());
+      }
+      const declared =
+        this.symbolTables.lookupType(name)?.declaration?.declaredName ?? name;
+      return { what: `structure type ${declared}`, members };
+    }
+    if (definition !== undefined) return undefined;
+    const fb = this.symbolTables.lookupFunctionBlock(name);
+    if (fb === undefined) return undefined;
+    const members = new Set<string>(["EN", "ENO"]);
+    const lineage = this.fbLineage(fb);
+    const top = lineage[lineage.length - 1]!;
+    const parent = top.declaration.extends;
+    if (parent !== undefined && parent !== "") return undefined; // unknown base
+    for (const block of lineage) {
+      if (block.libraryName !== undefined) return undefined;
+      for (const varBlock of block.declaration.varBlocks) {
+        for (const decl of varBlock.declarations) {
+          for (const n of decl.names) members.add(n.toUpperCase());
+        }
+      }
+      for (const v of [
+        ...block.inputs,
+        ...block.outputs,
+        ...block.inouts,
+        ...block.locals,
+      ]) {
+        members.add(v.name.toUpperCase());
+      }
+      for (const m of block.declaration.methods) {
+        members.add(m.name.toUpperCase());
+      }
+      for (const p of block.declaration.properties) {
+        members.add(p.name.toUpperCase());
+      }
+    }
+    return { what: `function block type ${fb.name}`, members };
   }
 
   /**
@@ -4110,7 +4917,7 @@ export class SemanticAnalyzer {
           }
           break;
         }
-        this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan);
+        this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan, true);
         // Reject member access on a type-level symbol (FB / program / type).
         // Resolves the bug where `RED_YELLOW_GREEN.GREENTIME := …` is
         // silently accepted by the analyzer but blows up at C++
@@ -4121,6 +4928,7 @@ export class SemanticAnalyzer {
         // honoured because `scope.lookup` walks the chain — the
         // shadowing variable wins.
         this.checkInstanceAccess(expr, scope);
+        this.checkEnumValue(expr, scope);
         if (expr.accessChain) {
           // accessChain is the authoritative ordered chain — walk its subscripts
           for (const step of expr.accessChain) {
@@ -4241,6 +5049,28 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * `Mode.Auto` and `Mode#Auto` name a value the enumerated type has.
+   * Without this a misspelt value reached C++ as `MODE::AUTOO`.
+   */
+  private checkEnumValue(expr: VariableExpression, scope: Scope): void {
+    const first = expr.accessChain?.[0];
+    const member = first?.kind === "field" ? first.name : expr.fieldAccess[0];
+    if (member === undefined) return;
+    const sym = scope.lookup(expr.name);
+    if (sym?.kind !== "type" || sym.resolvedType?.typeKind !== "enum") return;
+    const values = (sym.resolvedType as EnumType).values.map((v) =>
+      v.toUpperCase(),
+    );
+    if (values.includes(member.toUpperCase())) return;
+    this.addError(
+      `'${member}' is not a value of the enumerated type '${sym.name}' (its values are ${values.join(", ")})`,
+      expr.sourceSpan.startLine,
+      expr.sourceSpan.startCol,
+      expr.sourceSpan.file,
+    );
+  }
+
+  /**
    * Check whether a name is declared in the current scope chain or context.
    */
   private checkNameDeclared(
@@ -4248,6 +5078,7 @@ export class SemanticAnalyzer {
     scope: Scope,
     ctx: UndeclaredVarContext,
     sourceSpan: { startLine: number; startCol: number; file?: string },
+    asValue = false,
   ): void {
     const upper = name.toUpperCase();
 
@@ -4259,7 +5090,9 @@ export class SemanticAnalyzer {
     //    enumValue match short-circuit here would swallow the
     //    "Ambiguous enum member" diagnostic.
     const scopeHit = scope.lookup(upper);
-    if (scopeHit && scopeHit.kind !== "enumValue") return;
+    // A function read as a value is checked after its own return variable.
+    const isFunction = asValue && scopeHit?.kind === "function";
+    if (scopeHit && scopeHit.kind !== "enumValue" && !isFunction) return;
 
     // 1b. Inherited FB member variables (walk EXTENDS chain)
     if (ctx.fbName) {
@@ -4291,7 +5124,8 @@ export class SemanticAnalyzer {
     if ((upper === "THIS" || upper === "SUPER") && ctx.fbName) return;
 
     // 5. Standard functions (safety net)
-    if (this.stdRegistry.isStandardFunction(name)) return;
+    const isStandardFunction = this.stdRegistry.isStandardFunction(name);
+    if (isStandardFunction && !asValue) return;
 
     // 6. Enum member names (bare enum values like Stopped, Running, Manual)
     const enumEntry = this.enumMemberMap.get(upper);
@@ -4309,7 +5143,18 @@ export class SemanticAnalyzer {
       return;
     }
 
-    // 7. Not found
+    // 7. A function named without a call: `d := CURRENT_DT;`
+    if (isFunction || isStandardFunction) {
+      this.addError(
+        `'${name}' is a function, not a variable: call it as '${name}()'`,
+        sourceSpan.startLine,
+        sourceSpan.startCol,
+        sourceSpan.file,
+      );
+      return;
+    }
+
+    // 8. Not found
     this.addError(
       `Undeclared variable '${name}'`,
       sourceSpan.startLine,
@@ -4334,6 +5179,13 @@ export class SemanticAnalyzer {
     this.errors = [];
     this.warnings = [];
     this.symbolTables = sourceSymbolTables;
+
+    this.bindStdFunctionArguments([
+      ...(testFile.setup?.varBlocks ?? []),
+      ...(testFile.setup?.body ?? []),
+      ...(testFile.teardown?.body ?? []),
+      ...testFile.testCases.flatMap((tc) => [...tc.varBlocks, ...tc.body]),
+    ]);
 
     // Build enum member map from source symbol tables for bare enum resolution
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];

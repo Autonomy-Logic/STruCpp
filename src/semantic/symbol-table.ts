@@ -123,6 +123,12 @@ export interface FunctionBlockSymbol extends BaseSymbol {
    * not exist.
    */
   libraryName?: string;
+  /**
+   * A library block whose value in-outs are bound by reference
+   * (`LibraryFBEntry.inoutsByReference`). Absent on a block from an older
+   * archive, whose in-outs are plain copies.
+   */
+  inoutsByReference?: boolean;
 }
 
 /**

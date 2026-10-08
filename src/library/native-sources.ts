@@ -113,6 +113,21 @@ function lastEndVarIndex(source: string): number {
   return last;
 }
 
+/**
+ * The text of a POU's documentation comment as the editor wrote it, with its
+ * comment delimiters restored.
+ *
+ * The editor breaks each delimiter inside the documentation with a backslash
+ * so it cannot end the comment early: `*)` is written `*\)` and `(*` is
+ * written `(\*`, and a run of backslashes already between the two characters
+ * gains one more. Reading takes exactly one away again. This mirrors
+ * `unescapeCommentText` in the editor's `comment-text.ts`; text with neither
+ * delimiter is unchanged.
+ */
+export function unescapeCommentText(text: string): string {
+  return text.replace(/\*\\(\\*)\)/g, "*$1)").replace(/\(\\(\\*)\*/g, "($1*");
+}
+
 /** Failure to recover an interface from a native source. */
 export interface NativeHeaderError {
   fileName: string;
@@ -140,7 +155,9 @@ export function projectNativeHeaderToSt(
   // (`extractDocumentation` in its POU text parser). Strip it first so the
   // declaration match stays anchored, and keep the text for the manifest.
   const docMatch = /^\s*\(\*\s*([\s\S]*?)\s*\*\)\s*/.exec(source.source);
-  const documentation = docMatch ? docMatch[1]!.trim() : "";
+  const documentation = docMatch
+    ? unescapeCommentText(docMatch[1]!.trim())
+    : "";
   const body = docMatch
     ? source.source.slice(docMatch[0].length)
     : source.source;

@@ -242,7 +242,7 @@ describeIfGpp('C++ Compilation Tests', () => {
     const result = compile(source);
     expect(result.success).toBe(true);
     // File-scope canonical + FB pointer member bound to it + pointer access.
-    expect(result.headerCode).toContain('inline GlobalVar<IEC_INT> COUNTER');
+    expect(result.headerCode).toContain('extern GlobalVar<IEC_INT> COUNTER;');
     expect(result.headerCode).toContain('GlobalVar<IEC_INT>* COUNTER');
     expect(result.cppCode).toContain('COUNTER(&');
     expect(result.cppCode).toContain('COUNTER->write(');

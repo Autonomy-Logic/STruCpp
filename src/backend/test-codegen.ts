@@ -102,6 +102,9 @@ export class TestCodeGenerator extends CodeGenerator {
       }
     }
     this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
+    // The FB / function parameter maps generateFBInvocation reads: positional
+    // order, and the in-outs it must copy back after a call.
+    this.registerPouParameters(ast);
     for (const prog of ast.programs) {
       this.knownProgramTypes.add(prog.name.toUpperCase());
     }

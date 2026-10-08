@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstring>
 #include <algorithm>
+#include <type_traits>
 #include "iec_types.hpp"
 
 namespace strucpp {
@@ -625,18 +626,22 @@ inline IECWString<MaxLen> WMID(const IECWString<MaxLen>& s, size_t pos, size_t l
     return s.substr(pos - 1, len);
 }
 
+// The whole joined string, as for STRING: IEC 61131-3 Table 34 feature 5 —
+// see iec_concat_capacity in iec_string.hpp.
 template<size_t MaxLen1, size_t MaxLen2>
-inline IECWString<(MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2)> 
+inline IECWString<iec_concat_capacity(MaxLen1, MaxLen2)>
 WCONCAT(const IECWString<MaxLen1>& s1, const IECWString<MaxLen2>& s2) noexcept {
-    constexpr size_t ResultLen = MaxLen1 > MaxLen2 ? MaxLen1 : MaxLen2;
+    constexpr size_t ResultLen = iec_concat_capacity(MaxLen1, MaxLen2);
     IECWString<ResultLen> result(s1);
     result.append(s2);
     return result;
 }
 
-template<size_t MaxLen>
-inline IECWString<MaxLen> WINSERT(const IECWString<MaxLen>& s1, const IECWString<MaxLen>& s2, size_t pos) noexcept {
-    IECWString<MaxLen> result(s1);
+// The whole result, as for STRING (Table 34 features 6 and 8): IN1 + IN2 of
+// room, and IN2 is no longer cut to IN1's length first.
+template<size_t MaxLen, size_t MaxLen2>
+inline IECWString<iec_concat_capacity(MaxLen, MaxLen2)> WINSERT(const IECWString<MaxLen>& s1, const IECWString<MaxLen2>& s2, size_t pos) noexcept {
+    IECWString<iec_concat_capacity(MaxLen, MaxLen2)> result(s1);
     // As the STRING form: INSERT places IN2 after the P-th character, while
     // DELETE begins at it and keeps `pos - 1`.
     result.insert(pos, s2.c_str());
@@ -651,9 +656,9 @@ inline IECWString<MaxLen> WDELETE(const IECWString<MaxLen>& s, size_t len, size_
     return result;
 }
 
-template<size_t MaxLen>
-inline IECWString<MaxLen> WREPLACE(const IECWString<MaxLen>& s1, const IECWString<MaxLen>& s2, size_t len, size_t pos) noexcept {
-    IECWString<MaxLen> result(s1);
+template<size_t MaxLen, size_t MaxLen2>
+inline IECWString<iec_concat_capacity(MaxLen, MaxLen2)> WREPLACE(const IECWString<MaxLen>& s1, const IECWString<MaxLen2>& s2, size_t len, size_t pos) noexcept {
+    IECWString<iec_concat_capacity(MaxLen, MaxLen2)> result(s1);
     if (pos == 0) pos = 1;
     result.replace(pos - 1, len, s2.c_str());
     return result;
@@ -694,5 +699,174 @@ template<size_t MaxLen1, size_t MaxLen2>
 inline bool NE_WSTRING(const IECWString<MaxLen1>& s1, const IECWString<MaxLen2>& s2) noexcept {
     return s1 != s2;
 }
+
+
+// =============================================================================
+// The IEC 61131-3 string functions on WSTRING
+// =============================================================================
+//
+// The standard names LEN, LEFT, RIGHT, MID, CONCAT, INSERT, DELETE, REPLACE,
+// FIND and the comparisons are overloaded on STRING and WSTRING alike, and
+// the compiler calls them by those names. These take any WSTRING kind — an
+// IECWString, an IECWStringVar, or a literal (`"abc"`, `const char16_t[N]` in
+// C++) — and forward to the W-prefixed forms above.
+
+template<typename T> struct iec_wstring_arg { static constexpr bool value = false; };
+template<size_t N> struct iec_wstring_arg<IECWString<N>> {
+    static constexpr bool value = true;
+    static const IECWString<N>& get(const IECWString<N>& s) noexcept { return s; }
+};
+template<size_t N> struct iec_wstring_arg<IECWStringVar<N>> {
+    static constexpr bool value = true;
+    static IECWString<N> get(const IECWStringVar<N>& s) noexcept { return s.get(); }
+};
+template<size_t K> struct iec_wstring_arg<char16_t[K]> {
+    static constexpr bool value = true;
+    static constexpr size_t length = K - 1 > 254 ? K - 1 : 254;
+    static IECWString<length> get(const char16_t (&s)[K]) noexcept { return IECWString<length>(s); }
+};
+template<> struct iec_wstring_arg<const char16_t*> {
+    static constexpr bool value = true;
+    static IECWString<254> get(const char16_t* s) noexcept { return IECWString<254>(s); }
+};
+
+template<typename T>
+using iec_wstring_arg_t = iec_wstring_arg<std::remove_cv_t<T>>;
+
+template<typename... Ts> struct iec_all_wstring_args : std::true_type {};
+template<typename T, typename... Ts> struct iec_all_wstring_args<T, Ts...>
+    : std::integral_constant<bool, iec_wstring_arg_t<T>::value && iec_all_wstring_args<Ts...>::value> {};
+
+template<typename... Ts>
+using enable_if_wstring_args = std::enable_if_t<iec_all_wstring_args<Ts...>::value, int>;
+
+/** The argument as an IECWString of its own size. */
+template<typename T>
+inline auto iec_as_wstring(const T& s) noexcept -> decltype(iec_wstring_arg_t<T>::get(s)) {
+    return iec_wstring_arg_t<T>::get(s);
+}
+
+template<typename S, enable_if_wstring_args<S> = 0>
+inline size_t LEN(const S& s) noexcept { return WLEN(iec_as_wstring(s)); }
+
+template<typename S, enable_if_wstring_args<S> = 0>
+inline auto LEFT(const S& s, size_t len) noexcept { return WLEFT(iec_as_wstring(s), len); }
+
+template<typename S, enable_if_wstring_args<S> = 0>
+inline auto RIGHT(const S& s, size_t len) noexcept { return WRIGHT(iec_as_wstring(s), len); }
+
+// MID(IN, L, P); WMID takes the position first.
+template<typename S, enable_if_wstring_args<S> = 0>
+inline auto MID(const S& s, size_t len, size_t pos) noexcept {
+    return WMID(iec_as_wstring(s), pos, len);
+}
+
+template<typename S, enable_if_wstring_args<S> = 0>
+inline auto DELETE_STR(const S& s, size_t len, size_t pos) noexcept {
+    return WDELETE(iec_as_wstring(s), len, pos);
+}
+
+template<typename A, typename B, enable_if_wstring_args<A, B> = 0>
+inline auto INSERT(const A& s1, const B& s2, size_t pos) noexcept {
+    const auto first = iec_as_wstring(s1);
+    return WINSERT(first, iec_as_wstring(s2), pos);
+}
+
+template<typename A, typename B, enable_if_wstring_args<A, B> = 0>
+inline auto REPLACE(const A& s1, const B& s2, size_t len, size_t pos) noexcept {
+    const auto first = iec_as_wstring(s1);
+    return WREPLACE(first, iec_as_wstring(s2), len, pos);
+}
+
+template<typename A, typename B, enable_if_wstring_args<A, B> = 0>
+inline size_t FIND(const A& s1, const B& s2) noexcept {
+    return WFIND(iec_as_wstring(s1), iec_as_wstring(s2));
+}
+
+/** Room a WSTRING CONCAT input takes: its declared length, or a literal's own. */
+template<typename T> struct iec_wconcat_room {
+    static constexpr size_t value = std::decay_t<decltype(iec_as_wstring(std::declval<const T&>()))>::max_length;
+};
+template<size_t K> struct iec_wconcat_room<char16_t[K]> { static constexpr size_t value = K - 1; };
+template<size_t K> struct iec_wconcat_room<const char16_t[K]> { static constexpr size_t value = K - 1; };
+
+template<typename A, typename B, enable_if_wstring_args<A, B> = 0>
+inline auto CONCAT(const A& s1, const B& s2) noexcept {
+    IECWString<iec_concat_capacity(iec_wconcat_room<A>::value, iec_wconcat_room<B>::value)> result(
+        iec_as_wstring(s1));
+    result.append(iec_as_wstring(s2));
+    return result;
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_wstring_args<A, B, C, Rest...> = 0>
+inline auto CONCAT(const A& s1, const B& s2, const C& s3, const Rest&... rest) noexcept {
+    return CONCAT(CONCAT(s1, s2), s3, rest...);
+}
+
+#define STRUCPP_WSTRING_COMPARE(NAME, OP)                                           \
+    template<typename A, typename B, enable_if_wstring_args<A, B> = 0>             \
+    inline bool NAME(const A& s1, const B& s2) noexcept {                         \
+        return iec_as_wstring(s1) OP iec_as_wstring(s2);                          \
+    }
+#define STRUCPP_WSTRING_COMPARE_EXTENSIBLE(NAME)                                    \
+    template<typename A, typename B, typename C, typename... Rest,                 \
+             enable_if_wstring_args<A, B, C, Rest...> = 0>                         \
+    inline bool NAME(const A& s1, const B& s2, const C& s3, const Rest&... rest) noexcept { \
+        return NAME(s1, s2) && NAME(s2, s3, rest...);                             \
+    }
+STRUCPP_WSTRING_COMPARE(GT, >)
+STRUCPP_WSTRING_COMPARE(GE, >=)
+STRUCPP_WSTRING_COMPARE(EQ, ==)
+STRUCPP_WSTRING_COMPARE(LE, <=)
+STRUCPP_WSTRING_COMPARE(LT, <)
+STRUCPP_WSTRING_COMPARE(NE, !=)
+STRUCPP_WSTRING_COMPARE_EXTENSIBLE(GT)
+STRUCPP_WSTRING_COMPARE_EXTENSIBLE(GE)
+STRUCPP_WSTRING_COMPARE_EXTENSIBLE(EQ)
+STRUCPP_WSTRING_COMPARE_EXTENSIBLE(LE)
+STRUCPP_WSTRING_COMPARE_EXTENSIBLE(LT)
+#undef STRUCPP_WSTRING_COMPARE
+
+// MAX, MIN and LIMIT on WSTRING (ANY_ELEMENTARY in IEC 61131-3 Table 24). The
+// result is as long as the longest input.
+template<typename A, typename B, enable_if_wstring_args<A, B> = 0>
+inline auto MAX(const A& a, const B& b) noexcept {
+    const auto x = iec_as_wstring(a);
+    const auto y = iec_as_wstring(b);
+    using R = IECWString<(std::decay_t<decltype(x)>::max_length > std::decay_t<decltype(y)>::max_length
+                              ? std::decay_t<decltype(x)>::max_length
+                              : std::decay_t<decltype(y)>::max_length)>;
+    return x < y ? R(y) : R(x);
+}
+
+template<typename A, typename B, enable_if_wstring_args<A, B> = 0>
+inline auto MIN(const A& a, const B& b) noexcept {
+    const auto x = iec_as_wstring(a);
+    const auto y = iec_as_wstring(b);
+    using R = IECWString<(std::decay_t<decltype(x)>::max_length > std::decay_t<decltype(y)>::max_length
+                              ? std::decay_t<decltype(x)>::max_length
+                              : std::decay_t<decltype(y)>::max_length)>;
+    return y < x ? R(y) : R(x);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_wstring_args<A, B, C, Rest...> = 0>
+inline auto MAX(const A& a, const B& b, const C& c, const Rest&... rest) noexcept {
+    return MAX(MAX(a, b), c, rest...);
+}
+
+template<typename A, typename B, typename C, typename... Rest,
+         enable_if_wstring_args<A, B, C, Rest...> = 0>
+inline auto MIN(const A& a, const B& b, const C& c, const Rest&... rest) noexcept {
+    return MIN(MIN(a, b), c, rest...);
+}
+
+/** OUT := MIN(MAX(IN, MN), MX), as for numbers. */
+template<typename A, typename B, typename C, enable_if_wstring_args<A, B, C> = 0>
+inline auto LIMIT(const A& mn, const B& in, const C& mx) noexcept {
+    return MIN(MAX(in, mn), mx);
+}
+#undef STRUCPP_WSTRING_COMPARE_EXTENSIBLE
 
 } // namespace strucpp

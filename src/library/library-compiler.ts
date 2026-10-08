@@ -28,6 +28,7 @@ import {
 import type {
   LibraryFBEntry,
   LibraryManifest,
+  LibraryStructField,
   LibraryVarType,
 } from "./library-manifest.js";
 import type {
@@ -88,6 +89,14 @@ function serializeVarType(
   typeRef: TypeReference,
 ): LibraryVarType {
   const entry: LibraryVarType = { name, type: typeRef.name };
+  // Lengths as numbers only: a constant's name would not resolve in a consumer.
+  if (typeof typeRef.maxLength === "number") {
+    entry.maxLength = typeRef.maxLength;
+  }
+  if (typeRef.elementMaxLength !== undefined) {
+    entry.elementMaxLength = typeRef.elementMaxLength;
+  }
+
   if (typeRef.arrayDimensions && typeRef.arrayDimensions.length > 0) {
     entry.arrayDimensions = typeRef.arrayDimensions;
   }
@@ -300,11 +309,13 @@ function buildFBEntry(fb: {
         ),
       );
 
+  const inouts = varsOfBlock("VAR_IN_OUT");
   return {
     name: fb.name,
     inputs: varsOfBlock("VAR_INPUT"),
     outputs: varsOfBlock("VAR_OUTPUT"),
-    inouts: varsOfBlock("VAR_IN_OUT"),
+    inouts,
+    ...(inouts.length > 0 ? { inoutsByReference: true } : {}),
   };
 }
 
@@ -707,7 +718,7 @@ export function compileLibrary(
         name: string;
         kind: typeof kind;
         declaredName?: string;
-        fields?: Array<{ name: string; type: string; declaredName?: string }>;
+        fields?: LibraryStructField[];
         members?: string[];
       } = { name: t.name, kind };
       // Only when it says something the folded name does not, so an all-caps
@@ -721,14 +732,13 @@ export function compileLibrary(
         entry.members = t.definition.members.map((m) => m.name);
       }
       // Export struct member fields so consumers can type `x.field` access
-      // on a dependency struct.
+      // on a dependency struct, and lay out its arrays and strings.
       if (t.definition.kind === "StructDefinition") {
         entry.fields = t.definition.fields.flatMap((decl) =>
           decl.names.map((name, i) => {
             const declared = decl.declaredNames?.[i];
             return {
-              name,
-              type: decl.type.name,
+              ...serializeVarType(name, decl.type),
               ...(declared !== undefined && declared !== name
                 ? { declaredName: declared }
                 : {}),

@@ -101,6 +101,10 @@ export interface LibraryVarType {
   /** The declaring block was `VAR RETAIN`: retained in every instance, whether
    *  or not the instance itself was declared RETAIN. */
   retain?: true;
+  /** Declared length of a `STRING(n)` / `WSTRING(n)`; absent when unqualified. */
+  maxLength?: number;
+  /** Declared length of an inline array's `STRING(n)` element. */
+  elementMaxLength?: number;
 }
 
 /**
@@ -136,6 +140,14 @@ export interface LibraryFBEntry {
   /** In-out variables */
   inouts: LibraryVarType[];
   /**
+   * The block's value in-outs are `strucpp::InOut<V>` members, bound to the
+   * caller's variable by reference at each call (IEC 61131-3 §3.48). Set by
+   * every STruC++ that binds them; an archive without it was built when the
+   * block held a copy (plain members), and a consumer calls its blocks the
+   * old way — copy in, copy back — and debugs the copy.
+   */
+  inoutsByReference?: boolean;
+  /**
    * `VAR` members — the block's own internal state, declared exactly as the
    * interface arrays are.
    *
@@ -168,6 +180,10 @@ export interface LibraryFBEntry {
 /**
  * Library type entry in a manifest.
  */
+/** A struct member in a manifest: its full type (array bounds, string length)
+ *  so a consumer lays it out as the library declared it. */
+export type LibraryStructField = LibraryVarType & { declaredName?: string };
+
 export interface LibraryTypeEntry {
   /** Type name */
   name: string;
@@ -183,7 +199,7 @@ export interface LibraryTypeEntry {
   /** Struct member fields (name + declared type), so a consuming compilation
    *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
    *  for `kind: "struct"`; optional for backward compatibility. */
-  fields?: Array<{ name: string; type: string; declaredName?: string }>;
+  fields?: LibraryStructField[];
   /** Enumerator names in declaration order, so a consumer can resolve a bare
    *  member to this type and qualify it. Only for `kind: "enum"`. Without it
    *  the consumer knows the type is an enum but not what may be written into

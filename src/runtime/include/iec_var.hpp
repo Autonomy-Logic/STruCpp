@@ -46,6 +46,28 @@
 #include <type_traits>
 #include <utility>
 
+/**
+ * Calling form of the variable accessors (IECVar / IEC_ENUM_Var get and set)
+ * in a size-optimised build.
+ *
+ * At -Os GCC keeps get() and set() out of line, then specialises each one with
+ * IPA-SRA so every call site passes the object's fields (value, force flag,
+ * forced value) instead of the object's address — several extra instructions
+ * per read and per write of a variable, in every POU. `noipa` keeps the one
+ * plain out-of-line accessor called with `this`. It changes how the accessor is
+ * called, never what it does: the forcing semantics above are untouched.
+ *
+ * Only where it is known to shrink code: GCC 8+ (`noipa` is unknown before)
+ * optimising for size (`__OPTIMIZE_SIZE__`, i.e. -Os, the board builds). A
+ * host build at -O1/-O2 keeps inlining the accessors, so the runtime's speed
+ * is unchanged; Clang and MSVC see nothing.
+ */
+#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ >= 8) && defined(__OPTIMIZE_SIZE__)
+#  define STRUCPP_ACCESSOR __attribute__((noinline, noipa))
+#else
+#  define STRUCPP_ACCESSOR
+#endif
+
 namespace strucpp {
 
 // Forward declaration for pointer-to-integer assignment
@@ -126,7 +148,7 @@ public:
      * Get the current value.
      * Returns the forced value if forcing is active, otherwise the normal value.
      */
-    T get() const noexcept {
+    STRUCPP_ACCESSOR T get() const noexcept {
         return forced_ ? forced_value_ : value_;
     }
 
@@ -135,7 +157,7 @@ public:
      * If forcing is active, the set is ignored to ensure drivers reading
      * the raw storage always see the forced value for output variables.
      */
-    void set(T v) noexcept {
+    STRUCPP_ACCESSOR void set(T v) noexcept {
         if (!forced_) {
             value_ = v;
         }
@@ -400,44 +422,55 @@ static_assert(IECVar<int64_t>::value_field_offset() == 0, "IECVar<LINT> payload 
 
 // =============================================================================
 // Binary Operators
+//
+// The result of an arithmetic or bitwise operation is the OPERANDS' type
+// (IEC 61131-3 §6.6.1.7.2: "The data types of inputs and the outputs/result
+// shall be of the same type"; "dint1:= int1 + int2; (* Addition is performed
+// as an integer operation, then the result is converted to a DINT *)"), so
+// each operator converts C++'s promoted result back to T — exactly what the
+// IECVar<T> it used to return did on construction. It returns that T itself:
+// a temporary is never forced, so wrapping it in an IECVar (value + force flag
+// + forced copy, copied out again by the caller) only cost code. Where a
+// result feeds another operator or a call, T and IECVar<T> select the same
+// arithmetic; none of the value semantics change.
 // =============================================================================
 
 template<typename T>
-inline IECVar<T> operator+(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() + b.get());
+inline T operator+(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() + b.get());
 }
 
 template<typename T>
-inline IECVar<T> operator-(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() - b.get());
+inline T operator-(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() - b.get());
 }
 
 template<typename T>
-inline IECVar<T> operator*(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() * b.get());
+inline T operator*(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() * b.get());
 }
 
 template<typename T>
-inline IECVar<T> operator/(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() / b.get());
+inline T operator/(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() / b.get());
 }
 
 template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>>
-inline IECVar<T> operator%(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() % b.get());
+inline T operator%(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() % b.get());
 }
 
 // Mixed-type arithmetic operators (IECVar<T> op T) and (T op IECVar<T>)
-template<typename T> inline IECVar<T> operator+(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() + b); }
-template<typename T> inline IECVar<T> operator+(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a + b.get()); }
-template<typename T> inline IECVar<T> operator-(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() - b); }
-template<typename T> inline IECVar<T> operator-(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a - b.get()); }
-template<typename T> inline IECVar<T> operator*(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() * b); }
-template<typename T> inline IECVar<T> operator*(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a * b.get()); }
-template<typename T> inline IECVar<T> operator/(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() / b); }
-template<typename T> inline IECVar<T> operator/(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a / b.get()); }
-template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>> inline IECVar<T> operator%(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() % b); }
-template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>> inline IECVar<T> operator%(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a % b.get()); }
+template<typename T> inline T operator+(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() + b); }
+template<typename T> inline T operator+(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a + b.get()); }
+template<typename T> inline T operator-(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() - b); }
+template<typename T> inline T operator-(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a - b.get()); }
+template<typename T> inline T operator*(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() * b); }
+template<typename T> inline T operator*(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a * b.get()); }
+template<typename T> inline T operator/(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() / b); }
+template<typename T> inline T operator/(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a / b.get()); }
+template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>> inline T operator%(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() % b); }
+template<typename T, typename = std::enable_if_t<std::is_integral<T>::value>> inline T operator%(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a % b.get()); }
 
 // =============================================================================
 // Comparison Operators
@@ -492,31 +525,31 @@ template<typename T> inline bool operator>=(T a, const IECVar<T>& b) noexcept { 
 // =============================================================================
 
 template<typename T>
-inline IECVar<T> operator&(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() & b.get());
+inline T operator&(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() & b.get());
 }
 
 template<typename T>
-inline IECVar<T> operator|(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() | b.get());
+inline T operator|(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() | b.get());
 }
 
 template<typename T>
-inline IECVar<T> operator^(const IECVar<T>& a, const IECVar<T>& b) noexcept {
-    return IECVar<T>(a.get() ^ b.get());
+inline T operator^(const IECVar<T>& a, const IECVar<T>& b) noexcept {
+    return static_cast<T>(a.get() ^ b.get());
 }
 
 // Mixed-type bitwise operators
-template<typename T> inline IECVar<T> operator&(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() & b); }
-template<typename T> inline IECVar<T> operator&(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a & b.get()); }
-template<typename T> inline IECVar<T> operator|(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() | b); }
-template<typename T> inline IECVar<T> operator|(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a | b.get()); }
-template<typename T> inline IECVar<T> operator^(const IECVar<T>& a, T b) noexcept { return IECVar<T>(a.get() ^ b); }
-template<typename T> inline IECVar<T> operator^(T a, const IECVar<T>& b) noexcept { return IECVar<T>(a ^ b.get()); }
+template<typename T> inline T operator&(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() & b); }
+template<typename T> inline T operator&(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a & b.get()); }
+template<typename T> inline T operator|(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() | b); }
+template<typename T> inline T operator|(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a | b.get()); }
+template<typename T> inline T operator^(const IECVar<T>& a, T b) noexcept { return static_cast<T>(a.get() ^ b); }
+template<typename T> inline T operator^(T a, const IECVar<T>& b) noexcept { return static_cast<T>(a ^ b.get()); }
 
 template<typename T>
-inline IECVar<T> operator~(const IECVar<T>& a) noexcept {
-    return IECVar<T>(~a.get());
+inline T operator~(const IECVar<T>& a) noexcept {
+    return static_cast<T>(~a.get());
 }
 
 // =============================================================================
@@ -571,5 +604,96 @@ using IEC_TIME_OF_DAY = IEC_TOD;
 using IEC_DATE_AND_TIME = IEC_DT;
 using IEC_LONG_TIME_OF_DAY = IEC_LTOD;
 using IEC_LONG_DATE_AND_TIME = IEC_LDT;
+
+// =============================================================================
+// VAR_IN_OUT of a function block
+// =============================================================================
+
+/**
+ * A function block's VAR_IN_OUT parameter: the caller's variable, reached
+ * through a reference the call binds.
+ *
+ * IEC 61131-3 §3.48: an in-out variable "is used to supply a value to a
+ * program organization unit and which is additionally used to return a value
+ * from the program organization unit"; the block reads and writes the caller's
+ * variable itself (§6.6.2.2 rule 6, Figure 13 NOTE 3), and the binding is
+ * stored in the instance between calls (§6.6.3.4.1: "the instance shall be
+ * provided with a valid value which is stored, e.g. via initialization or
+ * former call"). The instance used to hold a COPY, copied in before the call
+ * and back after it: two in-outs bound to one variable lost a write, and an
+ * element `arr[i]` was written back to whichever element `i` named after the
+ * call.
+ *
+ * `ref` points at the caller's own wrapper (IECVar, struct, string, array), so
+ * reads go through get() and writes through set(): a forced variable reads its
+ * forced value and keeps it, exactly as before. `copy` is the block's own
+ * storage, used where a reference cannot be made — a bit of a word, an actual
+ * of another type (STRING(10) on a STRING(20) in-out) — or where the call is
+ * copied in and back on purpose (a shared global, whose lock the call cannot
+ * hold); `ref` then points at `copy`. `copy` is first, so an older reader that
+ * takes the member's own address sees a valid value of the declared type.
+ */
+template<typename V>
+class InOut {
+public:
+    InOut() noexcept : copy(), ref(&copy) {}
+    InOut(const InOut& other) noexcept : copy(other.var()), ref(&copy) {}
+
+    /** A copied-in value (the copy-in / copy-back form). */
+    InOut& operator=(const InOut& other) noexcept {
+        copy = other.var();
+        ref = &copy;
+        return *this;
+    }
+    template<typename A>
+    InOut& operator=(const A& value) noexcept {
+        copy = value;
+        ref = &copy;
+        return *this;
+    }
+
+    /** Bind the caller's variable itself. */
+    void bind(V& actual) noexcept { ref = &actual; }
+
+    V& var() noexcept { return *ref; }
+    const V& var() const noexcept { return *ref; }
+    operator V&() noexcept { return *ref; }
+    operator const V&() const noexcept { return *ref; }
+
+    /**
+     * C++ written against the member directly (a C/C++ block's `{external}`
+     * glue: `vars.IO = &IO;`, `&IO[lower] - lower`) reaches the bound variable,
+     * as it reached the member when the member was the variable's copy.
+     */
+    V* operator&() noexcept { return ref; }
+    const V* operator&() const noexcept { return ref; }
+    template<typename I>
+    auto operator[](I i) noexcept -> decltype((*std::declval<V*>())[i]) { return (*ref)[i]; }
+
+    V copy;   ///< The block's own storage (copy form, and the unbound default)
+    V* ref;   ///< The variable the block works on
+};
+
+/**
+ * Bind an in-out to the caller's variable before the call. A variable of the
+ * in-out's own type is bound by reference (returns false: nothing to copy
+ * back); anything else is copied in (returns true: copy it back after).
+ */
+template<typename V>
+inline bool iec_inout_bind(InOut<V>& io, V& actual) noexcept {
+    io.bind(actual);
+    return false;
+}
+template<typename V, typename A>
+inline bool iec_inout_bind(InOut<V>& io, A& actual) noexcept {
+    io = actual;
+    return true;
+}
+
+/** Copy a copied-in in-out back to the caller's variable after the call. */
+template<typename V, typename A>
+inline void iec_inout_back(InOut<V>& io, A& actual) noexcept {
+    actual = io.copy;
+}
 
 } // namespace strucpp

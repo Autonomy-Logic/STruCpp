@@ -85,7 +85,14 @@ describe("Library chunks", () => {
       const fnChunk = chunks.find((c) => c.kind === "function")!;
 
       expect(typeChunk.header.length).toBeGreaterThan(0);
-      expect(typeChunk.cpp).toBe(""); // types are header-only
+      // A STRUCT's cpp is only its layout table, defined once in the
+      // consumer's configuration.cpp; the header declares it `extern`.
+      expect(typeChunk.header).toContain(
+        "extern const strucpp::TypeDesc T__TYPEDESC;",
+      );
+      expect(typeChunk.cpp.trim()).toMatch(
+        /^\/\/ Member layout of T,[\s\S]*const strucpp::TypeDesc T__TYPEDESC = \{[\s\S]*\};$/,
+      );
 
       expect(fbChunk.header.length).toBeGreaterThan(0);
       expect(fbChunk.cpp.length).toBeGreaterThan(0); // FBs have both

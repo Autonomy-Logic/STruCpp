@@ -58,6 +58,28 @@
 #define STRUCPP_DEBUG_FLASH
 #endif
 
+namespace strucpp {
+template<size_t MaxLen> class IECStringVar;
+template<size_t MaxLen> class IECWStringVar;
+
+namespace debug {
+
+// `Entry::cap` read from a STRING / WSTRING leaf's own C++ type, for a leaf
+// whose declared length the table generator could not see. 0 for the 254
+// default and for any other type, matching the table's convention.
+template<typename T> struct string_cap { static constexpr uint8_t value = 0; };
+template<typename T> struct string_cap<T&> : string_cap<T> {};
+template<typename T> struct string_cap<const T> : string_cap<T> {};
+template<size_t N> struct string_cap<IECStringVar<N>> {
+    static constexpr uint8_t value = N >= 254 ? 0 : static_cast<uint8_t>(N);
+};
+template<size_t N> struct string_cap<IECWStringVar<N>> {
+    static constexpr uint8_t value = N >= 254 ? 0 : static_cast<uint8_t>(N);
+};
+
+} // namespace debug
+} // namespace strucpp
+
 namespace strucpp { namespace debug {
 
 // ---------------------------------------------------------------------------
@@ -115,6 +137,28 @@ constexpr uint8_t LEAF_FLAG_READONLY = 1 << 0;
 // generated table self-describing: a reviewer or a diagnostic dump can see
 // which leaves are retained without cross-referencing a second array.
 constexpr uint8_t LEAF_FLAG_RETAIN = 1 << 1;
+
+// INDIRECT marks a leaf inside a function block's VAR_IN_OUT: the caller's
+// variable, which the block reaches through a reference bound at each call
+// (strucpp::InOut in iec_var.hpp). Its `Entry.ptr` is then not the variable but
+// an `IndirectRef` (below) naming where the binding is kept; `read_entry`
+// follows it, so every handler sees the caller's variable as it is now. Always
+// set together with READONLY: the leaf is a view of someone else's variable,
+// forced and written at that variable's own name.
+constexpr uint8_t LEAF_FLAG_INDIRECT = 1 << 2;
+
+/**
+ * Where an INDIRECT leaf's variable is: the bound pointer (`InOut::ref`), and
+ * the leaf's offset inside the in-out's type — taken as the distance from the
+ * block's own copy (`InOut::copy`, a real object of that type) to the same
+ * leaf inside it, so a member or element at any depth needs no `offsetof`.
+ * All three are address constants, so the table stays in flash.
+ */
+struct IndirectRef {
+    const void* binding;     // &instance.MEMBER.ref  (a V*)
+    const void* proto_base;  // &instance.MEMBER.copy
+    const void* proto_leaf;  // &instance.MEMBER.copy<.field / [i] ...>
+};
 
 // ---------------------------------------------------------------------------
 // Debug entry: one per leaf variable.  Layout is ABI; see notes in

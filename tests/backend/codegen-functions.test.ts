@@ -326,7 +326,7 @@ describe("Codegen - Function Calls", () => {
 
         PROGRAM Main
           VAR q : INT; r : INT; END_VAR
-          q := Divide(10, 3, r => r);
+          q := Divide(10, 3, remainder => r);
         END_PROGRAM
       `);
 
@@ -397,7 +397,7 @@ describe("Codegen - Function Calls", () => {
       expect(outputWarnings[0]!.message).toContain("REMAINDER");
     });
 
-    it("should warn when => is used on a VAR_INPUT parameter", () => {
+    it("should reject => on a VAR_INPUT parameter", () => {
       const result = compile(`
         FUNCTION Divide : INT
           VAR_INPUT dividend : INT := 0; divisor : INT; END_VAR
@@ -412,12 +412,10 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.success).toBe(true);
-      const directionWarnings = result.warnings.filter((w) =>
-        w.message.includes("did you mean"),
-      );
-      expect(directionWarnings.length).toBe(1);
-      expect(directionWarnings[0]!.message).toContain("dividend");
+      expect(result.success).toBe(false);
+      expect(result.errors.map((e) => e.message)).toEqual([
+        "'DIVIDEND' is an input of function 'DIVIDE': assign it with ':=', not '=>'",
+      ]);
     });
   });
 
@@ -600,7 +598,7 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toMatch(/CALC\(99, 5, 77\)/);
     });
 
-    it("should warn about named args referencing non-existent parameters", () => {
+    it("should reject named args referencing non-existent parameters", () => {
       const result = compile(`
         FUNCTION Calc : INT
           VAR_INPUT x : INT := 0; y : INT := 0; END_VAR
@@ -613,32 +611,12 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.success).toBe(true);
-      // Should have warnings for unrecognized param names
-      const typoWarnings = result.warnings.filter((w) =>
-        w.message.includes("does not match any parameter"),
-      );
-      expect(typoWarnings.length).toBe(2);
-      expect(typoWarnings[0]!.message).toContain("XX");
-      expect(typoWarnings[1]!.message).toContain("YY");
-    });
-
-    it("should fill all slots with defaults when named args have typos", () => {
-      const result = compile(`
-        FUNCTION Calc : INT
-          VAR_INPUT x : INT := 0; y : INT := 0; END_VAR
-          Calc := x + y;
-        END_FUNCTION
-
-        PROGRAM Main
-          VAR r : INT; END_VAR
-          r := Calc(xx := 5, yy := 10);
-        END_PROGRAM
-      `);
-
-      expect(result.success).toBe(true);
-      // x and y are unfilled (typos don't match), so they get default 0
-      expect(result.cppCode).toMatch(/CALC\(0, 0\)/);
+      // A misspelt name is an error, not a default silently filled in.
+      expect(result.success).toBe(false);
+      expect(result.errors.map((e) => e.message)).toEqual([
+        "Function 'CALC' has no input 'XX' (its inputs are X, Y)",
+        "Function 'CALC' has no input 'YY' (its inputs are X, Y)",
+      ]);
     });
 
     it("should handle mix of positional before named correctly", () => {

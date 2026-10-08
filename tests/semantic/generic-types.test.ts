@@ -396,7 +396,7 @@ END_PROGRAM`;
     );
   });
 
-  it("still copies a concrete in-out back", () => {
+  it("binds a concrete in-out by reference", () => {
     const concrete = `
 FUNCTION_BLOCK BUMP
 VAR_IN_OUT
@@ -413,8 +413,9 @@ END_VAR
   b(N := count);
 END_PROGRAM`;
     const cpp = compileSource(concrete).cppCode;
-    expect(cpp).toContain("B.N = COUNT;");
-    expect(cpp).toContain("COUNT = B.N;");
+    expect(cpp).toMatch(
+      /auto\* (__io\d+) = &COUNT;\n\s*const bool __ioc\d+ = strucpp::iec_inout_bind\(B\.N, \*\1\);/,
+    );
   });
 });
 

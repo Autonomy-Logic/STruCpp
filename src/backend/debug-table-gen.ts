@@ -21,7 +21,10 @@
  */
 
 import type {
+  ASTNode,
   CompilationUnit,
+  FunctionCallExpression,
+  VariableExpression,
   ProgramDeclaration,
   TypeReference,
   StructDefinition,
@@ -40,6 +43,7 @@ import {
 import { formatArrayElementAccess } from "./codegen-utils.js";
 import { mangledMemberName } from "./member-mangling.js";
 import { GENERATED_TU_MACRO } from "./codegen.js";
+import { walkAST } from "../ast-utils.js";
 
 // ---------------------------------------------------------------------------
 // Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
@@ -83,6 +87,12 @@ export type TagName = keyof typeof TAG;
 export const LEAF_FLAG_READONLY = 1 << 0;
 /** Mirrors LEAF_FLAG_RETAIN in runtime/include/debug_table.hpp. */
 export const LEAF_FLAG_RETAIN = 1 << 1;
+/**
+ * Mirrors LEAF_FLAG_INDIRECT in runtime/include/debug_table.hpp: a leaf inside
+ * a function block's VAR_IN_OUT — the caller's variable, reached through the
+ * binding the call made (IEC 61131-3 §3.48). Always with READONLY.
+ */
+export const LEAF_FLAG_INDIRECT = 1 << 2;
 
 /**
  * Apply one var block's qualifiers to the flags inherited from its container.
@@ -103,6 +113,12 @@ function applyBlockFlags(
   if (block.isNonRetain) flags &= ~LEAF_FLAG_RETAIN;
   return flags;
 }
+
+/**
+ * Walk-only flag, never emitted: below it only retained leaves are kept. Set on
+ * a library block's VAR member walked solely for the RETAIN state inside it.
+ */
+const WALK_RETAINED_ONLY = 1 << 7;
 
 /**
  * Mirrors `strucpp::retain::HEADER_SIZE` in runtime/include/iec_retain.hpp.
@@ -152,7 +168,20 @@ function flagsLiteral(flags: number): string {
   const names: string[] = [];
   if (flags & LEAF_FLAG_READONLY) names.push("LEAF_FLAG_READONLY");
   if (flags & LEAF_FLAG_RETAIN) names.push("LEAF_FLAG_RETAIN");
+  if (flags & LEAF_FLAG_INDIRECT) names.push("LEAF_FLAG_INDIRECT");
   return names.length > 0 ? names.join(" | ") : "0";
+}
+
+/**
+ * Render an entry's `cap` byte. A string leaf whose length was not known here
+ * (a constant's name, an archive without lengths) takes it from its C++ type,
+ * so the runtime never addresses it with the 254 default.
+ */
+function capLiteral(e: Entry): string {
+  if (e.cap === 0 && (e.tagName === "STRING" || e.tagName === "WSTRING")) {
+    return `string_cap<decltype(${e.cppExpr})>::value`;
+  }
+  return String(e.cap);
 }
 
 const TAG_NAME_BY_VALUE: Record<number, TagName> = Object.fromEntries(
@@ -271,6 +300,21 @@ export interface DebugLeaf {
    * holds thousands of leaves and the flag is rare.
    */
   retain?: true;
+  /**
+   * Present and `true` for a leaf inside a function block's VAR_IN_OUT: a
+   * live, read-only view of the CALLER's variable, followed through the
+   * binding the last call made (IEC 61131-3 §3.48). Always `readOnly` too:
+   * the variable is forced and written at its own name — see `target`.
+   * Additive, like `readOnly`: an older editor shows it as a read-only leaf.
+   */
+  indirect?: true;
+  /**
+   * For an `indirect` leaf, the path of the variable it shows, when every
+   * call of the instance binds the in-out to the same plain variable (no
+   * computed index). Absent when the binding cannot be named statically: the
+   * variable is then whatever the last call passed.
+   */
+  target?: string;
 }
 
 export interface DebugMapV2 {
@@ -351,6 +395,9 @@ const DEFAULTS: Required<Omit<DebugTableGenOptions, "md5">> = {
 // ---------------------------------------------------------------------------
 
 interface Entry {
+  /** For a LEAF_FLAG_INDIRECT leaf: the in-out's binding (`InOut::ref`) and
+   *  its own copy (`InOut::copy`), which `cppExpr` is a leaf of. */
+  indirect?: { binding: string; proto: string };
   cppExpr: string;
   tagName: TagName;
   path: string;
@@ -454,6 +501,64 @@ export function generateDebugTable(
     tagName: TagName;
   }> = [];
   const skipped: Array<{ path: string; reason: string }> = [];
+
+  // The value in-out being walked, if any: its leaves are INDIRECT. A stack,
+  // because the walk is depth-first; an in-out's type holds no further in-out.
+  const indirectStack: Array<{
+    binding: string;
+    proto: string;
+    path: string;
+    target?: string;
+  }> = [];
+  const inoutTargets = computeInoutTargets(ast, projectModel, symbolTables);
+
+  /**
+   * Walk a function block's value VAR_IN_OUT `member` (an `InOut<V>`): its
+   * leaves are the caller's variable, reached through the binding, so they are
+   * INDIRECT and READONLY, and addressed inside the block's own copy. An
+   * in-out is never retained — IEC 61131-3 §6.5.6: RETAIN "may be used for
+   * variables declared in static VAR, VAR_INPUT, VAR_OUTPUT, and VAR_GLOBAL
+   * sections but not in VAR_IN_OUT section" — so a RETAIN instance's in-out
+   * is left out of the retain list, and said so.
+   */
+  const visitValueInout = (
+    path: string,
+    member: string,
+    typeRef: TypeReference,
+    flags: number,
+  ) => {
+    if (flags & LEAF_FLAG_RETAIN && !(flags & WALK_RETAINED_ONLY)) {
+      incomplete.push({
+        path,
+        reason:
+          `VAR_IN_OUT '${path}' is not retained: it is the caller's variable, ` +
+          `retained (or not) where the caller declares it. IEC 61131-3 §6.5.6 ` +
+          `allows RETAIN in VAR, VAR_INPUT, VAR_OUTPUT and VAR_GLOBAL, not in ` +
+          `VAR_IN_OUT.`,
+      });
+    }
+    if (flags & WALK_RETAINED_ONLY) return;
+    const target = inoutTargets.get(path);
+    indirectStack.push({
+      binding: `${member}.ref`,
+      proto: `${member}.copy`,
+      path,
+      ...(target !== undefined ? { target } : {}),
+    });
+    visitTypeRef(
+      path,
+      `${member}.copy`,
+      typeRef,
+      (flags & ~LEAF_FLAG_RETAIN) | LEAF_FLAG_READONLY | LEAF_FLAG_INDIRECT,
+    );
+    indirectStack.pop();
+  };
+
+  /** A value in-out: not an FB instance (a pointer), not `ARRAY [*]` (a view). */
+  const isValueInoutType = (typeRef: TypeReference): boolean =>
+    !isFunctionBlockTypeName(typeRef.name) &&
+    symbolTables.lookupFunctionBlock(typeRef.name) === undefined &&
+    !typeRef.name.toUpperCase().startsWith("__VLA_");
   /**
    * Retained state the walk could not reach — today only a RETAIN on a library
    * block whose manifest predates exported locals.
@@ -479,6 +584,10 @@ export function generateDebugTable(
     flags: number,
     maxLength?: number | string,
   ) => {
+    if (flags & WALK_RETAINED_ONLY) {
+      if (!(flags & LEAF_FLAG_RETAIN)) return;
+      flags &= ~WALK_RETAINED_ONLY;
+    }
     const tagName = IEC_NAME_TO_TAG[iecName.toUpperCase()];
     if (tagName === undefined) {
       skipped.push({ path, reason: `unknown elementary type: ${iecName}` });
@@ -489,13 +598,25 @@ export function generateDebugTable(
     const bucket = tail();
     const arrIdx = arrays.length - 1;
     const elemIdx = bucket.length;
-    // A symbolic length (`STRING(BUF_MAX)`) is not resolved here, so it records
-    // 0 and the runtime treats the variable as the 254 default.
+    // A symbolic length (`STRING(BUF_MAX)`) is not resolved here: it records 0
+    // and capLiteral takes the length from the member's C++ type.
     const cap =
       typeof maxLength === "number" && maxLength >= 1 && maxLength <= 254
         ? maxLength
         : 0;
-    bucket.push({ cppExpr, tagName, path, type: tagName, size, flags, cap });
+    const ind = indirectStack[indirectStack.length - 1];
+    bucket.push({
+      cppExpr,
+      tagName,
+      path,
+      type: tagName,
+      size,
+      flags,
+      cap,
+      ...(ind !== undefined
+        ? { indirect: { binding: ind.binding, proto: ind.proto } }
+        : {}),
+    });
     leaves.push({
       arrayIdx: arrIdx,
       elemIdx,
@@ -504,6 +625,10 @@ export function generateDebugTable(
       size,
       ...(flags & LEAF_FLAG_READONLY ? { readOnly: true as const } : {}),
       ...(flags & LEAF_FLAG_RETAIN ? { retain: true as const } : {}),
+      ...(ind !== undefined ? { indirect: true as const } : {}),
+      ...(ind?.target !== undefined
+        ? { target: ind.target + path.slice(ind.path.length) }
+        : {}),
     });
     if (flags & LEAF_FLAG_RETAIN) {
       retainVars.push({ arrayIdx: arrIdx, elemIdx, path, size, tagName });
@@ -674,8 +799,25 @@ export function generateDebugTable(
       ];
       // `name` is the FB type declaring these members, so it is the owner for
       // both mangling collisions.
-      if (interfaceVars.length > 0) {
-        for (const v of interfaceVars) {
+      if (fbSym.libraryName !== undefined || interfaceVars.length > 0) {
+        // Walked for nested RETAIN state only: the interface holds none.
+        const retainedOnly =
+          (flags & WALK_RETAINED_ONLY) !== 0 &&
+          (flags & LEAF_FLAG_RETAIN) === 0;
+        for (const v of retainedOnly ? [] : interfaceVars) {
+          if (
+            v.isInOut &&
+            fbSym.inoutsByReference === true &&
+            isValueInoutType(v.declaration.type)
+          ) {
+            visitValueInout(
+              `${path}.${v.name.toUpperCase()}`,
+              `${cppExpr}.${libraryMemberCppName(v, name)}`,
+              v.declaration.type,
+              flags,
+            );
+            continue;
+          }
           visitTypeRef(
             `${path}.${v.name.toUpperCase()}`,
             `${cppExpr}.${libraryMemberCppName(v, name)}`,
@@ -698,9 +840,13 @@ export function generateDebugTable(
         // `VAR RETAIN` — which retains it in every instance, exactly as it
         // does for a user-defined block.
         const instanceRetained = (flags & LEAF_FLAG_RETAIN) !== 0;
+        // A member that is not RETAIN itself is still walked when RETAIN
+        // state is nested in it (a block holding a block), for that state only.
         const localsToWalk = instanceRetained
           ? fbSym.locals
-          : fbSym.locals.filter((v) => v.isRetain);
+          : fbSym.locals.filter(
+              (v) => v.isRetain || holdsRetain(v.declaration.type),
+            );
         if (localsToWalk.length > 0 || instanceRetained) {
           if (instanceRetained && fbSym.locals.length === 0) {
             // An archive whose manifest does not export locals. Retain still
@@ -722,7 +868,11 @@ export function generateDebugTable(
               `${path}.${v.name.toUpperCase()}`,
               `${cppExpr}.${libraryMemberCppName(v, name)}`,
               v.declaration.type,
-              v.isRetain ? flags | LEAF_FLAG_RETAIN : flags,
+              v.isRetain
+                ? flags | LEAF_FLAG_RETAIN
+                : instanceRetained
+                  ? flags
+                  : flags | WALK_RETAINED_ONLY,
             );
           }
         }
@@ -811,9 +961,12 @@ export function generateDebugTable(
                   }
                   continue;
                 }
+                const valueInout =
+                  block.blockType === "VAR_IN_OUT" &&
+                  isValueInoutType(fieldDecl.type);
                 for (const fieldName of fieldDecl.names) {
                   if (!entry.take.has(fieldName.toUpperCase())) continue;
-                  visitTypeRef(
+                  (valueInout ? visitValueInout : visitTypeRef)(
                     `${path}.${fieldName.toUpperCase()}`,
                     `${cppExpr}.${memberCppName(fieldName, fieldDecl.type, entry.owner)}`,
                     fieldDecl.type,
@@ -829,6 +982,63 @@ export function generateDebugTable(
     }
 
     skipped.push({ path, reason: `unresolved type name: ${typeRef.name}` });
+  };
+
+  /** UPPER(type name) → whether an instance of it holds RETAIN state. */
+  const retainHolders = new Map<string, boolean>();
+
+  /**
+   * Whether a value of this type holds a member declared `VAR RETAIN` at any
+   * depth: through function block members (library or project), STRUCT
+   * fields and array elements.
+   */
+  const holdsRetain = (typeRef: TypeReference): boolean => {
+    if (typeRef.referenceKind !== undefined && typeRef.referenceKind !== "none")
+      return false;
+    const name =
+      typeRef.arrayDimensions && typeRef.elementTypeName
+        ? typeRef.elementTypeName
+        : typeRef.name;
+    return typeHoldsRetain(name.toUpperCase());
+  };
+
+  const typeHoldsRetain = (name: string): boolean => {
+    const known = retainHolders.get(name);
+    if (known !== undefined) return known;
+    // Provisional answer, so a recursive type ends the walk.
+    retainHolders.set(name, false);
+    let result = false;
+    const def = symbolTables.lookupType(name)?.declaration?.definition;
+    if (def?.kind === "StructDefinition") {
+      result = def.fields.some((f) => holdsRetain(f.type));
+    } else if (def?.kind === "ArrayDefinition") {
+      result = holdsRetain(def.elementType);
+    } else if (def?.kind === "TypeReference") {
+      result = def.name.toUpperCase() !== name && holdsRetain(def);
+    } else if (def === undefined) {
+      const fb = symbolTables.lookupFunctionBlock(name);
+      if (fb?.libraryName !== undefined) {
+        result = fb.locals.some(
+          (v) => v.isRetain || holdsRetain(v.declaration.type),
+        );
+      } else if (fb) {
+        const base = fb.declaration.extends;
+        result =
+          fb.declaration.varBlocks.some(
+            (b) =>
+              (b.blockType === "VAR" ||
+                b.blockType === "VAR_INPUT" ||
+                b.blockType === "VAR_OUTPUT") &&
+              !b.isNonRetain &&
+              (b.isRetain
+                ? b.declarations.length > 0
+                : b.declarations.some((d) => holdsRetain(d.type))),
+          ) ||
+          (base !== undefined && typeHoldsRetain(base.toUpperCase()));
+      }
+    }
+    retainHolders.set(name, result);
+    return result;
   };
 
   const visitStructFields = (
@@ -989,11 +1199,12 @@ export function generateDebugTable(
   // Path convention is bare uppercase name (no instance prefix): the
   // editor's `buildGlobalDebugPath()` returns `name.toUpperCase()` and
   // OPC-UA `GVL:foo` references resolve against the same key.
-  // C++ expression is `${name}.value`: each global is emitted as a file-scope
-  // `inline GlobalVar<V>` singleton (value + per-global mutex), so `.value`
-  // reaches the underlying IEC storage the debugger reads/writes directly —
-  // no configuration-instance prefix (see codegen.ts emitFileScopeGlobals,
-  // iec_global.hpp).
+  // C++ expression is `${name}.value`: each global is a file-scope
+  // `GlobalVar<V>` singleton (value + per-global mutex), declared `extern` in
+  // the header and defined once in configuration.cpp, so `.value` reaches the
+  // underlying IEC storage the debugger reads/writes directly — no
+  // configuration-instance prefix — and `&name` is a link-time constant
+  // (see codegen.ts emitFileScopeGlobals, iec_global.hpp).
   const seenGlobals = new Set<string>();
   for (const config of ast.configurations) {
     for (const block of config.varBlocks) {
@@ -1099,6 +1310,207 @@ export function generateDebugTable(
 }
 
 // ---------------------------------------------------------------------------
+// In-out targets
+// ---------------------------------------------------------------------------
+
+/**
+ * For each function-block instance in-out, the debug path of the variable its
+ * calls bind it to — `"INST.PUMP.DATA" -> "INST.PUMPDATA"` — so the editor can
+ * offer forcing at that variable (an in-out leaf is a read-only view of it).
+ *
+ * Only where it is one plain variable: every call of the instance in its POU
+ * passes the same variable, named directly (fields and constant subscripts,
+ * no computed index), and it is a local of that POU, a global, or the POU's
+ * own in-out with a target of its own. Anything else has no target: the leaf
+ * then shows whatever the last call passed.
+ */
+function computeInoutTargets(
+  ast: CompilationUnit,
+  projectModel: ProjectModel,
+  symbolTables: SymbolTables,
+): Map<string, string> {
+  const targets = new Map<string, string>();
+  const fbDecls = new Map(
+    ast.functionBlocks.map((fb) => [fb.name.toUpperCase(), fb]),
+  );
+  const programs = new Map(ast.programs.map((p) => [p.name.toUpperCase(), p]));
+  const globals = new Set<string>();
+  for (const config of ast.configurations) {
+    for (const block of config.varBlocks) {
+      if (block.blockType !== "VAR_GLOBAL") continue;
+      for (const d of block.declarations)
+        for (const n of d.names) globals.add(n.toUpperCase());
+    }
+  }
+
+  /** Declared parameter order and in-out names of an FB type. */
+  const paramsOf = (
+    type: string,
+  ): { order: string[]; inouts: Set<string> } | undefined => {
+    const decl = fbDecls.get(type.toUpperCase());
+    if (decl) {
+      const order: string[] = [];
+      const inouts = new Set<string>();
+      for (const b of decl.varBlocks) {
+        if (
+          b.blockType !== "VAR_INPUT" &&
+          b.blockType !== "VAR_IN_OUT" &&
+          b.blockType !== "VAR_OUTPUT"
+        )
+          continue;
+        for (const d of b.declarations) {
+          for (const n of d.names) {
+            order.push(n.toUpperCase());
+            if (b.blockType === "VAR_IN_OUT") inouts.add(n.toUpperCase());
+          }
+        }
+      }
+      return { order, inouts };
+    }
+    const sym = symbolTables.lookupFunctionBlock(type);
+    if (!sym) return undefined;
+    // Library blocks: named arguments only (the manifest keeps no order).
+    return {
+      order: [],
+      inouts: new Set(sym.inouts.map((v) => v.name.toUpperCase())),
+    };
+  };
+
+  /** `a.b[2].c` as a debug path suffix, or undefined if not plain. */
+  const plainTail = (e: VariableExpression): string | undefined => {
+    let tail = "";
+    const steps = e.accessChain ?? [
+      ...e.fieldAccess.map((name) => ({ kind: "field" as const, name })),
+    ];
+    for (const st of steps) {
+      if (st.kind === "field") tail += `.${st.name.toUpperCase()}`;
+      else if (st.kind === "subscript") {
+        const idx: number[] = [];
+        for (const ix of st.indices) {
+          const v = evalIntConst(ix);
+          if (v === undefined) return undefined;
+          idx.push(v);
+        }
+        tail += `[${idx.join(",")}]`;
+      } else return undefined;
+    }
+    return tail;
+  };
+
+  /**
+   * Walk a POU instance at `path` (program or FB type `type`), resolving the
+   * in-outs of the instances it calls. `ownInouts`: this POU's own in-outs, and
+   * `externals`: its VAR_EXTERNAL names.
+   */
+  const walkPou = (
+    path: string,
+    varBlocks: VarBlock[],
+    body: ASTNode[],
+    depth: number,
+  ): void => {
+    if (depth > 32) return;
+    const locals = new Map<string, string>(); // UPPER name -> type
+    const ownInouts = new Set<string>();
+    const externals = new Set<string>();
+    for (const b of varBlocks) {
+      for (const d of b.declarations) {
+        for (const n of d.names) {
+          const u = n.toUpperCase();
+          if (b.blockType === "VAR_EXTERNAL") externals.add(u);
+          else if (b.blockType === "VAR_IN_OUT") ownInouts.add(u);
+          else locals.set(u, d.type.name);
+        }
+      }
+    }
+    // child instance -> in-out -> set of target paths (undefined = not plain)
+    const bindings = new Map<string, Map<string, Set<string | undefined>>>();
+    for (const stmt of body) {
+      walkAST(stmt, (node) => {
+        if (node.kind !== "FunctionCallExpression") return;
+        const call = node as FunctionCallExpression;
+        if (call.instance !== undefined) return;
+        const inst = call.functionName.toUpperCase();
+        const type = locals.get(inst);
+        if (type === undefined) return;
+        const params = paramsOf(type);
+        if (!params || params.inouts.size === 0) return;
+        let next = 0;
+        const named = new Set(
+          call.arguments
+            .filter((a) => a.name !== undefined)
+            .map((a) => a.name!.toUpperCase()),
+        );
+        for (const arg of call.arguments) {
+          let slot = arg.name?.toUpperCase();
+          if (slot === undefined) {
+            while (next < params.order.length && named.has(params.order[next]!))
+              next++;
+            slot = params.order[next++];
+          }
+          if (slot === undefined || arg.isOutput || !params.inouts.has(slot))
+            continue;
+          let target: string | undefined;
+          const v = arg.value;
+          if (v.kind === "VariableExpression" && !v.isDereference) {
+            const tail = plainTail(v);
+            const root = v.name.toUpperCase();
+            if (tail !== undefined) {
+              if (externals.has(root) && globals.has(root))
+                target = root + tail;
+              else if (ownInouts.has(root)) {
+                const t = targets.get(`${path}.${root}`);
+                target = t !== undefined ? t + tail : undefined;
+              } else if (locals.has(root)) target = `${path}.${root}${tail}`;
+            }
+          }
+          let byInout = bindings.get(inst);
+          if (!byInout)
+            bindings.set(
+              inst,
+              (byInout = new Map<string, Set<string | undefined>>()),
+            );
+          let set = byInout.get(slot);
+          if (!set) byInout.set(slot, (set = new Set<string | undefined>()));
+          set.add(target);
+        }
+      });
+    }
+    for (const [inst, byInout] of bindings) {
+      for (const [slot, set] of byInout) {
+        if (set.size === 1) {
+          const only = [...set][0];
+          if (only !== undefined) targets.set(`${path}.${inst}.${slot}`, only);
+        }
+      }
+    }
+    // Descend into user FB instances declared here (scalar instances only).
+    for (const [name, type] of locals) {
+      const decl = fbDecls.get(type.toUpperCase());
+      if (!decl) continue;
+      walkPou(`${path}.${name}`, decl.varBlocks, decl.body, depth + 1);
+    }
+  };
+
+  for (const config of projectModel.configurations) {
+    for (const resource of config.resources) {
+      for (const task of resource.tasks) {
+        for (const instance of task.programInstances) {
+          const prog = programs.get(instance.programType.toUpperCase());
+          if (!prog) continue;
+          walkPou(
+            instance.instanceName.toUpperCase(),
+            prog.varBlocks,
+            prog.body,
+            0,
+          );
+        }
+      }
+    }
+  }
+  return targets;
+}
+
+// ---------------------------------------------------------------------------
 // C++ rendering
 // ---------------------------------------------------------------------------
 
@@ -1138,6 +1550,29 @@ function renderCpp(
   lines.push("namespace strucpp { namespace debug {");
   lines.push("");
 
+  // VAR_IN_OUT leaves: where each one's binding is (see IndirectRef in
+  // debug_table.hpp). Before the entry arrays, which take their addresses.
+  const indirectIndex = new Map<Entry, number>();
+  const indirectLines: string[] = [];
+  for (const bucket of arrays) {
+    for (const e of bucket) {
+      if (e.indirect === undefined) continue;
+      indirectIndex.set(e, indirectLines.length);
+      indirectLines.push(
+        `    { (const void*)&${e.indirect.binding}, (const void*)&${e.indirect.proto}, (const void*)&${e.cppExpr} },  // ${e.path}`,
+      );
+    }
+  }
+  if (indirectLines.length > 0) {
+    lines.push(
+      `const IndirectRef debug_indirect[${indirectLines.length}] STRUCPP_DEBUG_FLASH = {`,
+    );
+    // One at a time: a spread of a large program's table overflows the stack.
+    for (const line of indirectLines) lines.push(line);
+    lines.push("};");
+    lines.push("");
+  }
+
   for (let ai = 0; ai < arrays.length; ai++) {
     const bucket = arrays[ai]!;
     lines.push(
@@ -1152,7 +1587,9 @@ function renderCpp(
           // declared `const`, and a C-style cast strips that silently where
           // `static_cast` would refuse. The flags byte is what carries the
           // qualifier through to the runtime so the write paths can honour it.
-          `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, ${flagsLiteral(e.flags)}, ${e.cap} },  // ${e.path}`,
+          indirectIndex.has(e)
+            ? `    { (void*)&debug_indirect[${indirectIndex.get(e)}], TAG_${e.tagName}, ${flagsLiteral(e.flags)}, ${capLiteral(e)} },  // ${e.path} (in-out)`
+            : `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, ${flagsLiteral(e.flags)}, ${capLiteral(e)} },  // ${e.path}`,
         );
       }
     }

@@ -26,7 +26,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Type | Status | Notes |
 |------|--------|-------|
 | TYPE ... END_TYPE | Supported | Type aliases |
-| STRUCT ... END_STRUCT | Supported | With nested structs |
+| STRUCT ... END_STRUCT | Supported | With nested structs. An access path naming an element its type does not declare (`s.nosuch`, `arr[1].inner.nosuch`, `fb.nosuch`) is an error at the ST line (§6.4.4.6.1; Table 41 features 6a, 7) — for structures, local or from a library manifest, and user function blocks. A library block's members are not judged: its manifest omits what it inherits, its methods and its properties |
 | Enumerations | Supported | With optional base type |
 | Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
@@ -90,7 +90,9 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | No qualifier | `CONSTANT`, `RETAIN` and `NON_RETAIN` are refused |
 | No initial value | `:= value` on an in-out declaration is refused |
 | Not a reference type | `REF_TO` / `REFERENCE TO` is refused. Not enforced for an interface imported from a library |
-| Passing mechanism | Function block instances and `ARRAY [*]` are passed by reference; scalars, structures and fixed-bound arrays are copied in and back |
+| Passing mechanism | The in-out IS the caller's variable (§3.48). A function takes its in-outs as C++ references. A function block binds each in-out by reference, once, before the call — a function block instance, an `ARRAY [*]`, and a scalar, structure, string or fixed-bound array named by a variable, element or field — so its body reads and writes the caller's storage. Copied in and back instead: a bit or partial access (`w.3`, `w.%B1`), a shared global (copied under its lock), an actual of another declared type (a `STRING(10)` for a `STRING`), and a block from a library archive built before by-reference binding (a warning names it; rebuild the archive) |
+| Debugging an in-out | An opened instance shows each value in-out as a live, read-only view of the bound variable (`indirect` in debug-map.json, with `target` naming that variable when every call binds the same one). It is forced at the variable's own name; the runtime refuses a force or write at the view |
+| RETAIN instance | A `RETAIN` instance does not retain its in-outs (§6.5.6: no `RETAIN` on `VAR_IN_OUT`): what they show belongs to the caller. A warning says so |
 | Function block instance | On `VAR_INPUT` read-only and not callable; on `VAR_IN_OUT` read, written and callable, held as a pointer with no copy back; on `VAR_EXTERNAL` callable. Its outputs are readable but not writable in all three |
 
 ### Initialization gaps

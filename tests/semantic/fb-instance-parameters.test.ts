@@ -77,8 +77,8 @@ describe("a function block instance as VAR_IN_OUT", () => {
   });
 });
 
-describe("what still copies", () => {
-  it("a scalar in-out is unchanged", () => {
+describe("value in-outs are bound by reference (IEC 61131-3 §3.48)", () => {
+  it("a scalar in-out is the caller's variable", () => {
     const result = build(`
       FUNCTION_BLOCK Bumper
         VAR_IN_OUT v : INT; END_VAR
@@ -87,12 +87,14 @@ describe("what still copies", () => {
       PROGRAM main VAR b : Bumper; n : INT; END_VAR b(v := n); END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.headerCode ?? "").toContain("IEC_INT V;");
-    expect(result.cppCode ?? "").toContain("B.V = N;");
-    expect(result.cppCode ?? "").toContain("N = B.V;");
+    expect(result.headerCode ?? "").toContain("strucpp::InOut<IEC_INT> V;");
+    expect(result.cppCode ?? "").toMatch(
+      /auto\* (__io\d+) = &N;\n\s*const bool __ioc\d+ = strucpp::iec_inout_bind\(B\.V, \*\1\);/,
+    );
+    expect(result.cppCode ?? "").not.toContain("N = B.V;");
   });
 
-  it("a structure in-out is unchanged", () => {
+  it("a structure in-out is the caller's variable", () => {
     const result = build(`
       TYPE PointT : STRUCT a : INT; END_STRUCT END_TYPE
       FUNCTION_BLOCK Setter
@@ -102,16 +104,22 @@ describe("what still copies", () => {
       PROGRAM main VAR s : Setter; q : PointT; END_VAR s(p := q); END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode ?? "").toContain("S.P = Q;");
-    expect(result.cppCode ?? "").toContain("Q = S.P;");
+    expect(result.cppCode ?? "").toMatch(
+      /auto\* (__io\d+) = &Q;\n\s*const bool __ioc\d+ = strucpp::iec_inout_bind\(S\.P, \*\1\);/,
+    );
+    expect(result.cppCode ?? "").not.toContain("Q = S.P;");
   });
 });
 
 describe("the parameter must be assigned", () => {
   it("refuses a call that leaves it unassigned", () => {
-    const result = build(ENGINE + DRIVER + `
+    const result = build(
+      ENGINE +
+        DRIVER +
+        `
       PROGRAM main VAR d : Driver; END_VAR d(); END_PROGRAM
-    `);
+    `,
+    );
     expect(result.success).toBe(false);
     expect((result.errors ?? []).map((e) => e.message).join(" ")).toContain(
       "leaves in-out 'ENG' unassigned",
@@ -134,12 +142,16 @@ describe("the parameter must be assigned", () => {
   });
 
   it("refuses it on a later call, even after an earlier one assigned it", () => {
-    const result = build(ENGINE + DRIVER + `
+    const result = build(
+      ENGINE +
+        DRIVER +
+        `
       PROGRAM main VAR e : Engine; d : Driver; END_VAR
         d(ENG := e);
         d();
       END_PROGRAM
-    `);
+    `,
+    );
     expect(result.success).toBe(false);
   });
 
@@ -148,9 +160,13 @@ describe("the parameter must be assigned", () => {
   });
 
   it("accepts it supplied without a name", () => {
-    const result = build(ENGINE + DRIVER + `
+    const result = build(
+      ENGINE +
+        DRIVER +
+        `
       PROGRAM main VAR e : Engine; d : Driver; END_VAR d(e); END_PROGRAM
-    `);
+    `,
+    );
     expect(result.success, JSON.stringify(result.errors)).toBe(true);
   });
 });
@@ -167,7 +183,10 @@ END_FUNCTION_BLOCK
 
   it.each([
     ["a literal", "VAR a : Acc; END_VAR a(VAL := 7);"],
-    ["an expression", "VAR a : Acc; x : INT; y : INT; END_VAR a(VAL := x + y);"],
+    [
+      "an expression",
+      "VAR a : Acc; x : INT; y : INT; END_VAR a(VAL := x + y);",
+    ],
   ])("refuses %s, which has nowhere to write back to", (_label, body) => {
     expect(errorText(ACC + `PROGRAM main ${body} END_PROGRAM`)).toContain(
       "Only a variable may be assigned to in-out",
@@ -195,7 +214,10 @@ END_FUNCTION_BLOCK
 
   it.each([
     ["a plain variable", "VAR a : Acc; n : INT; END_VAR a(VAL := n);"],
-    ["an array element", "VAR a : Acc; arr : ARRAY[0..3] OF INT; END_VAR a(VAL := arr[2]);"],
+    [
+      "an array element",
+      "VAR a : Acc; arr : ARRAY[0..3] OF INT; END_VAR a(VAL := arr[2]);",
+    ],
   ])("accepts %s", (_label, body) => {
     const result = build(ACC + `PROGRAM main ${body} END_PROGRAM`);
     expect(result.success, JSON.stringify(result.errors)).toBe(true);
@@ -242,14 +264,18 @@ END_FUNCTION_BLOCK
   ])("refuses it being %s from outside the block", (_label, body) => {
     expect(
       errorText(
-        ACC + `PROGRAM main VAR a : Acc; n : INT; m : INT; END_VAR ${body} END_PROGRAM`,
+        ACC +
+          `PROGRAM main VAR a : Acc; n : INT; m : INT; END_VAR ${body} END_PROGRAM`,
       ),
     ).toContain("reaches an in-out of 'ACC' from outside it");
   });
 
   it("refuses capturing it with '=>'", () => {
     expect(
-      errorText(ACC + `PROGRAM main VAR a : Acc; n : INT; END_VAR a(VAL => n); END_PROGRAM`),
+      errorText(
+        ACC +
+          `PROGRAM main VAR a : Acc; n : INT; END_VAR a(VAL => n); END_PROGRAM`,
+      ),
     ).toContain("with '=>'");
   });
 
@@ -268,7 +294,8 @@ END_FUNCTION_BLOCK
 
   it("still allows an output to be read from outside", () => {
     const result = build(
-      ENGINE + `PROGRAM main VAR e : Engine; b : BOOL; END_VAR e(SPEED := 1); b := e.RUNNING; END_PROGRAM`,
+      ENGINE +
+        `PROGRAM main VAR e : Engine; b : BOOL; END_VAR e(SPEED := 1); b := e.RUNNING; END_PROGRAM`,
     );
     expect(result.success, JSON.stringify(result.errors)).toBe(true);
   });
@@ -379,15 +406,19 @@ describe("an in-out is not converted", () => {
 
 describe("an in-out supplied without a name", () => {
   it("binds a function block instance by pointer", () => {
-    const result = build(ENGINE + DRIVER + `
+    const result = build(
+      ENGINE +
+        DRIVER +
+        `
       PROGRAM main VAR e : Engine; d : Driver; END_VAR d(e); END_PROGRAM
-    `);
+    `,
+    );
     expect(result.success, JSON.stringify(result.errors)).toBe(true);
     expect(result.cppCode ?? "").toContain("D.ENG = &E;");
     expect(result.cppCode ?? "").not.toContain("could not be resolved");
   });
 
-  it("copies a scalar in and back, in declaration order after an input", () => {
+  it("binds a scalar in-out, in declaration order after an input", () => {
     const result = build(`
       FUNCTION_BLOCK Bump
         VAR_INPUT k : INT; END_VAR
@@ -399,8 +430,9 @@ describe("an in-out supplied without a name", () => {
     expect(result.success, JSON.stringify(result.errors)).toBe(true);
     const cpp = result.cppCode ?? "";
     expect(cpp).toContain("B.K = 3;");
-    expect(cpp).toContain("B.V = N;");
-    expect(cpp).toContain("N = B.V;");
+    expect(cpp).toMatch(
+      /auto\* (__io\d+) = &N;\n\s*const bool __ioc\d+ = strucpp::iec_inout_bind\(B\.V, \*\1\);/,
+    );
   });
 });
 
@@ -414,7 +446,9 @@ describe("what a callee may do with a block handed to it", () => {
   it("refuses writing through one passed as an input", () => {
     expect(
       errorText(
-        wrap(`FUNCTION_BLOCK C VAR_INPUT ENG : Engine; END_VAR ENG.SPEED := 5; END_FUNCTION_BLOCK`),
+        wrap(
+          `FUNCTION_BLOCK C VAR_INPUT ENG : Engine; END_VAR ENG.SPEED := 5; END_FUNCTION_BLOCK`,
+        ),
       ),
     ).toContain("can only be read");
   });
@@ -422,7 +456,9 @@ describe("what a callee may do with a block handed to it", () => {
   it("refuses calling one passed as an input", () => {
     expect(
       errorText(
-        wrap(`FUNCTION_BLOCK C VAR_INPUT ENG : Engine; END_VAR ENG(SPEED := 5); END_FUNCTION_BLOCK`),
+        wrap(
+          `FUNCTION_BLOCK C VAR_INPUT ENG : Engine; END_VAR ENG(SPEED := 5); END_FUNCTION_BLOCK`,
+        ),
       ),
     ).toContain("cannot be called");
   });
@@ -441,7 +477,9 @@ describe("what a callee may do with a block handed to it", () => {
   it("refuses writing an output of one passed as an in-out", () => {
     expect(
       errorText(
-        wrap(`FUNCTION_BLOCK C VAR_IN_OUT ENG : Engine; END_VAR ENG.RUNNING := TRUE; END_FUNCTION_BLOCK`),
+        wrap(
+          `FUNCTION_BLOCK C VAR_IN_OUT ENG : Engine; END_VAR ENG.RUNNING := TRUE; END_FUNCTION_BLOCK`,
+        ),
       ),
     ).toContain("can be read but not written");
   });
@@ -483,7 +521,8 @@ describe("what a callee may do with a block handed to it", () => {
 
   it("leaves a block's own local instance alone", () => {
     const result = build(
-      ENGINE + `PROGRAM main VAR e : Engine; END_VAR e(SPEED := 1); e.SPEED := 2; END_PROGRAM`,
+      ENGINE +
+        `PROGRAM main VAR e : Engine; END_VAR e(SPEED := 1); e.SPEED := 2; END_PROGRAM`,
     );
     expect(result.success, JSON.stringify(result.errors)).toBe(true);
   });

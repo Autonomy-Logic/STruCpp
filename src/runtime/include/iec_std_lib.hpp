@@ -420,9 +420,19 @@ inline T LIMIT(T mn, T in, T mx) noexcept {
     return iec_unwrap(v) > iec_unwrap(mx) ? mx : v;
 }
 
-// Mixed-type MIN/MAX/LIMIT/SEL overloads (OSCAT mixes e.g. INT with DINT)
+// Mixed-type MIN/MAX/LIMIT/SEL overloads (OSCAT mixes e.g. INT with DINT).
+// Numbers only: strings have their own MAX, MIN and LIMIT in iec_string.hpp,
+// and a string here would be ambiguous with them.
+template<typename... Ts> struct iec_all_unwrap_numeric : std::true_type {};
+template<typename T, typename... Ts> struct iec_all_unwrap_numeric<T, Ts...>
+    : std::integral_constant<bool,
+          (std::is_arithmetic<std::decay_t<decltype(iec_unwrap(std::declval<T>()))>>::value ||
+           std::is_enum<std::decay_t<decltype(iec_unwrap(std::declval<T>()))>>::value) &&
+              iec_all_unwrap_numeric<Ts...>::value> {};
+
 template<typename T, typename U,
-    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value &&
+                         iec_all_unwrap_numeric<T, U>::value, int> = 0>
 inline auto MAX(T a, U b) noexcept {
     using CT = std::common_type_t<decltype(iec_unwrap(a)), decltype(iec_unwrap(b))>;
     auto va = static_cast<CT>(iec_unwrap(a));
@@ -431,7 +441,8 @@ inline auto MAX(T a, U b) noexcept {
 }
 
 template<typename T, typename U,
-    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value, int> = 0>
+    std::enable_if_t<!std::is_same<std::decay_t<T>, std::decay_t<U>>::value &&
+                         iec_all_unwrap_numeric<T, U>::value, int> = 0>
 inline auto MIN(T a, U b) noexcept {
     using CT = std::common_type_t<decltype(iec_unwrap(a)), decltype(iec_unwrap(b))>;
     auto va = static_cast<CT>(iec_unwrap(a));
@@ -443,7 +454,8 @@ template<typename T1, typename T2, typename T3>
 inline auto LIMIT(T1 mn, T2 in, T3 mx) noexcept
     -> std::enable_if_t<
         !(std::is_same<std::decay_t<T1>, std::decay_t<T2>>::value &&
-          std::is_same<std::decay_t<T2>, std::decay_t<T3>>::value),
+          std::is_same<std::decay_t<T2>, std::decay_t<T3>>::value) &&
+            iec_all_unwrap_numeric<T1, T2, T3>::value,
         std::common_type_t<decltype(iec_unwrap(mn)), decltype(iec_unwrap(in)), decltype(iec_unwrap(mx))>> {
     using CT = std::common_type_t<decltype(iec_unwrap(mn)), decltype(iec_unwrap(in)), decltype(iec_unwrap(mx))>;
     auto vmn = static_cast<CT>(iec_unwrap(mn));

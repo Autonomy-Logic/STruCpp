@@ -27,7 +27,10 @@ import {
   translateIECString,
 } from "./codegen-utils.js";
 import { mangledMemberName } from "./member-mangling.js";
-import { TypeDescriptorGenerator } from "./type-descriptor-gen.js";
+import {
+  TypeDescriptorGenerator,
+  typeDescDeclaration,
+} from "./type-descriptor-gen.js";
 import {
   parseDateLiteralToDays,
   parseDtLiteralToNs,
@@ -60,6 +63,8 @@ export interface TypeCodeGenOptions {
    *  back to "anything that is not elementary", all a bare TypeCodeGenerator
    *  can tell from a list of type declarations. */
   isUserDefinedType: (typeName: string) => boolean;
+  /** Library STRUCTs with a layout table, which a struct here may nest. */
+  externalStructs?: readonly import("./type-descriptor-gen.js").ExternalStruct[];
 }
 
 /**
@@ -161,6 +166,12 @@ export class TypeCodeGenerator {
    *  call site must ask rather than assume every struct has one. */
   readonly describedTypes: Set<string> = new Set();
 
+  /** The layout-table DEFINITIONS of `describedTypes`, in emission order. The
+   *  header gets only an `extern` declaration; the caller emits these once,
+   *  in configuration.cpp (see `type-descriptor-gen.ts`). */
+  readonly descriptorDefinitions: Array<{ typeName: string; lines: string[] }> =
+    [];
+
   /** STRUCT types that got no layout table, and why. Surfaced as warnings by
    *  the caller — see `CodeGenerator.emitTypeDeclarations`. */
   readonly undescribedTypes: Array<{
@@ -210,6 +221,7 @@ export class TypeCodeGenerator {
     this.knownEnumNames = new Set();
     this.descriptors = new TypeDescriptorGenerator({
       types,
+      externalStructs: this.options.externalStructs ?? [],
       mapStructFieldTypeToCpp: (
         name: string,
         maxLength?: number | string,
@@ -263,12 +275,17 @@ export class TypeCodeGenerator {
         // Struct fields already contain IECVar leaves — identity alias
         this.emit(`using IEC_${type.name} = ${type.name};`);
         this.emit("");
-        // The alias has to come first: the table says `sizeof(<name>)`, so the
-        // struct must be complete by the time the initialiser is parsed.
+        // The table says `sizeof(<name>)`, so its definition (in
+        // configuration.cpp, after this header) needs the complete struct.
+        // Here, beside the struct, only the declaration every TU links to.
         const tables = this.descriptors?.generate(type.name, def) ?? [];
-        for (const line of tables) this.emit(line);
         if (tables.length > 0) {
+          this.emit(typeDescDeclaration(type.name));
           this.emit("");
+          this.descriptorDefinitions.push({
+            typeName: type.name,
+            lines: tables,
+          });
           this.describedTypes.add(type.name.toUpperCase());
         }
         for (const skip of this.descriptors?.skipped ?? []) {

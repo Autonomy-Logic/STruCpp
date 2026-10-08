@@ -493,7 +493,8 @@ describe('Error Handling Tests', () => {
       expect(result.cppCode).toContain('RUN->write(');
       // The config global is a file-scope GlobalVar<V> singleton (reachable from
       // every POU) and the located image binds through its `.value`.
-      expect(result.headerCode).toContain('inline GlobalVar<IEC_BOOL> RUN');
+      expect(result.headerCode).toContain('extern GlobalVar<IEC_BOOL> RUN;');
+      expect(result.cppCode).toContain('GlobalVar<IEC_BOOL> RUN{');
       expect(result.cppCode).toContain('RUN.value.raw_ptr()');
     });
 

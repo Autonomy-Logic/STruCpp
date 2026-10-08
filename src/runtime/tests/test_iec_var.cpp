@@ -77,6 +77,39 @@ TEST(IECVarTest, ArithmeticOperators) {
     EXPECT_EQ(a % b, 1);
 }
 
+// IEC 61131-3 §6.6.1.7.2: an operation on two INTs is an INT operation, and
+// the variable the result is stored in does not change that. The free
+// operators return the operand type T (not an IECVar<T> temporary): pinned
+// here, with the values that type gives — including a sum past INT's range,
+// which wraps exactly as before (§7.3.2 c calls the overflow an error; STruC++
+// does not report it, and this change does not alter that).
+TEST(IECVarTest, OperatorResultIsOperandType) {
+    IEC_INT a(32767);
+    IEC_INT b(1);
+    static_assert(std::is_same<decltype(a + b), INT_t>::value, "INT + INT is INT");
+    static_assert(std::is_same<decltype(a * INT_t(2)), INT_t>::value, "INT * INT is INT");
+    static_assert(std::is_same<decltype(a & b), INT_t>::value, "bitwise result is the operand type");
+    static_assert(std::is_same<decltype(~a), INT_t>::value, "complement is the operand type");
+    IEC_DINT d = a + b;               // INT addition first, then the DINT store
+    EXPECT_EQ(d.get(), -32768);
+    IEC_DINT e = a + 1;               // a bare literal: C++ int arithmetic, as before
+    EXPECT_EQ(e.get(), 32768);
+    IEC_SINT s(127);
+    IEC_SINT one(1);
+    EXPECT_EQ(static_cast<int>(s + one), -128);
+    IEC_USINT u(255);
+    IEC_USINT uo(1);
+    EXPECT_EQ(static_cast<int>(u + uo), 0);
+    IEC_REAL r(0.1f);
+    IEC_REAL r3(3.0f);
+    static_assert(std::is_same<decltype(r * r3), REAL_t>::value, "REAL * REAL is REAL");
+    EXPECT_EQ(r * r3, 0.1f * 3.0f);
+    // A forced operand is read through get() exactly as before.
+    IEC_INT f(5);
+    f.force(40);
+    EXPECT_EQ(f + b, 41);
+}
+
 TEST(IECVarTest, CompoundAssignment) {
     IEC_INT var(10);
     
@@ -115,10 +148,10 @@ TEST(IECVarTest, BitwiseOperators) {
     IEC_BYTE a(0b11110000);
     IEC_BYTE b(0b10101010);
     
-    EXPECT_EQ((a & b).get(), 0b10100000);
-    EXPECT_EQ((a | b).get(), 0b11111010);
-    EXPECT_EQ((a ^ b).get(), 0b01011010);
-    EXPECT_EQ((~a).get(), static_cast<BYTE_t>(0b00001111));
+    EXPECT_EQ(a & b, 0b10100000);  // a BYTE: the operand type (§6.6.1.7.2)
+    EXPECT_EQ(a | b, 0b11111010);
+    EXPECT_EQ(a ^ b, 0b01011010);
+    EXPECT_EQ(~a, static_cast<BYTE_t>(0b00001111));
 }
 
 TEST(IECVarTest, BitwiseCompoundAssignment) {

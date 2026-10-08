@@ -337,11 +337,12 @@ describe("Codegen - Function Blocks", () => {
     });
   });
 
-  describe("VAR_IN_OUT copy-back", () => {
-    // FB inout params are by-value members with copy-in at the call site; the
-    // codegen must also emit a copy-OUT after the call so the callee's mutations
-    // reach the caller's variable (true inout semantics).
-    it("copies a scalar inout back to the caller after the call", () => {
+  describe("VAR_IN_OUT binding", () => {
+    // A value in-out is the caller's variable (IEC 61131-3 §3.48): the call
+    // binds the block's strucpp::InOut member to it by reference, the address
+    // taken once before the call. Only an actual of another type is copied
+    // back (iec_inout_back, guarded by the bind's result).
+    it("binds a scalar inout to the caller's variable", () => {
       const result = compileAndCheck(`
         FUNCTION_BLOCK Bumper
           VAR_IN_OUT v : INT; END_VAR
@@ -352,12 +353,19 @@ describe("Codegen - Function Blocks", () => {
           fb(v := x);
         END_PROGRAM
       `);
-      // copy-in, call, copy-out
-      expect(result.cppCode).toContain("FB.V = X;");
-      expect(result.cppCode).toContain("X = FB.V;");
+      expect(result.headerCode).toContain("strucpp::InOut<IEC_INT> V;");
+      expect(result.cppCode).toMatch(
+        /auto\* (__io\d+) = &X;\n\s*const bool (__ioc\d+) = strucpp::iec_inout_bind\(FB\.V, \*\1\);/,
+      );
+      expect(result.cppCode).toMatch(
+        /if \(__ioc\d+\) strucpp::iec_inout_back\(FB\.V, \*__io\d+\);/,
+      );
+      expect(result.cppCode).not.toContain("X = FB.V;");
+      // Inside the block, the in-out is reached through its binding.
+      expect(result.cppCode).toContain("V.var() = V.var() + ");
     });
 
-    it("copies a struct inout back to the caller", () => {
+    it("binds a struct inout to the caller's variable", () => {
       const result = compileAndCheck(`
         TYPE PointT : STRUCT a : INT; END_STRUCT END_TYPE
         FUNCTION_BLOCK Setter
@@ -369,11 +377,13 @@ describe("Codegen - Function Blocks", () => {
           fb(p := mypt);
         END_PROGRAM
       `);
-      expect(result.cppCode).toContain("FB.P = MYPT;");
-      expect(result.cppCode).toContain("MYPT = FB.P;");
+      expect(result.cppCode).toMatch(
+        /auto\* (__io\d+) = &MYPT;\n\s*const bool __ioc\d+ = strucpp::iec_inout_bind\(FB\.P, \*\1\);/,
+      );
+      expect(result.cppCode).not.toContain("MYPT = FB.P;");
     });
 
-    it("copies a nested struct-field inout back through both FB levels", () => {
+    it("binds a nested struct-field inout through both FB levels", () => {
       const result = compileAndCheck(`
         TYPE Inner : STRUCT w : INT; END_STRUCT END_TYPE
         TYPE Outer : STRUCT inr : Inner; END_STRUCT END_TYPE
@@ -388,10 +398,15 @@ describe("Codegen - Function Blocks", () => {
           m(o := top);
         END_PROGRAM
       `);
-      // inner FB writes back to the struct field...
-      expect(result.cppCode).toContain("O.INR = W.A;");
-      // ...and the outer FB writes back to the program variable
-      expect(result.cppCode).toContain("TOP = M.O;");
+      // the inner FB is bound to a field of the outer FB's own in-out...
+      expect(result.cppCode).toMatch(
+        /auto\* (__io\d+) = &O\.var\(\)\.INR;\n\s*const bool __ioc\d+ = strucpp::iec_inout_bind\(W\.A, \*\1\);/,
+      );
+      // ...and the outer FB to the program variable
+      expect(result.cppCode).toMatch(
+        /auto\* (__io\d+) = &TOP;\n\s*const bool __ioc\d+ = strucpp::iec_inout_bind\(M\.O, \*\1\);/,
+      );
+      expect(result.cppCode).not.toContain("TOP = M.O;");
     });
   });
 });

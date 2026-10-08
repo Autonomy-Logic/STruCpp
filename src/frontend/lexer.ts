@@ -572,6 +572,23 @@ export const WideStringLiteral = createToken({
   pattern: /"(?:[^"$]|\$\$|\$"|\$[LNPRTlnprt]|\$[0-9A-Fa-f]{4})*"/,
 });
 
+// Typed string literal: STRING#'text', WSTRING#"text" (IEC 61131-3 §6.3.3).
+export const TypedStringLiteral = createToken({
+  name: "TypedStringLiteral",
+  pattern:
+    /STRING#'(?:[^'$]|\$\$|\$'|\$[LNPRTlnprt]|\$[0-9A-Fa-f]{2}|'')*'|WSTRING#"(?:[^"$]|\$\$|\$"|\$[LNPRTlnprt]|\$[0-9A-Fa-f]{4})*"/i,
+});
+
+// A typed literal with a sign: INT#-5, REAL#-1.5, DINT#+7. IEC 61131-3 puts
+// the sign on a decimal value only. A TypedLiteral to the parser, which reads
+// it the same way.
+export const SignedTypedLiteral = createToken({
+  name: "SignedTypedLiteral",
+  pattern:
+    /(?:SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|REAL|LREAL)#[+-][0-9][0-9_]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/i,
+  categories: [TypedLiteral],
+});
+
 // =============================================================================
 // Operators and Punctuation
 // =============================================================================
@@ -797,6 +814,8 @@ export const allTokens = [
   GreaterEqual,
 
   // Typed and time/date literals (before keywords — BYTE#255, TOD#12:00 must not split)
+  TypedStringLiteral,
+  SignedTypedLiteral,
   TimeLiteral,
   DateTimeLiteral,
   DateLiteral,

@@ -2844,6 +2844,20 @@ export class ASTBuilder {
 
     // Check for different literal types
 
+    // Typed string literal: STRING#'abc', WSTRING#"abc". The value is the
+    // quoted text, as for an untyped literal of the same kind.
+    if (children.TypedStringLiteral) {
+      const token = getFirstToken(children.TypedStringLiteral)!;
+      const quoted = token.image.substring(token.image.indexOf("#") + 1);
+      return {
+        kind: "LiteralExpression",
+        sourceSpan: tokenToSourceSpan(token),
+        literalType: quoted.startsWith('"') ? "WSTRING" : "STRING",
+        value: quoted,
+        rawValue: quoted,
+      };
+    }
+
     // Typed literal: BYTE#255, DWORD#16#FF, INT#0, etc.
     if (children.TypedLiteral) {
       const token = getFirstToken(children.TypedLiteral)!;
