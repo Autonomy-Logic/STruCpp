@@ -64,3 +64,23 @@ PROGRAM Main
   dist := Distance(p1 := player.position, p2 := enemy.position);
   counter := counter + 1;
 END_PROGRAM
+
+FUNCTION_BLOCK Owner
+  METHOD PUBLIC Ping : BOOL
+    VAR_INPUT
+      Flag : BOOL;
+    END_VAR
+    Ping := Flag;
+  END_METHOD
+END_FUNCTION_BLOCK
+
+PROGRAM PointerUser
+  VAR
+    Boss : POINTER TO Owner;
+    home : Owner;
+    Ok : BOOL;
+  END_VAR
+  Boss := ADR(home);
+  Boss^.Ping(Flag := TRUE);
+  Ok := Boss^.Ping(Flag := FALSE);
+END_PROGRAM

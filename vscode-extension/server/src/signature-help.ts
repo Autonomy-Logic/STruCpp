@@ -177,14 +177,15 @@ function findEnclosingCall(
         // Use the original (unstripped) text for name extraction so identifiers
         // that happen to adjoin a stripped region are still found correctly.
         const before = flat.substring(0, i).trimEnd();
-        const match = before.match(/([\w]+(?:\.[\w]+)?)\s*$/);
+        const match = before.match(/([\w]+\^?(?:\.[\w]+)?)\s*$/);
         if (!match) return null;
 
         const fullName = match[1];
         const dotIdx = fullName.lastIndexOf(".");
         if (dotIdx >= 0) {
           return {
-            objectName: fullName.substring(0, dotIdx),
+            // Strip a pointer caret (pointer^.method); lookup uses base name.
+            objectName: fullName.substring(0, dotIdx).replace(/\^$/, ""),
             functionName: fullName.substring(dotIdx + 1),
             activeParameter: commas,
           };

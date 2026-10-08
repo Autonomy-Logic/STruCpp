@@ -129,3 +129,25 @@ describe("getSignatureHelp", () => {
     expect(help!.signatures[0].label.toUpperCase()).toContain("SQRT");
   });
 });
+
+describe("getSignatureHelp (pointer method dispatch)", () => {
+  it("shows params for a pointer method call", () => {
+    const analysis = getAnalysis();
+    // Position cursor right after "Boss^.Ping(" — inside the call
+    const pos = findPosition("Boss^.Ping(Flag := TRUE)");
+    const col = pos.col + "Boss^.Ping(".length;
+    const help = getSignatureHelp(
+      analysis,
+      "complex-project.st",
+      pos.line,
+      col,
+      FIXTURE,
+    );
+    expect(help).not.toBeNull();
+    expect(help!.signatures.length).toBe(1);
+    const label = help!.signatures[0].label.toUpperCase();
+    expect(label).toContain("PING");
+    expect(label).toContain("BOOL");
+    expect(help!.activeParameter).toBe(0);
+  });
+});

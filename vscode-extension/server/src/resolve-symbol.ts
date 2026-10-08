@@ -168,10 +168,12 @@ export function resolveSymbolAtPosition(
       const fce = node as FunctionCallExpression;
 
       // Handle dotted names: instance.method() — the parser represents
-      // simple method calls as FunctionCallExpression with dotted functionName
+      // simple method calls as FunctionCallExpression with dotted functionName.
+      // A pointer receiver (pointer^.method) carries its caret; strip it
+      // since scope lookup uses the base name.
       const dotIndex = fce.functionName.indexOf(".");
       if (dotIndex >= 0) {
-        const instanceName = fce.functionName.substring(0, dotIndex);
+        const instanceName = fce.functionName.substring(0, dotIndex).replace(/\^$/, "");
         const methodName = fce.functionName.substring(dotIndex + 1);
         const instanceVar = lookupScope.lookup(instanceName);
         if (instanceVar) {
