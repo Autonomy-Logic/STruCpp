@@ -221,7 +221,7 @@ async function buildCommand(
       const baseName = response.primaryFileName.replace(/\.(st|iecst)$/i, "");
       const cppPath = path.join(outputDir, `${baseName}.cpp`);
       const hppPath = path.join(outputDir, `${baseName}.hpp`);
-      const mainCppPath = path.join(outputDir, "main.cpp");
+      const mainCppPath = path.join(outputDir, "repl_main.cpp");
 
       fs.writeFileSync(cppPath, response.cppCode, "utf-8");
       fs.writeFileSync(hppPath, response.headerCode, "utf-8");
@@ -362,7 +362,7 @@ export async function debugBuildCommand(
       const baseName = response.primaryFileName.replace(/\.(st|iecst)$/i, "");
       const cppPath = path.join(outputDir, `${baseName}.cpp`);
       const hppPath = path.join(outputDir, `${baseName}.hpp`);
-      const mainCppPath = path.join(outputDir, "main.cpp");
+      const mainCppPath = path.join(outputDir, "repl_main.cpp");
 
       fs.writeFileSync(cppPath, response.cppCode, "utf-8");
       fs.writeFileSync(hppPath, response.headerCode, "utf-8");
