@@ -1466,11 +1466,6 @@ static int64_t& __CURRENT_DT_NS = __current_dt_ns_slot();
  * Unix epoch). Distinct from TIME() which returns the scan-cycle's
  * monotonic elapsed time, not a date.
  *
- * Used by the Additional Function Blocks library's RTC FB, which under
- * MatIEC consumed a `__CURRENT_TIME` global the runtime injected before
- * each scan. STruC++ exposes the same capability through this regular
- * function so RTC's body can call it without compiler-specific pragmas.
- *
  * Resolution priority (highest first):
  *   1. `__CURRENT_DT_NS` when non-zero — the platform integration
  *      delivered a real wall-clock value (RTC chip, NTP, host syscall
