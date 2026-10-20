@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// Copyright (C) 2025 Autonomy
 import { describe, it, expect } from "vitest";
 import { analyze } from "strucpp";
 import { getCompletions } from "../../server/src/completion.js";

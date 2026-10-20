@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// Copyright (C) 2025 Autonomy
 /**
  * Tests for capturing VAR_INPUT initial values into the library manifest.
  *

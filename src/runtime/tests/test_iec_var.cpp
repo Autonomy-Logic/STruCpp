@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later WITH STruCpp-runtime-exception
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// Copyright (C) 2025 Autonomy
 /**
  * STruC++ Runtime - IEC Variable Wrapper Unit Tests
  */

@@ -1,5 +1,5 @@
 (* Additional Function Blocks: DERIVATIVE                                *)
-(* Source: example function block of IEC 61131-3, 2nd Ed. (2001).      *)
+(* Source: example function block of IEC 61131-3, 2nd Ed.                *)
 
 FUNCTION_BLOCK DERIVATIVE
   VAR_INPUT

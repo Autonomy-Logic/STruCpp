@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// Copyright (C) 2025 Autonomy
 /**
  * Architecture guard: scan every `.ts` file under `src/` outside the
  * `src/node/` subdirectory and verify it doesn't reach for any

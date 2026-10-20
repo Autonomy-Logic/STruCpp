@@ -1,5 +1,5 @@
 (* Additional Function Blocks: PID                                       *)
-(* Source: example function block of IEC 61131-3, 2nd Ed. (2001).      *)
+(* Source: example function block of IEC 61131-3, 2nd Ed.                *)
 (*                                                                        *)
 (* Depends on INTEGRAL and DERIVATIVE FBs declared elsewhere in this lib. *)
 

@@ -1,5 +1,5 @@
 (* Additional Function Blocks: HYSTERESIS                                *)
-(* Source: example function block of IEC 61131-3, 2nd Ed. (2001).      *)
+(* Source: example function block of IEC 61131-3, 2nd Ed.                *)
 (*                                                                        *)
 (* Boolean hysteresis on the difference of two REAL inputs (XIN1 - XIN2). *)
 

@@ -63,7 +63,7 @@
     "code-generator",
     "openplc"
   ],
-  "author": "Autonomy / OpenPLC Project <thiago.alves@autonomylogic.com>",
+  "author": "Autonomy <thiago.alves@autonomylogic.com>",
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",

@@ -1,5 +1,5 @@
 (* Additional Function Blocks: RAMP                                      *)
-(* Source: example function block of IEC 61131-3, 2nd Ed. (2001).      *)
+(* Source: example function block of IEC 61131-3, 2nd Ed.                *)
 
 FUNCTION_BLOCK RAMP
   VAR_INPUT
