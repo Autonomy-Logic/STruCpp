@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later WITH STruCpp-runtime-exception
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only WITH STruCpp-runtime-exception
+// Copyright (c) 2025 Autonomy®
 // This file is part of the STruC++ Runtime Library and is covered by the
 // STruC++ Runtime Library Exception. See COPYING.RUNTIME for details.
 /**
@@ -1465,11 +1465,6 @@ static int64_t& __CURRENT_DT_NS = __current_dt_ns_slot();
  * Returns the current absolute time as IEC_DT (nanoseconds since the
  * Unix epoch). Distinct from TIME() which returns the scan-cycle's
  * monotonic elapsed time, not a date.
- *
- * Used by the Additional Function Blocks library's RTC FB, which under
- * MatIEC consumed a `__CURRENT_TIME` global the runtime injected before
- * each scan. STruC++ exposes the same capability through this regular
- * function so RTC's body can call it without compiler-specific pragmas.
  *
  * Resolution priority (highest first):
  *   1. `__CURRENT_DT_NS` when non-zero — the platform integration

@@ -10,11 +10,11 @@ Compiler (GPLv3)
 
 The STruC++ compiler itself -- including the lexer, parser, AST builder,
 semantic analyzer, type checker, code generator, CLI, and library system --
-is licensed under the GNU General Public License version 3 or later.
+is licensed under the GNU General Public License version 3.
 
   Files:  src/*.ts, src/frontend/, src/semantic/, src/backend/,
           src/library/, src/testing/, src/ir/
-  License: GPL-3.0-or-later (see LICENSE)
+  License: GPL-3.0-only (see LICENSE)
 
 This means any modifications to the compiler must be released under the
 same license. However, merely using the compiler to compile your programs
@@ -30,7 +30,7 @@ requiring that output to be GPL-licensed.
 
   Files:  src/runtime/include/*.hpp, src/runtime/repl/iec_repl.hpp,
           src/runtime/test/iec_test.hpp, libs/*.stlib
-  License: GPL-3.0-or-later WITH STruCpp-runtime-exception
+  License: GPL-3.0-only WITH STruCpp-runtime-exception
            (see LICENSE and COPYING.RUNTIME)
 
 In practice: when you compile a Structured Text program with STruC++, the
@@ -54,8 +54,8 @@ Summary
 
   Component                   | License
   ----------------------------|----------------------------------------
-  Compiler (src/*.ts, etc.)   | GPL-3.0-or-later
-  Runtime headers (*.hpp)     | GPL-3.0-or-later + Runtime Exception
-  Standard libraries (*.stlib)| GPL-3.0-or-later + Runtime Exception
+  Compiler (src/*.ts, etc.)   | GPL-3.0-only
+  Runtime headers (*.hpp)     | GPL-3.0-only + Runtime Exception
+  Standard libraries (*.stlib)| GPL-3.0-only + Runtime Exception
   REPL / isocline             | MIT (third-party)
   Your compiled programs      | Your choice

@@ -271,6 +271,8 @@ npm run typecheck       # Type-check without emit
 
 The compiler is licensed under [GPL-3.0](LICENSE). The C++ runtime and standard libraries use GPL-3.0 with the [STruC++ Runtime Library Exception](COPYING.RUNTIME), allowing you to distribute compiled programs under any license. See [COPYING](COPYING) for details.
 
+STruC++ is part of the OpenPLC ecosystem, whose runtimes are dual-licensed under the GPLv3 and a commercial licence. The runtime library exception above means programs compiled with STruC++ carry no licence obligation from STruC++ itself; see the [OpenPLC Runtime licensing page](https://github.com/Autonomy-Logic/openplc-runtime/blob/main/LICENSING.md) for how the runtimes that execute them are licensed. Contributions require agreeing to the [Contributor License Agreement](CLA.md) by ticking its checkbox on the pull request; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Acknowledgments
 
 - [OpenPLC Project](https://autonomylogic.com) -- The ecosystem that motivated this compiler

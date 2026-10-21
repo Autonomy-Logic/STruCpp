@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * E2E for the __XWORD pointer-width address type: ADR()/REF_LINK() return
  * __XWORD, a __XWORD temp round-trips an address to a typed pointer, and a

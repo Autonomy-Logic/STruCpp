@@ -7,7 +7,7 @@
   "isBuiltin": true,
   "blocks": {
     "RTC": {
-      "documentation": "The real time clock has many uses including time stamping, setting dates and times of day in batch reports, in alarm messages and so on."
+      "documentation": "Real time clock. CDT starts from the system date and time; on targets without one, it starts from DT#1970-01-01-00:00:00. While SET is TRUE, CDT equals PDT. When SET is FALSE, CDT keeps counting from the last value set. Q is a copy of SET."
     },
     "INTEGRAL": {
       "documentation": "The integral function block integrates the value of input XIN over time."
