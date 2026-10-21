@@ -1,12 +1,13 @@
-(* SPDX-License-Identifier: GPL-3.0-or-later WITH STruCpp-runtime-exception *)
-(* Copyright (C) 2026 Autonomy *)
+(* SPDX-License-Identifier: GPL-3.0-only WITH STruCpp-runtime-exception *)
+(* Copyright (c) 2026 Autonomy® *)
 (* Additional Function Blocks: RTC (real time clock)                      *)
-(* IN = FALSE: CDT is the runtime clock, TIME() as a DT. Rising edge of  *)
-(* IN latches PDT; while IN stays TRUE, CDT = PDT + time since the edge.  *)
+(* First scan: CDT starts from CURRENT_DT() (1970 + uptime on targets     *)
+(* without a system date). SET = TRUE: CDT = PDT. SET = FALSE: CDT counts *)
+(* on from the last start value. Q copies SET.                            *)
 
 FUNCTION_BLOCK RTC
   VAR_INPUT
-    IN  : BOOL ;
+    SET : BOOL ;
     PDT : DT ;
   END_VAR
   VAR_OUTPUT
@@ -14,21 +15,20 @@ FUNCTION_BLOCK RTC
     CDT : DT ;
   END_VAR
   VAR
-    running    : BOOL := FALSE ;
-    edge_time  : TIME ;
-    preset     : DT ;
+    started  : BOOL := FALSE ;
+    preset   : DT ;
+    set_time : TIME ;
   END_VAR
 
-  IF IN THEN
-    IF NOT running THEN
-      edge_time := TIME() ;
-      preset := PDT ;
-      running := TRUE ;
-    END_IF ;
-    CDT := preset + (TIME() - edge_time) ;
-  ELSE
-    running := FALSE ;
-    CDT := DT#1970-01-01-00:00:00 + TIME() ;
+  IF SET THEN
+    preset := PDT ;
+    set_time := TIME() ;
+    started := TRUE ;
+  ELSIF NOT started THEN
+    preset := CURRENT_DT() ;
+    set_time := TIME() ;
+    started := TRUE ;
   END_IF ;
-  Q := IN ;
+  CDT := preset + (TIME() - set_time) ;
+  Q := SET ;
 END_FUNCTION_BLOCK

@@ -15,59 +15,67 @@ const RTC_SOURCE = path.resolve(
 );
 
 const TEST_ST = `
-TEST 'IN FALSE: Q is FALSE and CDT follows the runtime clock'
-  VAR c : RTC; first : DT; END_VAR
-  c(IN := FALSE, PDT := DT#2000-01-01-00:00:00);
+TEST 'never set: Q is FALSE and CDT starts from the system date'
+  VAR c : RTC; before : DT; first : DT; END_VAR
+  before := CURRENT_DT();
+  c(SET := FALSE, PDT := DT#2000-01-01-00:00:00);
   ASSERT_FALSE(c.Q);
   first := c.CDT;
+  ASSERT_TRUE(first >= before);
+  ASSERT_TRUE(first - before < T#5s);
+  ASSERT_TRUE(first > DT#2020-01-01-00:00:00);
   ADVANCE_TIME(T#3s);
-  c(IN := FALSE, PDT := DT#2000-01-01-00:00:00);
+  c(SET := FALSE, PDT := DT#2000-01-01-00:00:00);
   ASSERT_EQ(c.CDT - first, T#3s);
 END_TEST
 
-TEST 'rising edge: Q is TRUE and CDT equals PDT'
+TEST 'SET TRUE: Q is TRUE and CDT equals PDT'
   VAR c : RTC; END_VAR
-  c(IN := TRUE, PDT := DT#2024-03-01-12:00:00);
+  c(SET := TRUE, PDT := DT#2024-03-01-12:00:00);
   ASSERT_TRUE(c.Q);
   ASSERT_EQ(c.CDT, DT#2024-03-01-12:00:00);
 END_TEST
 
-TEST 'IN TRUE: CDT advances by the elapsed time'
+TEST 'SET held TRUE: CDT follows PDT and does not count'
   VAR c : RTC; END_VAR
-  c(IN := TRUE, PDT := DT#2024-03-01-12:00:00);
+  c(SET := TRUE, PDT := DT#2024-03-01-12:00:00);
   ADVANCE_TIME(T#5s);
-  c(IN := TRUE, PDT := DT#2024-03-01-12:00:00);
+  c(SET := TRUE, PDT := DT#2024-03-01-12:00:00);
+  ASSERT_EQ(c.CDT, DT#2024-03-01-12:00:00);
+  c(SET := TRUE, PDT := DT#1999-12-31-23:59:59);
+  ASSERT_EQ(c.CDT, DT#1999-12-31-23:59:59);
+END_TEST
+
+TEST 'SET released: CDT counts on from the last PDT set'
+  VAR c : RTC; END_VAR
+  c(SET := TRUE, PDT := DT#2024-03-01-12:00:00);
+  ADVANCE_TIME(T#5s);
+  c(SET := FALSE, PDT := DT#2000-01-01-00:00:00);
+  ASSERT_FALSE(c.Q);
   ASSERT_EQ(c.CDT, DT#2024-03-01-12:00:05);
   ADVANCE_TIME(T#1m);
-  c(IN := TRUE, PDT := DT#2024-03-01-12:00:00);
+  c(SET := FALSE, PDT := DT#2000-01-01-00:00:00);
   ASSERT_EQ(c.CDT, DT#2024-03-01-12:01:05);
 END_TEST
 
-TEST 'IN TRUE: PDT is latched on the rising edge only'
+TEST 'PDT changes are ignored while SET is FALSE'
   VAR c : RTC; END_VAR
-  c(IN := TRUE, PDT := DT#2024-03-01-12:00:00);
+  c(SET := TRUE, PDT := DT#2040-01-01-00:00:00);
+  c(SET := FALSE, PDT := DT#2040-01-01-00:00:00);
   ADVANCE_TIME(T#2s);
-  c(IN := TRUE, PDT := DT#1999-12-31-23:59:59);
-  ASSERT_EQ(c.CDT, DT#2024-03-01-12:00:02);
+  c(SET := FALSE, PDT := DT#1999-12-31-23:59:59);
+  ASSERT_EQ(c.CDT, DT#2040-01-01-00:00:02);
 END_TEST
 
-TEST 'falling edge: Q is FALSE and CDT returns to the runtime clock'
-  VAR c : RTC; clock : RTC; END_VAR
-  c(IN := TRUE, PDT := DT#2040-01-01-00:00:00);
-  ASSERT_EQ(c.CDT, DT#2040-01-01-00:00:00);
-  c(IN := FALSE, PDT := DT#2040-01-01-00:00:00);
-  clock(IN := FALSE, PDT := DT#2040-01-01-00:00:00);
-  ASSERT_FALSE(c.Q);
-  ASSERT_EQ(c.CDT, clock.CDT);
-END_TEST
-
-TEST 'a new rising edge latches the new PDT'
+TEST 'setting again replaces the previous time'
   VAR c : RTC; END_VAR
-  c(IN := TRUE, PDT := DT#2024-03-01-12:00:00);
+  c(SET := TRUE, PDT := DT#2024-03-01-12:00:00);
   ADVANCE_TIME(T#10s);
-  c(IN := FALSE, PDT := DT#2024-03-01-12:00:00);
-  c(IN := TRUE, PDT := DT#2030-06-15-08:30:00);
-  ASSERT_EQ(c.CDT, DT#2030-06-15-08:30:00);
+  c(SET := FALSE, PDT := DT#2024-03-01-12:00:00);
+  c(SET := TRUE, PDT := DT#2030-06-15-08:30:00);
+  ADVANCE_TIME(T#1s);
+  c(SET := FALSE, PDT := DT#2030-06-15-08:30:00);
+  ASSERT_EQ(c.CDT, DT#2030-06-15-08:30:01);
 END_TEST
 `;
 
