@@ -116,4 +116,4 @@ All commands are available from the Command Palette (**Cmd+Shift+P** / **Ctrl+Sh
 
 ## License
 
-GPL-3.0-or-later
+GPL-3.0-only
