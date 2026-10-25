@@ -38,10 +38,24 @@ function parseAST(source: string) {
 
 describe("type-utils", () => {
   describe("ELEMENTARY_TYPES", () => {
-    it("should define all 24 types (22 canonical + TOD + DT aliases)", () => {
-      // 22 canonical = 21 standard elementary types + __XWORD (platform-width
-      // address type); plus the TOD and DT alias entries.
-      expect(Object.keys(ELEMENTARY_TYPES)).toHaveLength(24);
+    it("should define all 29 types (25 canonical + 4 aliases)", () => {
+      // 25 canonical = 21 standard elementary types, __XWORD, and LTIME/LTOD/
+      // LDT. LDATE is absent: it needs nanoseconds where DATE_t holds days.
+      // 4 aliases = TOD, DT and the long forms LTOD and LDT.
+      expect(Object.keys(ELEMENTARY_TYPES)).toHaveLength(29);
+    });
+
+    it.each(["LTIME", "LTOD", "LDT", "LTIME_OF_DAY", "LDATE_AND_TIME"])(
+      "defines %s as a 64-bit type",
+      (name) => {
+        expect(ELEMENTARY_TYPES[name]?.sizeBits).toBe(64);
+      },
+    );
+
+    it("does not define LDATE — its unit does not match DATE_t", () => {
+      // LDATE counts nanoseconds since 1970-01-01, while DATE_t holds whole
+      // days, so it cannot share DATE's representation.
+      expect(ELEMENTARY_TYPES["LDATE"]).toBeUndefined();
     });
 
     it("should have correct sizes for integer types", () => {
@@ -451,6 +465,36 @@ describe("type-utils", () => {
       expect(entry?.typeName).toBeNull();
       expect(entry?.conflictingTypes).toContain("State1");
       expect(entry?.conflictingTypes).toContain("State2");
+    });
+
+    it("treats one enum described twice as one enum, not a conflict", () => {
+      // A library compiling against a dependency that re-exports its types
+      // sees each from both sides. Counting that as a clash made every member
+      // ambiguous with itself, which broke SoftMotion on `SMC_NO_ERROR`.
+      const map = buildEnumMemberMap([
+        { name: "SMC_ERROR", members: ["SMC_NO_ERROR", "SMC_DI_AXIS_ERROR"] },
+        { name: "SMC_ERROR", members: ["SMC_NO_ERROR", "SMC_DI_AXIS_ERROR"] },
+      ]);
+      const entry = map.get("SMC_NO_ERROR");
+      expect(entry?.typeName).toBe("SMC_ERROR");
+      expect(entry?.conflictingTypes).toEqual(["SMC_ERROR"]);
+    });
+
+    it("compares those names case-insensitively too", () => {
+      const map = buildEnumMemberMap([
+        { name: "State", members: ["IDLE"] },
+        { name: "STATE", members: ["IDLE"] },
+      ]);
+      expect(map.get("IDLE")?.typeName).toBe("State");
+    });
+
+    it("still marks a genuine clash between two enums", () => {
+      const map = buildEnumMemberMap([
+        { name: "State1", members: ["IDLE"] },
+        { name: "State1", members: ["IDLE"] },
+        { name: "State2", members: ["IDLE"] },
+      ]);
+      expect(map.get("IDLE")?.typeName).toBeNull();
     });
 
     it("should handle case-insensitive member names", () => {

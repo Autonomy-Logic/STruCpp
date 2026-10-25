@@ -7,7 +7,13 @@
  * Uses Chevrotain's embedded DSL for grammar definition.
  */
 
-import { CstParser, CstNode, type IToken, type TokenType } from "chevrotain";
+import {
+  CstParser,
+  CstNode,
+  EOF,
+  type IToken,
+  type TokenType,
+} from "chevrotain";
 import * as tokens from "./lexer.js";
 import { resolveErrorMessageProvider } from "./parser-error-message-provider.js";
 
@@ -835,6 +841,18 @@ export class STParser extends CstParser {
       ]);
     });
     const typeNameTok = this.CONSUME(tokens.Identifier);
+    // CODESYS spells its descriptor type `__SYSTEM.AnyType`, so a type name
+    // may carry that one qualifier. Gated on the namespace rather than opened
+    // to dotted names: elsewhere a dot after a type is a mistake.
+    this.OPTION3({
+      GATE: () =>
+        typeNameTok.image.toUpperCase() === "__SYSTEM" &&
+        this.LA(1).tokenType === tokens.Dot,
+      DEF: () => {
+        this.CONSUME(tokens.Dot);
+        this.CONSUME3(tokens.Identifier);
+      },
+    });
     // Optional parameterized length for STRING(n) / WSTRING(n) / STRING(CONSTANT_NAME)
     // GATE: only when the type name is STRING or WSTRING, consume ( IntegerLiteral ) or ( Identifier )
     // Avoid ( Identifier ) for typed enums and ( IntegerLiteral .. ) for subrange types
@@ -1011,6 +1029,10 @@ export class STParser extends CstParser {
           GATE: () => this.LA(1).tokenType === tokens.EXIT,
         },
         {
+          ALT: () => this.SUBRULE(this.continueStatement),
+          GATE: () => this.LA(1).tokenType === tokens.CONTINUE,
+        },
+        {
           ALT: () => this.SUBRULE(this.returnStatement),
           GATE: () => this.LA(1).tokenType === tokens.RETURN,
         },
@@ -1167,17 +1189,15 @@ export class STParser extends CstParser {
     ) {
       return false;
     }
-    // Scan forward looking for Colon before Assign/Semicolon/LParen.
-    // 8-token cap covers all realistic label patterns:
-    //   42:                → 2 tokens    EnumType.MEMBER:  → 4 tokens
-    //   -5:                → 3 tokens    1, 2, 3, 4:       → 8 tokens
-    //   1..10:             → 4 tokens
-    // The AT_LEAST_ONE_SEP in caseElement handles comma-separated labels
-    // internally, so the gate only needs to detect the first label's colon.
-    for (let i = 2; i <= 8; i++) {
+    // Scan forward to the label's Colon, stopping at anything only a
+    // statement can contain (Assign, Semicolon, LParen). No length cap: IEC
+    // puts no limit on a label list, and `2, 3, 4, 5, 6:` is already ten
+    // tokens (an 8-token cap rejected five labels or more).
+    for (let i = 2; ; i++) {
       const t = this.LA(i).tokenType;
       if (t === tokens.Colon) return true;
       if (
+        t === EOF ||
         t === tokens.Assign ||
         t === tokens.Semicolon ||
         t === tokens.LParen ||
@@ -1496,6 +1516,14 @@ export class STParser extends CstParser {
    */
   public exitStatement = this.RULE("exitStatement", () => {
     this.CONSUME(tokens.EXIT);
+    this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
+   * CONTINUE statement.
+   */
+  public continueStatement = this.RULE("continueStatement", () => {
+    this.CONSUME(tokens.CONTINUE);
     this.CONSUME(tokens.Semicolon);
   });
 
@@ -1867,8 +1895,10 @@ export class STParser extends CstParser {
             this.OR3({
               DEF: [
                 { ALT: () => this.SUBRULE2(this.identifierOrKeyword) },
-                // Bit access: var.0, var.31
+                // Bit access: var.0, var.31 — `%X` is optional for bits.
                 { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
+                // Partial access: var.%X15, var.%B3, var.%W1, var.%D0
+                { ALT: () => this.CONSUME(tokens.PartialAccess) },
               ],
               IGNORE_AMBIGUITIES: true,
             });

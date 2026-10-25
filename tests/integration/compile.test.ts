@@ -626,10 +626,10 @@ describe('Error Handling Tests', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      // copy-in: locked read of the whole global into the FB's by-value inout member
-      expect(result.cppCode).toContain('MV.A = AX->with_lock([&](auto* __glk){ return (*__glk); });');
-      // copy-out: locked write back
-      expect(result.cppCode).toContain('AX->with_lock([&](auto* __glk){ (*__glk) = MV.A; });');
+      // copy-in, call and copy-out run as one step under the global's lock
+      expect(result.cppCode).toMatch(
+        /AX->with_lock\(\[&\]\(auto\* __glk\)\{\s*auto& __fbi = MV;\s*__fbi\.A = \(\*__glk\);\s*__fbi\(\);\s*__fbi\.ENO = true;\s*\(\*__glk\) = __fbi\.A;\s*\}\);/,
+      );
     });
 
     it('never nests two global locks in one statement (reads hoisted before write-lock)', () => {

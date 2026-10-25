@@ -28,6 +28,7 @@ import {
 } from "./codegen-utils.js";
 import { wrapReferenceChain } from "./reference-types.js";
 import { mangledMemberName } from "./member-mangling.js";
+import { TypeDescriptorGenerator } from "./type-descriptor-gen.js";
 import {
   parseDateLiteralToDays,
   parseDtLiteralToNs,
@@ -145,21 +146,24 @@ export const IEC_TO_CPP_VAR_TYPE: Record<string, string> = {
 };
 
 /**
- * The C++ type of a struct field or type alias declared POINTER TO, which is a
- * raw pointer. `cppType` is the pointee as a single level spells it today;
- * `rawType` is the unwrapped element (`INT_t`, a UDT name). With more levels,
- * the pointee is itself a reference variable, so `POINTER TO POINTER TO INT`
- * is `IEC_Ptr<INT_t>*` and `POINTER TO REF_TO INT` is `IEC_REF_TO<INT_t>*`.
+ * The C++ type of a struct field or type alias declared POINTER TO, lowered the
+ * way a pointer variable is: `IEC_Ptr<T>` accepts the address of any type; a
+ * raw `T*` does not, so `pByte := ADR(anInt)` type-checked and then failed in
+ * C++. `cppType` is the type without the pointer level (returned unchanged when
+ * the outermost level is not POINTER TO); `rawType` is the unwrapped element
+ * (`INT_t`, a UDT name, or the array type). With more levels, the pointee is
+ * itself a reference variable, so `POINTER TO POINTER TO INT` is
+ * `IEC_Ptr<IEC_Ptr<INT_t>>` and `POINTER TO REF_TO INT` is
+ * `IEC_Ptr<IEC_REF_TO<INT_t>>`.
  */
-function rawPointerType(
+function pointerFieldType(
   typeRef: TypeReference,
   cppType: string,
   rawType: string,
 ): string {
   const chain = typeRef.referenceChain ?? [typeRef.referenceKind];
   if (chain[0] !== "pointer_to") return cppType;
-  if (chain.length === 1) return `${cppType}*`;
-  return `${wrapReferenceChain(chain.slice(1), rawType)}*`;
+  return wrapReferenceChain(chain, rawType);
 }
 
 /** A field or alias whose outermost level is REF_TO or REFERENCE TO. */
@@ -178,6 +182,22 @@ export class TypeCodeGenerator {
   private output: string[] = [];
   /** Track known enum type names (uppercase) so struct fields can use IEC_ wrapper */
   private knownEnumNames: Set<string> = new Set();
+  /** Emits the layout tables a block walks when handed a STRUCT on an ANY
+   *  pin. Rebuilt per run, since it indexes the type list. */
+  private descriptors: TypeDescriptorGenerator | undefined;
+
+  /** UPPER(names) of the STRUCT types this run emitted a layout table for.
+   *  A member codegen could not describe suppresses the whole table, so a
+   *  call site must ask rather than assume every struct has one. */
+  readonly describedTypes: Set<string> = new Set();
+
+  /** STRUCT types that got no layout table, and why. Surfaced as warnings by
+   *  the caller — see `CodeGenerator.emitTypeDeclarations`. */
+  readonly undescribedTypes: Array<{
+    typeName: string;
+    member: string;
+    reason: string;
+  }> = [];
   /** Reverse map: enum member name (upper case) → owning enum type */
   private enumMemberToType: Map<string, EnumMemberEntry> = new Map();
 
@@ -218,6 +238,16 @@ export class TypeCodeGenerator {
   generateTypes(types: TypeDeclaration[]): string {
     this.output = [];
     this.knownEnumNames = new Set();
+    this.descriptors = new TypeDescriptorGenerator({
+      types,
+      mapStructFieldTypeToCpp: (
+        name: string,
+        maxLength?: number | string,
+      ): string => this.mapStructFieldTypeToCpp(name, maxLength),
+      mapTypeToCpp: (name: string): string => this.mapTypeToCpp(name),
+      isUserDefinedType: this.options.isUserDefinedType,
+      indent: this.options.indent,
+    });
 
     // Build reverse map for bare enum member qualification
     this.enumMemberToType = buildEnumMemberMap(
@@ -262,12 +292,28 @@ export class TypeCodeGenerator {
     const def = type.definition;
 
     switch (def.kind) {
-      case "StructDefinition":
+      case "StructDefinition": {
         this.generateStructType(type.name, def);
         // Struct fields already contain IECVar leaves — identity alias
         this.emit(`using IEC_${type.name} = ${type.name};`);
         this.emit("");
+        // The alias has to come first: the table says `sizeof(<name>)`, so the
+        // struct must be complete by the time the initialiser is parsed.
+        const tables = this.descriptors?.generate(type.name, def) ?? [];
+        for (const line of tables) this.emit(line);
+        if (tables.length > 0) {
+          this.emit("");
+          this.describedTypes.add(type.name.toUpperCase());
+        }
+        for (const skip of this.descriptors?.skipped ?? []) {
+          if (
+            !this.undescribedTypes.some((u) => u.typeName === skip.typeName)
+          ) {
+            this.undescribedTypes.push(skip);
+          }
+        }
         break;
+      }
       case "EnumDefinition":
         this.knownEnumNames.add(type.name.toUpperCase());
         this.generateEnumType(type.name, def);
@@ -352,6 +398,7 @@ export class TypeCodeGenerator {
         const elemCpp = this.arrayElementTypeToCpp(
           field.type.elementTypeName,
           field.type.elementReferenceChain,
+          field.type.elementMaxLength,
         );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
@@ -369,7 +416,7 @@ export class TypeCodeGenerator {
             field.type.referenceChain ?? [field.type.referenceKind],
             rawType,
           )
-        : rawPointerType(field.type, cppType, rawType);
+        : pointerFieldType(field.type, cppType, rawType);
       for (const fieldName of field.names) {
         // One rule, shared with the class definition and the debug table — see
         // member-mangling.ts. Compare against the ST type name, not cppType
@@ -469,6 +516,7 @@ export class TypeCodeGenerator {
       elementKind === undefined || elementKind === "none"
         ? undefined
         : (def.elementType.referenceChain ?? [elementKind]),
+      def.elementType.maxLength,
     );
     const numDims = def.dimensions.length;
 
@@ -554,7 +602,7 @@ export class TypeCodeGenerator {
     const rawType = def.arrayDimensions ? cppType : this.mapTypeToCpp(def.name);
     cppType = isReferenceField(def)
       ? wrapReferenceChain(def.referenceChain ?? [def.referenceKind], rawType)
-      : rawPointerType(def, cppType, rawType);
+      : pointerFieldType(def, cppType, rawType);
     this.emit(`using ${name} = ${cppType};`);
     this.emit("");
   }
@@ -562,15 +610,18 @@ export class TypeCodeGenerator {
   /**
    * The C++ element type of an array: the IECVar-wrapped type for a value
    * element, or for an element declared POINTER TO / REF_TO the wrapper a
-   * variable of that type gets (`IEC_Ptr<INT_t>`).
+   * variable of that type gets (`IEC_Ptr<INT_t>`). `maxLength` is a STRING /
+   * WSTRING element's declared length — `ARRAY[1..4] OF STRING(60)` — which
+   * would otherwise fall back to 254.
    */
   private arrayElementTypeToCpp(
     typeName: string,
     referenceChain: readonly string[] | undefined,
+    maxLength?: number | string,
   ): string {
     return referenceChain
       ? wrapReferenceChain(referenceChain, this.mapTypeToCpp(typeName))
-      : this.mapStructFieldTypeToCpp(typeName);
+      : this.mapStructFieldTypeToCpp(typeName, maxLength);
   }
 
   /**

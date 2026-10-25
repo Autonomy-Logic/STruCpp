@@ -89,6 +89,8 @@ export interface ProjectVarDeclaration {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type for inline arrays (e.g. "DINT"). */
   elementTypeName?: string;
+  /** Declared length of an inline array's ELEMENT — `ARRAY [0..3] OF STRING(23)`. */
+  elementMaxLength?: number;
   /** Element reference levels for an inline array of pointers or references. */
   elementReferenceChain?: ReferenceKind[];
   /** Pointer/reference qualifier carried through from the AST TypeReference. */
@@ -112,6 +114,8 @@ export interface VarExternalDeclaration {
   maxLength?: number | string;
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  /** Declared length of an inline array's ELEMENT — `ARRAY [0..3] OF STRING(23)`. */
+  elementMaxLength?: number;
   elementReferenceChain?: ReferenceKind[];
   referenceKind?: string;
   referenceChain?: ReferenceKind[];
@@ -275,6 +279,9 @@ export function toProjectVarDeclaration(
     ...(decl.type.elementTypeName !== undefined
       ? { elementTypeName: decl.type.elementTypeName }
       : {}),
+    ...(decl.type.elementMaxLength !== undefined
+      ? { elementMaxLength: decl.type.elementMaxLength }
+      : {}),
     ...(decl.type.elementReferenceChain !== undefined
       ? { elementReferenceChain: decl.type.elementReferenceChain }
       : {}),
@@ -318,6 +325,26 @@ export function collectFileScopeGlobals(
 }
 
 /**
+ * The CONFIGURATION globals in the index order a runtime locks them by
+ * (strucpp_global_lock), each name once.
+ */
+export function lockedGlobals(
+  model: ProjectModel | undefined,
+): Array<{ key: string; name: string }> {
+  const out: Array<{ key: string; name: string }> = [];
+  const seen = new Set<string>();
+  for (const config of model?.configurations ?? []) {
+    for (const g of config.globalVars) {
+      const key = g.name.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, name: g.name });
+    }
+  }
+  return out;
+}
+
+/**
  * Result of building the project model.
  */
 export interface ProjectModelResult {
@@ -351,7 +378,7 @@ export interface ProjectModelResult {
  * throwing, mirroring `parseTimeLiteral`.
  */
 export function parseDateLiteralToDays(literal: string): bigint {
-  const stripped = literal.replace(/^(D|DATE)#/i, "");
+  const stripped = literal.replace(/^(LDATE|LD|DATE|D)#/i, "");
   const m = stripped.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
   if (!m) return 0n;
   const MS_PER_DAY = 86_400_000n;
@@ -368,7 +395,10 @@ export function parseDateLiteralToDays(literal: string): bigint {
  * rounding mode). Returns 0 for unparsable input.
  */
 export function parseTodLiteralToNs(literal: string): bigint {
-  const stripped = literal.replace(/^(TOD|TIME_OF_DAY)#/i, "");
+  const stripped = literal.replace(
+    /^(LTIME_OF_DAY|LTOD|TIME_OF_DAY|TOD)#/i,
+    "",
+  );
   const m = stripped.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?$/);
   if (!m) return 0n;
   const hh = m[1] ?? "0";
@@ -393,7 +423,10 @@ export function parseTodLiteralToNs(literal: string): bigint {
  * Returns 0 for unparsable input.
  */
 export function parseDtLiteralToNs(literal: string): bigint {
-  const stripped = literal.replace(/^(DT|DATE_AND_TIME)#/i, "");
+  const stripped = literal.replace(
+    /^(LDATE_AND_TIME|LDT|DATE_AND_TIME|DT)#/i,
+    "",
+  );
   const m = stripped.match(
     /^(\d{4})-(\d{1,2})-(\d{1,2})-(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?$/,
   );
@@ -421,8 +454,9 @@ export function parseTimeLiteral(literal: string): TimeValue {
   const rawValue = literal;
   let nanoseconds = 0;
 
-  // Remove T# or TIME# prefix (case insensitive)
-  let value = literal.replace(/^(T|TIME)#/i, "");
+  // Remove the duration prefix (case insensitive): T, LT, TIME or LTIME.
+  // LTIME shares TIME's nanosecond representation, so both parse the same.
+  let value = literal.replace(/^(LTIME|LT|TIME|T)#/i, "");
 
   // Parse components: d (days), h (hours), m (minutes), s (seconds), ms (milliseconds), us (microseconds), ns (nanoseconds)
   const patterns = [
@@ -936,6 +970,9 @@ export class ProjectModelBuilder {
       ...(decl.type.elementTypeName !== undefined
         ? { elementTypeName: decl.type.elementTypeName }
         : {}),
+      ...(decl.type.elementMaxLength !== undefined
+        ? { elementMaxLength: decl.type.elementMaxLength }
+        : {}),
       ...(decl.type.elementReferenceChain !== undefined
         ? { elementReferenceChain: decl.type.elementReferenceChain }
         : {}),
@@ -961,7 +998,7 @@ export class ProjectModelBuilder {
       // Handle raw string that might be a time literal
       if (
         typeof lit.rawValue === "string" &&
-        lit.rawValue.match(/^T#|^TIME#/i)
+        lit.rawValue.match(/^(LTIME|LT|TIME|T)#/i)
       ) {
         return parseTimeLiteral(lit.rawValue);
       }

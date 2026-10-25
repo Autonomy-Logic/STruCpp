@@ -40,6 +40,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 // ---------------------------------------------------------------------------
@@ -118,18 +119,37 @@ constexpr uint8_t LEAF_FLAG_RETAIN = 1 << 1;
 // ---------------------------------------------------------------------------
 // Debug entry: one per leaf variable.  Layout is ABI; see notes in
 // debug_dispatch.hpp's runtime dispatch for the per-platform size:
-// 4 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (flags absorbs
-// alignment).
+// 6 bytes on 16-bit-pointer AVR, 16 bytes on 64-bit platforms (the trailing
+// bytes absorb alignment).
 //
-// `flags` occupies the byte that used to be `_pad`, so sizeof(Entry) is
-// unchanged on every target — the read-only gate costs no flash and no RAM,
-// which is why it is a whole byte rather than a bit stolen from `tag`.
+// `flags` took the byte that used to be `_pad`. `cap` follows it, and on AVR
+// that is the one member that costs anything: a 2-byte pointer, three bytes
+// and 2-byte alignment make the entry 6 rather than 4. It is not optional —
+// without it every sized STRING reads as the 254 default and the string ops
+// compute their forced-value offsets past the end of the object.
 // ---------------------------------------------------------------------------
 struct Entry {
     void* ptr;
     uint8_t tag;
     uint8_t flags;
+
+    /**
+     * Declared capacity of a `STRING(n)` / `WSTRING(n)`; 0 for any other type
+     * and for an unqualified string, where it means the 254 default. The
+     * string ops need it — `type_ops[]` has one row per TypeTag while
+     * `IECStringVar<23>` and `<254>` are distinct types.
+     */
+    uint8_t cap;
 };
+
+// The AVR branches of `read_entry` cannot copy an `Entry` out of PROGMEM as a
+// struct; they read each member by offset. These pin those offsets on every
+// target, so a member added or reordered here is a compile error rather than
+// an out-of-bounds read on an ATmega.
+static_assert(offsetof(Entry, ptr) == 0, "Entry::ptr must be first");
+static_assert(offsetof(Entry, tag) == sizeof(void*), "Entry::tag follows ptr");
+static_assert(offsetof(Entry, flags) == sizeof(void*) + 1, "Entry::flags follows tag");
+static_assert(offsetof(Entry, cap) == sizeof(void*) + 2, "Entry::cap follows flags");
 
 // ---------------------------------------------------------------------------
 // Per-project tables — DECLARED here, DEFINED by generated_debug.cpp.
@@ -184,5 +204,26 @@ extern const uint16_t  retain_var_count;
 // Identity of the retain LAYOUT (ordered path|typeTag), not of the program: a
 // body edit keeps retained values, a declaration change invalidates them.
 extern const uint32_t  retain_layout_hash;
+
+// Consecutive leaves of one locked global `g`: elements [first, first + count)
+// of debug array `arr`. A threaded build lists them so a runtime can take the
+// global's lock (strucpp_global_lock(g)) around a leaf.
+struct GlobalLeafRun {
+    uint8_t  arr;
+    uint16_t first;
+    uint16_t count;
+    uint32_t g;
+};
+
+// The global leaf (arr, elem) is in, from `n` runs, or -1.
+inline int32_t global_of_leaf(const GlobalLeafRun* runs, uint32_t n, uint8_t arr, uint16_t elem) {
+    for (uint32_t i = 0; i < n; ++i) {
+        const GlobalLeafRun& r = runs[i];
+        if (r.arr == arr && elem >= r.first && elem - r.first < r.count) {
+            return static_cast<int32_t>(r.g);
+        }
+    }
+    return -1;
+}
 
 } } // namespace strucpp::debug

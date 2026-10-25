@@ -7,8 +7,10 @@
 // `std::trait_v`, no inline variables, no <optional>/<variant>/<string_view>).
 // `auto` return-type deduction and generic/`decltype` trailing returns are C++14
 // and OK. The <mutex> include + all locks are `#ifdef STRUCPP_THREADED`, so the
-// baremetal (Arduino) build never pulls them in. Codegen emits with_lock()
-// lambdas with CONCRETE parameter types (not `auto*`) to stay portable.
+// baremetal (Arduino) build never pulls them in; a threaded firmware without
+// <mutex> takes its locks from the platform (STRUCPP_PLATFORM_THREADS). Codegen
+// emits with_lock() lambdas with CONCRETE parameter types (not `auto*`) to stay
+// portable.
 // ============================================================================
 
 /**
@@ -29,8 +31,9 @@
  *
  *   - STRUCPP_THREADED (openplc-runtime v4): every access (read / write / field
  *     / FB call) is serialized on the global's own mutex — fine-grained, so a
- *     lock is held for exactly one access and never nested with another global's
- *     lock (deadlock-free). Contract: per-access validity (no torn read/write);
+ *     lock is held for one access and never nested with another global's lock,
+ *     except a global FB instance's lock, held across that instance's own call.
+ *     The mutex is recursive. Contract: per-access validity (no torn read/write);
  *     conflicts resolve last-writer-in-time. Data-agnostic — scalars, structs,
  *     arrays, and FB instances all work, and different-field writes from
  *     different tasks all survive because they mutate the one shared object.
@@ -53,8 +56,67 @@
 #include "iec_var.hpp"
 
 #ifdef STRUCPP_THREADED
+#ifdef STRUCPP_PLATFORM_THREADS
+// The platform supplies the locks where the toolchain has no <mutex> (the ARM
+// Arduino cores). One lock per global, created with it; the holding thread must
+// be able to take it again. try_lock returns true when it took the lock.
+extern "C" void *strucpp_platform_mutex_create(void);
+extern "C" void strucpp_platform_mutex_lock(void *mutex);
+extern "C" void strucpp_platform_mutex_unlock(void *mutex);
+extern "C" bool strucpp_platform_mutex_try_lock(void *mutex);
+#else
 #include <mutex>
 #endif
+#endif
+
+namespace strucpp {
+namespace detail {
+#if defined(STRUCPP_THREADED) && defined(STRUCPP_PLATFORM_THREADS)
+/** A global's lock, from the platform. */
+class GlobalMutex {
+   public:
+    GlobalMutex() : handle_(strucpp_platform_mutex_create()) {}
+    GlobalMutex(const GlobalMutex&) = delete;
+    GlobalMutex& operator=(const GlobalMutex&) = delete;
+    void lock() const { strucpp_platform_mutex_lock(handle_); }
+    void unlock() const { strucpp_platform_mutex_unlock(handle_); }
+    bool try_lock() const { return strucpp_platform_mutex_try_lock(handle_); }
+
+   private:
+    void *handle_;
+};
+
+/** Held for one access, as std::lock_guard would be. */
+class GlobalLock {
+   public:
+    explicit GlobalLock(const GlobalMutex& mutex) : mutex_(mutex) { mutex_.lock(); }
+    ~GlobalLock() { mutex_.unlock(); }
+    GlobalLock(const GlobalLock&) = delete;
+    GlobalLock& operator=(const GlobalLock&) = delete;
+
+   private:
+    const GlobalMutex& mutex_;
+};
+#elif defined(STRUCPP_THREADED)
+// Recursive: the thread holding a global FB instance's lock around its call
+// may reach that same global again from the instance's body.
+using GlobalMutex = std::recursive_mutex;
+using GlobalLock  = std::lock_guard<std::recursive_mutex>;
+#endif
+
+#ifdef STRUCPP_THREADED
+/** A global's lock taken by index, for the generated strucpp_global_* hooks;
+ *  null for an index that names no global. */
+inline bool global_try_lock(GlobalMutex* m) { return m != nullptr && m->try_lock(); }
+inline void global_lock(GlobalMutex* m) {
+    if (m != nullptr) m->lock();
+}
+inline void global_unlock(GlobalMutex* m) {
+    if (m != nullptr) m->unlock();
+}
+#endif
+}  // namespace detail
+}  // namespace strucpp
 
 namespace strucpp {
 
@@ -89,7 +151,7 @@ class GlobalVar {
      *  lock acquisition, same hold duration. */
     V read() const {
 #ifdef STRUCPP_THREADED
-        std::lock_guard<std::mutex> lg(mtx_);
+        detail::GlobalLock lg(mtx_);
 #endif
         return value;
     }
@@ -98,7 +160,7 @@ class GlobalVar {
     template <typename T>
     void write(T v) {
 #ifdef STRUCPP_THREADED
-        std::lock_guard<std::mutex> lg(mtx_);
+        detail::GlobalLock lg(mtx_);
 #endif
         value.set(v);
     }
@@ -110,14 +172,17 @@ class GlobalVar {
     template <typename F>
     auto with_lock(F&& f) -> decltype(f(static_cast<V*>(nullptr))) {
 #ifdef STRUCPP_THREADED
-        std::lock_guard<std::mutex> lg(mtx_);
+        detail::GlobalLock lg(mtx_);
 #endif
         return f(&value);
     }
 
 #ifdef STRUCPP_THREADED
+    /** This global's lock, for a runtime that locks globals by index. */
+    detail::GlobalMutex* lock_handle() const { return &mtx_; }
+
    private:
-    mutable std::mutex mtx_;
+    mutable detail::GlobalMutex mtx_;
 #endif
 };
 

@@ -5,7 +5,12 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { tokenize, STLexer, uppercaseSource } from '../../src/frontend/lexer.js';
+import {
+  tokenize,
+  STLexer,
+  uppercaseSource,
+  declaredImageOf,
+} from '../../src/frontend/lexer.js';
 
 describe('STLexer', () => {
   describe('initialization', () => {
@@ -670,5 +675,59 @@ describe('uppercaseSource', () => {
 
   it('should preserve strings that contain comment syntax', () => {
     expect(uppercaseSource("x := '(* not a comment *)';")).toBe("X := '(* not a comment *)';");
+  });
+});
+
+describe('declared spelling', () => {
+  // IEC 61131-3 §6.1.2 makes identifiers case-insensitive, so the lexer folds
+  // the source and everything downstream matches the folded image. These pin
+  // the declared spelling kept beside it.
+  const named = (source: string) =>
+    tokenize(source)
+      .tokens.filter((t) => t.tokenType.name === 'Identifier')
+      .map(declaredImageOf);
+
+  it('keeps an identifier as it was typed, while the image stays folded', () => {
+    const result = tokenize('VAR spPressureAlt : REAL; END_VAR');
+    const token = result.tokens.find((t) => t.tokenType.name === 'Identifier');
+    expect(token?.image).toBe('SPPRESSUREALT');
+    expect(declaredImageOf(token!)).toBe('spPressureAlt');
+  });
+
+  it('keeps each name separately, whatever mix of cases a file uses', () => {
+    // Type names lex as identifiers too, and keep their source spelling for
+    // the same reason a variable does.
+    expect(named('VAR a1 : INT; Flow_Rate : REAL; ALARM : BOOL; END_VAR')).toEqual([
+      'a1',
+      'INT',
+      'Flow_Rate',
+      'REAL',
+      'ALARM',
+      'BOOL',
+    ]);
+  });
+
+  it('is unaffected by a string literal, whose case folding already skips it', () => {
+    // `uppercaseSource` leaves literals alone, so it writes one output
+    // character per input character there too; if it ever stopped, every
+    // offset after the literal would slice the wrong characters.
+    expect(named("VAR msg : STRING := 'MiXeD'; tail : INT; END_VAR")).toEqual([
+      'msg',
+      'STRING',
+      'tail',
+      'INT',
+    ]);
+  });
+
+  it('is unaffected by a comment, for the same reason', () => {
+    expect(
+      named('VAR (* Keep This *) lead : INT; // and this\n tail : INT; END_VAR'),
+    ).toEqual(['lead', 'INT', 'tail', 'INT']);
+  });
+
+  it('reports the folded image for a name that was already upper case', () => {
+    const result = tokenize('VAR MOTOR : INT; END_VAR');
+    const token = result.tokens.find((t) => t.tokenType.name === 'Identifier');
+    expect(declaredImageOf(token!)).toBe('MOTOR');
   });
 });
