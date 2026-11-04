@@ -229,9 +229,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain(
-        "class WORKER : public IRUNNABLE {",
-      );
+      expect(result.headerCode).toContain("class WORKER : public IRUNNABLE {");
     });
   });
 
@@ -368,7 +366,10 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       const childSection = result.cppCode.slice(
         result.cppCode.indexOf("void CHILD::operator()()"),
       );
-      const childBody = childSection.slice(0, childSection.indexOf("\n}\n") + 3);
+      const childBody = childSection.slice(
+        0,
+        childSection.indexOf("\n}\n") + 3,
+      );
       expect(childBody).not.toContain("BASE::operator()()");
     });
   });
@@ -480,6 +481,59 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       );
       // No getter should be generated
       expect(result.headerCode).not.toContain("get_TARGET");
+    });
+
+    it("should resolve an inherited property accessed through a derived instance", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Base
+          VAR _v : INT; END_VAR
+          PROPERTY Val : INT
+            GET
+              Val := _v;
+            END_GET
+            SET
+              _v := Val;
+            END_SET
+          END_PROPERTY
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Derived EXTENDS Base
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR d : Derived; x : INT; END_VAR
+          d.Val := 2;
+          x := d.Val;
+        END_PROGRAM
+      `);
+
+      // Access via the derived instance must go through the inherited accessors,
+      // not raw field access (D.VAL — DERIVED has no such member, the field is _V).
+      expect(result.cppCode).toContain("D.set_VAL(2);");
+      expect(result.cppCode).toContain("X = D.get_VAL();");
+      expect(result.cppCode).not.toContain("D.VAL");
+    });
+
+    it("should resolve a property inherited across multiple EXTENDS levels", () => {
+      const result = compileAndCheck(`
+        FUNCTION_BLOCK Base
+          VAR _v : INT; END_VAR
+          PROPERTY Val : INT
+            GET
+              Val := _v;
+            END_GET
+          END_PROPERTY
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Mid EXTENDS Base
+        END_FUNCTION_BLOCK
+        FUNCTION_BLOCK Leaf EXTENDS Mid
+        END_FUNCTION_BLOCK
+        PROGRAM Main
+          VAR l : Leaf; x : INT; END_VAR
+          x := l.Val;
+        END_PROGRAM
+      `);
+
+      expect(result.cppCode).toContain("X = L.get_VAL();");
+      expect(result.cppCode).not.toContain("L.VAL");
     });
   });
 
