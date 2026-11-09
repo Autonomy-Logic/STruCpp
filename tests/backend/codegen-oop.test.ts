@@ -1293,3 +1293,75 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
     });
   });
 });
+
+describe("Pointer method dispatch", () => {
+  it("should emit -> for a method call through a dereferenced pointer", () => {
+    const result = compileAndCheck(`
+      FUNCTION_BLOCK Owner
+        METHOD PUBLIC Ping
+        END_METHOD
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK User
+        VAR_INPUT
+          Boss : POINTER TO Owner;
+        END_VAR
+        VAR_OUTPUT
+          Ok : BOOL;
+        END_VAR
+        Ok := FALSE;
+        IF Boss <> 0 THEN
+          Boss^.Ping();
+          Ok := TRUE;
+        END_IF;
+      END_FUNCTION_BLOCK
+      PROGRAM Main END_PROGRAM
+    `);
+
+    expect(result.cppCode).toContain("BOSS->PING();");
+    expect(result.cppCode).not.toContain("BOSS.PING();");
+  });
+
+  it("should emit -> with arguments and resolve the pointed-to method case", () => {
+    const result = compileAndCheck(`
+      FUNCTION_BLOCK Owner
+        METHOD PUBLIC Store : BOOL
+          VAR_INPUT
+            Slot : INT;
+          END_VAR
+          Store := TRUE;
+        END_METHOD
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK User
+        VAR_INPUT
+          Boss : POINTER TO Owner;
+        END_VAR
+        VAR_OUTPUT
+          Published : BOOL;
+        END_VAR
+        Published := Boss^.Store(Slot := 2);
+      END_FUNCTION_BLOCK
+      PROGRAM Main END_PROGRAM
+    `);
+
+    expect(result.cppCode).toContain("BOSS->STORE(2)");
+    expect(result.cppCode).not.toContain("BOSS.STORE(");
+  });
+
+  it("should keep emitting . for direct instance method calls", () => {
+    const result = compileAndCheck(`
+      FUNCTION_BLOCK Owner
+        METHOD PUBLIC Ping
+        END_METHOD
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK User
+        VAR
+          Helper : Owner;
+        END_VAR
+        Helper.Ping();
+      END_FUNCTION_BLOCK
+      PROGRAM Main END_PROGRAM
+    `);
+
+    expect(result.cppCode).toContain("HELPER.PING();");
+  });
+});

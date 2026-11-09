@@ -1254,3 +1254,65 @@ describe('OOP Parser', () => {
     });
   });
 });
+
+describe('pointer method dispatch', () => {
+  it('should parse a method call through a dereferenced pointer as a statement', () => {
+    const source = `
+      FUNCTION_BLOCK Owner
+        METHOD PUBLIC Ping
+        END_METHOD
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK User
+        VAR_INPUT
+          Boss : POINTER TO Owner;
+        END_VAR
+        Boss^.Ping();
+      END_FUNCTION_BLOCK
+    `;
+    const result = parseSource(source);
+    expect(result.errors).toHaveLength(0);
+    expect(result.cst).toBeDefined();
+  });
+
+  it('should parse a pointer method call with named arguments', () => {
+    const source = `
+      FUNCTION_BLOCK Owner
+        METHOD PUBLIC Store : BOOL
+          VAR_INPUT
+            Slot : INT;
+          END_VAR
+          Store := TRUE;
+        END_METHOD
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK User
+        VAR_INPUT
+          Boss : POINTER TO Owner;
+        END_VAR
+        VAR_OUTPUT
+          Ok : BOOL;
+        END_VAR
+        Ok := Boss^.Store(Slot := 2);
+      END_FUNCTION_BLOCK
+    `;
+    const result = parseSource(source);
+    expect(result.errors).toHaveLength(0);
+    expect(result.cst).toBeDefined();
+  });
+
+  it('should still parse dereferenced field access without a call', () => {
+    const source = `
+      FUNCTION_BLOCK User
+        VAR_INPUT
+          Boss : POINTER TO Owner;
+        END_VAR
+        VAR
+          x : INT;
+        END_VAR
+        x := Boss^.Count;
+      END_FUNCTION_BLOCK
+    `;
+    const result = parseSource(source);
+    expect(result.errors).toHaveLength(0);
+    expect(result.cst).toBeDefined();
+  });
+});
