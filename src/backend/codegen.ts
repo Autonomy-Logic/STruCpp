@@ -1378,6 +1378,7 @@ export class CodeGenerator {
 
     // Generate interface declarations (before FBs since FBs may implement interfaces)
     for (const iface of ast.interfaces) {
+      if (iface.library !== undefined) continue;
       this.emitHeaderChunkMarker("begin", "type", iface.name);
       this.generateInterfaceHeaderDeclaration(iface);
       this.emitHeaderChunkMarker("end", "type", iface.name);
@@ -2723,7 +2724,7 @@ export class CodeGenerator {
    */
   private emitPouForwardDeclarations(ast: CompilationUnit): void {
     for (const iface of ast.interfaces) {
-      this.emitHeader(`class ${iface.name};`);
+      if (iface.library === undefined) this.emitHeader(`class ${iface.name};`);
     }
     for (const fb of ast.functionBlocks) {
       this.emitHeader(`class ${fb.name};`);
@@ -5251,16 +5252,24 @@ export class CodeGenerator {
   }
 
   /**
-   * Resolve a property name from the property name map.
-   * Returns the declared property name if the field is a property, undefined otherwise.
+   * Resolve a property name: the type's own (or an interface's, inherited ones included), else the nearest block of
+   * its lineage declaring it, a library block included. Returns the declared name, or undefined when the field is not
+   * a property.
    */
   private resolvePropertyName(
     typeName: string | undefined,
     fieldName: string,
   ): string | undefined {
-    if (!typeName) return undefined;
+    if (typeName === undefined) return undefined;
     const key = `${typeName.toUpperCase()}.${fieldName.toUpperCase()}`;
-    return this.propertyNameMap.get(key);
+    const own = this.propertyNameMap.get(key);
+    if (own !== undefined) return own;
+    const upper = fieldName.toUpperCase();
+    for (const owner of fbLineage(typeName, this.fbLookup)) {
+      const prop = owner.properties.find((p) => p.name.toUpperCase() === upper);
+      if (prop) return prop.name;
+    }
+    return undefined;
   }
 
   /**

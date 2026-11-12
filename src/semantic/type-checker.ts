@@ -1307,7 +1307,10 @@ export class TypeChecker {
         for (const v of library?.outputs ?? []) addVar(v.name, "VAR_OUTPUT");
         for (const v of library?.inouts ?? []) addVar(v.name, "VAR_IN_OUT");
         for (const v of library?.locals ?? []) addVar(v.name, "VAR");
-        members.complete = false;
+        if (library?.membersExported !== true) members.complete = false;
+        for (const m of fb.methods) members.callables.add(m.name.toUpperCase());
+        for (const p of fb.properties)
+          members.callables.add(p.name.toUpperCase());
         continue;
       }
       for (const block of fb.varBlocks) {

@@ -37,7 +37,10 @@ import type {
 import { mergeCompilationUnits } from "./merge.js";
 import { lowerInlineTypes } from "./frontend/lower-inline-types.js";
 import { walkAST } from "./ast-utils.js";
-import { registerLibrarySymbols } from "./library/library-loader.js";
+import {
+  libraryInterfaceDeclarations,
+  registerLibrarySymbols,
+} from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
 import { annotateErrorsWithPouContext } from "./diagnostic-pou-context.js";
 
@@ -611,6 +614,14 @@ function runPipeline(
     semanticSymbolTables = new SymbolTables();
     for (const archive of allArchives) {
       registerLibrarySymbols(archive.manifest, semanticSymbolTables);
+    }
+    const declared = new Set(ast.interfaces.map((i) => i.name.toUpperCase()));
+    for (const archive of allArchives) {
+      for (const iface of libraryInterfaceDeclarations(archive.manifest)) {
+        if (declared.has(iface.name.toUpperCase())) continue;
+        declared.add(iface.name.toUpperCase());
+        ast.interfaces.push(iface);
+      }
     }
   }
 

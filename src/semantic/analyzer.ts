@@ -44,6 +44,7 @@ import {
   fbLineage,
   fbLineageNames,
   functionBlockLookup,
+  type FunctionBlockLookup,
 } from "./fb-lineage.js";
 import {
   getBitAccessWidth,
@@ -1935,11 +1936,7 @@ export class SemanticAnalyzer {
    * Validate OOP modifier contradictions on function blocks and methods.
    */
   private validateOOPModifiers(ast: CompilationUnit): void {
-    // Build FB lookup map for OVERRIDE and IMPLEMENTS validation
-    const fbMap = new Map<string, FunctionBlockDeclaration>();
-    for (const fb of ast.functionBlocks) {
-      fbMap.set(fb.name.toUpperCase(), fb);
-    }
+    const lookup = functionBlockLookup(ast, this.symbolTables);
 
     // Build interface lookup map
     const ifaceMap = new Map<string, Set<string>>();
@@ -1963,11 +1960,11 @@ export class SemanticAnalyzer {
       }
 
       // Collect parent methods for OVERRIDE / FINAL validation
-      const parentMethods = this.collectParentMethods(fb, fbMap);
+      const parentMethods = this.collectParentMethods(fb, lookup);
 
       // Cannot extend a FINAL FB
       if (fb.extends) {
-        const parentFB = fbMap.get(fb.extends.toUpperCase());
+        const parentFB = lookup(fb.extends);
         if (parentFB && parentFB.isFinal) {
           this.addError(
             `Cannot extend FINAL FUNCTION_BLOCK '${fb.extends}'.`,
@@ -2076,25 +2073,15 @@ export class SemanticAnalyzer {
    */
   private collectParentMethods(
     fb: FunctionBlockDeclaration,
-    fbMap: Map<string, FunctionBlockDeclaration>,
+    lookup: FunctionBlockLookup,
   ): Map<string, MethodDeclaration> {
     const methods = new Map<string, MethodDeclaration>();
-    let current = fb.extends;
-    const visited = new Set<string>(); // prevent infinite loops on circular extends
-    while (current) {
-      const upper = current.toUpperCase();
-      if (visited.has(upper)) break;
-      visited.add(upper);
-      const parent = fbMap.get(upper);
-      if (!parent) break;
+    if (fb.extends === undefined) return methods;
+    for (const parent of fbLineage(fb.extends, lookup)) {
       for (const m of parent.methods) {
         const key = m.name.toUpperCase();
-        // Only store the nearest parent's version (first encountered wins)
-        if (!methods.has(key)) {
-          methods.set(key, m);
-        }
+        if (!methods.has(key)) methods.set(key, m);
       }
-      current = parent.extends;
     }
     return methods;
   }

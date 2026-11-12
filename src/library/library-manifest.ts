@@ -80,6 +80,8 @@ export interface LibraryVarType {
   elementTypeName?: string;
   /** Element length of an inline ARRAY OF STRING[n] / WSTRING[n] */
   elementMaxLength?: number | string;
+  /** Length of a STRING[n] / WSTRING[n] (a number, or the name of a constant) */
+  maxLength?: number | string;
   /** Element reference levels for an inline array of pointers or references */
   elementReferenceChain?: ReferenceKind[];
   /** Reference/pointer qualifier ("pointer_to" | "ref_to" | "reference_to") */
@@ -102,6 +104,49 @@ export interface LibraryVarType {
   /** The declaring block was `VAR RETAIN`: retained in every instance, whether
    *  or not the instance itself was declared RETAIN. */
   retain?: true;
+}
+
+/** A type as the manifest records it: a {@link LibraryVarType} without the member-only fields. */
+export type LibraryTypeRef = Omit<
+  LibraryVarType,
+  "name" | "cppName" | "readOnly" | "retain"
+>;
+
+export type LibraryVisibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
+
+/**
+ * A method of an exported function block or interface: what a consumer needs to call it, override it and check
+ * access to it. Interface methods are PUBLIC and abstract.
+ */
+export interface LibraryMethodEntry {
+  name: string;
+  visibility: LibraryVisibility;
+  returnType?: LibraryTypeRef;
+  isAbstract?: true;
+  isFinal?: true;
+  isOverride?: true;
+  inputs: LibraryVarType[];
+  outputs: LibraryVarType[];
+  inouts: LibraryVarType[];
+}
+
+/** A property of an exported function block or interface, with the accessors it has. */
+export interface LibraryPropertyEntry {
+  name: string;
+  type: LibraryTypeRef;
+  visibility: LibraryVisibility;
+  getter?: true;
+  setter?: true;
+}
+
+/** An exported interface. */
+export interface LibraryInterfaceEntry {
+  name: string;
+  extends?: string[];
+  methods: LibraryMethodEntry[];
+  properties: LibraryPropertyEntry[];
+  /** Folder path within the library — see `LibraryFunctionEntry.category`. */
+  category?: string;
 }
 
 /**
@@ -157,6 +202,19 @@ export interface LibraryFBEntry {
    * nobody is told about is the thing this field exists to prevent.
    */
   locals?: LibraryVarType[];
+  /** Base block (`EXTENDS`). */
+  extends?: string;
+  /** Interfaces the block declares it implements (`IMPLEMENTS`). */
+  implements?: string[];
+  isAbstract?: true;
+  isFinal?: true;
+  /**
+   * The block's own methods and properties, every visibility, so a consumer can call, override and check access
+   * to them. Absent in archives built before members were exported: a consumer then treats the block's members as
+   * unknown rather than missing.
+   */
+  methods?: LibraryMethodEntry[];
+  properties?: LibraryPropertyEntry[];
   /** Block-level help text shown in editor hover dialogs. Authored in
    *  the library's `library.json` and merged into the manifest at build
    *  time (see scripts/generate-*.mjs). Optional so existing archives
@@ -238,6 +296,8 @@ export interface LibraryManifest {
    *  Optional for backward compatibility with archives compiled before
    *  globals were exported — consumers treat a missing field as empty. */
   globals?: LibraryGlobalEntry[];
+  /** Exported interfaces. Optional for archives built before interfaces were exported. */
+  interfaces?: LibraryInterfaceEntry[];
   /** C++ headers to include */
   headers: string[];
   /** Whether this is a built-in C++ runtime library */

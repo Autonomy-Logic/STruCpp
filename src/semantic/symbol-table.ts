@@ -117,6 +117,8 @@ export interface FunctionBlockSymbol extends BaseSymbol {
    * not exist.
    */
   libraryName?: string;
+  /** The library archive exports this block's methods and properties, so its declaration lists all of them. */
+  membersExported?: true;
 }
 
 /**
