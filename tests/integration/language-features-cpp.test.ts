@@ -357,6 +357,29 @@ int main() {
     expect(out.trim()).toBe("42");
   });
 
+  it("evaluates calls with side effects left to right, on every compiler", () => {
+    const source = `
+FUNCTION Pair : DINT VAR_INPUT a : DINT; b : DINT; END_VAR Pair := a * 100 + b; END_FUNCTION
+FUNCTION_BLOCK Counter
+  VAR n : DINT; END_VAR
+  METHOD Bump : DINT n := n + 1; Bump := n; END_METHOD
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR c : Counter; x : DINT; y : DINT; z : DINT; RESULT : DINT; END_VAR
+  x := Pair(c.Bump(), c.Bump());
+  y := c.Bump() * 10 + c.Bump();
+  IF c.Bump() - c.Bump() = -1 THEN z := 1; END_IF;
+  RESULT := x * 10000 + y * 10 + z;
+END_PROGRAM`;
+    const cpp = compile(source).cppCode;
+    expect(cpp).toMatch(
+      /Y = \[&\]\(\) \{ auto __seq\d+ = C\.BUMP\(\); auto __seq\d+ = C\.BUMP\(\); return __seq\d+ \* 10 \+ __seq\d+; \}\(\);/,
+    );
+    expect(runProgram(tempDir, pchPath, source, "left_to_right").trim()).toBe(
+      "1020341",
+    );
+  });
+
   it("compares an interface with 0 in either operand order", () => {
     const out = runProgram(
       tempDir,
@@ -787,6 +810,32 @@ END_PROGRAM`);
       "Cannot access PRIVATE property 'SECRET' of 'B' from outside 'B'.",
       "Cannot access PROTECTED property 'PROT' of 'B' from 'PROGRAM'.",
       "Cannot access PRIVATE property 'SECRET' of 'B' from outside 'B'.",
+    ]);
+  });
+
+  it("requires interface members to be implemented PUBLIC", () => {
+    expect(
+      errorsOf(`
+INTERFACE I
+  METHOD M : DINT END_METHOD
+  PROPERTY P : DINT GET END_GET END_PROPERTY
+END_INTERFACE
+FUNCTION_BLOCK B IMPLEMENTS I
+  VAR hidden : DINT := 7; END_VAR
+  METHOD PROTECTED M : DINT M := 1; END_METHOD
+  PROPERTY PRIVATE P : DINT GET P := THIS^.hidden; END_GET END_PROPERTY
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK Base METHOD PRIVATE M : DINT M := 1; END_METHOD PROPERTY P : DINT GET P := 1; END_GET END_PROPERTY END_FUNCTION_BLOCK
+FUNCTION_BLOCK Derived EXTENDS Base IMPLEMENTS I END_FUNCTION_BLOCK
+PROGRAM Q
+  VAR b : B; itf : I; r : DINT; END_VAR
+  itf := b;
+  r := itf.P;
+END_PROGRAM`),
+    ).toEqual([
+      "FUNCTION_BLOCK 'B' implements 'I' but its PROPERTY 'P' is PRIVATE; interface members must be implemented PUBLIC.",
+      "FUNCTION_BLOCK 'B' implements 'I' but its method 'M' is PROTECTED; interface members must be implemented PUBLIC.",
+      "FUNCTION_BLOCK 'DERIVED' implements 'I' but its method 'M' is PRIVATE; interface members must be implemented PUBLIC.",
     ]);
   });
 

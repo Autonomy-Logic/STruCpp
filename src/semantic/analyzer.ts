@@ -866,10 +866,8 @@ export class SemanticAnalyzer {
     // Validate OOP property/member name collisions
     this.validatePropertyNameCollisions(ast);
 
-    // Variables and methods of one class hierarchy sharing a name
     this.validateMethodNameCollisions(ast);
 
-    // Interface property signatures and their implementations
     this.validateInterfaceProperties(ast);
 
     // Validate OOP modifier contradictions
@@ -1853,6 +1851,8 @@ export class SemanticAnalyzer {
           problem = `its PROPERTY '${prop.name}' has no GET`;
         else if (prop.setter && !impl.setter)
           problem = `its PROPERTY '${prop.name}' has no SET`;
+        else if (impl.visibility !== "PUBLIC")
+          problem = `its PROPERTY '${prop.name}' is ${impl.visibility}; interface members must be implemented PUBLIC`;
         if (problem !== undefined)
           this.addError(
             `${where} ${problem}.`,
@@ -2063,6 +2063,18 @@ export class SemanticAnalyzer {
               if (!fbMethodNames.has(reqMethod)) {
                 this.addError(
                   `FUNCTION_BLOCK '${fb.name}' implements '${ifaceName}' but does not provide method '${reqMethod}'.`,
+                  fb.sourceSpan.startLine,
+                  fb.sourceSpan.startCol,
+                  fb.sourceSpan.file,
+                );
+                continue;
+              }
+              const impl =
+                fb.methods.find((m) => m.name.toUpperCase() === reqMethod) ??
+                parentMethods.get(reqMethod);
+              if (impl !== undefined && impl.visibility !== "PUBLIC") {
+                this.addError(
+                  `FUNCTION_BLOCK '${fb.name}' implements '${ifaceName}' but its method '${reqMethod}' is ${impl.visibility}; interface members must be implemented PUBLIC.`,
                   fb.sourceSpan.startLine,
                   fb.sourceSpan.startCol,
                   fb.sourceSpan.file,

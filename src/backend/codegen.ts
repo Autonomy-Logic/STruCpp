@@ -435,6 +435,11 @@ export class CodeGenerator {
 
   /** Standard function registry for name mapping and conversion resolution */
   private stdRegistry: StdFunctionRegistry;
+  /** Nesting of statements being generated; expressions are sequenced only inside one. */
+  private statementDepth = 0;
+  /** Calls of the expression being sequenced, already evaluated into the named temporaries. */
+  private readonly callTemporaries = new Map<Expression, string>();
+  private sequenceCounter = 0;
 
   /** Warnings collected during code generation */
   private codegenWarnings: Array<{
@@ -3046,6 +3051,15 @@ export class CodeGenerator {
    * Generate code for a statement.
    */
   protected generateStatement(stmt: Statement, indent: string = "    "): void {
+    this.statementDepth++;
+    try {
+      this.generateStatementBody(stmt, indent);
+    } finally {
+      this.statementDepth--;
+    }
+  }
+
+  private generateStatementBody(stmt: Statement, indent: string): void {
     this.currentStatementIndent = indent;
     this.emitLineDirective(stmt.sourceSpan.startLine);
     const cppStartLine = this.currentLine;
@@ -3655,8 +3669,103 @@ export class CodeGenerator {
   /**
    * Generate C++ code for an expression.
    * Returns the C++ expression as a string.
+   *
+   * IEC 61131-3 evaluates operands left to right, while C++ leaves the order of operands and arguments unspecified.
+   * Inside statements, an expression holding two or more calls that may have side effects (see
+   * {@link sequencedCalls}) is emitted as an immediately invoked lambda that evaluates those calls into temporaries
+   * in source order, inner calls first, and then the expression over the temporaries.
    */
   protected generateExpression(expr: Expression): string {
+    const temp = this.callTemporaries.get(expr);
+    if (temp !== undefined) return temp;
+    if (this.statementDepth > 0 && this.callTemporaries.size === 0) {
+      const calls = this.sequencedCalls(expr).filter((c) => c !== expr);
+      if (calls.length >= 2)
+        return this.generateSequencedExpression(expr, calls);
+    }
+    return this.generateExpressionNode(expr);
+  }
+
+  /** `[&]() { auto __seqN = call; ...; return expr; }()` with the calls in the given order. */
+  private generateSequencedExpression(
+    expr: Expression,
+    calls: Expression[],
+  ): string {
+    const lines: string[] = [];
+    try {
+      for (const call of calls) {
+        const code = this.generateExpressionNode(call);
+        const name = `__seq${++this.sequenceCounter}`;
+        lines.push(`auto ${name} = ${code};`);
+        this.callTemporaries.set(call, name);
+      }
+      const body = this.generateExpressionNode(expr);
+      return `[&]() { ${lines.join(" ")} return ${body}; }()`;
+    } finally {
+      this.callTemporaries.clear();
+    }
+  }
+
+  /**
+   * Calls in `expr` that may have side effects, in evaluation order: left to right, a call's arguments (and object)
+   * before the call. User functions, methods and calls through THIS/SUPER count; standard functions and conversions,
+   * which have none, do not.
+   */
+  private sequencedCalls(expr: Expression): Expression[] {
+    const out: Expression[] = [];
+    const visit = (e: Expression | undefined): void => {
+      if (e === undefined) return;
+      switch (e.kind) {
+        case "BinaryExpression":
+          visit(e.left);
+          visit(e.right);
+          return;
+        case "UnaryExpression":
+          visit(e.operand);
+          return;
+        case "ParenthesizedExpression":
+          visit(e.expression);
+          return;
+        case "RefExpression":
+        case "DrefExpression":
+          visit(e.operand);
+          return;
+        case "NewExpression":
+          visit(e.arraySize);
+          return;
+        case "ArrayLiteralExpression":
+          e.elements.forEach(visit);
+          return;
+        case "VariableExpression":
+          e.subscripts.forEach(visit);
+          for (const step of e.accessChain ?? [])
+            if (step.kind === "subscript") step.indices.forEach(visit);
+          return;
+        case "MethodCallExpression":
+          visit(e.object);
+          e.arguments.forEach((a) => visit(a.value));
+          out.push(e);
+          return;
+        case "FunctionCallExpression": {
+          visit(e.instance);
+          e.arguments.forEach((a) => visit(a.value));
+          const upper = e.functionName.toUpperCase();
+          const pure =
+            this.stdRegistry.lookup(upper) !== undefined ||
+            this.stdRegistry.resolveConversion(upper) !== undefined ||
+            this.resolveEnumConversion(upper) !== undefined;
+          if (!pure) out.push(e);
+          return;
+        }
+        default:
+          return;
+      }
+    };
+    visit(expr);
+    return out;
+  }
+
+  private generateExpressionNode(expr: Expression): string {
     switch (expr.kind) {
       case "LiteralExpression":
         return this.generateLiteralExpression(expr);
