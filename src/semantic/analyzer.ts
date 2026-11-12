@@ -1975,8 +1975,16 @@ export class SemanticAnalyzer {
         }
       }
 
-      // ABSTRACT method in non-abstract FB is an error
       for (const method of fb.methods) {
+        this.validateNotOverridingHidden(
+          fb,
+          method,
+          parentMethods,
+          lookup,
+          ast,
+        );
+
+        // ABSTRACT method in non-abstract FB is an error
         if (method.isAbstract && !fb.isAbstract) {
           this.addError(
             `Method '${method.name}' is ABSTRACT but FUNCTION_BLOCK '${fb.name}' is not ABSTRACT. ` +
@@ -2158,16 +2166,50 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * Validate that abstract function blocks are not instantiated directly.
+   * A method named like a PRIVATE method of a base block, or an INTERNAL one of a library base, would replace it in
+   * C++ virtual dispatch, so the base's own calls would run the derived code. Reported with or without OVERRIDE.
+   */
+  private validateNotOverridingHidden(
+    fb: FunctionBlockDeclaration,
+    method: MethodDeclaration,
+    parentMethods: Map<string, MethodDeclaration>,
+    lookup: FunctionBlockLookup,
+    ast: CompilationUnit,
+  ): void {
+    const base = parentMethods.get(method.name.toUpperCase());
+    if (base === undefined || fb.extends === undefined) return;
+    const owner = fbLineage(fb.extends, lookup).find((p) =>
+      p.methods.includes(base),
+    );
+    if (owner === undefined) return;
+    const fromLibrary = !ast.functionBlocks.includes(owner);
+    if (
+      base.visibility !== "PRIVATE" &&
+      !(base.visibility === "INTERNAL" && fromLibrary)
+    )
+      return;
+    const where =
+      base.visibility === "INTERNAL" ? " from outside its library" : "";
+    this.addError(
+      `Method '${method.name}' in '${fb.name}' cannot override ${base.visibility} method '${base.name}' of '${owner.name}'${where}.`,
+      method.sourceSpan.startLine,
+      method.sourceSpan.startCol,
+      method.sourceSpan.file,
+    );
+  }
+
+  /**
+   * Validate that abstract function blocks, the unit's own or a library's, are not instantiated directly.
    */
   private validateAbstractInstantiation(ast: CompilationUnit): void {
-    // Build set of abstract FB names
+    const lookup = functionBlockLookup(ast, this.symbolTables);
     const abstractFBs = new Set<string>();
-    for (const fb of ast.functionBlocks) {
-      if (fb.isAbstract) {
-        abstractFBs.add(fb.name.toUpperCase());
-      }
-    }
+    for (const prog of ast.programs)
+      this.collectAbstractTypes(prog.varBlocks, lookup, abstractFBs);
+    for (const fb of ast.functionBlocks)
+      this.collectAbstractTypes(fb.varBlocks, lookup, abstractFBs);
+    for (const func of ast.functions)
+      this.collectAbstractTypes(func.varBlocks, lookup, abstractFBs);
     if (abstractFBs.size === 0) return;
 
     // Check variable declarations in programs
@@ -2186,6 +2228,24 @@ export class SemanticAnalyzer {
     }
   }
 
+  /** Adds to `into` the upper-cased names of the ABSTRACT blocks the declarations in `varBlocks` use as types. */
+  private collectAbstractTypes(
+    varBlocks: VarBlock[],
+    lookup: FunctionBlockLookup,
+    into: Set<string>,
+  ): void {
+    for (const block of varBlocks) {
+      for (const decl of block.declarations) {
+        if (
+          decl.type.referenceKind === "none" &&
+          lookup(decl.type.name)?.isAbstract === true
+        ) {
+          into.add(decl.type.name.toUpperCase());
+        }
+      }
+    }
+  }
+
   /**
    * Check var blocks for instantiation of abstract FBs.
    */
@@ -2195,7 +2255,10 @@ export class SemanticAnalyzer {
   ): void {
     for (const block of varBlocks) {
       for (const decl of block.declarations) {
-        if (abstractFBs.has(decl.type.name.toUpperCase())) {
+        if (
+          decl.type.referenceKind === "none" &&
+          abstractFBs.has(decl.type.name.toUpperCase())
+        ) {
           this.addError(
             `Cannot instantiate ABSTRACT FUNCTION_BLOCK '${decl.type.name}'.`,
             decl.sourceSpan.startLine,
@@ -3574,6 +3637,13 @@ export class SemanticAnalyzer {
           if (parentScope?.lookupLocal(upper)) return;
           const parentSym = this.symbolTables.globalScope.lookup(parentUpper);
           if (parentSym?.kind !== "functionBlock") break;
+          const parentVars = [
+            ...parentSym.inputs,
+            ...parentSym.outputs,
+            ...parentSym.inouts,
+            ...parentSym.locals,
+          ];
+          if (parentVars.some((v) => v.name.toUpperCase() === upper)) return;
           parentName = parentSym.declaration.extends;
         }
       }

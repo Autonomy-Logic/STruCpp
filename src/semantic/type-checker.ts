@@ -1283,9 +1283,8 @@ export class TypeChecker {
   }
 
   /**
-   * Members of a function block and its bases, plus the implicit ENO output.
-   * A library block exports only its variables, so a lineage that reaches one
-   * (or an unresolved base) is incomplete.
+   * Members of a function block and its bases, plus the implicit ENO output. A lineage that reaches an unresolved
+   * base, or a library block from an archive built before members were exported, is incomplete.
    */
   private functionBlockMembers(upper: string): DeclaredMembers {
     const members: DeclaredMembers = {

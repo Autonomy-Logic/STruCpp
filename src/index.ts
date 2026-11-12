@@ -138,7 +138,9 @@ function collectUsedSymbols(
 
   // Seed the reachable set from names the user AST references.
   const referencedNames = new Set<string>();
-  walkAST(ast, (node: ASTNode): void => {
+  const ownInterfaces = ast.interfaces.filter((i) => i.library === undefined);
+  const ownUnit: CompilationUnit = { ...ast, interfaces: ownInterfaces };
+  walkAST(ownUnit, (node: ASTNode): void => {
     switch (node.kind) {
       case "FunctionCallExpression": {
         const fc = node as FunctionCallExpression;
@@ -615,12 +617,28 @@ function runPipeline(
     for (const archive of allArchives) {
       registerLibrarySymbols(archive.manifest, semanticSymbolTables);
     }
-    const declared = new Set(ast.interfaces.map((i) => i.name.toUpperCase()));
+    const declared = new Map(
+      ast.interfaces.map((i) => [i.name.toUpperCase(), i]),
+    );
     for (const archive of allArchives) {
       for (const iface of libraryInterfaceDeclarations(archive.manifest)) {
-        if (declared.has(iface.name.toUpperCase())) continue;
-        declared.add(iface.name.toUpperCase());
-        ast.interfaces.push(iface);
+        const clash = declared.get(iface.name.toUpperCase());
+        if (clash === undefined) {
+          declared.set(iface.name.toUpperCase(), iface);
+          ast.interfaces.push(iface);
+          continue;
+        }
+        const other =
+          clash.library === undefined
+            ? "this program"
+            : `library '${clash.library}'`;
+        errors.push({
+          message: `INTERFACE '${iface.name}' of library '${archive.manifest.name}' clashes with INTERFACE '${clash.name}' of ${other}; rename one of them.`,
+          line: clash.sourceSpan.startLine,
+          column: clash.sourceSpan.startCol,
+          severity: "error",
+          file: clash.sourceSpan.file,
+        });
       }
     }
   }

@@ -179,7 +179,10 @@ function makeProperty(p: LibraryPropertyEntry): PropertyDeclaration {
   };
 }
 
-/** The declaration a library function block is registered under: its members when the archive exports them. */
+/**
+ * The declaration a library function block is registered under: its variables, so a derived block can use what it
+ * inherits, and its methods and properties when the archive exports them.
+ */
 function makeFunctionBlockDeclaration(
   fb: LibraryManifest["functionBlocks"][0],
 ): FunctionBlockDeclaration {
@@ -191,7 +194,12 @@ function makeFunctionBlockDeclaration(
     isFinal: fb.isFinal === true,
     ...(fb.extends !== undefined ? { extends: fb.extends } : {}),
     ...(fb.implements !== undefined ? { implements: fb.implements } : {}),
-    varBlocks: [],
+    varBlocks: [
+      makeVarBlock("VAR_INPUT", fb.inputs),
+      makeVarBlock("VAR_OUTPUT", fb.outputs),
+      makeVarBlock("VAR_IN_OUT", fb.inouts),
+      makeVarBlock("VAR", fb.locals ?? []),
+    ].filter((b) => b.declarations.length > 0),
     methods: (fb.methods ?? []).map(makeMethod),
     properties: (fb.properties ?? []).map(makeProperty),
     body: [],
@@ -199,19 +207,21 @@ function makeFunctionBlockDeclaration(
 }
 
 /**
- * A library's interfaces as declarations, marked with the library's name. The compiler adds them to the consuming
- * unit so every interface check sees them; their C++ comes from the library's chunks, not the consumer's code.
+ * A library's interfaces as declarations, marked with the library's name, which is also the file their diagnostics
+ * report. The compiler adds them to the consuming unit so every interface check sees them; their C++ comes from the
+ * library's chunks, not the consumer's code.
  */
 export function libraryInterfaceDeclarations(
   manifest: LibraryManifest,
 ): InterfaceDeclaration[] {
+  const sourceSpan = { ...createDefaultSourceSpan(), file: manifest.name };
   return (manifest.interfaces ?? []).map((i: LibraryInterfaceEntry) => ({
     kind: "InterfaceDeclaration",
-    sourceSpan: createDefaultSourceSpan(),
+    sourceSpan,
     name: i.name,
     ...(i.extends !== undefined ? { extends: i.extends } : {}),
-    methods: i.methods.map(makeMethod),
-    properties: i.properties.map(makeProperty),
+    methods: i.methods.map((m) => ({ ...makeMethod(m), sourceSpan })),
+    properties: i.properties.map((p) => ({ ...makeProperty(p), sourceSpan })),
     library: manifest.name,
   }));
 }
@@ -251,6 +261,10 @@ function makeVarSymbol(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 const VISIBILITIES: readonly string[] = [
   "PUBLIC",
   "PRIVATE",
@@ -275,10 +289,9 @@ function validateMembers(
         `Invalid library manifest: ${where}.${key} must be an array`,
       );
     }
-    list.forEach((raw: unknown, j) => {
-      const m = raw as Record<string, unknown>;
+    list.forEach((m: unknown, j) => {
       const at = `${where}.${key}[${j}]`;
-      if (typeof m.name !== "string" || m.name.length === 0) {
+      if (!isRecord(m) || typeof m.name !== "string" || m.name === "") {
         throw new LibraryManifestError(
           `Invalid library manifest: ${at}.name must be a non-empty string`,
         );
@@ -293,11 +306,19 @@ function validateMembers(
       }
       if (key === "methods") {
         for (const params of ["inputs", "outputs", "inouts"] as const) {
-          if (!Array.isArray(m[params])) {
+          const vars = m[params];
+          if (!Array.isArray(vars)) {
             throw new LibraryManifestError(
               `Invalid library manifest: ${at}.${params} must be an array`,
             );
           }
+          vars.forEach((v: unknown, k) => {
+            if (!isRecord(v) || typeof v.name !== "string" || v.name === "") {
+              throw new LibraryManifestError(
+                `Invalid library manifest: ${at}.${params}[${k}].name must be a non-empty string`,
+              );
+            }
+          });
         }
       } else if (typeof m.type !== "object" || m.type === null) {
         throw new LibraryManifestError(
@@ -447,12 +468,10 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
     }
   }
 
-  // Exported interfaces (optional, absent in archives built before they were exported).
   const interfaces: LibraryInterfaceEntry[] = [];
   if (Array.isArray(obj.interfaces)) {
-    obj.interfaces.forEach((raw: unknown, i) => {
-      const itf = raw as Record<string, unknown>;
-      if (typeof itf.name !== "string" || itf.name.length === 0) {
+    obj.interfaces.forEach((itf: unknown, i) => {
+      if (!isRecord(itf) || typeof itf.name !== "string" || itf.name === "") {
         throw new LibraryManifestError(
           `Invalid library manifest: interfaces[${i}].name must be a non-empty string`,
         );
@@ -599,16 +618,8 @@ export function registerLibrarySymbols(
     }
   }
 
-  // Register function blocks.
-  //
-  // The interface (inputs/outputs/inouts) is what a consuming compilation
-  // type-checks against, and what the debugger shows: library FBs stay black
-  // boxes, because their locals are implementation details.
-  //
-  // `locals` is the exception, and only retain uses it. It carries the block's
-  // own VAR members so a RETAINed instance keeps the state it actually runs
-  // on; it does not widen what the debugger displays, which stays the
-  // interface.
+  // Register function blocks. Instances expose the interface (inputs/outputs/inouts), which is also what the
+  // debugger shows. `locals` serve RETAIN and blocks that EXTEND the library block.
   for (const fb of manifest.functionBlocks) {
     try {
       symbolTables.globalScope.define({

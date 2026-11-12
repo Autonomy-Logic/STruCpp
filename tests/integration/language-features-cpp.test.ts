@@ -629,6 +629,7 @@ FUNCTION_BLOCK D EXTENDS B
 END_FUNCTION_BLOCK
 PROGRAM main END_PROGRAM`);
     expect(errs).toEqual([
+      "Method 'PRIV' in 'D' cannot override PRIVATE method 'PRIV' of 'B'.",
       "Cannot call PRIVATE method 'PRIV' of 'B' from outside 'B'.",
     ]);
   });

@@ -3,7 +3,7 @@
 import { describe, it, expect } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { analyze } from "strucpp";
+import { analyze, compileStlib } from "strucpp";
 import { getDocumentSymbols, getWorkspaceSymbols } from "../../server/src/symbols.js";
 import type { AnalysisResult } from "strucpp";
 
@@ -208,5 +208,22 @@ describe("getWorkspaceSymbols", () => {
     ]);
     const results = getWorkspaceSymbols(allAnalyses, "");
     expect(results.length).toBeGreaterThan(5);
+  });
+});
+
+describe("library interfaces", () => {
+  it("lists only the interfaces the document declares", () => {
+    const lib = compileStlib(
+      [{ fileName: "l.st", source: "INTERFACE ILib METHOD Run : DINT END_METHOD END_INTERFACE" }],
+      { name: "lib", version: "1.0.0", namespace: "lib" },
+    );
+    const analysis = analyze("INTERFACE IOwn METHOD Go : BOOL END_METHOD END_INTERFACE", {
+      fileName: "main.st",
+      libraries: [lib.archive],
+    });
+    const names = getDocumentSymbols(analysis).map((s) => s.name.toUpperCase());
+    expect(names).toEqual(["IOWN"]);
+    const all = getWorkspaceSymbols(new Map([["file:///main.st", analysis]]), "");
+    expect(all.map((s) => s.name.toUpperCase())).not.toContain("ILIB");
   });
 });

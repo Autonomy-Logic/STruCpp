@@ -23,8 +23,16 @@ END_INTERFACE
 INTERFACE ILabelled EXTENDS IElem
   PROPERTY Caption : STRING[16] GET END_GET SET END_SET END_PROPERTY
 END_INTERFACE
+TYPE GeoPoint : STRUCT x : DINT; END_STRUCT; END_TYPE
+INTERFACE IGeo
+  METHOD Origin : GeoPoint END_METHOD
+END_INTERFACE
+FUNCTION_BLOCK ABSTRACT Shape
+  METHOD ABSTRACT Area : DINT END_METHOD
+END_FUNCTION_BLOCK
 FUNCTION_BLOCK Elem IMPLEMENTS IElem
   VAR_INPUT Base : DINT := 1; Name : STRING[8]; END_VAR
+  VAR Counter : DINT := 40; END_VAR
   METHOD Draw : DINT Draw := Base; END_METHOD
   METHOD PROTECTED Hovered : DINT Hovered := 7; END_METHOD
   METHOD PRIVATE Own : DINT Own := 1; END_METHOD
@@ -77,6 +85,7 @@ describe("library manifests export methods, properties and interfaces", () => {
     expect(manifest.interfaces?.map((i) => i.name)).toEqual([
       "IELEM",
       "ILABELLED",
+      "IGEO",
     ]);
     expect(manifest.interfaces?.[1]?.extends).toEqual(["IELEM"]);
     expect(manifest.interfaces?.[1]?.properties[0]).toMatchObject({
@@ -116,11 +125,37 @@ describe("library manifests export methods, properties and interfaces", () => {
         functionBlocks: Array<{ methods: Array<{ visibility: string }> }>;
       };
     };
-    archive.manifest.functionBlocks[0]!.methods[0]!.visibility = "OPEN";
+    const elem = archive.manifest.functionBlocks.findIndex(
+      (f) => f.methods.length > 0,
+    );
+    archive.manifest.functionBlocks[elem]!.methods[0]!.visibility = "OPEN";
     expect(() => loadStlibArchive(archive)).toThrow(LibraryManifestError);
     expect(() => loadStlibArchive(archive)).toThrow(
-      "functionBlocks[0].methods[0].visibility must be PUBLIC, PRIVATE, PROTECTED or INTERNAL",
+      `functionBlocks[${elem}].methods[0].visibility must be PUBLIC, PRIVATE, PROTECTED or INTERNAL`,
     );
+  });
+
+  it("refuses null and unnamed member entries in an archive", () => {
+    const refuses = (
+      edit: (manifest: Record<string, unknown[]>) => void,
+      message: string,
+    ): void => {
+      const archive = JSON.parse(JSON.stringify(buildLibrary())) as {
+        manifest: Record<string, unknown[]>;
+      };
+      edit(archive.manifest);
+      expect(() => loadStlibArchive(archive)).toThrow(message);
+    };
+    refuses((m) => {
+      m.interfaces![0] = null;
+    }, "interfaces[0].name must be a non-empty string");
+    refuses((m) => {
+      (m.interfaces![0] as { methods: unknown[] }).methods[0] = null;
+    }, "interfaces[0].methods[0].name must be a non-empty string");
+    refuses((m) => {
+      const geo = m.interfaces![2] as { methods: Array<{ inputs: unknown[] }> };
+      geo.methods[0]!.inputs.push({ type: "DINT" });
+    }, "interfaces[2].methods[0].inputs[0].name must be a non-empty string");
   });
 });
 
@@ -162,6 +197,82 @@ END_FUNCTION_BLOCK`,
     expect(errors).toHaveLength(2);
     expect(errors[0]).toContain("'MISSING'");
     expect(errors[1]).toContain("FIXED");
+  });
+
+  it("rejects overriding a PRIVATE or INTERNAL library method", () => {
+    expect(
+      errorsWith(
+        `FUNCTION_BLOCK W EXTENDS Elem
+  METHOD OVERRIDE Own : DINT Own := 9; END_METHOD
+  METHOD Secret : BOOL Secret := FALSE; END_METHOD
+END_FUNCTION_BLOCK`,
+        archive,
+      ),
+    ).toEqual([
+      "Method 'OWN' in 'W' cannot override PRIVATE method 'OWN' of 'ELEM'.",
+      "Method 'SECRET' in 'W' cannot override INTERNAL method 'SECRET' of 'ELEM' from outside its library.",
+    ]);
+  });
+
+  it("rejects instances of an ABSTRACT library block, not pointers to it", () => {
+    expect(
+      errorsWith(
+        "PROGRAM P VAR s : Shape; p : POINTER TO Shape; END_VAR END_PROGRAM",
+        archive,
+      ),
+    ).toEqual(["Cannot instantiate ABSTRACT FUNCTION_BLOCK 'SHAPE'."]);
+  });
+
+  it("lets a block that extends a library block use the variables it inherits", () => {
+    expect(
+      errorsWith(
+        `FUNCTION_BLOCK W EXTENDS Elem
+  METHOD Run : DINT Counter := Counter + 1; Run := Base + Counter; END_METHOD
+END_FUNCTION_BLOCK`,
+        archive,
+      ),
+    ).toEqual([]);
+  });
+
+  it("reports an interface named like a library's", () => {
+    const local = compile(
+      "INTERFACE IElem METHOD Other : BOOL END_METHOD END_INTERFACE",
+      { libraries: [archive] },
+    );
+    expect(local.errors.map((e) => e.message)).toEqual([
+      "INTERFACE 'IELEM' of library 'uilib' clashes with INTERFACE 'IELEM' of this program; rename one of them.",
+    ]);
+    const second = compileStlib(
+      [
+        {
+          fileName: "s.st",
+          source:
+            "INTERFACE IElem METHOD Other : BOOL END_METHOD END_INTERFACE",
+        },
+      ],
+      { name: "second", version: "1.0.0", namespace: "second" },
+    );
+    const both = compile("PROGRAM P END_PROGRAM", {
+      libraries: [archive, second.archive],
+    });
+    expect(
+      both.errors.map((e) => ({ message: e.message, file: e.file })),
+    ).toEqual([
+      {
+        message:
+          "INTERFACE 'IELEM' of library 'second' clashes with INTERFACE 'IELEM' of library 'uilib'; rename one of them.",
+        file: "uilib",
+      },
+    ]);
+  });
+
+  it("emits no type that only a library interface's signature names", () => {
+    const result = compile(
+      "PROGRAM P VAR e : Elem; x : DINT; END_VAR x := e.Draw(); END_PROGRAM",
+      { libraries: [archive] },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.headerCode + result.cppCode).not.toContain("GEOPOINT");
   });
 
   it("checks library interfaces like the unit's own", () => {
@@ -231,6 +342,36 @@ describeIfGpp("library OOP compiled and run with g++", () => {
 
   afterAll(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("runs a block that uses the variables it inherits from a library block", () => {
+    const result = compile(
+      `FUNCTION_BLOCK W EXTENDS Elem
+  METHOD Run : DINT Counter := Counter + 1; Run := Base * 100 + Counter; END_METHOD
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR w1 : W; RESULT : DINT; END_VAR
+  w1(Base := 3);
+  RESULT := w1.Run();
+END_PROGRAM`,
+      { libraries: [buildLibrary()] },
+    );
+    expect(result.errors).toEqual([]);
+    const out = compileAndRunStandalone({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName: "library_inherited_vars",
+      mainCode: `#include <cstdio>
+int main() {
+  strucpp::Program_P p;
+  p.run();
+  std::printf("%lld\\n", (long long)p.RESULT.get());
+  return 0;
+}`,
+    });
+    expect(out.trim()).toBe("341");
   });
 
   it("overrides a library method and calls through a library interface", () => {
