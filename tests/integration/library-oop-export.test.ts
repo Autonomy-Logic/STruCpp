@@ -218,6 +218,18 @@ END_FUNCTION_BLOCK`,
     ]);
   });
 
+  it("keeps a library method's access modifier on an override", () => {
+    const override = (modifier: string): string[] =>
+      errorsWith(
+        `FUNCTION_BLOCK W EXTENDS Elem METHOD ${modifier} Hovered : DINT Hovered := 8; END_METHOD END_FUNCTION_BLOCK`,
+        archive,
+      );
+    expect(override("PROTECTED")).toEqual([]);
+    expect(override("PUBLIC")).toEqual([
+      "Method 'HOVERED' in 'W' cannot change the access modifier PROTECTED of method 'HOVERED' of 'ELEM' it overrides.",
+    ]);
+  });
+
   it("rejects instances of an ABSTRACT library block, not pointers to it", () => {
     expect(
       errorsWith(

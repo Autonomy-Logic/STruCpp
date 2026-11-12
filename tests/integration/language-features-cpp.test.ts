@@ -648,13 +648,43 @@ FUNCTION_BLOCK B
 END_FUNCTION_BLOCK
 FUNCTION_BLOCK D EXTENDS B
   METHOD PUBLIC Priv : INT Priv := SUPER^.Priv(); END_METHOD
-  METHOD PUBLIC Prot : INT Prot := SUPER^.Prot(); END_METHOD
+  METHOD PROTECTED Prot : INT Prot := SUPER^.Prot(); END_METHOD
 END_FUNCTION_BLOCK
 PROGRAM main END_PROGRAM`);
     expect(errs).toEqual([
       "Method 'PRIV' in 'D' cannot override PRIVATE method 'PRIV' of 'B'.",
       "Cannot call PRIVATE method 'PRIV' of 'B' from outside 'B'.",
     ]);
+  });
+
+  it("keeps the base access modifier on an override, as CODESYS does", () => {
+    const override = (base: string, derived: string): string[] =>
+      errorsOf(`
+FUNCTION_BLOCK B METHOD ${base} M : DINT M := 1; END_METHOD END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B METHOD ${derived} M : DINT M := 2; END_METHOD END_FUNCTION_BLOCK
+PROGRAM main END_PROGRAM`);
+    for (const [base, derived] of [
+      ["INTERNAL", "INTERNAL"],
+      ["PROTECTED", "PROTECTED"],
+      ["", "PUBLIC"],
+      ["PUBLIC", ""],
+      ["PUBLIC", "OVERRIDE"],
+    ]) {
+      expect(override(base, derived)).toEqual([]);
+    }
+    for (const [base, derived, from] of [
+      ["PROTECTED", "PUBLIC", "PROTECTED"],
+      ["PUBLIC", "PROTECTED", "PUBLIC"],
+      ["PROTECTED", "", "PROTECTED"],
+      ["", "PROTECTED", "PUBLIC"],
+      ["PUBLIC", "INTERNAL", "PUBLIC"],
+      ["INTERNAL", "PUBLIC", "INTERNAL"],
+      ["INTERNAL", "", "INTERNAL"],
+    ]) {
+      expect(override(base, derived)).toEqual([
+        `Method 'M' in 'D' cannot change the access modifier ${from} of method 'M' of 'B' it overrides.`,
+      ]);
+    }
   });
 
   it("reports a method call on a member that is not a method", () => {

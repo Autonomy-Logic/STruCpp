@@ -1976,13 +1976,7 @@ export class SemanticAnalyzer {
       }
 
       for (const method of fb.methods) {
-        this.validateNotOverridingHidden(
-          fb,
-          method,
-          parentMethods,
-          lookup,
-          ast,
-        );
+        this.validateOverrideAccess(fb, method, parentMethods, lookup, ast);
 
         // ABSTRACT method in non-abstract FB is an error
         if (method.isAbstract && !fb.isAbstract) {
@@ -2178,10 +2172,11 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * A method named like a PRIVATE method of a base block, or an INTERNAL one of a library base, would replace it in
-   * C++ virtual dispatch, so the base's own calls would run the derived code. Reported with or without OVERRIDE.
+   * Access rules for a method named like one of a base block, with or without OVERRIDE (as CODESYS checks them).
+   * A PRIVATE method, or an INTERNAL one of a library base, cannot be overridden: in C++ virtual dispatch the base's
+   * own calls would run the derived code. Any other override keeps the base method's access modifier.
    */
-  private validateNotOverridingHidden(
+  private validateOverrideAccess(
     fb: FunctionBlockDeclaration,
     method: MethodDeclaration,
     parentMethods: Map<string, MethodDeclaration>,
@@ -2198,8 +2193,17 @@ export class SemanticAnalyzer {
     if (
       base.visibility !== "PRIVATE" &&
       !(base.visibility === "INTERNAL" && fromLibrary)
-    )
+    ) {
+      if (method.visibility !== base.visibility) {
+        this.addError(
+          `Method '${method.name}' in '${fb.name}' cannot change the access modifier ${base.visibility} of method '${base.name}' of '${owner.name}' it overrides.`,
+          method.sourceSpan.startLine,
+          method.sourceSpan.startCol,
+          method.sourceSpan.file,
+        );
+      }
       return;
+    }
     const where =
       base.visibility === "INTERNAL" ? " from outside its library" : "";
     this.addError(
