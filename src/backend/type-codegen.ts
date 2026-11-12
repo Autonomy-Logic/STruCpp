@@ -355,6 +355,7 @@ export class TypeCodeGenerator {
         const elemCpp = this.arrayElementTypeToCpp(
           field.type.elementTypeName,
           field.type.elementReferenceChain,
+          field.type.elementMaxLength,
         );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
@@ -472,6 +473,7 @@ export class TypeCodeGenerator {
       elementKind === undefined || elementKind === "none"
         ? undefined
         : (def.elementType.referenceChain ?? [elementKind]),
+      def.elementType.maxLength,
     );
     const numDims = def.dimensions.length;
 
@@ -570,10 +572,11 @@ export class TypeCodeGenerator {
   private arrayElementTypeToCpp(
     typeName: string,
     referenceChain: readonly string[] | undefined,
+    maxLength?: number | string,
   ): string {
     return referenceChain
       ? wrapReferenceChain(referenceChain, this.mapTypeToCpp(typeName))
-      : this.mapStructFieldTypeToCpp(typeName);
+      : this.mapStructFieldTypeToCpp(typeName, maxLength);
   }
 
   /**

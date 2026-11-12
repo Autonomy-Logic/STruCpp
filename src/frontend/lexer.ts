@@ -821,7 +821,6 @@ export const contextualKeywordTokens: TokenType[] = [
   ABSTRACT,
   FINAL,
   INTERNAL,
-  // IEC 61131-3 operator keywords that can also be called as functions
   AND,
   OR,
   XOR,
@@ -849,7 +848,6 @@ export const allTokens = [
 
   // External code pragma
   ExternalPragma,
-  // CODESYS attribute pragma (not passed to the parser)
   AttributePragma,
 
   // Multi-character operators (before single-character)

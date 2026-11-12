@@ -113,6 +113,7 @@ interface TypeShape {
   referenceChain?: ReferenceKind[];
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  elementMaxLength?: number | string;
   elementReferenceChain?: ReferenceKind[];
 }
 
@@ -120,6 +121,7 @@ interface TypeShape {
 interface LibraryFieldShape {
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  elementMaxLength?: number | string;
   referenceKind?: ReferenceKind;
 }
 
@@ -657,6 +659,9 @@ export class CodeGenerator {
       ...(typeRef.elementTypeName !== undefined
         ? { elementTypeName: typeRef.elementTypeName }
         : {}),
+      ...(typeRef.elementMaxLength !== undefined
+        ? { elementMaxLength: typeRef.elementMaxLength }
+        : {}),
       ...(typeRef.elementReferenceChain !== undefined
         ? { elementReferenceChain: typeRef.elementReferenceChain }
         : {}),
@@ -689,6 +694,9 @@ export class CodeGenerator {
       ...(spec.elementTypeName !== undefined
         ? { elementTypeName: spec.elementTypeName }
         : {}),
+      ...(spec.elementMaxLength !== undefined
+        ? { elementMaxLength: spec.elementMaxLength }
+        : {}),
       ...(spec.elementReferenceChain !== undefined
         ? { elementReferenceChain: spec.elementReferenceChain }
         : {}),
@@ -719,8 +727,8 @@ export class CodeGenerator {
   private arrayElementCpp(
     elementTypeName: string,
     referenceChain: TypeShape["elementReferenceChain"],
+    maxLength?: number | string,
   ): string {
-    // ARRAY OF POINTER TO / REF_TO: each element is the wrapper a variable gets.
     if (referenceChain) {
       return wrapReferenceChain(
         referenceChain,
@@ -730,7 +738,11 @@ export class CodeGenerator {
     if (this.isInterfaceType(elementTypeName)) {
       return `IEC_INTERFACE<${elementTypeName}>`;
     }
-    // Composites hold IECVar leaves already; elementary elements are wrapped.
+    if (maxLength !== undefined) {
+      const upper = elementTypeName.toUpperCase();
+      if (upper === "STRING") return `IECStringVar<${maxLength}>`;
+      if (upper === "WSTRING") return `IECWStringVar<${maxLength}>`;
+    }
     if (this.isUserDefinedType(elementTypeName)) return elementTypeName;
     return this.mapVarTypeToCpp(elementTypeName);
   }
@@ -746,6 +758,7 @@ export class CodeGenerator {
         this.arrayElementCpp(
           typeRef.elementTypeName,
           typeRef.elementReferenceChain,
+          typeRef.elementMaxLength,
         ),
         typeRef.arrayDimensions,
       );
@@ -765,7 +778,6 @@ export class CodeGenerator {
         typeRef.referenceKind === "none") &&
       this.isInterfaceType(typeRef.name)
     ) {
-      // An interface variable holds a reference to an implementing instance.
       return `IEC_INTERFACE<${typeRef.name}>`;
     } else {
       baseType = this.mapVarTypeToCpp(
@@ -850,6 +862,8 @@ export class CodeGenerator {
           const ref: LibraryFieldShape = {};
           if (f.arrayDimensions) ref.arrayDimensions = f.arrayDimensions;
           if (f.elementTypeName) ref.elementTypeName = f.elementTypeName;
+          if (f.elementMaxLength !== undefined)
+            ref.elementMaxLength = f.elementMaxLength;
           if (f.referenceKind) ref.referenceKind = f.referenceKind;
           this.libraryFBFieldTypeRefs.set(
             `${fbUpper}.${f.name.toUpperCase()}`,
@@ -892,6 +906,8 @@ export class CodeGenerator {
             const entry: LibraryField = { name: v.name, type: v.type };
             if (v.arrayDimensions) entry.arrayDimensions = v.arrayDimensions;
             if (v.elementTypeName) entry.elementTypeName = v.elementTypeName;
+            if (v.elementMaxLength !== undefined)
+              entry.elementMaxLength = v.elementMaxLength;
             if (v.referenceKind) entry.referenceKind = v.referenceKind;
             return entry;
           };
@@ -1066,7 +1082,24 @@ export class CodeGenerator {
       }
     }
 
-    // Known interface types and their method name map
+    const interfacesByName = new Map(
+      ast.interfaces.map((i) => [i.name.toUpperCase(), i]),
+    );
+    for (const iface of ast.interfaces) {
+      const pending = [iface.name.toUpperCase()];
+      const seen = new Set<string>();
+      for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
+        const current = interfacesByName.get(name);
+        if (!current || seen.has(name)) continue;
+        seen.add(name);
+        for (const prop of current.properties) {
+          const key = `${iface.name.toUpperCase()}.${prop.name.toUpperCase()}`;
+          if (!this.propertyNameMap.has(key))
+            this.propertyNameMap.set(key, prop.name);
+        }
+        pending.push(...(current.extends ?? []).map((e) => e.toUpperCase()));
+      }
+    }
     for (const iface of ast.interfaces) {
       this.knownInterfaceTypes.add(iface.name.toUpperCase());
       for (const method of iface.methods) {
@@ -1077,7 +1110,6 @@ export class CodeGenerator {
       }
     }
 
-    // Method and property name maps of the FBs
     for (const fb of ast.functionBlocks) {
       for (const method of fb.methods) {
         this.methodNameMap.set(
@@ -1575,7 +1607,6 @@ export class CodeGenerator {
   private generateFBHeaderDeclaration(
     fb: CompilationUnit["functionBlocks"][0],
   ): void {
-    // Method names this FB's members must not take (member-mangling rule 2)
     this.currentFBMethodNames =
       this.fbMemberMethodNames.get(fb.name.toUpperCase()) ?? new Set();
 
@@ -1867,6 +1898,16 @@ export class CodeGenerator {
         );
       }
     }
+    for (const prop of iface.properties) {
+      const type = this.mapTypeRefToCpp(prop.type);
+      this.emitHeaderLineDirective(prop.sourceSpan.startLine);
+      if (prop.getter)
+        this.emitHeader(`    virtual ${type} get_${prop.name}() = 0;`);
+      if (prop.setter)
+        this.emitHeader(
+          `    virtual void set_${prop.name}(${type} ${prop.name}) = 0;`,
+        );
+    }
 
     this.emitHeader("};");
     this.emitHeader("");
@@ -1898,7 +1939,8 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate method declarations in the class header, grouped by visibility.
+   * Generate method declarations in the class header, grouped by visibility. INTERNAL methods are public in C++:
+   * the analyzer enforces INTERNAL across the compilation unit.
    */
   private generateMethodDeclarations(methods: MethodDeclaration[]): void {
     // Group by visibility
@@ -1921,7 +1963,6 @@ export class CodeGenerator {
     ][]) {
       if (visMethods.length === 0) continue;
 
-      // INTERNAL is unit-wide: the analyzer enforces it, C++ sees it as public.
       const cppVisibility =
         visibility === "INTERNAL" ? "public" : visibility.toLowerCase();
       if (cppVisibility !== currentVisibility) {
@@ -2014,7 +2055,7 @@ export class CodeGenerator {
       this.emitHeaderLineDirective(prop.sourceSpan.startLine);
       const propLine = this.currentHeaderLine;
       if (prop.getter) {
-        this.emitHeader(`    virtual ${type} get_${prop.name}() const;`);
+        this.emitHeader(`    virtual ${type} get_${prop.name}();`);
       }
       if (prop.setter) {
         this.emitHeader(
@@ -2113,7 +2154,7 @@ export class CodeGenerator {
     if (prop.getter) {
       this.emitLineDirective(prop.sourceSpan.startLine);
       const getterLine = this.currentLine;
-      this.emit(`${type} ${className}::get_${prop.name}() const {`);
+      this.emit(`${type} ${className}::get_${prop.name}() {`);
       this.emit(`    ${type} ${prop.name}_result;`);
       this.currentFunctionName = prop.name;
       this.generateStatements(prop.getter);
@@ -2433,31 +2474,7 @@ export class CodeGenerator {
       for (const decl of prog.varDeclarations) {
         const constQualifier = decl.isConstant ? "const " : "";
 
-        // Use mapTypeRefToCpp so inline ARRAY types (where typeName looks
-        // like __INLINE_ARRAY_<T> and the bounds live alongside on the
-        // ProjectVarDeclaration) get expanded to Array1D<T, L, U>. Going
-        // through mapVarTypeToCpp directly would emit IEC___INLINE_ARRAY_<T>.
-        const cppType = this.mapTypeRefToCpp({
-          name: decl.typeName,
-          ...(decl.maxLength !== undefined
-            ? { maxLength: decl.maxLength }
-            : {}),
-          ...(decl.arrayDimensions !== undefined
-            ? { arrayDimensions: decl.arrayDimensions }
-            : {}),
-          ...(decl.elementTypeName !== undefined
-            ? { elementTypeName: decl.elementTypeName }
-            : {}),
-          ...(decl.elementReferenceChain !== undefined
-            ? { elementReferenceChain: decl.elementReferenceChain }
-            : {}),
-          ...(decl.referenceKind !== undefined
-            ? { referenceKind: decl.referenceKind }
-            : {}),
-          ...(decl.referenceChain !== undefined
-            ? { referenceChain: decl.referenceChain }
-            : {}),
-        });
+        const cppType = this.mapTypeRefToCpp(this.projectVarToTypeRef(decl));
         const memberName = this.mangleMemberIfNeeded(decl.name, decl.typeName);
         // Map variable ST line → header member line
         const stLine = varSourceLines.get(decl.name);
@@ -3805,6 +3822,21 @@ export class CodeGenerator {
       if (expr.isDereference && expr.fieldAccess.length === 0) {
         return "(*this)";
       }
+      const chain = expr.accessChain ?? [];
+      const first = chain[0];
+      if (
+        first?.kind === "field" &&
+        chain.some((step) => step.kind !== "field")
+      ) {
+        const fromMember: VariableExpression = {
+          ...expr,
+          name: first.name,
+          fieldAccess: expr.fieldAccess.slice(1),
+          isDereference: false,
+          accessChain: chain.slice(1),
+        };
+        return `this->${this.generateVariableExpression(fromMember)}`;
+      }
       // THIS.member or THIS^.member → this->member
       // Check if last field is a property → this->get_Prop()
       let result = "this->";
@@ -3973,7 +4005,7 @@ export class CodeGenerator {
         if (isLast) {
           const propName = this.resolvePropertyName(currentType, field);
           if (propName) {
-            result += `.get_${propName}()`;
+            result += `${this.memberAccessSeparator(currentType)}get_${propName}()`;
             continue;
           }
         }
@@ -4036,7 +4068,7 @@ export class CodeGenerator {
           if (isLast) {
             const propName = this.resolvePropertyName(currentType, step.name);
             if (propName) {
-              result += `.get_${propName}()`;
+              result += `${this.memberAccessSeparator(currentType)}get_${propName}()`;
               return result;
             }
           }
@@ -4101,6 +4133,25 @@ export class CodeGenerator {
   };
 
   /**
+   * C++ for `left ** right`. A REAL or LREAL result goes through EXPT with both operands of that type, so REAL
+   * computes in single precision exactly like EXPT; other results keep a double `pow`.
+   */
+  private powerCpp(
+    expr: BinaryExpression,
+    left: string,
+    right: string,
+  ): string {
+    const result = expr.resolvedType
+      ? typeNameUtil(expr.resolvedType).toUpperCase()
+      : undefined;
+    if (result === "REAL" || result === "LREAL") {
+      const t = result === "REAL" ? "REAL_t" : "LREAL_t";
+      return `EXPT(static_cast<${t}>(${left}), static_cast<${t}>(${right}))`;
+    }
+    return `std::pow(static_cast<double>(${left}), static_cast<double>(${right}))`;
+  }
+
+  /**
    * Generate C++ for a binary expression.
    */
   private generateBinaryExpression(expr: BinaryExpression): string {
@@ -4113,10 +4164,7 @@ export class CodeGenerator {
       this.realLiteralContext(expr.left),
     );
 
-    // Power operator needs special handling
-    if (expr.operator === "**") {
-      return `std::pow(static_cast<double>(${left}), static_cast<double>(${right}))`;
-    }
+    if (expr.operator === "**") return this.powerCpp(expr, left, right);
 
     const cppOp = CodeGenerator.BINARY_OP_MAP[expr.operator] ?? expr.operator;
 
@@ -4744,7 +4792,6 @@ export class CodeGenerator {
       return `${arrExpr}.${method}()`;
     }
 
-    // 0. Enum conversions: TO_<ENUM>(x), <ANY>_TO_<ENUM>(x), <ENUM>_TO_<ANY>(x)
     const enumConv = this.resolveEnumConversion(nameUpper);
     if (enumConv && expr.arguments.length === 1) {
       const arg = this.generateExpression(expr.arguments[0]!.value);
@@ -5300,7 +5347,9 @@ export class CodeGenerator {
           delete baseExpr.accessChain;
         }
       }
-      objectCode = this.generateVariableExpression(baseExpr) + ".";
+      objectCode =
+        this.generateVariableExpression(baseExpr) +
+        this.memberAccessSeparator(currentType);
     }
 
     return { objectCode, propertyName: propName };

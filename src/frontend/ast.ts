@@ -189,10 +189,12 @@ export interface InterfaceDeclaration extends ASTNode {
   name: string;
   extends?: string[];
   methods: MethodDeclaration[];
+  /** Property signatures: the accessors present (empty bodies) are the ones implementations must provide. */
+  properties: PropertyDeclaration[];
 }
 
 /**
- * PROPERTY declaration within a Function Block
+ * PROPERTY declaration within a Function Block, or a property signature within an INTERFACE
  */
 export interface PropertyDeclaration extends ASTNode {
   kind: "PropertyDeclaration";
@@ -423,6 +425,8 @@ export interface TypeReference extends ASTNode {
   maxLength?: number | string; // For STRING(n) / WSTRING(n) parameterized length; string for constant names
   arrayDimensions?: Array<{ start: number; end: number }>; // For __INLINE_ARRAY_* types
   elementTypeName?: string; // Element type for inline arrays (e.g. "BYTE" for ARRAY[0..7] OF BYTE)
+  elementMaxLength?: number | string; // Element length of ARRAY OF STRING[n] / STRING(n) / WSTRING
+
   /**
    * The element's reference levels, outermost first, for an inline array of
    * pointers or references: `ARRAY[0..3] OF POINTER TO INT` is

@@ -427,13 +427,13 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Header: getter and setter declarations
-      expect(result.headerCode).toContain("virtual IEC_INT get_SPEED() const;");
+      expect(result.headerCode).toContain("virtual IEC_INT get_SPEED();");
       expect(result.headerCode).toContain(
         "virtual void set_SPEED(IEC_INT SPEED);",
       );
 
       // Implementation: getter body
-      expect(result.cppCode).toContain("IEC_INT MOTOR::get_SPEED() const {");
+      expect(result.cppCode).toContain("IEC_INT MOTOR::get_SPEED() {");
       expect(result.cppCode).toContain("SPEED_result = _SPEED;");
       expect(result.cppCode).toContain("return SPEED_result;");
 
@@ -457,7 +457,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("virtual IEC_INT get_COUNT() const;");
+      expect(result.headerCode).toContain("virtual IEC_INT get_COUNT();");
       // No setter should be generated
       expect(result.headerCode).not.toContain("set_COUNT");
     });
@@ -972,7 +972,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Property
       expect(result.headerCode).toContain(
-        "virtual IEC_REAL get_VALUE() const;",
+        "virtual IEC_REAL get_VALUE();",
       );
 
       // VAR_INST mangled

@@ -16,6 +16,8 @@ import type {
   EnumType,
   Expression,
   FunctionBlockDeclaration,
+  InterfaceDeclaration,
+  PropertyDeclaration,
   FunctionCallExpression,
   MethodCallExpression,
   LiteralExpression,
@@ -77,6 +79,9 @@ import {
  * Parsed components of a located variable address.
  */
 /** What a method call is made on: the caller itself, its base, or an instance of `type`. */
+/** What an access names: a method or a property. */
+type MemberKind = "method" | "property";
+
 type CallReceiver =
   | { kind: "self" }
   | { kind: "super" }
@@ -859,6 +864,12 @@ export class SemanticAnalyzer {
 
     // Validate OOP property/member name collisions
     this.validatePropertyNameCollisions(ast);
+
+    // Variables and methods of one class hierarchy sharing a name
+    this.validateMethodNameCollisions(ast);
+
+    // Interface property signatures and their implementations
+    this.validateInterfaceProperties(ast);
 
     // Validate OOP modifier contradictions
     this.validateOOPModifiers(ast);
@@ -1772,6 +1783,155 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * Interface properties: a signature lists GET, SET or both, with empty bodies and no access modifier. A non-abstract
+   * function block implementing the interface (directly, through EXTENDS of the interface, or through a base block)
+   * must have, in its lineage, a property of the same name and type with every accessor the signature lists.
+   */
+  private validateInterfaceProperties(ast: CompilationUnit): void {
+    const ifaces = new Map(
+      ast.interfaces.map((i) => [i.name.toUpperCase(), i]),
+    );
+    for (const iface of ast.interfaces) {
+      for (const prop of iface.properties) {
+        const at = prop.sourceSpan;
+        if (prop.visibility !== "PUBLIC")
+          this.addError(
+            `PROPERTY '${prop.name}' of INTERFACE '${iface.name}' cannot have an access modifier.`,
+            at.startLine,
+            at.startCol,
+            at.file,
+          );
+        if (!prop.getter && !prop.setter)
+          this.addError(
+            `PROPERTY '${prop.name}' of INTERFACE '${iface.name}' must declare GET, SET or both.`,
+            at.startLine,
+            at.startCol,
+            at.file,
+          );
+        if ((prop.getter?.length ?? 0) > 0 || (prop.setter?.length ?? 0) > 0)
+          this.addError(
+            `PROPERTY '${prop.name}' of INTERFACE '${iface.name}' cannot have a body.`,
+            at.startLine,
+            at.startCol,
+            at.file,
+          );
+      }
+    }
+    /** Properties required by `name` and the interfaces it extends. */
+    const required = (
+      name: string,
+      seen: Set<string>,
+    ): Array<{ iface: InterfaceDeclaration; prop: PropertyDeclaration }> => {
+      const iface = ifaces.get(name.toUpperCase());
+      if (!iface || seen.has(name.toUpperCase())) return [];
+      seen.add(name.toUpperCase());
+      return [
+        ...iface.properties.map((prop) => ({ iface, prop })),
+        ...(iface.extends ?? []).flatMap((e) => required(e, seen)),
+      ];
+    };
+    const lookup = functionBlockLookup(ast, this.symbolTables);
+    for (const fb of ast.functionBlocks) {
+      if (fb.isAbstract) continue;
+      const lineage = fbLineage(fb.name, lookup);
+      const seen = new Set<string>();
+      const needs = lineage.flatMap((owner) =>
+        (owner.implements ?? []).flatMap((i) => required(i, seen)),
+      );
+      for (const { iface, prop } of needs) {
+        const upper = prop.name.toUpperCase();
+        const impl = lineage
+          .flatMap((owner) => owner.properties)
+          .find((p) => p.name.toUpperCase() === upper);
+        const where = `FUNCTION_BLOCK '${fb.name}' implements '${iface.name}' but`;
+        let problem: string | undefined;
+        if (!impl) problem = `does not provide PROPERTY '${prop.name}'`;
+        else if (impl.type.name.toUpperCase() !== prop.type.name.toUpperCase())
+          problem = `its PROPERTY '${prop.name}' is ${impl.type.name}, not ${prop.type.name}`;
+        else if (prop.getter && !impl.getter)
+          problem = `its PROPERTY '${prop.name}' has no GET`;
+        else if (prop.setter && !impl.setter)
+          problem = `its PROPERTY '${prop.name}' has no SET`;
+        if (problem !== undefined)
+          this.addError(
+            `${where} ${problem}.`,
+            fb.sourceSpan.startLine,
+            fb.sourceSpan.startCol,
+            fb.sourceSpan.file,
+          );
+      }
+    }
+  }
+
+  /**
+   * Reports a variable and a method of one class hierarchy that share a name.
+   *
+   * - A variable named like a method of its block or of a base: warning. The generated C++ renames the variable.
+   * - A method named like a variable inherited from a base: warning when the base is in this unit (the variable is
+   *   renamed), error when the base comes from a library, whose member names are fixed in its compiled code.
+   */
+  private validateMethodNameCollisions(ast: CompilationUnit): void {
+    const lookup = functionBlockLookup(ast, this.symbolTables);
+    const localFBs = new Set(ast.functionBlocks);
+    const variableNames = (fb: FunctionBlockDeclaration): string[] => {
+      if (localFBs.has(fb))
+        return fb.varBlocks.flatMap((b) =>
+          b.declarations.flatMap((d) => d.names),
+        );
+      const sym = this.symbolTables.lookupFunctionBlock(fb.name.toUpperCase());
+      if (!sym) return [];
+      return [...sym.inputs, ...sym.outputs, ...sym.inouts, ...sym.locals].map(
+        (v) => v.name,
+      );
+    };
+    for (const fb of ast.functionBlocks) {
+      const lineage = fbLineage(fb.name, lookup);
+      const methodOwner = new Map<string, FunctionBlockDeclaration>();
+      for (const owner of [...lineage].reverse())
+        for (const m of owner.methods)
+          methodOwner.set(m.name.toUpperCase(), owner);
+      for (const block of fb.varBlocks)
+        for (const decl of block.declarations)
+          for (const name of decl.names) {
+            const owner = methodOwner.get(name.toUpperCase());
+            if (!owner) continue;
+            this.addWarning(
+              `Variable '${name}' in FUNCTION_BLOCK '${fb.name}' has the same name as METHOD '${name}' of '${owner.name}'; ` +
+                `it is renamed in the generated C++`,
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
+            );
+          }
+      for (const base of lineage.slice(1)) {
+        const inherited = new Map(
+          variableNames(base).map((n) => [n.toUpperCase(), n]),
+        );
+        const fromLibrary = !localFBs.has(base);
+        for (const m of fb.methods) {
+          const variable = inherited.get(m.name.toUpperCase());
+          if (variable === undefined) continue;
+          const where = `METHOD '${m.name}' in FUNCTION_BLOCK '${fb.name}' has the same name as variable '${variable}' inherited from`;
+          if (fromLibrary)
+            this.addError(
+              `${where} library FUNCTION_BLOCK '${base.name}'; rename the method`,
+              m.sourceSpan.startLine,
+              m.sourceSpan.startCol,
+              m.sourceSpan.file,
+            );
+          else
+            this.addWarning(
+              `${where} '${base.name}'; the variable is renamed in the generated C++`,
+              m.sourceSpan.startLine,
+              m.sourceSpan.startCol,
+              m.sourceSpan.file,
+            );
+        }
+      }
+    }
+  }
+
+  /**
    * Validate OOP modifier contradictions on function blocks and methods.
    */
   private validateOOPModifiers(ast: CompilationUnit): void {
@@ -2071,6 +2231,24 @@ export class SemanticAnalyzer {
       for (const prop of fb.properties) {
         const key = `${fb.name.toUpperCase()}.${prop.name.toUpperCase()}`;
         propertyInfo.set(key, { hasSetter: prop.setter !== undefined });
+      }
+    }
+    const ifaces = new Map(
+      ast.interfaces.map((i) => [i.name.toUpperCase(), i]),
+    );
+    for (const iface of ast.interfaces) {
+      const pending = [iface.name.toUpperCase()];
+      const seen = new Set<string>();
+      for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
+        const current = ifaces.get(name);
+        if (!current || seen.has(name)) continue;
+        seen.add(name);
+        for (const prop of current.properties) {
+          const key = `${iface.name.toUpperCase()}.${prop.name.toUpperCase()}`;
+          if (!propertyInfo.has(key))
+            propertyInfo.set(key, { hasSetter: prop.setter !== undefined });
+        }
+        pending.push(...(current.extends ?? []).map((e) => e.toUpperCase()));
       }
     }
     if (propertyInfo.size === 0) return;
@@ -2651,7 +2829,8 @@ export class SemanticAnalyzer {
 
   /**
    * Enforce method access specifiers on every call form (`obj.M()`, member
-   * paths, `THIS^.M()`, `SUPER^.M()`, unqualified calls inside an FB):
+   * paths, `THIS^.M()`, `SUPER^.M()`, unqualified calls inside an FB), and
+   * the same rules for property reads and writes (`obj.P`, `THIS^.P`, `SUPER^.P`):
    * PRIVATE only from the declaring FB; PROTECTED from the declaring FB or a
    * derived one, through itself or an instance of its own lineage; INTERNAL
    * only from the compilation unit that declares it (not across a library).
@@ -2659,16 +2838,17 @@ export class SemanticAnalyzer {
   private validateAccessModifiers(ast: CompilationUnit): void {
     const lookup = functionBlockLookup(ast, this.symbolTables);
     const localFBs = new Set(ast.functionBlocks);
-    const findMethod = (
+    /** The nearest method or property named `upper` in the lineage of `typeName`. */
+    const findMember = (
       typeName: string,
-      methodUpper: string,
+      upper: string,
+      kind: MemberKind,
     ):
       | { owner: FunctionBlockDeclaration; visibility: Visibility }
       | undefined => {
       for (const owner of fbLineage(typeName, lookup)) {
-        const m = owner.methods.find(
-          (x) => x.name.toUpperCase() === methodUpper,
-        );
+        const members = kind === "method" ? owner.methods : owner.properties;
+        const m = members.find((x) => x.name.toUpperCase() === upper);
         if (m) return { owner, visibility: m.visibility };
       }
       return undefined;
@@ -2695,12 +2875,13 @@ export class SemanticAnalyzer {
     const check = (
       callerFB: string | null,
       receiver: CallReceiver,
-      methodName: string,
+      memberName: string,
       span: SourceSpan,
+      kind: MemberKind = "method",
     ): void => {
       const start = lookupStart(callerFB, receiver);
       if (start === undefined) return;
-      const found = findMethod(start, methodName.toUpperCase());
+      const found = findMember(start, memberName.toUpperCase(), kind);
       if (!found) return;
       const owner = found.owner.name.toUpperCase();
       const callerLineage =
@@ -2715,7 +2896,6 @@ export class SemanticAnalyzer {
           where = `from outside '${owner}'`;
           break;
         case "PROTECTED":
-          // C++ rule: through itself, or an instance of its own lineage.
           allowed =
             callerLineage.includes(owner) &&
             (receiver.kind !== "instance" ||
@@ -2734,7 +2914,9 @@ export class SemanticAnalyzer {
       }
       if (allowed) return;
       this.addError(
-        `Cannot call ${found.visibility} method '${methodName}' of '${owner}' ${where}.`,
+        kind === "method"
+          ? `Cannot call ${found.visibility} method '${memberName}' of '${owner}' ${where}.`
+          : `Cannot access ${found.visibility} property '${memberName}' of '${owner}' ${where}.`,
         span.startLine,
         span.startCol,
         span.file,
@@ -2793,6 +2975,31 @@ export class SemanticAnalyzer {
                   call.sourceSpan,
                 );
               }
+            }
+          } else if (node.kind === "VariableExpression") {
+            const v = node as VariableExpression;
+            const nameUpper = v.name.toUpperCase();
+            const first = v.fieldAccess[0];
+            if (first === undefined) return;
+            if (
+              v.subscripts.length > 0 ||
+              (v.accessChain && v.accessChain[0]?.kind !== "field")
+            )
+              return;
+            if (nameUpper === "THIS") {
+              check(callerFB, SELF, first, v.sourceSpan, "property");
+            } else if (nameUpper === "SUPER") {
+              check(callerFB, SUPER, first, v.sourceSpan, "property");
+            } else {
+              const objType = varTypes.get(nameUpper);
+              if (objType !== undefined)
+                check(
+                  callerFB,
+                  { kind: "instance", type: objType },
+                  first,
+                  v.sourceSpan,
+                  "property",
+                );
             }
           }
         });

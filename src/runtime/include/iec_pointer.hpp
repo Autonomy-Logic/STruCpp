@@ -659,4 +659,22 @@ bool operator!=(const IEC_INTERFACE<A>& a, const IEC_INTERFACE<B>& b) noexcept {
     return !(a == b);
 }
 
+/** `0 = itf` and `0 <> itf`: the comparison with 0 in reversed operand order. */
+template<typename N, typename I, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+bool operator==(N value, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf == value;
+}
+template<typename N, typename I, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+bool operator!=(N value, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf != value;
+}
+template<typename I>
+bool operator==(std::nullptr_t, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf == nullptr;
+}
+template<typename I>
+bool operator!=(std::nullptr_t, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf != nullptr;
+}
+
 }  // namespace strucpp

@@ -179,7 +179,7 @@ export class STParser extends CstParser {
   // ==========================================================================
 
   /**
-   * INTERFACE declaration
+   * INTERFACE declaration: method and property signatures, without bodies.
    */
   public interfaceDeclaration = this.RULE("interfaceDeclaration", () => {
     this.CONSUME(tokens.INTERFACE);
@@ -192,9 +192,19 @@ export class STParser extends CstParser {
         DEF: () => this.CONSUME2(tokens.Identifier),
       });
     });
-    // Interface methods (abstract, no body)
     this.MANY(() => {
-      this.SUBRULE(this.interfaceMethodDeclaration);
+      this.OR([
+        {
+          ALT: (): void => {
+            this.SUBRULE(this.interfaceMethodDeclaration);
+          },
+        },
+        {
+          ALT: (): void => {
+            this.SUBRULE(this.propertyDeclaration);
+          },
+        },
+      ]);
     });
     this.CONSUME(tokens.END_INTERFACE);
   });
@@ -221,11 +231,11 @@ export class STParser extends CstParser {
   );
 
   /**
-   * METHOD declaration within a Function Block
+   * METHOD declaration within a Function Block. A leading INTERNAL not followed by a modifier and a name is the
+   * method's name, not its visibility.
    */
   public methodDeclaration = this.RULE("methodDeclaration", () => {
     this.CONSUME(tokens.METHOD);
-    // Optional visibility modifier; INTERNAL alone may be the name itself
     this.OPTION({
       GATE: () =>
         this.LA(1).tokenType !== tokens.INTERNAL || this.isModifierAhead(),
@@ -316,11 +326,11 @@ export class STParser extends CstParser {
   });
 
   /**
-   * PROPERTY declaration within a Function Block
+   * PROPERTY declaration within a Function Block or an INTERFACE. A leading INTERNAL not followed by a modifier and
+   * a name is the property's name, not its visibility.
    */
   public propertyDeclaration = this.RULE("propertyDeclaration", () => {
     this.CONSUME(tokens.PROPERTY);
-    // Optional visibility modifier; INTERNAL alone may be the name itself
     this.OPTION({
       GATE: () =>
         this.LA(1).tokenType !== tokens.INTERNAL || this.isModifierAhead(),
@@ -821,7 +831,8 @@ export class STParser extends CstParser {
   /**
    * Data type reference: a type name after any number of reference prefixes
    * (`REF_TO`, `REFERENCE TO`, `POINTER TO`), so `REF_TO REF_TO INT` and
-   * `POINTER TO REF_TO INT` keep every level.
+   * `POINTER TO REF_TO INT` keep every level. A string length is written
+   * `STRING(n)` (CODESYS) or `STRING[n]` (IEC 61131-3 Ed. 3).
    */
   public dataType = this.RULE("dataType", () => {
     this.MANY(() => {
@@ -854,7 +865,6 @@ export class STParser extends CstParser {
           (len === tokens.IntegerLiteral || len === tokens.Identifier)
         );
       },
-      // STRING(n) (CODESYS) or STRING[n] (IEC 61131-3 Ed. 3)
       DEF: () => {
         this.OR5([
           {
@@ -975,7 +985,8 @@ export class STParser extends CstParser {
   });
 
   /**
-   * Single statement
+   * Single statement. Method calls on a longer path (`a[i].m(`, `p^.m(`, `a.b.m(`) are tried before the plain
+   * `a.m(` form.
    */
   public statement = this.RULE("statement", () => {
     this.OR({
@@ -994,8 +1005,6 @@ export class STParser extends CstParser {
             this.LA(1).tokenType === tokens.SUPER &&
             this.LA(2).tokenType === tokens.Caret,
         },
-        // Path method calls (`a[i].m(`, `p^.m(`, `a.b.m(`); the gate leaves the
-        // plain `a.m(` form to methodCallStatement below.
         {
           ALT: () => this.SUBRULE(this.memberMethodCallStatement),
           GATE: () => this.isMemberMethodCallAhead(),
@@ -1068,15 +1077,14 @@ export class STParser extends CstParser {
   });
 
   /**
-   * THIS.member := expr; or THIS.method(args); statement
+   * `THIS^.path := expr;`, `THIS^.path(args);` or `THIS^.path;`, where `path` is any variable path (members,
+   * subscripts, dereferences). `THIS.path` without the caret is accepted too.
    */
   public thisStatement = this.RULE("thisStatement", () => {
     this.CONSUME(tokens.THIS);
-    // THIS^.member is the IEC/CODESYS form; THIS.member is kept for existing code.
     this.OPTION9(() => this.CONSUME(tokens.Caret));
     this.CONSUME(tokens.Dot);
-    this.SUBRULE(this.identifierOrKeyword);
-    // Determine if this is an assignment or method call
+    this.SUBRULE(this.variable);
     this.OR([
       {
         // Assignment: THIS.member := expression;
@@ -1282,7 +1290,6 @@ export class STParser extends CstParser {
           return false;
         }
         if (this.LA(i + 2)?.tokenType === tokens.LParen) {
-          // `a.m(` alone is the simple method call; anything longer is ours.
           return segmentsAfterRoot > 0;
         }
         i += 2;
@@ -1859,45 +1866,36 @@ export class STParser extends CstParser {
   });
 
   /**
-   * THIS.member or THIS.method(args) access
+   * `THIS^` alone, or `THIS^.path` / `THIS.path` with `path` any variable path, optionally called:
+   * `THIS^.s.v`, `THIS^.s.M(args)`, `THIS^.arr[1].M()`.
    */
   public thisAccess = this.RULE("thisAccess", () => {
     this.CONSUME(tokens.THIS);
     this.OR([
       {
-        // THIS^ alone (self), or THIS^.member / THIS^.method(args)
         GATE: () => this.LA(1).tokenType === tokens.Caret,
         ALT: () => {
           this.CONSUME(tokens.Caret);
-          this.OPTION3(() => {
-            this.CONSUME2(tokens.Dot);
-            this.SUBRULE2(this.identifierOrKeyword);
-            this.OPTION4(() => {
-              this.CONSUME2(tokens.LParen);
-              this.OPTION5(() => {
-                this.SUBRULE2(this.argumentList);
-              });
-              this.CONSUME2(tokens.RParen);
-            });
-          });
+          this.OPTION(() => this.SUBRULE(this.thisPathTail));
         },
       },
       {
-        // THIS.member or THIS.method(args) (kept for existing code)
-        ALT: () => {
-          this.CONSUME(tokens.Dot);
-          this.SUBRULE(this.identifierOrKeyword);
-          // Optional function call: THIS.Method(args)
-          this.OPTION(() => {
-            this.CONSUME(tokens.LParen);
-            this.OPTION2(() => {
-              this.SUBRULE(this.argumentList);
-            });
-            this.CONSUME(tokens.RParen);
-          });
+        ALT: (): void => {
+          this.SUBRULE2(this.thisPathTail);
         },
       },
     ]);
+  });
+
+  /** `.path` after THIS, with an optional call. */
+  public thisPathTail = this.RULE("thisPathTail", () => {
+    this.CONSUME(tokens.Dot);
+    this.SUBRULE(this.variable);
+    this.OPTION(() => {
+      this.CONSUME(tokens.LParen);
+      this.OPTION2(() => this.SUBRULE(this.argumentList));
+      this.CONSUME(tokens.RParen);
+    });
   });
 
   /**

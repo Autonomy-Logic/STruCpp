@@ -89,6 +89,8 @@ export interface ProjectVarDeclaration {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type for inline arrays (e.g. "DINT"). */
   elementTypeName?: string;
+  /** Element length of an inline ARRAY OF STRING[n] / WSTRING[n]. */
+  elementMaxLength?: number | string;
   /** Element reference levels for an inline array of pointers or references. */
   elementReferenceChain?: ReferenceKind[];
   /** Pointer/reference qualifier carried through from the AST TypeReference. */
@@ -112,6 +114,7 @@ export interface VarExternalDeclaration {
   maxLength?: number | string;
   arrayDimensions?: Array<{ start: number; end: number }>;
   elementTypeName?: string;
+  elementMaxLength?: number | string;
   elementReferenceChain?: ReferenceKind[];
   referenceKind?: string;
   referenceChain?: ReferenceKind[];
@@ -274,6 +277,9 @@ export function toProjectVarDeclaration(
       : {}),
     ...(decl.type.elementTypeName !== undefined
       ? { elementTypeName: decl.type.elementTypeName }
+      : {}),
+    ...(decl.type.elementMaxLength !== undefined
+      ? { elementMaxLength: decl.type.elementMaxLength }
       : {}),
     ...(decl.type.elementReferenceChain !== undefined
       ? { elementReferenceChain: decl.type.elementReferenceChain }
@@ -935,6 +941,9 @@ export class ProjectModelBuilder {
         : {}),
       ...(decl.type.elementTypeName !== undefined
         ? { elementTypeName: decl.type.elementTypeName }
+        : {}),
+      ...(decl.type.elementMaxLength !== undefined
+        ? { elementMaxLength: decl.type.elementMaxLength }
         : {}),
       ...(decl.type.elementReferenceChain !== undefined
         ? { elementReferenceChain: decl.type.elementReferenceChain }

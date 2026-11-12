@@ -16,9 +16,11 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  Argument,
   FunctionCallExpression,
   MethodCallExpression,
   MethodDeclaration,
+  PropertyDeclaration,
   IECType,
   ElementaryType,
   ReferenceType,
@@ -56,6 +58,7 @@ import {
 import { stripEnEno } from "../ast-utils.js";
 import {
   fbLineage,
+  fbLineageNames,
   functionBlockLookup,
   type FunctionBlockLookup,
 } from "./fb-lineage.js";
@@ -676,6 +679,8 @@ export class TypeChecker {
     }
     this.validateReferenceArguments(expr, scope);
     this.validateInstanceCallArgs(expr, scope);
+    const inputs = this.callInputs(expr, scope);
+    if (inputs) this.validateInterfaceArguments(expr.arguments, inputs);
 
     const nameUpper = expr.functionName.toUpperCase();
 
@@ -710,7 +715,6 @@ export class TypeChecker {
     // Validate standard function argument types (after resolving args)
     this.validateFunctionCallArgs(expr, scope);
 
-    // Conversions involving an enumeration: TO_<ENUM>, <ANY>_TO_<ENUM>, <ENUM>_TO_<ANY>
     const enumConv = parseConversionName(nameUpper);
     if (enumConv) {
       const target = this.enumTypeOf(enumConv.target);
@@ -862,6 +866,15 @@ export class TypeChecker {
     at: Expression,
   ): IECType | undefined {
     const method = this.findMethod(typeName, methodName);
+    if (method !== undefined && "arguments" in at) {
+      const inputs = method.varBlocks
+        .filter(
+          (b) => b.blockType === "VAR_INPUT" || b.blockType === "VAR_IN_OUT",
+        )
+        .flatMap((b) => b.declarations)
+        .flatMap((d) => d.names.map((name) => ({ name, type: d.type })));
+      this.validateInterfaceArguments(at.arguments, inputs);
+    }
     if (method === undefined) {
       if (this.declaredMembers(typeName)?.complete === true) {
         this.addError(
@@ -983,8 +996,8 @@ export class TypeChecker {
         const targetType = this.resolveExprType(stmt.target, scope);
         const valueType = this.resolveExprType(stmt.value, scope);
         const errorsBefore = this.errors.length;
-        // ADR() yields an untyped address; POINTER TO accepts any target type.
         if (this.isPointerTargetFromAddress(stmt.target, valueType, scope)) {
+          this.warnUnrelatedAddress(stmt.target, stmt.value, scope);
           break;
         }
         const ifaceCheck = this.checkInterfaceAssignment(
@@ -1358,6 +1371,8 @@ export class TypeChecker {
       seen.add(iface.name.toUpperCase());
       for (const m of iface.methods)
         members.callables.add(m.name.toUpperCase());
+      for (const prop of iface.properties)
+        members.vars.set(prop.name.toUpperCase(), "VAR");
       for (const e of iface.extends ?? []) {
         const base = findInterface(e.toUpperCase());
         if (base === undefined) return undefined;
@@ -1365,6 +1380,32 @@ export class TypeChecker {
       }
     }
     return members;
+  }
+
+  /** Property `name` of interface `typeName` or of an interface it extends. */
+  private interfaceProperty(
+    typeName: string,
+    name: string,
+  ): PropertyDeclaration | undefined {
+    const upper = name.toUpperCase();
+    const pending = [typeName.toUpperCase()];
+    const seen = new Set<string>();
+    for (
+      let current = pending.pop();
+      current !== undefined;
+      current = pending.pop()
+    ) {
+      if (seen.has(current)) continue;
+      seen.add(current);
+      const iface = this.ast?.interfaces.find(
+        (i) => i.name.toUpperCase() === current,
+      );
+      if (!iface) continue;
+      const prop = iface.properties.find((p) => p.name.toUpperCase() === upper);
+      if (prop) return prop;
+      pending.push(...(iface.extends ?? []).map((e) => e.toUpperCase()));
+    }
+    return undefined;
   }
 
   /** `x.name` where the type of `x` is fully known and declares no `name`. */
@@ -1484,24 +1525,72 @@ export class TypeChecker {
     value: Expression,
   ): { ok: true } | { ok: false; error: string } | null {
     const target = this.namedTypeOf(targetType);
-    if (!target || !this.isInterfaceName(target)) return null;
-    if (
-      value.kind === "LiteralExpression" &&
-      (value.literalType === "NULL" ||
-        (value.literalType === "INT" && Number(value.value) === 0))
-    ) {
-      return { ok: true };
-    }
-    const source = this.namedTypeOf(valueType);
-    if (!source) return null;
-    if (this.implementedInterfaces(source).has(target)) return { ok: true };
+    if (target === undefined) return null;
+    const source = this.interfaceMismatch(target, valueType, value);
+    if (source === null) return null;
+    if (source === undefined) return { ok: true };
     return {
       ok: false,
       error: `Cannot assign ${source} to ${target}: ${source} does not implement ${target}`,
     };
   }
 
-  /** `p := ADR(x)` where p (or the array holding it) is declared POINTER TO. */
+  /**
+   * For a value given to interface `target` (upper case): the value's type name when it does not implement the
+   * interface, undefined when it is accepted (an implementing FB, a related interface, 0), null when `target` is not
+   * an interface or the value's type is unknown.
+   */
+  private interfaceMismatch(
+    target: string,
+    valueType: IECType | undefined,
+    value: Expression,
+  ): string | undefined | null {
+    if (!this.isInterfaceName(target)) return null;
+    if (
+      value.kind === "LiteralExpression" &&
+      (value.literalType === "NULL" ||
+        (value.literalType === "INT" && Number(value.value) === 0))
+    ) {
+      return undefined;
+    }
+    const source = this.namedTypeOf(valueType);
+    if (!source) return null;
+    return this.implementedInterfaces(source).has(target) ? undefined : source;
+  }
+
+  /** Each argument given to an interface-typed input must implement that interface. */
+  private validateInterfaceArguments(
+    args: Argument[],
+    inputs: ReadonlyArray<{ name: string; type: AccessType }>,
+  ): void {
+    stripEnEno(args).forEach((arg, i) => {
+      if (arg.isOutput) return;
+      const argName = arg.name?.toUpperCase();
+      const input =
+        argName === undefined
+          ? inputs[i]
+          : inputs.find((p) => p.name.toUpperCase() === argName);
+      if (!input || input.type.referenceKind !== "none") return;
+      const target = input.type.name.toUpperCase();
+      const source = this.interfaceMismatch(
+        target,
+        arg.value.resolvedType,
+        arg.value,
+      );
+      if (typeof source !== "string") return;
+      this.addError(
+        `Cannot pass ${source} to '${input.name}' (${input.type.name}): ${source} does not implement ${input.type.name}`,
+        arg.sourceSpan.startLine,
+        arg.sourceSpan.startCol,
+        arg.sourceSpan.file,
+      );
+    });
+  }
+
+  /**
+   * `p := ADR(x)` where p (or the array holding it) is declared POINTER TO. ADR() yields an untyped address, so the
+   * assignment is accepted for any target type.
+   */
   private isPointerTargetFromAddress(
     target: Expression,
     valueType: IECType | undefined,
@@ -1519,6 +1608,43 @@ export class TypeChecker {
     return (
       chain.length === 0 ||
       (chain.length === 1 && chain[0]!.kind === "subscript")
+    );
+  }
+
+  /**
+   * `p := ADR(b)` with p a POINTER TO a function block or interface A: warns when b is a function block that is
+   * neither A nor derived from it (nor, for an interface, implements it), since a method call through p is then
+   * undefined. Pointers to other types keep CODESYS's untyped ADR.
+   */
+  private warnUnrelatedAddress(
+    target: Expression,
+    value: Expression,
+    scope: Scope,
+  ): void {
+    if (
+      target.kind !== "VariableExpression" ||
+      value.kind !== "FunctionCallExpression" ||
+      value.functionName.toUpperCase() !== "ADR" ||
+      value.arguments.length !== 1
+    )
+      return;
+    const sym = scope.lookup(target.name);
+    if (sym?.kind !== "variable" || sym.declaration === undefined) return;
+    const pointee = sym.declaration.type.name.toUpperCase();
+    const isInterface = this.isInterfaceName(pointee);
+    if (!isInterface && this.fbLookup(pointee) === undefined) return;
+    const source = this.namedTypeOf(value.arguments[0]!.value.resolvedType);
+    if (source === undefined || this.fbLookup(source) === undefined) return;
+    const related = isInterface
+      ? this.implementedInterfaces(source).has(pointee)
+      : fbLineageNames(source, this.fbLookup).includes(pointee);
+    if (related) return;
+    this.addWarning(
+      `ADR of an instance of ${source} assigned to POINTER TO ${sym.declaration.type.name}: ${source} is not ` +
+        `${isInterface ? "an implementation of" : "derived from"} ${sym.declaration.type.name}, so a method call through the pointer is undefined`,
+      value.sourceSpan.startLine,
+      value.sourceSpan.startCol,
+      value.sourceSpan.file,
     );
   }
 
@@ -1644,17 +1770,10 @@ export class TypeChecker {
     const declared = sym.declaration as VarDeclaration | undefined;
     if (!declared) return undefined;
     const typeName = declared.type.name.toUpperCase();
-    const chain: FunctionBlockDeclaration[] = [];
-    let current: string | undefined = typeName;
-    while (current !== undefined && chain.length < 32) {
-      const upper: string = current;
-      const fb = this.ast?.functionBlocks.find(
-        (f) => f.name.toUpperCase() === upper,
-      );
-      if (!fb) break;
-      chain.unshift(fb);
-      current = fb.extends?.toUpperCase();
-    }
+    const localFBs = new Set(this.ast?.functionBlocks ?? []);
+    const chain = fbLineage(typeName, this.fbLookup)
+      .filter((fb) => localFBs.has(fb))
+      .reverse();
     if (chain.length > 0)
       return chain.flatMap((fb) => fromBlocks(fb.varBlocks));
     const libraryFb = this.symbolTables.lookupFunctionBlock(typeName);
@@ -1703,6 +1822,14 @@ export class TypeChecker {
       ? resolveFieldDeclaration(typeName, fieldName, this.ast)
       : undefined;
     if (local) return local;
+    const prop = this.interfaceProperty(typeName, fieldName);
+    if (prop)
+      return {
+        kind: "VarDeclaration",
+        sourceSpan: prop.sourceSpan,
+        names: [prop.name],
+        type: prop.type,
+      };
     const fb = this.symbolTables.lookupFunctionBlock(typeName);
     if (!fb) return undefined;
     const upper = fieldName.toUpperCase();

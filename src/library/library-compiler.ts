@@ -96,6 +96,9 @@ function serializeVarType(
   if (typeRef.elementTypeName) {
     entry.elementTypeName = typeRef.elementTypeName;
   }
+  if (typeRef.elementMaxLength !== undefined) {
+    entry.elementMaxLength = typeRef.elementMaxLength;
+  }
   if (typeRef.elementReferenceChain) {
     entry.elementReferenceChain = typeRef.elementReferenceChain;
   }
@@ -593,9 +596,6 @@ export function compileLibrary(
 
   const headerFileName = `${options.name}.hpp`;
 
-  // Mangling inputs, computed once against THIS compilation unit — the only
-  // place that knows which of its type names are user-defined and which
-  // method names each block's members must not take. See serializeLocal().
   const userTypes = userDefinedTypeNames(ast);
   const blockMethodNames = methodNamesByBlock(
     ast,

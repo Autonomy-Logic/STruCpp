@@ -356,6 +356,158 @@ int main() {
     });
     expect(out.trim()).toBe("42");
   });
+
+  it("compares an interface with 0 in either operand order", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+INTERFACE I METHOD M : INT END_METHOD END_INTERFACE
+FUNCTION_BLOCK F IMPLEMENTS I METHOD M : INT M := 1; END_METHOD END_FUNCTION_BLOCK
+PROGRAM P
+  VAR itf : I; f1 : F; RESULT : DINT; END_VAR
+  IF 0 = itf THEN RESULT := RESULT + 1; END_IF;
+  itf := f1;
+  IF 0 <> itf THEN RESULT := RESULT + 10; END_IF;
+  IF itf <> 0 THEN RESULT := RESULT + 100; END_IF;
+END_PROGRAM`,
+      "interface_zero_reversed",
+    );
+    expect(out.trim()).toBe("111");
+  });
+
+  it("computes REAL ** REAL like EXPT, in single precision", () => {
+    const source = `
+PROGRAM P
+  VAR x : REAL := 1.7; y : REAL := 9.3; a : REAL; b : REAL; RESULT : DINT; END_VAR
+  a := x ** y;
+  b := EXPT(x, y);
+  IF a = b THEN RESULT := 1; END_IF;
+END_PROGRAM`;
+    expect(compile(source).cppCode).toContain(
+      "EXPT(static_cast<REAL_t>(X), static_cast<REAL_t>(Y))",
+    );
+    expect(runProgram(tempDir, pchPath, source, "real_power").trim()).toBe("1");
+  });
+
+  it("calls methods inside a property GET", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+FUNCTION_BLOCK B
+  VAR v : DINT := 2; END_VAR
+  METHOD Calc : DINT Calc := v * 2; END_METHOD
+  PROPERTY Value : DINT
+    GET Value := Calc() + THIS^.Calc(); END_GET
+  END_PROPERTY
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR b : B; RESULT : DINT; END_VAR
+  RESULT := b.Value;
+END_PROGRAM`,
+      "getter_calls_method",
+    );
+    expect(out.trim()).toBe("8");
+  });
+
+  it("follows a full variable path after THIS^", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+FUNCTION_BLOCK S
+  VAR v : DINT; END_VAR
+  METHOD M : DINT M := v + 1; END_METHOD
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK Cnt
+  VAR_INPUT inc : DINT; END_VAR
+  VAR_OUTPUT total : DINT; END_VAR
+  total := total + inc;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK F
+  VAR s : S; arr : ARRAY[0..2] OF S; cs : ARRAY[0..1] OF Cnt; x : DINT; y : DINT; END_VAR
+  METHOD Run : DINT
+    THIS^.s.v := 4;
+    THIS^.arr[1].v := 9;
+    x := THIS^.s.v;
+    x := x + THIS^.s.M();
+    x := x + THIS^.arr[1].M();
+    THIS^.s.M();
+    THIS^.cs[0](inc := 5);
+    y := THIS^.cs[0].total;
+    THIS.s.v := THIS.s.v + 1;
+    Run := x * 100 + y + THIS^.s.v;
+  END_METHOD
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR fb1 : F; RESULT : DINT; END_VAR
+  RESULT := fb1.Run();
+END_PROGRAM`,
+      "this_paths",
+    );
+    expect(out.trim()).toBe("1910");
+  });
+
+  it("keeps the length of bounded strings in arrays", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+TYPE
+  TA : ARRAY[0..1] OF STRING[4];
+  ST : STRUCT f : ARRAY[0..1] OF STRING(3); END_STRUCT;
+END_TYPE
+FUNCTION_BLOCK H
+  VAR_OUTPUT n : DINT; END_VAR
+  VAR m : ARRAY[1..2] OF STRING[2]; END_VAR
+  m[1] := 'abcdef';
+  n := LEN(m[1]);
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR a : ARRAY[0..1] OF STRING[4]; c : ARRAY[0..1] OF STRING(4); t : TA; s : ST; h : H; RESULT : DINT; END_VAR
+  a[0] := 'abcdefgh';
+  c[1] := 'abcdefgh';
+  t[0] := 'abcdefgh';
+  s.f[1] := 'abcdefgh';
+  h();
+  RESULT := LEN(a[0]) * 10000 + LEN(c[1]) * 1000 + LEN(t[0]) * 100 + LEN(s.f[1]) * 10 + h.n;
+END_PROGRAM`,
+      "bounded_string_arrays",
+    );
+    expect(out.trim()).toBe("44432");
+  });
+
+  it("reads and writes interface properties, inherited ones included", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+INTERFACE IBase
+  PROPERTY Level : DINT GET END_GET END_PROPERTY
+END_INTERFACE
+INTERFACE I EXTENDS IBase
+  PROPERTY Setpoint : DINT GET END_GET SET END_SET END_PROPERTY
+END_INTERFACE
+FUNCTION_BLOCK Tank IMPLEMENTS I
+  VAR lvl : DINT := 7; sp : DINT; END_VAR
+  PROPERTY Level : DINT GET Level := lvl; END_GET END_PROPERTY
+  PROPERTY Setpoint : DINT
+    GET Setpoint := sp; END_GET
+    SET sp := Setpoint; END_SET
+  END_PROPERTY
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR t : Tank; itf : I; b : IBase; RESULT : DINT; END_VAR
+  itf := t;
+  b := itf;
+  itf.Setpoint := 40;
+  RESULT := itf.Setpoint * 100 + b.Level;
+END_PROGRAM`,
+      "interface_properties",
+    );
+    expect(out.trim()).toBe("4007");
+  });
 });
 
 describe("access specifiers are enforced by the compiler", () => {
@@ -518,5 +670,155 @@ END_PROGRAM`,
       { libraries: [lib.archive] },
     ).errors.map((e) => e.message);
     expect(errs).toEqual(["'LIBFB' has no input or output 'NOPE'"]);
+  });
+});
+
+describe("diagnostics added for the language features", () => {
+  const warningsOf = (source: string): string[] =>
+    compile(source).warnings.map((w) => w.message);
+
+  it("warns about a variable named like a method of its hierarchy", () => {
+    const source = `
+FUNCTION_BLOCK B METHOD Start : BOOL Start := TRUE; END_METHOD END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B VAR Start : BOOL; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK E VAR Run : BOOL; END_VAR METHOD Run : BOOL Run := TRUE; END_METHOD END_FUNCTION_BLOCK
+FUNCTION_BLOCK G EXTENDS E METHOD Go : BOOL Go := TRUE; END_METHOD END_FUNCTION_BLOCK
+FUNCTION_BLOCK K VAR_INPUT Stop : BOOL; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK L EXTENDS K METHOD Stop : BOOL Stop := TRUE; END_METHOD END_FUNCTION_BLOCK`;
+    expect(errorsOf(source)).toEqual([]);
+    expect(warningsOf(source)).toEqual([
+      "Variable 'START' in FUNCTION_BLOCK 'D' has the same name as METHOD 'START' of 'B'; it is renamed in the generated C++",
+      "Variable 'RUN' in FUNCTION_BLOCK 'E' has the same name as METHOD 'RUN' of 'E'; it is renamed in the generated C++",
+      "METHOD 'STOP' in FUNCTION_BLOCK 'L' has the same name as variable 'STOP' inherited from 'K'; the variable is renamed in the generated C++",
+    ]);
+  });
+
+  it("refuses a method named like a variable of a library base", () => {
+    const lib = compileStlib(
+      [
+        {
+          fileName: "b.st",
+          source:
+            "FUNCTION_BLOCK LibB VAR_INPUT Start : BOOL; END_VAR END_FUNCTION_BLOCK",
+        },
+      ],
+      { name: "blib", version: "1.0.0", namespace: "blib" },
+    );
+    expect(lib.success).toBe(true);
+    const result = compile(
+      "FUNCTION_BLOCK D EXTENDS LibB METHOD Start : BOOL Start := TRUE; END_METHOD END_FUNCTION_BLOCK",
+      { libraries: [lib.archive] },
+    );
+    expect(result.errors.map((e) => e.message)).toEqual([
+      "METHOD 'START' in FUNCTION_BLOCK 'D' has the same name as variable 'START' inherited from library FUNCTION_BLOCK 'LIBB'; rename the method",
+    ]);
+  });
+
+  it("checks interface-typed arguments of FB, function and method calls", () => {
+    const decls = `
+INTERFACE I METHOD M : INT END_METHOD END_INTERFACE
+FUNCTION_BLOCK Impl IMPLEMENTS I METHOD M : INT M := 1; END_METHOD END_FUNCTION_BLOCK
+FUNCTION_BLOCK Other END_FUNCTION_BLOCK
+FUNCTION_BLOCK H VAR_INPUT target : I; END_VAR END_FUNCTION_BLOCK
+FUNCTION Use : INT VAR_INPUT x : I; END_VAR Use := 0; END_FUNCTION
+FUNCTION_BLOCK Host
+  METHOD Take : INT VAR_INPUT x : I; END_VAR Take := 0; END_METHOD
+END_FUNCTION_BLOCK`;
+    const bad = errorsOf(`${decls}
+PROGRAM P VAR h : H; host : Host; o : Other; r : INT; END_VAR
+  h(target := o);
+  r := Use(o);
+  r := host.Take(x := o);
+END_PROGRAM`);
+    expect(bad).toEqual([
+      "Cannot pass OTHER to 'TARGET' (I): OTHER does not implement I",
+      "Cannot pass OTHER to 'X' (I): OTHER does not implement I",
+      "Cannot pass OTHER to 'X' (I): OTHER does not implement I",
+    ]);
+    expect(
+      errorsOf(`${decls}
+PROGRAM P VAR h : H; host : Host; ok : Impl; r : INT; END_VAR
+  h(target := ok);
+  r := Use(x := 0);
+  r := host.Take(x := ok);
+END_PROGRAM`),
+    ).toEqual([]);
+  });
+
+  it("warns when ADR of an unrelated block is assigned to a POINTER TO a block", () => {
+    const warnings = warningsOf(`
+FUNCTION_BLOCK A END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS A END_FUNCTION_BLOCK
+FUNCTION_BLOCK Other END_FUNCTION_BLOCK
+PROGRAM P
+  VAR p : POINTER TO A; pi : POINTER TO INT; a1 : A; d1 : D; o : Other; END_VAR
+  p := ADR(a1);
+  p := ADR(d1);
+  p := ADR(o);
+  pi := ADR(o);
+END_PROGRAM`).filter((w) => w.startsWith("ADR"));
+    expect(warnings).toEqual([
+      "ADR of an instance of OTHER assigned to POINTER TO A: OTHER is not derived from A, so a method call through the pointer is undefined",
+    ]);
+  });
+
+  it("enforces access specifiers on properties", () => {
+    const errors = errorsOf(`
+FUNCTION_BLOCK B
+  VAR hidden : INT; END_VAR
+  PROPERTY PRIVATE Secret : INT GET Secret := hidden; END_GET SET hidden := Secret; END_SET END_PROPERTY
+  PROPERTY PROTECTED Prot : INT GET Prot := THIS^.Secret; END_GET END_PROPERTY
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B
+  METHOD Use : INT
+    Use := THIS^.Prot + SUPER^.Prot;
+    Use := THIS^.Secret;
+  END_METHOD
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR b : B; x : INT; END_VAR
+  x := b.Secret;
+  b.Secret := 3;
+  x := b.Prot;
+END_PROGRAM`);
+    expect(errors).toEqual([
+      "Cannot access PRIVATE property 'SECRET' of 'B' from outside 'B'.",
+      "Cannot access PRIVATE property 'SECRET' of 'B' from outside 'B'.",
+      "Cannot access PROTECTED property 'PROT' of 'B' from 'PROGRAM'.",
+      "Cannot access PRIVATE property 'SECRET' of 'B' from outside 'B'.",
+    ]);
+  });
+
+  it("checks interface property signatures and their implementations", () => {
+    const errors = errorsOf(`
+INTERFACE I
+  PROPERTY P : INT GET END_GET SET END_SET END_PROPERTY
+  PROPERTY RO : INT GET END_GET END_PROPERTY
+END_INTERFACE
+INTERFACE Bad
+  PROPERTY PRIVATE Hidden : INT GET END_GET END_PROPERTY
+  PROPERTY NoAccessor : INT END_PROPERTY
+  PROPERTY Body : INT GET Body := 1; END_GET END_PROPERTY
+END_INTERFACE
+FUNCTION_BLOCK WrongType IMPLEMENTS I
+  PROPERTY P : DINT GET P := 0; END_GET SET END_SET END_PROPERTY
+  PROPERTY RO : INT GET RO := 0; END_GET END_PROPERTY
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK NoSet IMPLEMENTS I
+  PROPERTY P : INT GET P := 0; END_GET END_PROPERTY
+END_FUNCTION_BLOCK
+PROGRAM Main
+  VAR itf : I; END_VAR
+  itf.RO := 5;
+END_PROGRAM`);
+    expect(errors).toEqual([
+      "PROPERTY 'HIDDEN' of INTERFACE 'BAD' cannot have an access modifier.",
+      "PROPERTY 'NOACCESSOR' of INTERFACE 'BAD' must declare GET, SET or both.",
+      "PROPERTY 'BODY' of INTERFACE 'BAD' cannot have a body.",
+      "FUNCTION_BLOCK 'WRONGTYPE' implements 'I' but its PROPERTY 'P' is DINT, not INT.",
+      "FUNCTION_BLOCK 'NOSET' implements 'I' but its PROPERTY 'P' has no SET.",
+      "FUNCTION_BLOCK 'NOSET' implements 'I' but does not provide PROPERTY 'RO'.",
+      "Property 'RO' of 'I' is read-only (no SET accessor).",
+    ]);
   });
 });
