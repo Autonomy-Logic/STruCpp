@@ -225,38 +225,46 @@ export class STParser extends CstParser {
    */
   public methodDeclaration = this.RULE("methodDeclaration", () => {
     this.CONSUME(tokens.METHOD);
-    // Optional visibility modifier
-    this.OPTION(() => {
-      this.OR({
-        DEF: [
-          { ALT: () => this.CONSUME(tokens.PUBLIC) },
-          { ALT: () => this.CONSUME(tokens.PRIVATE) },
-          { ALT: () => this.CONSUME(tokens.PROTECTED) },
-        ],
-        IGNORE_AMBIGUITIES: true,
-      });
+    // Optional visibility modifier; INTERNAL alone may be the name itself
+    this.OPTION({
+      GATE: () =>
+        this.LA(1).tokenType !== tokens.INTERNAL || this.isModifierAhead(),
+      DEF: () => {
+        this.OR({
+          DEF: [
+            { ALT: () => this.CONSUME(tokens.PUBLIC) },
+            { ALT: () => this.CONSUME(tokens.PRIVATE) },
+            { ALT: () => this.CONSUME(tokens.PROTECTED) },
+            { ALT: () => this.CONSUME(tokens.INTERNAL) },
+          ],
+          IGNORE_AMBIGUITIES: true,
+        });
+      },
     });
     // Optional ABSTRACT/FINAL/OVERRIDE (can appear in any combination and order)
-    this.MANY2(() => {
-      this.OR2({
-        DEF: [
-          {
-            ALT: () => this.CONSUME(tokens.ABSTRACT),
-            GATE: () => this.LA(1).tokenType === tokens.ABSTRACT,
-          },
-          {
-            ALT: () => this.CONSUME(tokens.FINAL),
-            GATE: () => this.LA(1).tokenType === tokens.FINAL,
-          },
-          {
-            ALT: () => this.CONSUME(tokens.OVERRIDE),
-            GATE: () => this.LA(1).tokenType === tokens.OVERRIDE,
-          },
-        ],
-        IGNORE_AMBIGUITIES: true,
-      });
+    this.MANY2({
+      GATE: () => this.isModifierAhead(),
+      DEF: () => {
+        this.OR2({
+          DEF: [
+            {
+              ALT: () => this.CONSUME(tokens.ABSTRACT),
+              GATE: () => this.LA(1).tokenType === tokens.ABSTRACT,
+            },
+            {
+              ALT: () => this.CONSUME(tokens.FINAL),
+              GATE: () => this.LA(1).tokenType === tokens.FINAL,
+            },
+            {
+              ALT: () => this.CONSUME(tokens.OVERRIDE),
+              GATE: () => this.LA(1).tokenType === tokens.OVERRIDE,
+            },
+          ],
+          IGNORE_AMBIGUITIES: true,
+        });
+      },
     });
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     // Optional return type
     this.OPTION3(() => {
       this.CONSUME(tokens.Colon);
@@ -312,18 +320,23 @@ export class STParser extends CstParser {
    */
   public propertyDeclaration = this.RULE("propertyDeclaration", () => {
     this.CONSUME(tokens.PROPERTY);
-    // Optional visibility modifier
-    this.OPTION(() => {
-      this.OR({
-        DEF: [
-          { ALT: () => this.CONSUME(tokens.PUBLIC) },
-          { ALT: () => this.CONSUME(tokens.PRIVATE) },
-          { ALT: () => this.CONSUME(tokens.PROTECTED) },
-        ],
-        IGNORE_AMBIGUITIES: true,
-      });
+    // Optional visibility modifier; INTERNAL alone may be the name itself
+    this.OPTION({
+      GATE: () =>
+        this.LA(1).tokenType !== tokens.INTERNAL || this.isModifierAhead(),
+      DEF: () => {
+        this.OR({
+          DEF: [
+            { ALT: () => this.CONSUME(tokens.PUBLIC) },
+            { ALT: () => this.CONSUME(tokens.PRIVATE) },
+            { ALT: () => this.CONSUME(tokens.PROTECTED) },
+            { ALT: () => this.CONSUME(tokens.INTERNAL) },
+          ],
+          IGNORE_AMBIGUITIES: true,
+        });
+      },
     });
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     this.CONSUME(tokens.Colon);
     this.SUBRULE(this.dataType);
     // GET and/or SET blocks
@@ -366,27 +379,16 @@ export class STParser extends CstParser {
   // ==========================================================================
 
   /**
-   * Identifier or contextual keyword.
-   * Allows SET, GET, ON, OVERRIDE, ABSTRACT, FINAL to be used as
+   * Identifier or contextual keyword (`contextualKeywordTokens`), usable as
    * variable/parameter/function names in contexts where they are unambiguous.
    */
   public identifierOrKeyword = this.RULE("identifierOrKeyword", () => {
     this.OR({
       DEF: [
         { ALT: () => this.CONSUME(tokens.Identifier) },
-        { ALT: () => this.CONSUME(tokens.SET) },
-        { ALT: () => this.CONSUME(tokens.GET) },
-        { ALT: () => this.CONSUME(tokens.ON) },
-        { ALT: () => this.CONSUME(tokens.OVERRIDE) },
-        { ALT: () => this.CONSUME(tokens.ABSTRACT) },
-        { ALT: () => this.CONSUME(tokens.FINAL) },
-        // IEC 61131-3 operator keywords that can also be called as functions
-        // (e.g. AND(a, b, c), OR(x, y), NOT(z), MOD(a, b), XOR(a, b))
-        { ALT: () => this.CONSUME(tokens.AND) },
-        { ALT: () => this.CONSUME(tokens.OR) },
-        { ALT: () => this.CONSUME(tokens.XOR) },
-        { ALT: () => this.CONSUME(tokens.NOT) },
-        { ALT: () => this.CONSUME(tokens.MOD) },
+        ...tokens.contextualKeywordTokens.map((tok) => ({
+          ALT: () => this.CONSUME(tok),
+        })),
       ],
       IGNORE_AMBIGUITIES: true,
     });
@@ -706,7 +708,7 @@ export class STParser extends CstParser {
    * Enumeration member: NAME or NAME := value
    */
   public enumMember = this.RULE("enumMember", () => {
-    this.CONSUME(tokens.Identifier);
+    this.SUBRULE(this.identifierOrKeyword);
     this.OPTION(() => {
       this.CONSUME(tokens.Assign);
       this.SUBRULE(this.expression);
@@ -834,32 +836,54 @@ export class STParser extends CstParser {
         },
       ]);
     });
-    const typeNameTok = this.CONSUME(tokens.Identifier);
+    const typeNameTok = this.LA(1);
+    this.SUBRULE(this.identifierOrKeyword);
     // Optional parameterized length for STRING(n) / WSTRING(n) / STRING(CONSTANT_NAME)
     // GATE: only when the type name is STRING or WSTRING, consume ( IntegerLiteral ) or ( Identifier )
     // Avoid ( Identifier ) for typed enums and ( IntegerLiteral .. ) for subrange types
     this.OPTION2({
       GATE: () => {
         const name = typeNameTok.image.toUpperCase();
+        const open = this.LA(1).tokenType;
+        const len = this.LA(2).tokenType;
+        const close = this.LA(3).tokenType;
         return (
           (name === "STRING" || name === "WSTRING") &&
-          this.LA(1).tokenType === tokens.LParen &&
-          ((this.LA(2).tokenType === tokens.IntegerLiteral &&
-            this.LA(3).tokenType === tokens.RParen) ||
-            (this.LA(2).tokenType === tokens.Identifier &&
-              this.LA(3).tokenType === tokens.RParen))
+          ((open === tokens.LParen && close === tokens.RParen) ||
+            (open === tokens.LBracket && close === tokens.RBracket)) &&
+          (len === tokens.IntegerLiteral || len === tokens.Identifier)
         );
       },
+      // STRING(n) (CODESYS) or STRING[n] (IEC 61131-3 Ed. 3)
       DEF: () => {
-        this.CONSUME(tokens.LParen);
-        this.OR4({
-          DEF: [
-            { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
-            { ALT: () => this.CONSUME4(tokens.Identifier) },
-          ],
-          IGNORE_AMBIGUITIES: true,
-        });
-        this.CONSUME(tokens.RParen);
+        this.OR5([
+          {
+            ALT: () => {
+              this.CONSUME(tokens.LParen);
+              this.OR4({
+                DEF: [
+                  { ALT: () => this.CONSUME(tokens.IntegerLiteral) },
+                  { ALT: () => this.CONSUME4(tokens.Identifier) },
+                ],
+                IGNORE_AMBIGUITIES: true,
+              });
+              this.CONSUME(tokens.RParen);
+            },
+          },
+          {
+            ALT: () => {
+              this.CONSUME(tokens.LBracket);
+              this.OR6({
+                DEF: [
+                  { ALT: () => this.CONSUME2(tokens.IntegerLiteral) },
+                  { ALT: () => this.CONSUME5(tokens.Identifier) },
+                ],
+                IGNORE_AMBIGUITIES: true,
+              });
+              this.CONSUME(tokens.RBracket);
+            },
+          },
+        ]);
       },
     });
   });
@@ -970,6 +994,12 @@ export class STParser extends CstParser {
             this.LA(1).tokenType === tokens.SUPER &&
             this.LA(2).tokenType === tokens.Caret,
         },
+        // Path method calls (`a[i].m(`, `p^.m(`, `a.b.m(`); the gate leaves the
+        // plain `a.m(` form to methodCallStatement below.
+        {
+          ALT: () => this.SUBRULE(this.memberMethodCallStatement),
+          GATE: () => this.isMemberMethodCallAhead(),
+        },
         // methodCallStatement must come before assignmentStatement/functionCallStatement
         // since all start with Identifier but methodCall needs Ident.Ident( lookahead
         {
@@ -1042,6 +1072,8 @@ export class STParser extends CstParser {
    */
   public thisStatement = this.RULE("thisStatement", () => {
     this.CONSUME(tokens.THIS);
+    // THIS^.member is the IEC/CODESYS form; THIS.member is kept for existing code.
+    this.OPTION9(() => this.CONSUME(tokens.Caret));
     this.CONSUME(tokens.Dot);
     this.SUBRULE(this.identifierOrKeyword);
     // Determine if this is an assignment or method call
@@ -1091,32 +1123,30 @@ export class STParser extends CstParser {
   }
 
   /**
-   * Contextual keyword tokens that can also be used as identifiers.
-   * Keep in sync with the identifierOrKeyword rule alternatives.
-   */
-  private static readonly CONTEXTUAL_KEYWORDS: TokenType[] = [
-    tokens.SET,
-    tokens.GET,
-    tokens.ON,
-    tokens.OVERRIDE,
-    tokens.ABSTRACT,
-    tokens.FINAL,
-    // IEC 61131-3 operator keywords usable as function names
-    tokens.AND,
-    tokens.OR,
-    tokens.XOR,
-    tokens.NOT,
-    tokens.MOD,
-  ];
-
-  /**
    * Lookahead helper to detect if a token type is an identifier or contextual keyword.
    * Used by isMethodCallAhead() for lookahead decisions.
    */
   private isIdentifierOrKeywordToken(tokenType: TokenType): boolean {
     return (
       tokenType === tokens.Identifier ||
-      STParser.CONTEXTUAL_KEYWORDS.includes(tokenType)
+      tokens.contextualKeywordTokens.includes(tokenType)
+    );
+  }
+
+  /**
+   * At a METHOD/PROPERTY modifier that is also a valid name: a modifier when a
+   * name still follows and that name does not begin the body's first
+   * statement (`x := ...`, `x.y`, `f(...)`, `a[i]`, `p^`).
+   */
+  private isModifierAhead(): boolean {
+    if (!this.isIdentifierOrKeywordToken(this.LA(2).tokenType)) return false;
+    const after = this.LA(3).tokenType;
+    return (
+      after !== tokens.Assign &&
+      after !== tokens.Dot &&
+      after !== tokens.LParen &&
+      after !== tokens.LBracket &&
+      after !== tokens.Caret
     );
   }
 
@@ -1229,6 +1259,83 @@ export class STParser extends CstParser {
     }
     return false;
   }
+
+  /**
+   * Lookahead helper: a method call on any variable path that the simple
+   * `inst.method(` form does not cover — `arr[i].M(`, `p^.M(`, `a.b.M(`,
+   * `arr[i].sub[j]^.M(`. The path must end in `.name(`.
+   */
+  private isMemberMethodCallAhead(): boolean {
+    if (!this.isIdentifierOrKeywordToken(this.LA(1).tokenType)) return false;
+    let i = 2;
+    let segmentsAfterRoot = 0;
+    while (i <= STParser.MEMBER_CALL_LOOKAHEAD) {
+      const t = this.LA(i)?.tokenType;
+      if (t === tokens.LBracket) {
+        const next = this.skipBracketGroup(i);
+        if (next === undefined) return false;
+        i = next;
+      } else if (t === tokens.Caret) {
+        i++;
+      } else if (t === tokens.Dot) {
+        if (!this.isIdentifierOrKeywordToken(this.LA(i + 1)?.tokenType)) {
+          return false;
+        }
+        if (this.LA(i + 2)?.tokenType === tokens.LParen) {
+          // `a.m(` alone is the simple method call; anything longer is ours.
+          return segmentsAfterRoot > 0;
+        }
+        i += 2;
+      } else {
+        return false;
+      }
+      segmentsAfterRoot++;
+    }
+    return false;
+  }
+
+  private static readonly MEMBER_CALL_LOOKAHEAD = 64;
+
+  /**
+   * From the `[` at LA(`open`), the position just past its matching `]`.
+   * Undefined when the group does not close within the lookahead window.
+   */
+  private skipBracketGroup(open: number): number | undefined {
+    let depth = 0;
+    for (let i = open; i <= STParser.MEMBER_CALL_LOOKAHEAD; i++) {
+      const t = this.LA(i)?.tokenType;
+      if (t === undefined || t === tokens.Semicolon) return undefined;
+      if (t === tokens.LBracket) depth++;
+      if (t === tokens.RBracket) {
+        depth--;
+        if (depth === 0) return i + 1;
+      }
+    }
+    return undefined;
+  }
+
+  /**
+   * `arr[i].method(args);`, `p^.method(args);`, `a.b.method(args);`
+   */
+  public memberMethodCallStatement = this.RULE(
+    "memberMethodCallStatement",
+    () => {
+      this.SUBRULE(this.memberMethodCall);
+      this.CONSUME(tokens.Semicolon);
+    },
+  );
+
+  /**
+   * Method call on a variable path: the path's last field is the method.
+   */
+  public memberMethodCall = this.RULE("memberMethodCall", () => {
+    this.SUBRULE(this.variable);
+    this.CONSUME(tokens.LParen);
+    this.OPTION(() => {
+      this.SUBRULE(this.argumentList);
+    });
+    this.CONSUME(tokens.RParen);
+  });
 
   /**
    * instance.method(args); statement
@@ -1684,6 +1791,10 @@ export class STParser extends CstParser {
             this.LA(2).tokenType === tokens.Caret,
         },
         {
+          ALT: () => this.SUBRULE(this.memberMethodCall),
+          GATE: () => this.isMemberMethodCallAhead(),
+        },
+        {
           ALT: () => this.SUBRULE(this.methodCall),
           GATE: () => this.isMethodCallAhead(),
         },
@@ -1754,14 +1865,25 @@ export class STParser extends CstParser {
     this.CONSUME(tokens.THIS);
     this.OR([
       {
-        // THIS^ (dereference - return self)
+        // THIS^ alone (self), or THIS^.member / THIS^.method(args)
         GATE: () => this.LA(1).tokenType === tokens.Caret,
         ALT: () => {
           this.CONSUME(tokens.Caret);
+          this.OPTION3(() => {
+            this.CONSUME2(tokens.Dot);
+            this.SUBRULE2(this.identifierOrKeyword);
+            this.OPTION4(() => {
+              this.CONSUME2(tokens.LParen);
+              this.OPTION5(() => {
+                this.SUBRULE2(this.argumentList);
+              });
+              this.CONSUME2(tokens.RParen);
+            });
+          });
         },
       },
       {
-        // THIS.member or THIS.method(args)
+        // THIS.member or THIS.method(args) (kept for existing code)
         ALT: () => {
           this.CONSUME(tokens.Dot);
           this.SUBRULE(this.identifierOrKeyword);

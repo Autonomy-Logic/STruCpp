@@ -164,7 +164,7 @@ export interface FunctionBlockDeclaration extends ASTNode {
 /**
  * Visibility modifier for OOP members
  */
-export type Visibility = "PUBLIC" | "PRIVATE" | "PROTECTED";
+export type Visibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
 
 /**
  * METHOD declaration within a Function Block

@@ -60,6 +60,8 @@ export interface TypeCodeGenOptions {
    *  back to "anything that is not elementary", all a bare TypeCodeGenerator
    *  can tell from a list of type declarations. */
   isUserDefinedType: (typeName: string) => boolean;
+  /** Whether a type name is an INTERFACE; a field of that type holds an `IEC_INTERFACE<I>`. */
+  isInterfaceType: (typeName: string) => boolean;
 }
 
 /**
@@ -71,6 +73,7 @@ export const defaultTypeCodeGenOptions: TypeCodeGenOptions = {
   emitChunkMarkers: false,
   isUserDefinedType: (typeName: string) =>
     !isElementaryType(typeName.toUpperCase()),
+  isInterfaceType: () => false,
 };
 
 /**
@@ -616,6 +619,10 @@ export class TypeCodeGenerator {
     // Enum types → IEC_<Name> (resolves to IEC_ENUM<Name> via alias)
     if (this.knownEnumNames.has(upperName)) {
       return `IEC_${typeName}`;
+    }
+
+    if (this.options.isInterfaceType(typeName)) {
+      return `IEC_INTERFACE<${typeName}>`;
     }
 
     // Composite types (struct, array, FB) → bare name

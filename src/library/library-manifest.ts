@@ -89,11 +89,10 @@ export interface LibraryVarType {
    *
    * Emitted only when the library's own codegen mangled it — a member whose
    * name matches its own user-defined type's name, or one colliding with a
-   * method of an interface the block implements (see member-mangling.ts).
-   * Both are decided against the DECLARING unit, so a consumer cannot always
-   * re-derive them; carrying the answer costs one optional string in the rare
-   * case and nothing in the common one. Across the five bundled archives —
-   * 224 function blocks, 7,639 leaves — it is currently emitted zero times.
+   * method of the block's class hierarchy (see member-mangling.ts). Both are
+   * decided against the DECLARING unit, so a consumer cannot always re-derive
+   * them; carrying the answer costs one optional string in the rare case and
+   * nothing in the common one.
    */
   cppName?: string;
   /** The declaring block was `VAR CONSTANT`: read-only in every instance. */

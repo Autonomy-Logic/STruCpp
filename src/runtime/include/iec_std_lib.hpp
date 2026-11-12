@@ -223,12 +223,21 @@ inline T ABS(T value) noexcept {
 }
 
 /**
+ * Arithmetic type for the math of an ANY_REAL value: float for REAL, double for
+ * LREAL, so REAL functions compute in single precision (IEC 61131-3).
+ */
+template<typename T>
+using iec_real_math_t = typename std::conditional<
+    std::is_same<iec_underlying_type_t<typename std::decay<T>::type>, float>::value,
+    float, double>::type;
+
+/**
  * SQRT - Square root
  * Input: ANY_REAL, Output: ANY_REAL (same type)
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T SQRT(T value) noexcept {
-    return T(std::sqrt(static_cast<double>(iec_unwrap(value))));
+    return T(std::sqrt(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -237,7 +246,7 @@ inline T SQRT(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T LN(T value) noexcept {
-    return T(std::log(static_cast<double>(iec_unwrap(value))));
+    return T(std::log(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -246,7 +255,7 @@ inline T LN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T LOG(T value) noexcept {
-    return T(std::log10(static_cast<double>(iec_unwrap(value))));
+    return T(std::log10(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -255,7 +264,7 @@ inline T LOG(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T EXP(T value) noexcept {
-    return T(std::exp(static_cast<double>(iec_unwrap(value))));
+    return T(std::exp(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -264,7 +273,7 @@ inline T EXP(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T EXPT(T base, T exponent) noexcept {
-    return T(std::pow(static_cast<double>(iec_unwrap(base)), static_cast<double>(iec_unwrap(exponent))));
+    return T(std::pow(static_cast<iec_real_math_t<T>>(iec_unwrap(base)), static_cast<iec_real_math_t<T>>(iec_unwrap(exponent))));
 }
 
 // Mixed-type EXPT: allows e.g. EXPT(INT, REAL) → returns LREAL
@@ -291,7 +300,7 @@ inline IEC_LREAL EXPT(T base, T exponent) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T SIN(T value) noexcept {
-    return T(std::sin(static_cast<double>(iec_unwrap(value))));
+    return T(std::sin(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -300,7 +309,7 @@ inline T SIN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T COS(T value) noexcept {
-    return T(std::cos(static_cast<double>(iec_unwrap(value))));
+    return T(std::cos(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -309,7 +318,7 @@ inline T COS(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T TAN(T value) noexcept {
-    return T(std::tan(static_cast<double>(iec_unwrap(value))));
+    return T(std::tan(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -318,7 +327,7 @@ inline T TAN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ASIN(T value) noexcept {
-    return T(std::asin(static_cast<double>(iec_unwrap(value))));
+    return T(std::asin(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -327,7 +336,7 @@ inline T ASIN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ACOS(T value) noexcept {
-    return T(std::acos(static_cast<double>(iec_unwrap(value))));
+    return T(std::acos(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -336,7 +345,7 @@ inline T ACOS(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ATAN(T value) noexcept {
-    return T(std::atan(static_cast<double>(iec_unwrap(value))));
+    return T(std::atan(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -345,7 +354,7 @@ inline T ATAN(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ATAN2(T y, T x) noexcept {
-    return T(std::atan2(static_cast<double>(iec_unwrap(y)), static_cast<double>(iec_unwrap(x))));
+    return T(std::atan2(static_cast<iec_real_math_t<T>>(iec_unwrap(y)), static_cast<iec_real_math_t<T>>(iec_unwrap(x))));
 }
 
 /**
@@ -354,7 +363,7 @@ inline T ATAN2(T y, T x) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T TRUNC(T value) noexcept {
-    return T(std::trunc(static_cast<double>(iec_unwrap(value))));
+    return T(std::trunc(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 /**
@@ -364,7 +373,7 @@ inline T TRUNC(T value) noexcept {
  */
 template<typename T, enable_if_any_real<T> = 0>
 inline T ROUND(T value) noexcept {
-    return T(std::round(static_cast<double>(iec_unwrap(value))));
+    return T(std::round(static_cast<iec_real_math_t<T>>(iec_unwrap(value))));
 }
 
 // =============================================================================
@@ -1262,7 +1271,7 @@ inline T DIV(T a, T b) noexcept {
 namespace detail {
 template<typename T>
 inline T iec_mod_impl(T a, T b, std::true_type /*floating*/) noexcept {
-    return T(std::fmod(static_cast<double>(iec_unwrap(a)), static_cast<double>(iec_unwrap(b))));
+    return T(std::fmod(static_cast<iec_real_math_t<T>>(iec_unwrap(a)), static_cast<iec_real_math_t<T>>(iec_unwrap(b))));
 }
 template<typename T>
 inline T iec_mod_impl(T a, T b, std::false_type) noexcept {

@@ -422,7 +422,25 @@ describe("Semantic Analyzer - Access Modifier Enforcement", () => {
     expect(result.errors.some((e) => e.message.includes("PROTECTED"))).toBe(true);
   });
 
-  it("should allow calling PROTECTED method from derived FB", () => {
+  it("should allow calling PROTECTED method from derived FB on itself", () => {
+    const result = analyzeSource(`
+      FUNCTION_BLOCK Motor
+        METHOD PROTECTED InternalCalc : INT
+        END_METHOD
+      END_FUNCTION_BLOCK
+      FUNCTION_BLOCK DerivedMotor EXTENDS Motor
+        METHOD PUBLIC Run : BOOL
+          InternalCalc();
+          THIS^.InternalCalc();
+        END_METHOD
+      END_FUNCTION_BLOCK
+      PROGRAM Main END_PROGRAM
+    `);
+    const accessErrors = result.errors.filter((e) => e.message.includes("PROTECTED"));
+    expect(accessErrors).toHaveLength(0);
+  });
+
+  it("should reject calling PROTECTED method of another base instance from derived FB", () => {
     const result = analyzeSource(`
       FUNCTION_BLOCK Motor
         METHOD PROTECTED InternalCalc : INT
@@ -437,6 +455,6 @@ describe("Semantic Analyzer - Access Modifier Enforcement", () => {
       PROGRAM Main END_PROGRAM
     `);
     const accessErrors = result.errors.filter((e) => e.message.includes("PROTECTED"));
-    expect(accessErrors).toHaveLength(0);
+    expect(accessErrors).toHaveLength(1);
   });
 });
