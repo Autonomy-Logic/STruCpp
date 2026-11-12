@@ -106,6 +106,7 @@ function buildLibraryTypeDefinition(
         kind: "VarDeclaration" as const,
         sourceSpan: createDefaultSourceSpan(),
         names: [f.name],
+        ...(f.attributes !== undefined ? { attributes: f.attributes } : {}),
         type: {
           kind: "TypeReference" as const,
           sourceSpan: createDefaultSourceSpan(),
@@ -153,6 +154,7 @@ function makeMethod(m: LibraryMethodEntry): MethodDeclaration {
     kind: "MethodDeclaration",
     sourceSpan: createDefaultSourceSpan(),
     name: m.name,
+    ...(m.attributes !== undefined ? { attributes: m.attributes } : {}),
     visibility: m.visibility,
     isAbstract: m.isAbstract === true,
     isFinal: m.isFinal === true,
@@ -173,6 +175,7 @@ function makeProperty(p: LibraryPropertyEntry): PropertyDeclaration {
     kind: "PropertyDeclaration",
     sourceSpan: createDefaultSourceSpan(),
     name: p.name,
+    ...(p.attributes !== undefined ? { attributes: p.attributes } : {}),
     type: makeTypeRef(p.type),
     visibility: p.visibility,
     ...(p.getter ? { getter: [] } : {}),
@@ -221,6 +224,7 @@ export function libraryInterfaceDeclarations(
     kind: "InterfaceDeclaration",
     sourceSpan,
     name: i.name,
+    ...(i.attributes !== undefined ? { attributes: i.attributes } : {}),
     ...(i.extends !== undefined ? { extends: i.extends } : {}),
     methods: i.methods.map((m) => ({ ...makeMethod(m), sourceSpan })),
     properties: i.properties.map((p) => ({ ...makeProperty(p), sourceSpan })),
@@ -275,10 +279,6 @@ const VISIBILITIES: readonly string[] = [
   "INTERNAL",
 ];
 
-/**
- * Checks the `methods` and `properties` of an exported block or interface (required for an interface, optional for
- * a block): arrays of named entries with a known visibility, methods with their three parameter lists.
- */
 /** Refuses an `attributes` field that is not a list of named attribute pragmas. */
 function validateAttributes(owner: unknown, where: string): void {
   if (!isRecord(owner) || owner.attributes === undefined) return;
@@ -301,6 +301,10 @@ function validateAttributes(owner: unknown, where: string): void {
   });
 }
 
+/**
+ * Checks the `methods` and `properties` of an exported block or interface (required for an interface, optional for
+ * a block): arrays of named entries with a known visibility, methods with their three parameter lists.
+ */
 function validateMembers(
   owner: Record<string, unknown>,
   where: string,
@@ -321,6 +325,7 @@ function validateMembers(
           `Invalid library manifest: ${at}.name must be a non-empty string`,
         );
       }
+      validateAttributes(m, at);
       if (
         typeof m.visibility !== "string" ||
         !VISIBILITIES.includes(m.visibility)
@@ -343,6 +348,7 @@ function validateMembers(
                 `Invalid library manifest: ${at}.${params}[${k}].name must be a non-empty string`,
               );
             }
+            validateAttributes(v, `${at}.${params}[${k}]`);
           });
         }
       } else if (typeof m.type !== "object" || m.type === null) {
@@ -410,6 +416,10 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: functions[${i}].parameters must be an array`,
         );
       }
+      validateAttributes(fn, `functions[${i}]`);
+      fn.parameters.forEach((param: unknown, k) =>
+        validateAttributes(param, `functions[${i}].parameters[${k}]`),
+      );
       functions.push(fn as unknown as LibraryManifest["functions"][0]);
     }
   }
@@ -477,6 +487,12 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: types[${i}].fields must be an array`,
         );
       }
+      validateAttributes(t, `types[${i}]`);
+      if (Array.isArray(t.fields)) {
+        t.fields.forEach((f: unknown, k) =>
+          validateAttributes(f, `types[${i}].fields[${k}]`),
+        );
+      }
       types.push(t as unknown as LibraryManifest["types"][0]);
     }
   }
@@ -497,6 +513,7 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: globals[${i}].type must be a non-empty string`,
         );
       }
+      validateAttributes(g, `globals[${i}]`);
       globals.push(g as unknown as NonNullable<LibraryManifest["globals"]>[0]);
     }
   }
@@ -510,6 +527,7 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
         );
       }
       validateMembers(itf, `interfaces[${i}]`, true);
+      validateAttributes(itf, `interfaces[${i}]`);
       interfaces.push(itf as unknown as LibraryInterfaceEntry);
     });
   }
@@ -567,6 +585,7 @@ export function registerLibrarySymbols(
           kind: "FunctionDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           name: fn.name,
+          ...(fn.attributes !== undefined ? { attributes: fn.attributes } : {}),
           returnType: {
             kind: "TypeReference",
             sourceSpan: createDefaultSourceSpan(),
@@ -632,6 +651,7 @@ export function registerLibrarySymbols(
           kind: "TypeDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           name: t.name,
+          ...(t.attributes !== undefined ? { attributes: t.attributes } : {}),
           // A struct with exported fields gets a REAL StructDefinition, not the
           // self-referential alias the other kinds fall back to.
           //
@@ -693,6 +713,7 @@ export function registerLibrarySymbols(
           kind: "VarDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           names: [g.name],
+          ...(g.attributes !== undefined ? { attributes: g.attributes } : {}),
           type: {
             kind: "TypeReference",
             sourceSpan: createDefaultSourceSpan(),

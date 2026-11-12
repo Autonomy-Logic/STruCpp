@@ -28,6 +28,7 @@ import {
   projectNativeHeaderToSt,
 } from "./native-sources.js";
 import type {
+  LibraryAttribute,
   LibraryFBEntry,
   LibraryInterfaceEntry,
   LibraryManifest,
@@ -37,6 +38,7 @@ import type {
   LibraryVarType,
 } from "./library-manifest.js";
 import type {
+  Attribute,
   Expression,
   FunctionBlockDeclaration,
   InterfaceDeclaration,
@@ -126,15 +128,21 @@ function serializeVarType(
   return { name, ...serializeTypeRef(typeRef) };
 }
 
+/** A declaration's attribute pragmas as a manifest field to spread into its entry; empty when it has none. */
+function attributesOf(node: { attributes?: Attribute[] }): {
+  attributes?: LibraryAttribute[];
+} {
+  return node.attributes !== undefined && node.attributes.length > 0
+    ? { attributes: node.attributes.map((a) => ({ ...a })) }
+    : {};
+}
+
 /** Copies a declaration's attribute pragmas onto its manifest entry. */
 function withAttributes(
   entry: LibraryVarType,
   decl: VarDeclaration,
 ): LibraryVarType {
-  if (decl.attributes !== undefined && decl.attributes.length > 0) {
-    entry.attributes = decl.attributes.map((a) => ({ ...a }));
-  }
-  return entry;
+  return Object.assign(entry, attributesOf(decl));
 }
 
 /** Variables of the given block kind, in declaration order. */
@@ -146,7 +154,7 @@ function blockVars(
     .filter((b) => b.blockType === blockType)
     .flatMap((b) =>
       b.declarations.flatMap((d) =>
-        d.names.map((n) => serializeVarType(n, d.type)),
+        d.names.map((n) => withAttributes(serializeVarType(n, d.type), d)),
       ),
     );
 }
@@ -154,6 +162,7 @@ function blockVars(
 function serializeMethod(m: MethodDeclaration): LibraryMethodEntry {
   return {
     name: m.name,
+    ...attributesOf(m),
     visibility: m.visibility,
     ...(m.returnType ? { returnType: serializeTypeRef(m.returnType) } : {}),
     ...(m.isAbstract ? { isAbstract: true as const } : {}),
@@ -168,6 +177,7 @@ function serializeMethod(m: MethodDeclaration): LibraryMethodEntry {
 function serializeProperty(p: PropertyDeclaration): LibraryPropertyEntry {
   return {
     name: p.name,
+    ...attributesOf(p),
     type: serializeTypeRef(p.type),
     visibility: p.visibility,
     ...(p.getter ? { getter: true as const } : {}),
@@ -178,6 +188,7 @@ function serializeProperty(p: PropertyDeclaration): LibraryPropertyEntry {
 function serializeInterface(i: InterfaceDeclaration): LibraryInterfaceEntry {
   return {
     name: i.name,
+    ...attributesOf(i),
     ...(i.extends && i.extends.length > 0 ? { extends: i.extends } : {}),
     methods: i.methods.map(serializeMethod),
     properties: i.properties.map(serializeProperty),
@@ -394,9 +405,7 @@ function buildFBEntry(
       : {}),
     ...(fb.isAbstract ? { isAbstract: true as const } : {}),
     ...(fb.isFinal ? { isFinal: true as const } : {}),
-    ...(fb.attributes !== undefined && fb.attributes.length > 0
-      ? { attributes: fb.attributes.map((a) => ({ ...a })) }
-      : {}),
+    ...attributesOf(fb),
     locals: fb.varBlocks
       .filter((b) => b.blockType === "VAR")
       .flatMap((b) =>
@@ -722,6 +731,7 @@ export function compileLibrary(
         tagCategory(
           {
             name: fn.name,
+            ...attributesOf(fn),
             returnType: fn.returnType.name,
             parameters: fn.varBlocks.flatMap((block) =>
               block.declarations.flatMap((decl) => {
@@ -741,6 +751,7 @@ export function compileLibrary(
                   // Present ⇒ optional input (default supplied); absent ⇒
                   // mandatory. Preserved from user ST and CODESYS-imported ST.
                   ...(initialValue !== undefined ? { initialValue } : {}),
+                  ...attributesOf(decl),
                 }));
               }),
             ),
@@ -772,13 +783,22 @@ export function compileLibrary(
       const entry: {
         name: string;
         kind: typeof kind;
-        fields?: Array<{ name: string; type: string }>;
-      } = { name: t.name, kind };
+        attributes?: LibraryAttribute[];
+        fields?: Array<{
+          name: string;
+          type: string;
+          attributes?: LibraryAttribute[];
+        }>;
+      } = { name: t.name, kind, ...attributesOf(t) };
       // Export struct member fields so consumers can type `x.field` access
       // on a dependency struct.
       if (t.definition.kind === "StructDefinition") {
         entry.fields = t.definition.fields.flatMap((decl) =>
-          decl.names.map((name) => ({ name, type: decl.type.name })),
+          decl.names.map((name) => ({
+            name,
+            type: decl.type.name,
+            ...attributesOf(decl),
+          })),
         );
       }
       return tagDocumentation(tagCategory(entry, catByName), docByName);
@@ -794,6 +814,7 @@ export function compileLibrary(
               name,
               type: decl.type.name,
               ...(block.isConstant ? { constant: true } : {}),
+              ...attributesOf(decl),
             },
             catByName,
           ),

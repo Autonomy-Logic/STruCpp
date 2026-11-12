@@ -249,6 +249,8 @@ export type VarBlockType =
  */
 export interface VarBlock extends ASTNode {
   kind: "VarBlock";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   blockType: VarBlockType;
   isConstant: boolean;
   /**
@@ -373,6 +375,8 @@ export interface StructDefinition extends ASTNode {
  */
 export interface EnumMember extends ASTNode {
   kind: "EnumMember";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   value?: Expression;
 }

@@ -25,6 +25,8 @@ import type { ReferenceKind } from "../frontend/ast.js";
 export interface LibraryFunctionEntry {
   /** Function name */
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
   /** Return type name (concrete IEC type or generic — see above) */
   returnType: string;
   /** Parameter list */
@@ -41,6 +43,8 @@ export interface LibraryFunctionEntry {
      *  initial values in the source ST — including ST produced by the CODESYS
      *  v2/v3 importers, which preserve declarations verbatim. */
     initialValue?: string;
+    /** CODESYS attribute pragmas written before the parameter. */
+    attributes?: LibraryAttribute[];
   }>;
   /** Variadic call shape. When set, `parameters` describes the leading
    *  required parameters and the function accepts any number of
@@ -128,6 +132,8 @@ export type LibraryVisibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
  */
 export interface LibraryMethodEntry {
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
   visibility: LibraryVisibility;
   returnType?: LibraryTypeRef;
   isAbstract?: true;
@@ -141,6 +147,8 @@ export interface LibraryMethodEntry {
 /** A property of an exported function block or interface, with the accessors it has. */
 export interface LibraryPropertyEntry {
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
   type: LibraryTypeRef;
   visibility: LibraryVisibility;
   getter?: true;
@@ -150,6 +158,8 @@ export interface LibraryPropertyEntry {
 /** An exported interface. */
 export interface LibraryInterfaceEntry {
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
   extends?: string[];
   methods: LibraryMethodEntry[];
   properties: LibraryPropertyEntry[];
@@ -240,6 +250,8 @@ export interface LibraryFBEntry {
 export interface LibraryTypeEntry {
   /** Type name */
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
   /** Type kind (struct, enum, alias) */
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
@@ -247,7 +259,11 @@ export interface LibraryTypeEntry {
   /** Struct member fields (name + declared type), so a consuming compilation
    *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
    *  for `kind: "struct"`; optional for backward compatibility. */
-  fields?: Array<{ name: string; type: string }>;
+  fields?: Array<{
+    name: string;
+    type: string;
+    attributes?: LibraryAttribute[];
+  }>;
   /** Type-level help text — same lifecycle as `LibraryFBEntry.documentation`,
    *  populated automatically from the structured doc-block slot in CODESYS
    *  imports (typically the type's revision-history comment for OSCAT) and
@@ -270,6 +286,8 @@ export interface LibraryTypeEntry {
 export interface LibraryGlobalEntry {
   /** Global variable name (as declared). */
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
   /** Declared type name (elementary or a library type, e.g. CONSTANTS_MATH). */
   type: string;
   /** True for `VAR_GLOBAL CONSTANT` entries. */

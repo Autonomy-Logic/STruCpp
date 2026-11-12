@@ -398,7 +398,7 @@ function runPipeline(
       mergedOptions.fileName ?? "main.st",
       globalConstants,
     );
-    attachAttributes(primaryAst, effectiveSource, parseResult.pragmas);
+    attachAttributes(primaryAst, parseResult.pragmas, parseResult.tokens);
     const units: CompilationUnit[] = [primaryAst];
 
     // Parse additional source files. Each gets the same Phase 0
@@ -462,8 +462,8 @@ function runPipeline(
             );
             attachAttributes(
               addlAst,
-              effectiveAddlSource,
               addlParseResult.pragmas,
+              addlParseResult.tokens,
             );
             units.push(addlAst);
           } catch (e) {
@@ -1002,7 +1002,7 @@ export function parse(source: string): {
   }
   try {
     const ast = buildAST(parseResult.cst);
-    attachAttributes(ast, source, parseResult.pragmas);
+    attachAttributes(ast, parseResult.pragmas, parseResult.tokens);
     return { ast, errors };
   } catch (e) {
     errors.push({

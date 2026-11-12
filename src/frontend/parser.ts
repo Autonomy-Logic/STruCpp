@@ -2318,6 +2318,8 @@ export function parse(source: string): {
   errors: unknown[];
   /** The `{attribute ...}` pragma tokens, which the parser itself skips. */
   pragmas: IToken[];
+  /** The tokens the parser read, in source order. */
+  tokens: IToken[];
 } {
   const lexResult = tokens.tokenize(source);
   const pragmas = lexResult.groups["pragmas"] ?? [];
@@ -2327,6 +2329,7 @@ export function parse(source: string): {
       cst: null,
       errors: lexResult.errors,
       pragmas,
+      tokens: lexResult.tokens,
     };
   }
 
@@ -2337,6 +2340,7 @@ export function parse(source: string): {
     cst,
     errors: parser.errors,
     pragmas,
+    tokens: lexResult.tokens,
   };
 }
 
