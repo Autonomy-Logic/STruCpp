@@ -20,6 +20,7 @@ import type {
 } from "../frontend/ast.js";
 import type { POUInfo } from "./test-main-gen.js";
 import { CodeGenerator } from "./codegen.js";
+import { methodNamesByBlock } from "./member-mangling.js";
 import type { CodeGenOptions } from "./codegen.js";
 import { buildEnumMemberMap } from "../semantic/type-utils.js";
 
@@ -58,18 +59,12 @@ export class TestCodeGenerator extends CodeGenerator {
     // Interfaces first — needed for FB interface method name resolution
     for (const iface of ast.interfaces) {
       this.knownInterfaceTypes.add(iface.name.toUpperCase());
-      const ifaceMethods = new Set<string>();
       for (const method of iface.methods) {
         this.methodNameMap.set(
           `${iface.name.toUpperCase()}.${method.name.toUpperCase()}`,
           method.name,
         );
-        ifaceMethods.add(method.name.toUpperCase());
       }
-      this.interfaceMethodsByInterface.set(
-        iface.name.toUpperCase(),
-        ifaceMethods,
-      );
     }
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
@@ -85,12 +80,8 @@ export class TestCodeGenerator extends CodeGenerator {
           prop.name,
         );
       }
-      // Precompute interface method names for field access mangling
-      const ifaceMethods = this.getInterfaceMethodNames(fb);
-      if (ifaceMethods.size > 0) {
-        this.fbInterfaceMethodNames.set(fb.name.toUpperCase(), ifaceMethods);
-      }
     }
+    this.fbMemberMethodNames = methodNamesByBlock(ast);
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());

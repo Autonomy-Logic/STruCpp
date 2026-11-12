@@ -95,7 +95,7 @@ describe("Phase 3.4: Inline ARRAY Types in VAR Blocks", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("VALUES.at(0) = 3.14;");
+    expect(result.cppCode).toContain("VALUES.at(0) = 3.14f;");
   });
 });
 

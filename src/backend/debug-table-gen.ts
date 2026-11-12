@@ -32,7 +32,7 @@ import type { SymbolTables } from "../semantic/symbol-table.js";
 import { isElementaryType } from "../semantic/type-registry.js";
 import { evalIntConst, MAX_TYPE_ALIAS_DEPTH } from "../semantic/type-utils.js";
 import { formatArrayElementAccess } from "./codegen-utils.js";
-import { mangledMemberName } from "./member-mangling.js";
+import { mangledMemberName, methodNamesByBlock } from "./member-mangling.js";
 
 // ---------------------------------------------------------------------------
 // Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
@@ -414,33 +414,11 @@ export function generateDebugTable(
     );
   };
 
-  /**
-   * FB type name → upper-cased method names of every interface it implements,
-   * mirroring `CodeGenerator.fbInterfaceMethodNames`. Directly implemented
-   * interfaces only, which is what codegen consults.
-   */
-  const fbInterfaceMethods = new Map<string, Set<string>>();
-  {
-    const methodsByInterface = new Map<string, Set<string>>();
-    for (const iface of ast.interfaces) {
-      methodsByInterface.set(
-        iface.name.toUpperCase(),
-        new Set(iface.methods.map((m) => m.name.toUpperCase())),
-      );
-    }
-    for (const fb of ast.functionBlocks) {
-      if (!fb.implements || fb.implements.length === 0) continue;
-      const methods = new Set<string>();
-      for (const ifaceName of fb.implements) {
-        for (const m of methodsByInterface.get(ifaceName.toUpperCase()) ?? []) {
-          methods.add(m);
-        }
-      }
-      if (methods.size > 0) {
-        fbInterfaceMethods.set(fb.name.toUpperCase(), methods);
-      }
-    }
-  }
+  /** FB type name → method names its members must not take; the codegen's rule. */
+  const fbMethodNames = methodNamesByBlock(
+    ast,
+    (upper) => symbolTables.lookupFunctionBlock(upper)?.declaration,
+  );
 
   // Buckets of entries — grown in order, flushed at program boundary or size cap.
   const arrays: Entry[][] = [[]];
@@ -454,6 +432,9 @@ export function generateDebugTable(
     tagName: TagName;
   }> = [];
   const skipped: Array<{ path: string; reason: string }> = [];
+  // An interface variable holds a reference to an FB instance, not data.
+  const INTERFACE_REASON =
+    "an interface variable holds a reference to an instance, which the debugger cannot show or write.";
   /**
    * Retained state the walk could not reach — today only a RETAIN on a library
    * block whose manifest predates exported locals.
@@ -542,6 +523,14 @@ export function generateDebugTable(
     }
 
     // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
+    if (
+      typeRef.arrayDimensions !== undefined &&
+      typeRef.elementTypeName !== undefined &&
+      interfaceNames.has(typeRef.elementTypeName.toUpperCase())
+    ) {
+      skipped.push({ path, reason: `each element of ${INTERFACE_REASON}` });
+      return;
+    }
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
       const elementKind =
         typeRef.elementReferenceChain?.[0] ??
@@ -562,6 +551,11 @@ export function generateDebugTable(
     }
 
     const name = typeRef.name.toUpperCase();
+
+    if (interfaceNames.has(name)) {
+      skipped.push({ path, reason: INTERFACE_REASON });
+      return;
+    }
 
     // Named elementary type (or alias thereof).
     if (IEC_NAME_TO_TAG[name] !== undefined) {
@@ -921,9 +915,9 @@ export function generateDebugTable(
   ): string =>
     mangledMemberName(varName, typeRef?.name, {
       isUserDefinedType,
-      interfaceMethods:
+      methodNames:
         ownerTypeName !== undefined
-          ? fbInterfaceMethods.get(ownerTypeName.toUpperCase())
+          ? fbMethodNames.get(ownerTypeName.toUpperCase())
           : undefined,
     });
 

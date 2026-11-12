@@ -24,6 +24,7 @@ import type {
   StructType,
   CompilationUnit,
   FunctionBlockDeclaration,
+  VarBlockType,
   FunctionDeclaration,
   Statement,
   VarBlock,
@@ -479,6 +480,7 @@ export class TypeChecker {
               currentType = ELEMENTARY_TYPES["BOOL"];
               currentTypeName = "BOOL";
             } else {
+              this.reportMissingMember(currentTypeName, step.name, expr);
               currentType = undefined;
               currentTypeName = undefined;
             }
@@ -541,6 +543,7 @@ export class TypeChecker {
               currentTypeName = fieldType;
               currentType = this.resolveNamedType(fieldType);
             } else {
+              this.reportMissingMember(currentTypeName, field, expr);
               currentType = undefined;
               currentTypeName = undefined;
             }
@@ -650,6 +653,7 @@ export class TypeChecker {
       this.resolveExprType(arg.value, scope);
     }
     this.validateReferenceArguments(expr, scope);
+    this.validateInstanceCallArgs(expr, scope);
 
     const nameUpper = expr.functionName.toUpperCase();
 
@@ -677,6 +681,22 @@ export class TypeChecker {
 
     // Validate standard function argument types (after resolving args)
     this.validateFunctionCallArgs(expr, scope);
+
+    // Conversions involving an enumeration: TO_<ENUM>, <ANY>_TO_<ENUM>, <ENUM>_TO_<ANY>
+    const enumConv = /^(?:(\w+?)_)?TO_(\w+)$/.exec(nameUpper);
+    if (enumConv) {
+      const target = this.enumTypeOf(enumConv[2]!);
+      if (target) {
+        expr.resolvedType = target;
+        return target;
+      }
+      const source = enumConv[1];
+      const elementary = ELEMENTARY_TYPES[enumConv[2]!];
+      if (source !== undefined && this.enumTypeOf(source) && elementary) {
+        expr.resolvedType = elementary;
+        return elementary;
+      }
+    }
 
     // Check standard function registry for return type
     if (this.stdRegistry) {
@@ -862,6 +882,24 @@ export class TypeChecker {
         const targetType = this.resolveExprType(stmt.target, scope);
         const valueType = this.resolveExprType(stmt.value, scope);
         const errorsBefore = this.errors.length;
+        if (this.isPointerTargetFromAddress(stmt.target, valueType, scope)) {
+          break;
+        }
+        const ifaceCheck = this.checkInterfaceAssignment(
+          targetType,
+          valueType,
+          stmt.value,
+        );
+        if (ifaceCheck !== null && ifaceCheck.ok) break;
+        if (ifaceCheck !== null && !ifaceCheck.ok) {
+          this.addError(
+            ifaceCheck.error,
+            stmt.value.sourceSpan.startLine,
+            stmt.value.sourceSpan.startCol,
+            stmt.value.sourceSpan.file,
+          );
+          break;
+        }
         this.validateAssignment(targetType, valueType, stmt.target, stmt.value);
         // One error per mistake: the REF_TO check only adds what the general one missed.
         if (this.errors.length === errorsBefore) {
@@ -1113,6 +1151,245 @@ export class TypeChecker {
       );
       return;
     }
+  }
+
+  /**
+   * Members a type declares through its lineage: variables with their block
+   * kind (struct fields as VAR), and methods and properties. Undefined when the
+   * type is not a function block, structure or interface this compile knows.
+   */
+  private declaredMembers(
+    typeName: string,
+  ): { vars: Map<string, VarBlockType>; callables: Set<string> } | undefined {
+    const upper = typeName.toUpperCase();
+    const vars = new Map<string, VarBlockType>();
+    const callables = new Set<string>();
+    const fbDecl = (u: string): FunctionBlockDeclaration | undefined =>
+      this.ast?.functionBlocks.find((f) => f.name.toUpperCase() === u) ??
+      this.symbolTables.lookupFunctionBlock(u)?.declaration;
+    if (fbDecl(upper)) {
+      const seen = new Set<string>();
+      let current: string | undefined = upper;
+      while (current !== undefined && !seen.has(current)) {
+        seen.add(current);
+        const d = fbDecl(current);
+        if (!d) return undefined;
+        for (const block of d.varBlocks) {
+          for (const decl of block.declarations) {
+            for (const n of decl.names) {
+              if (!vars.has(n.toUpperCase())) {
+                vars.set(n.toUpperCase(), block.blockType);
+              }
+            }
+          }
+        }
+        for (const m of d.methods) callables.add(m.name.toUpperCase());
+        for (const p of d.properties) callables.add(p.name.toUpperCase());
+        current = d.extends?.toUpperCase();
+      }
+      return { vars, callables };
+    }
+    const local = this.ast?.types.find((t) => t.name.toUpperCase() === upper);
+    if (local) {
+      if (local.definition.kind !== "StructDefinition") return undefined;
+      for (const decl of local.definition.fields) {
+        for (const n of decl.names) vars.set(n.toUpperCase(), "VAR");
+      }
+      return { vars, callables };
+    }
+    const iface = this.ast?.interfaces.find(
+      (i) => i.name.toUpperCase() === upper,
+    );
+    if (iface) {
+      const pending = [iface];
+      const seen = new Set<string>();
+      while (pending.length > 0) {
+        const i = pending.pop()!;
+        if (seen.has(i.name.toUpperCase())) continue;
+        seen.add(i.name.toUpperCase());
+        for (const m of i.methods) callables.add(m.name.toUpperCase());
+        for (const e of i.extends ?? []) {
+          const base = this.ast?.interfaces.find(
+            (x) => x.name.toUpperCase() === e.toUpperCase(),
+          );
+          if (!base) return undefined;
+          pending.push(base);
+        }
+      }
+      return { vars, callables };
+    }
+    const sym = this.symbolTables.lookupType(upper);
+    if (sym?.kind === "type" && sym.resolvedType?.typeKind === "struct") {
+      for (const f of (sym.resolvedType as StructType).fields.keys()) {
+        vars.set(f.toUpperCase(), "VAR");
+      }
+      return { vars, callables };
+    }
+    return undefined;
+  }
+
+  /** `x.name` where the type of `x` is fully known and declares no `name`. */
+  private reportMissingMember(
+    typeName: string,
+    name: string,
+    at: Expression,
+  ): void {
+    const members = this.declaredMembers(typeName);
+    if (!members) return;
+    const upper = name.toUpperCase();
+    if (members.vars.has(upper) || members.callables.has(upper)) return;
+    this.addError(
+      `'${typeName}' has no member '${name}'`,
+      at.sourceSpan.startLine,
+      at.sourceSpan.startCol,
+      at.sourceSpan.file,
+    );
+  }
+
+  /** `fb(Name := ...)`: every named argument must be an input, output or in-out of the block. */
+  private validateInstanceCallArgs(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): void {
+    const sym = scope.lookup(expr.functionName);
+    if (sym?.kind !== "variable") return;
+    const declType = sym.declaration?.type;
+    if (!declType || declType.arrayDimensions) return;
+    const members = this.declaredMembers(declType.name);
+    if (!members || members.callables.size + members.vars.size === 0) return;
+    const isFB =
+      this.ast?.functionBlocks.some(
+        (f) => f.name.toUpperCase() === declType.name.toUpperCase(),
+      ) ?? this.symbolTables.lookupFunctionBlock(declType.name) !== undefined;
+    if (!isFB) return;
+    for (const arg of expr.arguments) {
+      if (arg.name === undefined) continue;
+      const upper = arg.name.toUpperCase();
+      if (upper === "EN" || upper === "ENO") continue;
+      const kind = members.vars.get(upper);
+      if (
+        kind === "VAR_INPUT" ||
+        kind === "VAR_OUTPUT" ||
+        kind === "VAR_IN_OUT"
+      ) {
+        continue;
+      }
+      this.addError(
+        kind === undefined
+          ? `'${declType.name}' has no input or output '${arg.name}'`
+          : `'${arg.name}' is not an input or output of '${declType.name}'`,
+        arg.sourceSpan.startLine,
+        arg.sourceSpan.startCol,
+        arg.sourceSpan.file,
+      );
+    }
+  }
+
+  /** The enumeration type named `upper`, local or from a library. */
+  private enumTypeOf(upper: string): IECType | undefined {
+    const sym = this.symbolTables.lookupType(upper);
+    return sym?.kind === "type" && sym.resolvedType?.typeKind === "enum"
+      ? sym.resolvedType
+      : undefined;
+  }
+
+  /** Upper-cased type name of an elementary-named type (FBs and interfaces resolve this way). */
+  private namedTypeOf(t: IECType | undefined): string | undefined {
+    if (!t) return undefined;
+    if (t.typeKind === "elementary")
+      return (t as ElementaryType).name.toUpperCase();
+    return undefined;
+  }
+
+  private isInterfaceName(name: string): boolean {
+    return !!this.ast?.interfaces.some((i) => i.name.toUpperCase() === name);
+  }
+
+  /** Interfaces `name` is, directly or through EXTENDS (interfaces) / EXTENDS + IMPLEMENTS (FBs). */
+  private implementedInterfaces(
+    name: string,
+    seen = new Set<string>(),
+  ): Set<string> {
+    const out = new Set<string>();
+    if (!this.ast || seen.has(name)) return out;
+    seen.add(name);
+    const iface = this.ast.interfaces.find(
+      (i) => i.name.toUpperCase() === name,
+    );
+    if (iface) {
+      out.add(name);
+      for (const e of iface.extends ?? []) {
+        for (const x of this.implementedInterfaces(e.toUpperCase(), seen))
+          out.add(x);
+      }
+      return out;
+    }
+    const fb =
+      this.ast.functionBlocks.find((f) => f.name.toUpperCase() === name) ??
+      this.symbolTables.lookupFunctionBlock(name)?.declaration;
+    if (!fb) return out;
+    for (const i of fb.implements ?? []) {
+      for (const x of this.implementedInterfaces(i.toUpperCase(), seen))
+        out.add(x);
+    }
+    if (fb.extends) {
+      for (const x of this.implementedInterfaces(
+        fb.extends.toUpperCase(),
+        seen,
+      ))
+        out.add(x);
+    }
+    return out;
+  }
+
+  /**
+   * Assignment to an interface variable (CODESYS): accepts an FB instance that
+   * implements the interface (itself or through a base FB), an interface that
+   * is or extends it, or the literal 0. Returns null when the target is not
+   * an interface.
+   */
+  private checkInterfaceAssignment(
+    targetType: IECType | undefined,
+    valueType: IECType | undefined,
+    value: Expression,
+  ): { ok: true } | { ok: false; error: string } | null {
+    const target = this.namedTypeOf(targetType);
+    if (!target || !this.isInterfaceName(target)) return null;
+    if (
+      value.kind === "LiteralExpression" &&
+      (value.literalType === "NULL" ||
+        (value.literalType === "INT" && Number(value.value) === 0))
+    ) {
+      return { ok: true };
+    }
+    const source = this.namedTypeOf(valueType);
+    if (!source) return null;
+    if (this.implementedInterfaces(source).has(target)) return { ok: true };
+    return {
+      ok: false,
+      error: `Cannot assign ${source} to ${target}: ${source} does not implement ${target}`,
+    };
+  }
+
+  /** `p := ADR(x)` where p (or the array holding it) is declared POINTER TO. */
+  private isPointerTargetFromAddress(
+    target: Expression,
+    valueType: IECType | undefined,
+    scope: Scope,
+  ): boolean {
+    if (target.kind !== "VariableExpression") return false;
+    const vName = this.namedTypeOf(valueType);
+    if (vName !== "__XWORD" && valueType?.typeKind !== "reference")
+      return false;
+    const sym = scope.lookup(target.name);
+    if (!sym || sym.kind !== "variable" || !sym.declaration?.type) return false;
+    if (sym.declaration.type.referenceKind !== "pointer_to") return false;
+    const chain = target.accessChain ?? [];
+    // The pointer itself, or one element of an array of pointers.
+    return (
+      chain.length === 0 ||
+      (chain.length === 1 && chain[0]!.kind === "subscript")
+    );
   }
 
   /**

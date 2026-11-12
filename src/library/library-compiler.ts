@@ -17,6 +17,7 @@ import { buildChunks } from "./library-chunks.js";
 import type { MemberManglingContext } from "../backend/member-mangling.js";
 import {
   mangledMemberName,
+  methodNamesByBlock,
   userDefinedTypeNames,
 } from "../backend/member-mangling.js";
 import {
@@ -582,32 +583,15 @@ export function compileLibrary(
 
   // Mangling inputs, computed once against THIS compilation unit — the only
   // place that knows which of its type names are user-defined and which
-  // interface methods each block implements. See serializeLocal().
+  // method names each block's members must not take. See serializeLocal().
   const userTypes = userDefinedTypeNames(ast);
-  const ifaceMethods = new Map<string, Set<string>>();
-  {
-    const byInterface = new Map<string, Set<string>>();
-    for (const iface of ast.interfaces) {
-      byInterface.set(
-        iface.name.toUpperCase(),
-        new Set(iface.methods.map((m) => m.name.toUpperCase())),
-      );
-    }
-    for (const fb of ast.functionBlocks) {
-      if (!fb.implements || fb.implements.length === 0) continue;
-      const methods = new Set<string>();
-      for (const name of fb.implements) {
-        for (const m of byInterface.get(name.toUpperCase()) ?? [])
-          methods.add(m);
-      }
-      if (methods.size > 0) ifaceMethods.set(fb.name.toUpperCase(), methods);
-    }
-  }
+  const blockMethodNames = methodNamesByBlock(ast);
+
   const manglingCtx = (
     fb: FunctionBlockDeclaration,
   ): MemberManglingContext => ({
     isUserDefinedType: (n) => userTypes.has(n.toUpperCase()),
-    interfaceMethods: ifaceMethods.get(fb.name.toUpperCase()),
+    methodNames: blockMethodNames.get(fb.name.toUpperCase()),
   });
 
   // Slice emitted code into per-symbol chunks via the boundary

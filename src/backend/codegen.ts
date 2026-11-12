@@ -33,6 +33,7 @@ import type {
   MethodDeclaration,
   InterfaceDeclaration,
   PropertyDeclaration,
+  VarBlock,
   Visibility,
 } from "../frontend/ast.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
@@ -65,7 +66,11 @@ import {
   iecBaseToCppLiteral,
   translateIECString,
 } from "./codegen-utils.js";
-import { mangledMemberName, needsMemberMangling } from "./member-mangling.js";
+import {
+  mangledMemberName,
+  methodNamesByBlock,
+  needsMemberMangling,
+} from "./member-mangling.js";
 import {
   getTypeBits,
   getTypeCategory,
@@ -498,9 +503,6 @@ export class CodeGenerator {
   /** Map of UPPER(typeName).UPPER(methodName) → declared method name for case normalization */
   protected methodNameMap: Map<string, string> = new Map();
 
-  /** Map of UPPER(interfaceName) → Set of UPPER(methodName) for variable/method collision detection */
-  protected interfaceMethodsByInterface: Map<string, Set<string>> = new Map();
-
   /** Map of UPPER(typeName).UPPER(propName) → declared property name for property access codegen */
   protected propertyNameMap: Map<string, string> = new Map();
 
@@ -511,14 +513,14 @@ export class CodeGenerator {
   private varInstMangledNames: Map<string, string> = new Map();
 
   /** Mapping of member names (upper case) that collide with their type name
-   *  or interface method names to mangled names (e.g., SENSOR → SENSOR_) */
+   *  or a method name to mangled names (e.g., SENSOR → SENSOR_) */
   private memberMangledNames: Map<string, string> = new Map();
 
-  /** Interface method names for the current FB (UPPER case), used for variable/method collision detection */
-  private currentFBInterfaceMethods: Set<string> = new Set();
+  /** Method names the current FB's members must not take (UPPER case), see methodNamesByBlock */
+  private currentFBMethodNames: ReadonlySet<string> = new Set();
 
-  /** Map of UPPER(fbName) → Set of UPPER(interfaceMethodName) for external field access mangling */
-  protected fbInterfaceMethodNames: Map<string, Set<string>> = new Map();
+  /** UPPER(fbName) → method names its members must not take (methodNamesByBlock), for external field access */
+  protected fbMemberMethodNames: Map<string, Set<string>> = new Map();
 
   /** Current FB's var blocks, kept so method scopes can see FB member types */
   private currentFBVarBlocks: CompilationUnit["programs"][0]["varBlocks"] = [];
@@ -721,9 +723,11 @@ export class CodeGenerator {
             typeRef.elementReferenceChain,
             this.rawReferencedType(typeRef.elementTypeName),
           )
-        : this.isUserDefinedType(typeRef.elementTypeName)
-          ? typeRef.elementTypeName
-          : this.mapVarTypeToCpp(typeRef.elementTypeName);
+        : this.isInterfaceType(typeRef.elementTypeName)
+          ? `IEC_INTERFACE<${typeRef.elementTypeName}>`
+          : this.isUserDefinedType(typeRef.elementTypeName)
+            ? typeRef.elementTypeName
+            : this.mapVarTypeToCpp(typeRef.elementTypeName);
       baseType = formatArrayType(elemCpp, typeRef.arrayDimensions);
     } else if (
       typeRef.elementReferenceChain &&
@@ -736,6 +740,13 @@ export class CodeGenerator {
         this.rawReferencedType(elem!),
       );
       baseType = `ArrayView${ndims}D<${elemCpp}>`;
+    } else if (
+      (typeRef.referenceKind === undefined ||
+        typeRef.referenceKind === "none") &&
+      this.isInterfaceType(typeRef.name)
+    ) {
+      // An interface variable holds a reference to an implementing instance.
+      return `IEC_INTERFACE<${typeRef.name}>`;
     } else {
       baseType = this.mapVarTypeToCpp(
         typeRef.name,
@@ -1038,18 +1049,12 @@ export class CodeGenerator {
     // Build set of known interface types, method name map, and per-interface method sets
     for (const iface of ast.interfaces) {
       this.knownInterfaceTypes.add(iface.name.toUpperCase());
-      const ifaceMethods = new Set<string>();
       for (const method of iface.methods) {
         this.methodNameMap.set(
           `${iface.name.toUpperCase()}.${method.name.toUpperCase()}`,
           method.name,
         );
-        ifaceMethods.add(method.name.toUpperCase());
       }
-      this.interfaceMethodsByInterface.set(
-        iface.name.toUpperCase(),
-        ifaceMethods,
-      );
     }
 
     // Build method name map, property name map, and interface method names for FBs
@@ -1066,12 +1071,12 @@ export class CodeGenerator {
           prop.name,
         );
       }
-      // Precompute interface method names for each FB (for field access mangling)
-      const ifaceMethods = this.getInterfaceMethodNames(fb);
-      if (ifaceMethods.size > 0) {
-        this.fbInterfaceMethodNames.set(fb.name.toUpperCase(), ifaceMethods);
-      }
     }
+    // Method names each FB's members must not take (member-mangling rule 2)
+    this.fbMemberMethodNames = methodNamesByBlock(
+      ast,
+      (upper) => this._symbolTables?.lookupFunctionBlock(upper)?.declaration,
+    );
 
     // Build set of known struct/UDT types and enum member maps
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
@@ -1554,7 +1559,8 @@ export class CodeGenerator {
     fb: CompilationUnit["functionBlocks"][0],
   ): void {
     // Populate interface method names for variable/method collision detection
-    this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
+    this.currentFBMethodNames =
+      this.fbMemberMethodNames.get(fb.name.toUpperCase()) ?? new Set();
 
     // Build inheritance clause
     const bases: string[] = [];
@@ -1829,11 +1835,7 @@ export class CodeGenerator {
     this.recordHeaderLineMapping(iface.sourceSpan.startLine, classLine);
 
     for (const method of iface.methods) {
-      const isIfaceReturn =
-        method.returnType && this.isInterfaceType(method.returnType.name);
-      const returnType = method.returnType
-        ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
-        : "void";
+      const returnType = this.methodReturnCpp(method);
       const params = this.generateMethodParamList(method);
       if (method.sourceSpan) {
         this.emitHeaderLineDirective(method.sourceSpan.startLine);
@@ -1885,6 +1887,7 @@ export class CodeGenerator {
     // Group by visibility
     const groups: Record<Visibility, MethodDeclaration[]> = {
       PUBLIC: [],
+      INTERNAL: [],
       PRIVATE: [],
       PROTECTED: [],
     };
@@ -1901,18 +1904,16 @@ export class CodeGenerator {
     ][]) {
       if (visMethods.length === 0) continue;
 
-      const cppVisibility = visibility.toLowerCase();
+      // INTERNAL is unit-wide: the analyzer enforces it, C++ sees it as public.
+      const cppVisibility =
+        visibility === "INTERNAL" ? "public" : visibility.toLowerCase();
       if (cppVisibility !== currentVisibility) {
         this.emitHeader(`${cppVisibility}:`);
         currentVisibility = cppVisibility;
       }
 
       for (const method of visMethods) {
-        const isIfaceReturn =
-          method.returnType && this.isInterfaceType(method.returnType.name);
-        const returnType = method.returnType
-          ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
-          : "void";
+        const returnType = this.methodReturnCpp(method);
         const params = this.generateMethodParamList(method);
 
         // Build declaration with appropriate specifiers
@@ -2016,10 +2017,9 @@ export class CodeGenerator {
     className: string,
   ): void {
     const isIfaceReturn =
-      method.returnType && this.isInterfaceType(method.returnType.name);
-    const returnType = method.returnType
-      ? `${this.mapTypeRefToCpp(method.returnType)}${isIfaceReturn ? "&" : ""}`
-      : "void";
+      method.returnType !== undefined &&
+      this.isInterfaceType(method.returnType.name);
+    const returnType = this.methodReturnCpp(method);
     const params = this.generateMethodParamList(method);
 
     this.emitLineDirective(method.sourceSpan.startLine);
@@ -2055,7 +2055,7 @@ export class CodeGenerator {
     }
 
     // Merge FB scope + method scope so FB member types are visible (same pattern as properties)
-    this.enterScope([...this.currentFBVarBlocks, ...method.varBlocks]);
+    this.enterScope(this.currentFBVarBlocks, method.varBlocks);
 
     // Declare local variables (VAR, VAR_TEMP)
     for (const block of method.varBlocks) {
@@ -2190,7 +2190,8 @@ export class CodeGenerator {
     this.currentFBName = fb.name;
     this.currentFBExtends = fb.extends;
     this.currentFBVarBlocks = fb.varBlocks;
-    this.currentFBInterfaceMethods = this.getInterfaceMethodNames(fb);
+    this.currentFBMethodNames =
+      this.fbMemberMethodNames.get(fb.name.toUpperCase()) ?? new Set();
 
     // VAR_EXTERNAL: body access (operator(), methods, properties) is rewritten
     // to go through the GlobalVar pointer (g->read()/write()/with_lock), exactly
@@ -2283,7 +2284,7 @@ export class CodeGenerator {
     this.currentFBName = undefined;
     this.currentFBExtends = undefined;
     this.currentFBVarBlocks = [];
-    this.currentFBInterfaceMethods = new Set();
+    this.currentFBMethodNames = new Set();
     this.programExternals = new Set();
     this.compositeExternals = new Set();
   }
@@ -3229,7 +3230,10 @@ export class CodeGenerator {
     }
 
     const target = this.generateExpression(stmt.target);
-    const value = this.generateExpression(stmt.value);
+    const value = this.generateRealOperand(
+      stmt.value,
+      this.inferExprType(stmt.target),
+    );
 
     // For interface-returning methods, convert assignment to result var into return statement
     if (
@@ -4113,8 +4117,14 @@ export class CodeGenerator {
    * Generate C++ for a binary expression.
    */
   private generateBinaryExpression(expr: BinaryExpression): string {
-    const left = this.generateExpression(expr.left);
-    const right = this.generateExpression(expr.right);
+    const left = this.generateRealOperand(
+      expr.left,
+      this.realLiteralContext(expr.right),
+    );
+    const right = this.generateRealOperand(
+      expr.right,
+      this.realLiteralContext(expr.left),
+    );
 
     // Power operator needs special handling
     if (expr.operator === "**") {
@@ -4136,6 +4146,48 @@ export class CodeGenerator {
     }
 
     return `${left} ${cppOp} ${right}`;
+  }
+
+  /**
+   * An untyped real literal (`1.5`, not `LREAL#1.5`) takes the type of its
+   * context: in a REAL context it is emitted as a float (`1.5f`), so REAL
+   * arithmetic stays in single precision; otherwise as a double.
+   */
+  private generateRealOperand(
+    expr: Expression,
+    contextType: string | undefined,
+  ): string {
+    const generated = this.generateExpression(expr);
+    if (contextType?.toUpperCase() !== "REAL") return generated;
+    if (this.isUntypedRealLiteral(expr)) return `${generated}f`;
+    if (
+      expr.kind === "UnaryExpression" &&
+      expr.operator === "-" &&
+      this.isUntypedRealLiteral(expr.operand)
+    ) {
+      return `-${this.generateExpression(expr.operand)}f`;
+    }
+    return generated;
+  }
+
+  private isUntypedRealLiteral(expr: Expression): boolean {
+    return (
+      expr.kind === "LiteralExpression" &&
+      expr.literalType === "REAL" &&
+      !expr.rawValue.includes("#")
+    );
+  }
+
+  /** Type an operand gives an untyped real literal next to it; none when it is one itself. */
+  private realLiteralContext(expr: Expression): string | undefined {
+    if (this.isUntypedRealLiteral(expr)) return undefined;
+    if (
+      expr.kind === "UnaryExpression" &&
+      this.isUntypedRealLiteral(expr.operand)
+    ) {
+      return undefined;
+    }
+    return this.inferExprType(expr);
   }
 
   /**
@@ -4172,6 +4224,17 @@ export class CodeGenerator {
     const args = expr.arguments
       .map((a) => this.generateExpression(a.value))
       .join(", ");
+    // Object type from semantic analysis (covers arr[i], a.b, p^ paths).
+    const objType = expr.object.resolvedType
+      ? typeNameUtil(expr.object.resolvedType)
+      : undefined;
+    const isPath =
+      expr.object.kind === "VariableExpression" &&
+      ((expr.object.accessChain?.length ?? 0) > 0 || expr.object.isDereference);
+    if (isPath && objType !== undefined) {
+      const sep = this.isInterfaceType(objType) ? "->" : ".";
+      return `${obj}${sep}${this.resolveMethodName(objType, expr.methodName)}(${args})`;
+    }
     // Try type-specific resolution first (avoids collisions when two FBs share a method name)
     let resolvedName: string;
     if (expr.object.kind === "VariableExpression") {
@@ -4184,7 +4247,13 @@ export class CodeGenerator {
     } else {
       resolvedName = this.resolveMethodNameGlobal(expr.methodName);
     }
-    return `${obj}.${resolvedName}(${args})`;
+    const objVarType =
+      expr.object.kind === "VariableExpression"
+        ? this.currentScopeVarTypes.get(expr.object.name.toUpperCase())
+        : undefined;
+    const sep =
+      objVarType !== undefined && this.isInterfaceType(objVarType) ? "->" : ".";
+    return `${obj}${sep}${resolvedName}(${args})`;
   }
 
   // ===========================================================================
@@ -4630,8 +4699,10 @@ export class CodeGenerator {
       } else if (prefix.toUpperCase() === "SUPER" && this.currentFBExtends) {
         return `${this.currentFBExtends}::${resolvedMethod}(${args.join(", ")})`;
       } else {
-        // instance.method() call
-        return `${prefix}.${resolvedMethod}(${args.join(", ")})`;
+        // instance.method() call; an interface variable holds a reference.
+        const sep =
+          varType !== undefined && this.isInterfaceType(varType) ? "->" : ".";
+        return `${prefix}${sep}${resolvedMethod}(${args.join(", ")})`;
       }
     }
 
@@ -4675,6 +4746,15 @@ export class CodeGenerator {
       return `${arrExpr}.${method}()`;
     }
 
+    // 0. Enum conversions: TO_<ENUM>(x), <ANY>_TO_<ENUM>(x), <ENUM>_TO_<ANY>(x)
+    const enumConv = this.resolveEnumConversion(nameUpper);
+    if (enumConv && expr.arguments.length === 1) {
+      const arg = this.generateExpression(expr.arguments[0]!.value);
+      return enumConv.toEnum !== undefined
+        ? `TO_ENUM<${enumConv.toEnum}>(${arg})`
+        : `TO_${enumConv.target}(${arg})`;
+    }
+
     // 1. Check for *_TO_* conversion pattern (e.g., INT_TO_REAL -> TO_REAL)
     const conversion = this.stdRegistry.resolveConversion(nameUpper);
     if (conversion) {
@@ -4699,7 +4779,7 @@ export class CodeGenerator {
           conversion.toType.toUpperCase(),
         );
       });
-      return `${conversion.cppName}(${args.join(", ")})`;
+      return `${this.qualifyIfShadowed(conversion.cppName)}(${args.join(", ")})`;
     }
 
     // 2. Check for standard function (may have different cppName)
@@ -4728,7 +4808,7 @@ export class CodeGenerator {
         return generated;
       });
       this.harmonizeStdFuncArgs(args, expr.arguments, stdFunc);
-      return `${stdFunc.cppName}(${args.join(", ")})`;
+      return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
     }
 
     // 3. Check for named arguments that may need reordering
@@ -4736,7 +4816,7 @@ export class CodeGenerator {
     if (hasNamedArgs && this.ast) {
       const reordered = this.reorderNamedArguments(expr);
       if (reordered) {
-        return `${expr.functionName}(${reordered.join(", ")})`;
+        return `${this.calleeName(expr)}(${reordered.join(", ")})`;
       }
     }
 
@@ -4797,7 +4877,31 @@ export class CodeGenerator {
       this.coerceUserFuncArgs(args, expr.arguments, paramTypes);
     }
 
-    return `${expr.functionName}(${args.join(", ")})`;
+    return `${this.calleeName(expr)}(${args.join(", ")})`;
+  }
+
+  /**
+   * The callee of an unqualified call: a method of the current block's class
+   * hierarchy is called through `this->`, so a local variable of the same name
+   * cannot hide it; anything else is called by name.
+   */
+  private calleeName(expr: FunctionCallExpression): string {
+    const upper = expr.functionName.toUpperCase();
+    const seen = new Set<string>();
+    let current = this.currentFBName?.toUpperCase();
+    while (current !== undefined && !seen.has(current)) {
+      seen.add(current);
+      const owner = current;
+      const decl =
+        this.ast?.functionBlocks.find((f) => f.name.toUpperCase() === owner) ??
+        this._symbolTables?.lookupFunctionBlock(owner)?.declaration;
+      if (decl === undefined) break;
+      if (decl.methods.some((m) => m.name.toUpperCase() === upper)) {
+        return `this->${expr.functionName}`;
+      }
+      current = decl.extends?.toUpperCase();
+    }
+    return expr.functionName;
   }
 
   /**
@@ -5013,14 +5117,91 @@ export class CodeGenerator {
   /**
    * Check if a type name refers to a known interface type.
    */
+  /** C++ return type of a method: an interface result is a reference to the implementing instance. */
+  private methodReturnCpp(method: MethodDeclaration): string {
+    if (method.returnType === undefined) return "void";
+    return this.isInterfaceType(method.returnType.name)
+      ? `${method.returnType.name}&`
+      : this.mapTypeRefToCpp(method.returnType);
+  }
+
   private isInterfaceType(typeName: string): boolean {
     return this.knownInterfaceTypes.has(typeName.toUpperCase());
+  }
+
+  /**
+   * A variable or FB member with the same name as a standard function (an
+   * input named `Min`, say) hides the runtime function in C++ name lookup;
+   * qualify the call so it still reaches `strucpp::MIN`.
+   */
+  private qualifyIfShadowed(cppName: string): string {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(cppName)) return cppName;
+    const upper = cppName.toUpperCase();
+    return this.currentScopeVarTypes.has(upper) || this.inheritedMember(upper)
+      ? `strucpp::${cppName}`
+      : cppName;
+  }
+
+  /** Whether a base FB of the current FB (local or from a library) declares a variable named `upper`. */
+  private inheritedMember(upper: string): boolean {
+    let base = this.currentFBExtends;
+    const seen = new Set<string>();
+    while (base !== undefined && !seen.has(base.toUpperCase())) {
+      const baseUpper = base.toUpperCase();
+      seen.add(baseUpper);
+      const fb =
+        this.ast?.functionBlocks.find(
+          (f) => f.name.toUpperCase() === baseUpper,
+        ) ?? this._symbolTables?.lookupFunctionBlock(base)?.declaration;
+      if (!fb) return false;
+      for (const block of fb.varBlocks) {
+        for (const decl of block.declarations) {
+          if (decl.names.some((n) => n.toUpperCase() === upper)) return true;
+        }
+      }
+      base = fb.extends;
+    }
+    return false;
   }
 
   /**
    * Resolve the declared case of a method name given the type and method name.
    * Returns the declared name if found, or the original name if not.
    */
+  /**
+   * Conversions involving an enumeration: to an enum the result is the member
+   * with that integer value; from an enum the integer value is converted by
+   * the ordinary `TO_<type>` of the target. Undefined when no enum is involved.
+   */
+  private resolveEnumConversion(
+    nameUpper: string,
+  ): { toEnum?: string; target: string } | undefined {
+    const m = /^(?:(\w+?)_)?TO_(\w+)$/.exec(nameUpper);
+    if (!m) return undefined;
+    const source = m[1];
+    const target = m[2]!;
+    const toEnum = this.enumCppName(target);
+    if (toEnum !== undefined) return { toEnum, target };
+    if (source !== undefined && this.enumCppName(source) !== undefined) {
+      return { target };
+    }
+    return undefined;
+  }
+
+  /** Declared C++ name of an enumeration type, local or from a library. */
+  private enumCppName(upper: string): string | undefined {
+    const local = this.ast?.types.find(
+      (td) =>
+        td.name.toUpperCase() === upper &&
+        td.definition.kind === "EnumDefinition",
+    );
+    if (local) return local.name;
+    const sym = this._symbolTables?.lookupType(upper);
+    return sym?.kind === "type" && sym.resolvedType?.typeKind === "enum"
+      ? sym.name
+      : undefined;
+  }
+
   private resolveMethodName(typeName: string, methodName: string): string {
     const key = `${typeName.toUpperCase()}.${methodName.toUpperCase()}`;
     return this.methodNameMap.get(key) ?? methodName;
@@ -5175,46 +5356,94 @@ export class CodeGenerator {
   }
 
   /**
-   * Enter a new scope for code generation. Populates currentScopeVarTypes
-   * from the variable blocks of a program or function block.
+   * Enter a new scope for code generation: the members in `varBlocks` and the
+   * locals in `localBlocks` (method parameters and variables). Members follow
+   * the member-mangling rule of the block that declares them, inherited ones
+   * included; locals keep their names and hide a member of the same name.
    */
   private enterScope(
-    varBlocks: CompilationUnit["programs"][0]["varBlocks"],
+    varBlocks: VarBlock[],
+    localBlocks: VarBlock[] = [],
   ): void {
     this.currentScopeVarTypes.clear();
     this.currentScopeVarRefKinds.clear();
     this.currentScopeVarTypeRefs.clear();
     this.memberMangledNames.clear();
-    for (const block of varBlocks) {
-      for (const decl of block.declarations) {
-        const cppType = this.isUserDefinedType(decl.type.name)
-          ? decl.type.name
-          : `IEC_${decl.type.name}`;
-        for (const name of decl.names) {
-          this.currentScopeVarTypes.set(name.toUpperCase(), decl.type.name);
-          this.currentScopeVarTypeRefs.set(name.toUpperCase(), decl.type);
-          if (
-            decl.type.referenceKind !== undefined &&
-            decl.type.referenceKind !== "none"
-          ) {
-            this.currentScopeVarRefKinds.set(
-              name.toUpperCase(),
-              decl.type.referenceKind,
-            );
-          }
-          // Detect member name collisions with type name (GCC -Wchanges-meaning)
-          if (
-            this.isUserDefinedType(decl.type.name) &&
-            name.toUpperCase() === cppType.toUpperCase()
-          ) {
-            this.memberMangledNames.set(name.toUpperCase(), `${name}_`);
-          }
-          // Detect member name collisions with interface method names
-          if (this.currentFBInterfaceMethods.has(name.toUpperCase())) {
-            this.memberMangledNames.set(name.toUpperCase(), `${name}_`);
-          }
+    this.registerInheritedMemberNames();
+    for (const block of varBlocks) this.registerScopeBlock(block, true);
+    for (const block of localBlocks) this.registerScopeBlock(block, false);
+  }
+
+  private registerScopeBlock(block: VarBlock, member: boolean): void {
+    for (const decl of block.declarations) {
+      for (const name of decl.names) {
+        const upper = name.toUpperCase();
+        this.currentScopeVarTypes.set(upper, decl.type.name);
+        this.currentScopeVarTypeRefs.set(upper, decl.type);
+        if (
+          decl.type.referenceKind !== undefined &&
+          decl.type.referenceKind !== "none"
+        ) {
+          this.currentScopeVarRefKinds.set(upper, decl.type.referenceKind);
+        }
+        if (!member) {
+          this.memberMangledNames.delete(upper);
+        } else if (
+          needsMemberMangling(name, decl.type.name, {
+            isUserDefinedType: (t) => this.isUserDefinedType(t),
+            methodNames: this.currentFBMethodNames,
+          })
+        ) {
+          this.memberMangledNames.set(upper, `${name}_`);
         }
       }
+    }
+  }
+
+  /**
+   * C++ names of the members the current block inherits, where they differ
+   * from the ST name: by each local base's own mangling rule, or as recorded
+   * for a library base.
+   */
+  private registerInheritedMemberNames(): void {
+    const seen = new Set<string>();
+    let base = this.currentFBExtends?.toUpperCase();
+    while (base !== undefined && !seen.has(base)) {
+      seen.add(base);
+      const owner = base;
+      const local = this.ast?.functionBlocks.find(
+        (f) => f.name.toUpperCase() === owner,
+      );
+      if (local !== undefined) {
+        const methodNames = this.fbMemberMethodNames.get(owner);
+        for (const block of local.varBlocks) {
+          for (const decl of block.declarations) {
+            for (const name of decl.names) {
+              const cpp = mangledMemberName(name, decl.type.name, {
+                isUserDefinedType: (t) => this.isUserDefinedType(t),
+                methodNames,
+              });
+              if (cpp !== name)
+                this.memberMangledNames.set(name.toUpperCase(), cpp);
+            }
+          }
+        }
+        base = local.extends?.toUpperCase();
+        continue;
+      }
+      const lib = this._symbolTables?.lookupFunctionBlock(owner);
+      if (lib === undefined) break;
+      for (const v of [
+        ...lib.inputs,
+        ...lib.outputs,
+        ...lib.inouts,
+        ...lib.locals,
+      ]) {
+        if (v.cppName !== undefined && v.cppName !== v.name) {
+          this.memberMangledNames.set(v.name.toUpperCase(), v.cppName);
+        }
+      }
+      base = lib.declaration.extends?.toUpperCase();
     }
   }
 
@@ -5581,25 +5810,6 @@ export class CodeGenerator {
   }
 
   /**
-   * Collect all interface method names (UPPER case) for a FB's IMPLEMENTS list.
-   */
-  protected getInterfaceMethodNames(fb: {
-    implements?: string[];
-  }): Set<string> {
-    const result = new Set<string>();
-    if (!fb.implements) return result;
-    for (const ifaceName of fb.implements) {
-      const methods = this.interfaceMethodsByInterface.get(
-        ifaceName.toUpperCase(),
-      );
-      if (methods) {
-        for (const m of methods) result.add(m);
-      }
-    }
-    return result;
-  }
-
-  /**
    * If a member variable name collides with its C++ type name or an interface
    * method name (case-insensitive), append '_' to avoid C++ errors.
    * Populates memberMangledNames map and returns the (possibly mangled) name.
@@ -5609,7 +5819,7 @@ export class CodeGenerator {
     // methods in scope are that FB's.
     const mangled = mangledMemberName(name, stTypeName, {
       isUserDefinedType: (t) => this.isUserDefinedType(t),
-      interfaceMethods: this.currentFBInterfaceMethods,
+      methodNames: this.currentFBMethodNames,
     });
     if (mangled !== name) {
       this.memberMangledNames.set(name.toUpperCase(), mangled);
@@ -5654,9 +5864,9 @@ export class CodeGenerator {
   ): boolean {
     return needsMemberMangling(fieldName, fieldTypeName, {
       isUserDefinedType: (t) => this.isUserDefinedType(t),
-      interfaceMethods:
+      methodNames:
         parentTypeName !== undefined
-          ? this.fbInterfaceMethodNames.get(parentTypeName.toUpperCase())
+          ? this.fbMemberMethodNames.get(parentTypeName.toUpperCase())
           : undefined,
     });
   }

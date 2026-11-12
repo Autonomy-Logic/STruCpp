@@ -67,6 +67,7 @@ import type {
   UnaryOperator,
 } from "./ast.js";
 import { applyTypeDefaults } from "./type-defaults.js";
+import { contextualKeywordTokens } from "./lexer.js";
 import type { SourceSpan } from "../types.js";
 
 // =============================================================================
@@ -243,8 +244,7 @@ function getNodeStartOffset(node: CstNode): number {
 
 /**
  * Extract the identifier string from an identifierOrKeyword CST node.
- * The node contains either an Identifier token or one of the contextual keyword tokens
- * (SET, GET, ON, OVERRIDE, ABSTRACT, FINAL).
+ * The node contains either an Identifier token or one of `contextualKeywordTokens`.
  */
 function getIdentifierOrKeywordImage(node: CstNode): string {
   const children = node.children as CstChildren;
@@ -252,19 +252,7 @@ function getIdentifierOrKeywordImage(node: CstNode): string {
   const identToken = getFirstToken(children.Identifier);
   if (identToken) return identToken.image;
   // Check each contextual keyword token
-  for (const key of [
-    "SET",
-    "GET",
-    "ON",
-    "OVERRIDE",
-    "ABSTRACT",
-    "FINAL",
-    "AND",
-    "OR",
-    "XOR",
-    "NOT",
-    "MOD",
-  ]) {
+  for (const key of contextualKeywordTokens.map((t) => t.name)) {
     const kwToken = getFirstToken(children[key]);
     if (kwToken) return kwToken.image;
   }
@@ -738,6 +726,7 @@ export class ASTBuilder {
     let visibility: Visibility = "PUBLIC";
     if (children.PRIVATE) visibility = "PRIVATE";
     else if (children.PROTECTED) visibility = "PROTECTED";
+    else if (children.INTERNAL) visibility = "INTERNAL";
 
     // Modifiers
     const isAbstract = !!children.ABSTRACT;
@@ -828,6 +817,7 @@ export class ASTBuilder {
     let visibility: Visibility = "PUBLIC";
     if (children.PRIVATE) visibility = "PRIVATE";
     else if (children.PROTECTED) visibility = "PROTECTED";
+    else if (children.INTERNAL) visibility = "INTERNAL";
 
     // Property type
     const dataTypeNode = getFirstNode(children.dataType);
@@ -1866,6 +1856,17 @@ export class ASTBuilder {
         getFirstNode(children.instanceCallStatement)!,
       );
     }
+    if (children.memberMethodCallStatement) {
+      const stmtNode = getFirstNode(children.memberMethodCallStatement)!;
+      const callNode = getFirstNode(
+        (stmtNode.children as CstChildren).memberMethodCall,
+      )!;
+      return {
+        kind: "FunctionCallStatement",
+        sourceSpan: nodeToSourceSpan(stmtNode),
+        call: this.buildMemberMethodCall(callNode),
+      };
+    }
     if (children.methodCallStatement) {
       return this.buildMethodCallStatement(
         getFirstNode(children.methodCallStatement)!,
@@ -2632,6 +2633,13 @@ export class ASTBuilder {
       );
     }
 
+    // Method call on a variable path: arr[i].m(args), p^.m(args), a.b.m(args)
+    if (children.memberMethodCall) {
+      return this.buildMemberMethodCall(
+        getFirstNode(children.memberMethodCall)!,
+      );
+    }
+
     // Check for method call expression: instance.method(args)
     if (children.methodCall) {
       return this.buildMethodCallExpression(getFirstNode(children.methodCall)!);
@@ -3236,8 +3244,8 @@ export class ASTBuilder {
   buildThisAccessExpression(node: CstNode): Expression {
     const children = node.children as CstChildren;
 
-    // THIS^ (dereference - return self)
-    if (children.Caret) {
+    // THIS^ alone (dereference - return self); THIS^.x falls through to member/method
+    if (children.Caret && !children.Dot) {
       return {
         kind: "VariableExpression",
         sourceSpan: nodeToSourceSpan(node),
@@ -3381,6 +3389,49 @@ export class ASTBuilder {
     }
 
     return result;
+  }
+
+  /**
+   * Build a method call on a variable path (`arr[i].m()`, `p^.m()`, `a.b.m()`):
+   * the path's last field is the method, the rest is the object.
+   */
+  buildMemberMethodCall(node: CstNode): MethodCallExpression {
+    const children = node.children as CstChildren;
+    const v = this.buildVariableExpression(getFirstNode(children.variable)!);
+    const chain = v.accessChain ?? [];
+    const last = chain[chain.length - 1];
+    if (!last || last.kind !== "field") {
+      throw new Error(
+        `Method call target must end in a method name (line ${nodeToSourceSpan(node).startLine})`,
+      );
+    }
+    const methodName = last.name;
+    const rest = chain.slice(0, -1);
+    const object: VariableExpression = {
+      ...v,
+      fieldAccess: v.fieldAccess.slice(0, -1),
+      isDereference: rest.some((step) => step.kind === "dereference"),
+    };
+    if (rest.length > 0) {
+      object.accessChain = rest;
+    } else {
+      delete object.accessChain;
+    }
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+    return {
+      kind: "MethodCallExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      object,
+      methodName,
+      arguments: args,
+    };
   }
 
   /**

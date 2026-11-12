@@ -564,4 +564,87 @@ using REFERENCE_TO = IEC_REFERENCE_TO<T>;
  *   elem_ref.deref().set(100);
  */
 
+// =============================================================================
+// Interface variables (CODESYS)
+// =============================================================================
+
+/**
+ * A variable of an interface type: a reference to an instance of a function
+ * block that implements the interface, or 0 (unassigned). Assigning an FB
+ * instance stores a reference to it; calling a method dispatches virtually.
+ * Comparison with 0 tells whether it is assigned. Calling through an
+ * unassigned interface faults like a NULL reference.
+ */
+template<typename I>
+class IEC_INTERFACE {
+    I* ptr_ = nullptr;
+
+    void fault_if_null() const {
+        if (!ptr_) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::runtime_error("Interface reference is 0");
+#else
+            iec_runtime_fault(IecFault::NullReference);
+#endif
+        }
+    }
+
+public:
+    using interface_type = I;
+
+    IEC_INTERFACE() noexcept = default;
+    IEC_INTERFACE(std::nullptr_t) noexcept {}
+    IEC_INTERFACE(I& target) noexcept : ptr_(&target) {}
+    IEC_INTERFACE(const IEC_INTERFACE&) = default;
+    IEC_INTERFACE& operator=(const IEC_INTERFACE&) = default;
+
+    /** An interface variable of a derived interface converts to its base. */
+    template<typename J, std::enable_if_t<std::is_base_of<I, J>::value && !std::is_same<I, J>::value, int> = 0>
+    IEC_INTERFACE(const IEC_INTERFACE<J>& other) noexcept : ptr_(other.get()) {}
+
+    IEC_INTERFACE& operator=(I& target) noexcept {
+        ptr_ = &target;
+        return *this;
+    }
+    template<typename J, std::enable_if_t<std::is_base_of<I, J>::value && !std::is_same<I, J>::value, int> = 0>
+    IEC_INTERFACE& operator=(const IEC_INTERFACE<J>& other) noexcept {
+        ptr_ = other.get();
+        return *this;
+    }
+    IEC_INTERFACE& operator=(std::nullptr_t) noexcept {
+        ptr_ = nullptr;
+        return *this;
+    }
+    /** `itf := 0` */
+    template<typename N, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+    IEC_INTERFACE& operator=(N value) noexcept {
+        if (value == 0) ptr_ = nullptr;
+        return *this;
+    }
+
+    I* operator->() const {
+        fault_if_null();
+        return ptr_;
+    }
+    I& operator*() const {
+        fault_if_null();
+        return *ptr_;
+    }
+    I* get() const noexcept { return ptr_; }
+
+    template<typename N, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+    bool operator==(N value) const noexcept {
+        return value == 0 ? ptr_ == nullptr : false;
+    }
+    template<typename N, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+    bool operator!=(N value) const noexcept {
+        return !(*this == value);
+    }
+    bool operator==(std::nullptr_t) const noexcept { return ptr_ == nullptr; }
+    bool operator!=(std::nullptr_t) const noexcept { return ptr_ != nullptr; }
+    /** Same-interface identity; IEC compares interface references of one type only. */
+    bool operator==(const IEC_INTERFACE& other) const noexcept { return ptr_ == other.ptr_; }
+    bool operator!=(const IEC_INTERFACE& other) const noexcept { return ptr_ != other.ptr_; }
+};
+
 }  // namespace strucpp

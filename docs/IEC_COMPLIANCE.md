@@ -10,14 +10,14 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | BYTE, WORD, DWORD, LWORD | Supported | |
 | SINT, INT, DINT, LINT | Supported | |
 | USINT, UINT, UDINT, ULINT | Supported | |
-| REAL, LREAL | Supported | |
+| REAL, LREAL | Supported | REAL arithmetic and REAL functions (SQRT, SIN, COS, ...) compute in single precision; an untyped real literal (`1.5`) takes the type of its context, so it is a float next to a REAL and a double next to an LREAL |
 | TIME | Supported | Nanosecond precision, int64_t storage |
 | DATE | Supported | |
 | TIME_OF_DAY | Supported | |
 | DATE_AND_TIME | Supported | |
 | LTIME, LDATE, LTOD, LDT | Supported | 64-bit time types with nanosecond precision |
-| STRING | Supported | Parameterized length: STRING(N), default 254 |
-| WSTRING | Supported | Parameterized length: WSTRING(N) |
+| STRING | Supported | Parameterized length: STRING(N) (CODESYS) or STRING[N] (IEC 61131-3 Ed. 3), default 254 |
+| WSTRING | Supported | Parameterized length: WSTRING(N) or WSTRING[N] |
 | CHAR, WCHAR | Supported | |
 
 ### Derived Types
@@ -26,12 +26,12 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 |------|--------|-------|
 | TYPE ... END_TYPE | Supported | Type aliases |
 | STRUCT ... END_STRUCT | Supported | With nested structs |
-| Enumerations | Supported | With optional base type |
+| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value |
 | Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
 | ARRAY (3D) | Supported | ARRAY[1..3, 1..4, 1..5] OF INT |
-| ARRAY OF function block | Supported | Declaration, member access, and element invocation (`units[i](step := 1.0)`). A *method* call on an element (`units[0].M()`) is not yet parsed |
+| ARRAY OF function block | Supported | Declaration, member access, element invocation (`units[i](step := 1.0)`) and method calls on elements (`units[0].M()`) |
 | ARRAY[*] (VLA) | Supported | Variable-length array parameters |
 | Subranges | Supported | Runtime validation |
 | REF_TO | Supported | IEC reference type (explicit dereference) |
@@ -51,7 +51,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | PROGRAM | Supported | With CONFIGURATION/RESOURCE/TASK structure |
 | FUNCTION | Supported | With return type, all parameter modes |
 | FUNCTION_BLOCK | Supported | Instantiation, invocation, member access |
-| INTERFACE | Supported | Method and property signatures |
+| INTERFACE | Supported | Method and property signatures. Interface-typed variables and arrays hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); interfaces from a linked library are not recognised as interface types yet |
 
 ## Variable Declarations
 
@@ -96,7 +96,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Reference | `REF()` | Supported |
 | Parentheses | `( )` | Supported |
 | Function call | `name(args)` | Supported (positional + named) |
-| Method call | `obj.method(args)` | Supported |
+| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)` | Supported |
 | Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
 | Typed literals | `INT#5`, `DINT#42`, `REAL#3.14` | Supported |
@@ -127,8 +127,16 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | ABSTRACT | Supported | Abstract FB (no instantiation) and abstract methods (pure virtual) |
 | FINAL | Supported | Sealed FB and methods |
 | OVERRIDE | Supported | Method override with C++ override specifier |
-| PUBLIC/PRIVATE/PROTECTED | Supported | Access modifiers |
-| THIS | Supported | Self-reference in methods |
+| PUBLIC/PRIVATE/PROTECTED/INTERNAL | Supported | Enforced on methods: PRIVATE only from the declaring FB; PROTECTED from the declaring FB or a derived one, through `THIS^`/`SUPER^`/an unqualified call or an instance of the caller's own lineage; INTERNAL only within the compilation unit (library) that declares it. INTERNAL remains usable as an identifier |
+| THIS | Supported | Self-reference in methods: `THIS^`, `THIS^.member`, `THIS^.method(args)` (and `THIS.member`) |
+
+## Diagnostics beyond the standard
+
+| Check | Notes |
+|-------|-------|
+| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error |
+| Unknown FB argument | `fb(x := ...)` where `x` is not an input, output or in-out of the block is an error |
+| Members named like methods | A variable named like a method of its block's class hierarchy is emitted under a mangled C++ name; a method-local variable hides a member of the same name, and the block's methods stay callable |
 
 ## Standard Functions
 
@@ -193,12 +201,12 @@ edges on `CU` and `CD` leave `CV` unchanged. CODESYS does not document that case
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Nested comments `(* (* *) *)` | Supported | Arbitrary nesting depth |
-| Pragmas `{...}` | Supported | Including `{external}` for inline C++ |
+| Pragmas `{...}` | Supported | Including `{external}` for inline C++; CODESYS `{attribute 'name' [:= 'value']}` pragmas are accepted and ignored |
 | Inline C++ | Supported | Via `{external ...}` pragma blocks |
 | Inline function calls | Supported | Via `{call ...}` pragma |
 | Global constants (`-D`) | Supported | CLI `-D NAME=VALUE`, emits `constexpr` |
 | Dynamic memory | Supported | `__NEW(type)`, `__DELETE(ptr)` |
-| POINTER TO | Supported | Full pointer type with dereference |
+| POINTER TO | Supported | Full pointer type with dereference; `POINTER TO <FB>` from `ADR()` dispatches methods virtually |
 | Typed literals | Supported | `INT#5`, `DINT#42`, `REAL#3.14` |
 
 ## Not Yet Implemented

@@ -75,8 +75,8 @@ describe("issue #133: statement-body literal lowering", () => {
       "r := 1.5; r := 1.5E3; lr := 1.5E-10;",
       "r : REAL; lr : LREAL;",
     );
-    expect(body).toContain("R = 1.5;");
-    expect(body).toContain("R = 1500.0;");
+    expect(body).toContain("R = 1.5f;");
+    expect(body).toContain("R = 1500.0f;");
     expect(body).toContain("LR = 1.5e-10;");
   });
 });

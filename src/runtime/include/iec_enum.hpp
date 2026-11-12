@@ -274,4 +274,21 @@ inline std::ostream& operator<<(std::ostream& os, const IEC_ENUM_Var<EnumType>& 
  *   using Status_Var = IEC_ENUM_Var<Status>;
  */
 
+/** Integer value of an enumeration, so the generic `TO_<type>` conversions accept enums. */
+template<typename EnumType>
+constexpr typename std::underlying_type<EnumType>::type iec_unwrap(const IEC_ENUM_Value<EnumType>& v) noexcept {
+    return static_cast<typename std::underlying_type<EnumType>::type>(v.get());
+}
+
+template<typename EnumType>
+inline typename std::underlying_type<EnumType>::type iec_unwrap(const IEC_ENUM_Var<EnumType>& v) noexcept {
+    return static_cast<typename std::underlying_type<EnumType>::type>(v.get().get());
+}
+
+/** `TO_<enum>(x)`: the enumeration member whose integer value is `x`. */
+template<typename EnumType, typename T>
+inline IEC_ENUM_Value<EnumType> TO_ENUM(const T& v) noexcept {
+    return IEC_ENUM_Value<EnumType>(static_cast<EnumType>(iec_unwrap(v)));
+}
+
 }  // namespace strucpp

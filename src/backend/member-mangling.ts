@@ -11,10 +11,11 @@
  *      a member that changes the meaning of its type name within the class
  *      (`-Wchanges-meaning`), so it is emitted as `RUNNINGLIGHTS_`.
  *
- *   2. **The member's name matches an interface method the owning FB
- *      implements.** `VAR Start : BOOL` inside a `FUNCTION_BLOCK ... IMPLEMENTS
- *      IMotor` that declares `METHOD Start` would otherwise redeclare the method
- *      as a data member.
+ *   2. **The member's name matches a method of the owning FB's class
+ *      hierarchy**: a method the FB declares or inherits, a method of a block
+ *      that extends it, or a method of an interface it implements. `VAR Start :
+ *      BOOL` next to `METHOD Start` would otherwise redeclare the method as a
+ *      data member, or hide it in a derived class. See {@link methodNamesByBlock}.
  *
  * Every emitter that writes or addresses a member has to agree, because they all
  * name the same C++ entity: the class definition (`codegen` / `type-codegen`),
@@ -28,7 +29,10 @@
  * {@link MemberManglingContext} rather than being computed here.
  */
 
-import type { CompilationUnit } from "../frontend/ast.js";
+import type {
+  CompilationUnit,
+  FunctionBlockDeclaration,
+} from "../frontend/ast.js";
 
 /**
  * Upper-cased names of every user-defined type in a compilation unit — function
@@ -65,11 +69,12 @@ export interface MemberManglingContext {
   isUserDefinedType(typeName: string): boolean;
 
   /**
-   * Upper-cased method names of every interface implemented by the type that
-   * *declares* the member — not the member's own type. Omitted where the caller
-   * has no owner in hand, which skips that check rather than guessing.
+   * Upper-cased method names the member must not take, for the type that
+   * *declares* the member (not the member's own type): {@link methodNamesByBlock}
+   * of the owner. Omitted where the caller has no owner in hand, which skips
+   * that check rather than guessing.
    */
-  interfaceMethods?: ReadonlySet<string> | undefined;
+  methodNames?: ReadonlySet<string> | undefined;
 }
 
 /**
@@ -95,7 +100,7 @@ export function needsMemberMangling(
     return true;
   }
 
-  return ctx.interfaceMethods?.has(upperMember) === true;
+  return ctx.methodNames?.has(upperMember) === true;
 }
 
 /** The member's C++ name: {@link needsMemberMangling} applied. */
@@ -107,4 +112,74 @@ export function mangledMemberName(
   return needsMemberMangling(memberName, memberTypeName, ctx)
     ? `${memberName}_`
     : memberName;
+}
+
+/**
+ * For every function block of `ast`, the upper-cased method names its members
+ * must not take: methods it declares or inherits (bases resolved through
+ * `lookupBase` when they come from a library), methods declared by blocks of
+ * this unit that extend it, and methods of every interface it or a base
+ * implements, including inherited interfaces.
+ *
+ * The single source for {@link MemberManglingContext.methodNames}; every
+ * emitter calls it so they agree on member names.
+ */
+export function methodNamesByBlock(
+  ast: CompilationUnit,
+  lookupBase?: (upperName: string) => FunctionBlockDeclaration | undefined,
+): Map<string, Set<string>> {
+  const local = new Map(
+    ast.functionBlocks.map((fb) => [fb.name.toUpperCase(), fb] as const),
+  );
+  const interfaces = new Map(
+    ast.interfaces.map((i) => [i.name.toUpperCase(), i] as const),
+  );
+  const fbDecl = (upper: string): FunctionBlockDeclaration | undefined =>
+    local.get(upper) ?? lookupBase?.(upper);
+  const interfaceMethods = (
+    upper: string,
+    into: Set<string>,
+    seen: Set<string>,
+  ): void => {
+    if (seen.has(upper)) return;
+    seen.add(upper);
+    const iface = interfaces.get(upper);
+    if (!iface) return;
+    for (const m of iface.methods) into.add(m.name.toUpperCase());
+    for (const base of iface.extends ?? []) {
+      interfaceMethods(base.toUpperCase(), into, seen);
+    }
+  };
+  const lineage = (upper: string): string[] => {
+    const out: string[] = [];
+    let current: string | undefined = upper;
+    while (current !== undefined && !out.includes(current)) {
+      out.push(current);
+      current = fbDecl(current)?.extends?.toUpperCase();
+    }
+    return out;
+  };
+
+  const result = new Map<string, Set<string>>();
+  for (const [name] of local) {
+    const names = new Set<string>();
+    const seenInterfaces = new Set<string>();
+    for (const owner of lineage(name)) {
+      const decl = fbDecl(owner);
+      if (!decl) break;
+      for (const m of decl.methods) names.add(m.name.toUpperCase());
+      for (const i of decl.implements ?? []) {
+        interfaceMethods(i.toUpperCase(), names, seenInterfaces);
+      }
+    }
+    result.set(name, names);
+  }
+  for (const [name, fb] of local) {
+    for (const ancestor of lineage(name).slice(1)) {
+      const set = result.get(ancestor);
+      if (!set) continue;
+      for (const m of fb.methods) set.add(m.name.toUpperCase());
+    }
+  }
+  return result;
 }
