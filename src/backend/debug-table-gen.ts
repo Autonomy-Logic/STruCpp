@@ -432,9 +432,10 @@ export function generateDebugTable(
     tagName: TagName;
   }> = [];
   const skipped: Array<{ path: string; reason: string }> = [];
-  // An interface variable holds a reference to an FB instance, not data.
   const INTERFACE_REASON =
     "an interface variable holds a reference to an instance, which the debugger cannot show or write.";
+  const INTERFACE_ARRAY_REASON =
+    "each element is an interface variable, which holds a reference to an instance the debugger cannot show or write.";
   /**
    * Retained state the walk could not reach — today only a RETAIN on a library
    * block whose manifest predates exported locals.
@@ -522,15 +523,15 @@ export function generateDebugTable(
       return;
     }
 
-    // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
     if (
       typeRef.arrayDimensions !== undefined &&
       typeRef.elementTypeName !== undefined &&
       interfaceNames.has(typeRef.elementTypeName.toUpperCase())
     ) {
-      skipped.push({ path, reason: `each element of ${INTERFACE_REASON}` });
+      skipped.push({ path, reason: INTERFACE_ARRAY_REASON });
       return;
     }
+    // Inline array: `ARRAY[0..4] OF INT` → has arrayDimensions + elementTypeName
     if (typeRef.arrayDimensions && typeRef.elementTypeName) {
       const elementKind =
         typeRef.elementReferenceChain?.[0] ??

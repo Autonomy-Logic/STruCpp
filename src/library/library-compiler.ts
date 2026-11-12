@@ -14,6 +14,7 @@ import type {
 } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
+import { functionBlockLookup } from "../semantic/fb-lineage.js";
 import type { MemberManglingContext } from "../backend/member-mangling.js";
 import {
   mangledMemberName,
@@ -107,18 +108,28 @@ function serializeVarType(
   return entry;
 }
 
+/** Records `cppName` when the member-mangling rule renames the member in C++. */
+function withCppName(
+  entry: LibraryVarType,
+  ctx: MemberManglingContext | undefined,
+): LibraryVarType {
+  if (ctx === undefined) return entry;
+  const cppName = mangledMemberName(entry.name, entry.type, ctx);
+  if (cppName !== entry.name) entry.cppName = cppName;
+  return entry;
+}
+
 /**
  * Serialize one `VAR` member of a function block for the manifest.
  *
- * Same shape as the interface entries, plus three things only the declaring
+ * Same shape as the interface entries, plus what only the declaring
  * library can answer:
  *
- *   • `cppName` when codegen mangled the member. Both mangling rules are
- *     decided against this compilation unit — whether the member's type is
- *     user-defined HERE, and which interface methods the block implements —
- *     so a consumer cannot always re-derive them. Emitted only when it
- *     differs, which across the bundled archives is never; the field exists so
- *     the case that does occur is carried rather than guessed at.
+ *   • `cppName` when codegen mangled the member (see {@link withCppName}).
+ *     Both mangling rules are decided against this compilation unit — whether
+ *     the member's type is user-defined HERE, and which method names the
+ *     block's class hierarchy reserves — so a consumer cannot always
+ *     re-derive them. Emitted only when it differs.
  *
  *   • `readOnly` / `retain` from the declaring block's qualifiers. A
  *     `VAR RETAIN` inside a function block is retained in every instance of
@@ -130,9 +141,7 @@ function serializeLocal(
   block: VarBlock,
   ctx: MemberManglingContext,
 ): LibraryVarType {
-  const entry = serializeVarType(name, decl.type);
-  const cppName = mangledMemberName(name, decl.type.name, ctx);
-  if (cppName !== name) entry.cppName = cppName;
+  const entry = withCppName(serializeVarType(name, decl.type), ctx);
   if (block.isConstant) entry.readOnly = true;
   if (block.isRetain) entry.retain = true;
   return entry;
@@ -278,19 +287,22 @@ function emptyManifest(options: {
  * interface identically — the native path differs only in what it adds
  * afterwards (`implementation`, `sourceFile`).
  */
-function buildFBEntry(fb: {
-  name: string;
-  varBlocks: Array<{
-    blockType: string;
-    declarations: Array<{ names: string[]; type: TypeReference }>;
-  }>;
-}): LibraryFBEntry {
+function buildFBEntry(
+  fb: {
+    name: string;
+    varBlocks: Array<{
+      blockType: string;
+      declarations: Array<{ names: string[]; type: TypeReference }>;
+    }>;
+  },
+  ctx?: MemberManglingContext,
+): LibraryFBEntry {
   const varsOfBlock = (blockType: string): LibraryVarType[] =>
     fb.varBlocks
       .filter((b) => b.blockType === blockType)
       .flatMap((b) =>
         b.declarations.flatMap((d) =>
-          d.names.map((n) => serializeVarType(n, d.type)),
+          d.names.map((n) => withCppName(serializeVarType(n, d.type), ctx)),
         ),
       );
 
@@ -585,7 +597,10 @@ export function compileLibrary(
   // place that knows which of its type names are user-defined and which
   // method names each block's members must not take. See serializeLocal().
   const userTypes = userDefinedTypeNames(ast);
-  const blockMethodNames = methodNamesByBlock(ast);
+  const blockMethodNames = methodNamesByBlock(
+    ast,
+    functionBlockLookup(ast, result.symbolTables),
+  );
 
   const manglingCtx = (
     fb: FunctionBlockDeclaration,
@@ -648,7 +663,7 @@ export function compileLibrary(
         tagDocumentation(
           tagCategory(
             {
-              ...buildFBEntry(fb),
+              ...buildFBEntry(fb, manglingCtx(fb)),
               // The block's own VAR members, declared the same way the
               // interface arrays above are. A RETAINed instance retains these
               // too; without them a retained TON keeps Q and ET and loses the

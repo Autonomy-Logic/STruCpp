@@ -259,6 +259,14 @@ function getIdentifierOrKeywordImage(node: CstNode): string {
   return "";
 }
 
+/** The type name of a `dataType` CST node, without its reference prefixes or length. */
+function dataTypeName(node: CstNode): string | undefined {
+  const nameNode = getFirstNode(
+    (node.children as CstChildren).identifierOrKeyword,
+  );
+  return nameNode ? getIdentifierOrKeywordImage(nameNode) : undefined;
+}
+
 /**
  * Extract all identifier strings from an array of identifierOrKeyword CST nodes.
  */
@@ -719,8 +727,8 @@ export class ASTBuilder {
    */
   buildMethodDeclaration(node: CstNode): MethodDeclaration {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+    const nameNode = getFirstNode(children.identifierOrKeyword);
+    const name = nameNode ? getIdentifierOrKeywordImage(nameNode) : "";
 
     // Visibility modifier
     let visibility: Visibility = "PUBLIC";
@@ -810,8 +818,8 @@ export class ASTBuilder {
    */
   buildPropertyDeclaration(node: CstNode): PropertyDeclaration {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+    const nameNode = getFirstNode(children.identifierOrKeyword);
+    const name = nameNode ? getIdentifierOrKeywordImage(nameNode) : "";
 
     // Visibility modifier
     let visibility: Visibility = "PUBLIC";
@@ -1033,8 +1041,8 @@ export class ASTBuilder {
    */
   buildEnumMember(node: CstNode): EnumMember {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+    const nameNode = getFirstNode(children.identifierOrKeyword);
+    const name = nameNode ? getIdentifierOrKeywordImage(nameNode) : "";
 
     // Check for explicit value: := expression
     let value: Expression | undefined;
@@ -1097,11 +1105,7 @@ export class ASTBuilder {
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
     if (elementTypeNode) {
-      const elemChildren = elementTypeNode.children as CstChildren;
-      const elemNameToken = getFirstToken(elemChildren.Identifier);
-      if (elemNameToken) {
-        elementTypeName = elemNameToken.image;
-      }
+      elementTypeName = dataTypeName(elementTypeNode) ?? elementTypeName;
     }
 
     // Extract integer bounds from dimensions
@@ -1653,8 +1657,7 @@ export class ASTBuilder {
   buildTypeReference(node: CstNode): TypeReference {
     const children = node.children as CstChildren;
 
-    const nameToken = getFirstToken(children.Identifier);
-    const name = nameToken?.image ?? "INT";
+    const name = dataTypeName(node) ?? "INT";
 
     // The prefixes in source order: CST children are grouped by token type,
     // so their relative order comes from the offsets.
@@ -1682,12 +1685,9 @@ export class ASTBuilder {
     if (lengthToken) {
       maxLength = parseInt(lengthToken.image, 10);
     } else {
-      // Check for identifier-based length (STRING(CONSTANT_NAME))
-      // Note: children.Identifier[0] is the type name itself; [1] would be the length constant
-      const allIdents = getAllTokens(children.Identifier);
-      if (allIdents.length > 1) {
-        maxLength = allIdents[1]!.image;
-      }
+      // Identifier-based length: STRING(CONSTANT_NAME)
+      const lengthName = getFirstToken(children.Identifier);
+      if (lengthName) maxLength = lengthName.image;
     }
 
     const result: TypeReference = {
@@ -1729,11 +1729,7 @@ export class ASTBuilder {
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
     if (elementTypeNode) {
-      const elemChildren = elementTypeNode.children as CstChildren;
-      const elemNameToken = getFirstToken(elemChildren.Identifier);
-      if (elemNameToken) {
-        elementTypeName = elemNameToken.image;
-      }
+      elementTypeName = dataTypeName(elementTypeNode) ?? elementTypeName;
     }
 
     // Create synthetic name based on whether it's VLA or fixed

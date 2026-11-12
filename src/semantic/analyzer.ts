@@ -39,6 +39,11 @@ import { Scope, SymbolTables } from "./symbol-table.js";
 import type { FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 import {
+  fbLineage,
+  fbLineageNames,
+  functionBlockLookup,
+} from "./fb-lineage.js";
+import {
   getBitAccessWidth,
   resolveFieldType,
   resolveArrayElementType,
@@ -71,6 +76,14 @@ import {
 /**
  * Parsed components of a located variable address.
  */
+/** What a method call is made on: the caller itself, its base, or an instance of `type`. */
+type CallReceiver =
+  | { kind: "self" }
+  | { kind: "super" }
+  | { kind: "instance"; type: string };
+const SELF: CallReceiver = { kind: "self" };
+const SUPER: CallReceiver = { kind: "super" };
+
 interface ParsedAddress {
   area: "I" | "Q" | "M"; // Input, Output, Memory
   size: "X" | "B" | "W" | "D" | "L"; // Bit, Byte, Word, DWord, LWord
@@ -2644,69 +2657,104 @@ export class SemanticAnalyzer {
    * only from the compilation unit that declares it (not across a library).
    */
   private validateAccessModifiers(ast: CompilationUnit): void {
-    const localFBs = new Map(
-      ast.functionBlocks.map((fb) => [fb.name.toUpperCase(), fb] as const),
-    );
-    const fbDecl = (upper: string): FunctionBlockDeclaration | undefined =>
-      localFBs.get(upper) ??
-      this.symbolTables.lookupFunctionBlock(upper)?.declaration;
-    const lineage = (upper: string): string[] => {
-      const out: string[] = [];
-      let current: string | undefined = upper;
-      while (current !== undefined && !out.includes(current)) {
-        out.push(current);
-        current = fbDecl(current)?.extends?.toUpperCase();
-      }
-      return out;
-    };
+    const lookup = functionBlockLookup(ast, this.symbolTables);
+    const localFBs = new Set(ast.functionBlocks);
     const findMethod = (
-      typeUpper: string,
+      typeName: string,
       methodUpper: string,
-    ): { owner: string; visibility: Visibility } | undefined => {
-      for (const owner of lineage(typeUpper)) {
-        const m = fbDecl(owner)?.methods.find(
+    ):
+      | { owner: FunctionBlockDeclaration; visibility: Visibility }
+      | undefined => {
+      for (const owner of fbLineage(typeName, lookup)) {
+        const m = owner.methods.find(
           (x) => x.name.toUpperCase() === methodUpper,
         );
         if (m) return { owner, visibility: m.visibility };
       }
       return undefined;
     };
+    /** The block whose methods `receiver` reaches, for a call made from `callerFB`. */
+    const lookupStart = (
+      callerFB: string | null,
+      receiver: CallReceiver,
+    ): string | undefined => {
+      switch (receiver.kind) {
+        case "instance":
+          return receiver.type;
+        case "self":
+          return callerFB ?? undefined;
+        case "super":
+          return callerFB === null ? undefined : lookup(callerFB)?.extends;
+        default: {
+          const unreachable: never = receiver;
+          return unreachable;
+        }
+      }
+    };
 
     const check = (
       callerFB: string | null,
-      objectType: string | null,
+      receiver: CallReceiver,
       methodName: string,
       span: SourceSpan,
     ): void => {
-      const target = objectType ?? callerFB;
-      if (target === null) return;
-      const found = findMethod(target, methodName.toUpperCase());
-      if (!found || found.visibility === "PUBLIC") return;
-      const { owner, visibility } = found;
+      const start = lookupStart(callerFB, receiver);
+      if (start === undefined) return;
+      const found = findMethod(start, methodName.toUpperCase());
+      if (!found) return;
+      const owner = found.owner.name.toUpperCase();
+      const callerLineage =
+        callerFB === null ? [] : fbLineageNames(callerFB, lookup);
       let allowed: boolean;
-      if (visibility === "PRIVATE") {
-        allowed = callerFB === owner;
-      } else if (visibility === "PROTECTED") {
-        allowed =
-          callerFB !== null &&
-          lineage(callerFB).includes(owner) &&
-          (objectType === null || lineage(objectType).includes(callerFB));
-      } else {
-        allowed = localFBs.has(owner);
+      let where: string;
+      switch (found.visibility) {
+        case "PUBLIC":
+          return;
+        case "PRIVATE":
+          allowed = callerFB === owner;
+          where = `from outside '${owner}'`;
+          break;
+        case "PROTECTED":
+          // C++ rule: through itself, or an instance of its own lineage.
+          allowed =
+            callerLineage.includes(owner) &&
+            (receiver.kind !== "instance" ||
+              (callerFB !== null &&
+                fbLineageNames(receiver.type, lookup).includes(callerFB)));
+          where = `from '${callerFB ?? "PROGRAM"}'`;
+          break;
+        case "INTERNAL":
+          allowed = localFBs.has(found.owner);
+          where = "from outside its library";
+          break;
+        default: {
+          const unreachable: never = found.visibility;
+          return unreachable;
+        }
       }
       if (allowed) return;
-      const where =
-        visibility === "PRIVATE"
-          ? `from outside '${owner}'`
-          : visibility === "INTERNAL"
-            ? "from outside its library"
-            : `from '${callerFB ?? "PROGRAM"}'`;
       this.addError(
-        `Cannot call ${visibility} method '${methodName}' of '${owner}' ${where}.`,
+        `Cannot call ${found.visibility} method '${methodName}' of '${owner}' ${where}.`,
         span.startLine,
         span.startCol,
         span.file,
       );
+    };
+
+    /** Receiver of `obj.M()`: its resolved type, else a declared variable's type. */
+    const receiverOf = (
+      call: MethodCallExpression,
+      varTypes: Map<string, string>,
+    ): CallReceiver | undefined => {
+      const obj = call.object;
+      if (obj.resolvedType) {
+        return { kind: "instance", type: typeName(obj.resolvedType) };
+      }
+      if (obj.kind !== "VariableExpression") return undefined;
+      const declared = varTypes.get(obj.name.toUpperCase());
+      return declared === undefined
+        ? undefined
+        : { kind: "instance", type: declared };
     };
 
     const scanBody = (
@@ -2718,33 +2766,32 @@ export class SemanticAnalyzer {
         walkAST(stmt, (node) => {
           if (node.kind === "MethodCallExpression") {
             const call = node as MethodCallExpression;
-            const obj = call.object;
-            const objType = obj.resolvedType
-              ? typeName(obj.resolvedType).toUpperCase()
-              : obj.kind === "VariableExpression"
-                ? varTypes.get(obj.name.toUpperCase())
-                : undefined;
-            if (objType !== undefined) {
-              check(callerFB, objType, call.methodName, call.sourceSpan);
+            const receiver = receiverOf(call, varTypes);
+            if (receiver !== undefined) {
+              check(callerFB, receiver, call.methodName, call.sourceSpan);
             }
           } else if (node.kind === "FunctionCallExpression") {
             const call = node as FunctionCallExpression;
             const dot = call.functionName.indexOf(".");
             if (dot < 0) {
-              const name = call.functionName.toUpperCase();
-              if (callerFB !== null && findMethod(callerFB, name)) {
-                check(callerFB, null, call.functionName, call.sourceSpan);
-              }
+              check(callerFB, SELF, call.functionName, call.sourceSpan);
               return;
             }
             const prefix = call.functionName.substring(0, dot).toUpperCase();
             const method = call.functionName.substring(dot + 1);
-            if (prefix === "THIS" || prefix === "SUPER") {
-              check(callerFB, null, method, call.sourceSpan);
+            if (prefix === "THIS") {
+              check(callerFB, SELF, method, call.sourceSpan);
+            } else if (prefix === "SUPER") {
+              check(callerFB, SUPER, method, call.sourceSpan);
             } else {
               const objType = varTypes.get(prefix);
               if (objType !== undefined) {
-                check(callerFB, objType, method, call.sourceSpan);
+                check(
+                  callerFB,
+                  { kind: "instance", type: objType },
+                  method,
+                  call.sourceSpan,
+                );
               }
             }
           }

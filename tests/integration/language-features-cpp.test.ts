@@ -8,6 +8,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { compile } from "../../src/index.js";
+import { compileStlib } from "../../src/library/library-compiler.js";
 import { hasGpp, createPCH, compileAndRunStandalone } from "./test-helpers.js";
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
@@ -198,6 +199,163 @@ END_PROGRAM`,
     );
     expect(out.trim()).toBe("111");
   });
+
+  it("calls through interfaces held by a base, a struct and a method result", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+INTERFACE I METHOD M : DINT END_METHOD END_INTERFACE
+INTERFACE J EXTENDS I END_INTERFACE
+FUNCTION_BLOCK Impl IMPLEMENTS J
+  VAR k : DINT := 7; END_VAR
+  METHOD M : DINT M := k; END_METHOD
+END_FUNCTION_BLOCK
+TYPE Holder : STRUCT itf : I; n : INT; END_STRUCT; END_TYPE
+FUNCTION_BLOCK Base VAR itf : I; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK Derived EXTENDS Base
+  VAR keep : J; END_VAR
+  METHOD Bind : DINT VAR_INPUT target : J; END_VAR
+    itf := target; keep := target; Bind := itf.M();
+  END_METHOD
+  METHOD Kept : I Kept := keep; END_METHOD
+  METHOD Nothing : I Nothing := 0; END_METHOD
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR impl : Impl; d : Derived; h : Holder; ii : I; jj : J; RESULT : DINT; END_VAR
+  RESULT := d.Bind(impl);
+  h.itf := impl;
+  RESULT := RESULT * 10 + h.itf.M();
+  RESULT := RESULT * 10 + d.Kept().M();
+  ii := impl; jj := impl;
+  IF ii = jj AND jj = ii AND d.Nothing() = 0 THEN RESULT := RESULT * 10 + 1; END_IF;
+END_PROGRAM`,
+      "interface_paths",
+    );
+    expect(out.trim()).toBe("7771");
+  });
+
+  it("calls a user function named like an enumeration conversion", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+TYPE E : (A := 0, B := 5); END_TYPE
+FUNCTION INT_TO_E : E VAR_INPUT v : INT; END_VAR INT_TO_E := E#B; END_FUNCTION
+PROGRAM P
+  VAR RESULT : DINT; END_VAR
+  RESULT := E_TO_DINT(INT_TO_E(3));
+END_PROGRAM`,
+      "user_enum_conversion",
+    );
+    expect(out.trim()).toBe("5");
+  });
+
+  it("reads ENO and uses INTERNAL as a type, method and property name", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+FUNCTION_BLOCK Internal VAR_INPUT a : INT; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK Gauge
+  VAR_INPUT a : INT; END_VAR
+  METHOD Internal : INT Internal := a; END_METHOD
+  METHOD INTERNAL Twice : INT Twice := 2 * a; END_METHOD
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK Meter
+  VAR v : INT := 3; END_VAR
+  PROPERTY Internal : INT GET Internal := v; END_GET END_PROPERTY
+END_FUNCTION_BLOCK
+PROGRAM P
+  VAR i : Internal; g : Gauge; m : Meter; ok : BOOL; RESULT : DINT; END_VAR
+  i(a := 1);
+  g(a := 4);
+  ok := i.ENO AND g.ENO;
+  RESULT := g.Internal() * 100 + g.Twice() * 10 + m.Internal;
+  IF NOT ok THEN RESULT := -1; END_IF;
+END_PROGRAM`,
+      "internal_names",
+    );
+    expect(out.trim()).toBe("483");
+  });
+
+  it("uses INTERNAL as an enumeration member", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+TYPE Mode : (EXTERNAL_M, INTERNAL); END_TYPE
+PROGRAM P
+  VAR m : Mode := Mode#INTERNAL; RESULT : DINT; END_VAR
+  RESULT := TO_DINT(m);
+END_PROGRAM`,
+      "internal_enum_member",
+    );
+    expect(out.trim()).toBe("1");
+  });
+
+  it("names a member the way its declaring block does when a derived block has a method of that name", () => {
+    const out = runProgram(
+      tempDir,
+      pchPath,
+      `
+FUNCTION_BLOCK B VAR_INPUT Start : BOOL; END_VAR VAR_OUTPUT Q : INT; END_VAR
+  IF Start THEN Q := 42; END_IF;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B SUPER^(); END_FUNCTION_BLOCK
+FUNCTION_BLOCK E EXTENDS B METHOD Start : BOOL Start := TRUE; END_METHOD END_FUNCTION_BLOCK
+PROGRAM P
+  VAR inst : D; RESULT : DINT; END_VAR
+  inst(Start := TRUE);
+  IF inst.Start THEN RESULT := inst.Q; END_IF;
+END_PROGRAM`,
+      "sibling_method_member",
+    );
+    expect(out.trim()).toBe("42");
+  });
+
+  it("uses the C++ name a library records for an input renamed by a derived method", () => {
+    const lib = compileStlib(
+      [
+        {
+          fileName: "l.st",
+          source: `
+FUNCTION_BLOCK B VAR_INPUT Start : BOOL; END_VAR VAR_OUTPUT Q : INT; END_VAR
+  IF Start THEN Q := 42; END_IF;
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B METHOD Start : BOOL Start := TRUE; END_METHOD END_FUNCTION_BLOCK`,
+        },
+      ],
+      { name: "l", version: "1.0.0", namespace: "l" },
+    );
+    expect(lib.success).toBe(true);
+    const b = lib.archive.manifest.functionBlocks.find((f) => f.name === "B");
+    expect(b?.inputs[0]?.cppName).toBe("START_");
+    const result = compile(
+      `PROGRAM P
+  VAR inst : B; RESULT : DINT; END_VAR
+  inst(Start := TRUE);
+  RESULT := inst.Q;
+END_PROGRAM`,
+      { libraries: [lib.archive] },
+    );
+    expect(result.errors).toEqual([]);
+    const out = compileAndRunStandalone({
+      tempDir,
+      pchPath,
+      headerCode: result.headerCode,
+      cppCode: result.cppCode,
+      testName: "library_member_name",
+      mainCode: `#include <cstdio>
+int main() {
+  strucpp::Program_P p;
+  p.run();
+  std::printf("%lld\\n", (long long)p.RESULT.get());
+  return 0;
+}`,
+    });
+    expect(out.trim()).toBe("42");
+  });
 });
 
 describe("access specifiers are enforced by the compiler", () => {
@@ -305,5 +463,60 @@ PROGRAM main
   s := TO_COLOR(i);
 END_PROGRAM`);
     expect(errs).toEqual(["Cannot assign COLOR to STRING"]);
+  });
+
+  it("checks SUPER^ against the base method it reaches", () => {
+    const errs = errorsOf(`
+FUNCTION_BLOCK B
+  METHOD PRIVATE Priv : INT Priv := 1; END_METHOD
+  METHOD PROTECTED Prot : INT Prot := 2; END_METHOD
+END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B
+  METHOD PUBLIC Priv : INT Priv := SUPER^.Priv(); END_METHOD
+  METHOD PUBLIC Prot : INT Prot := SUPER^.Prot(); END_METHOD
+END_FUNCTION_BLOCK
+PROGRAM main END_PROGRAM`);
+    expect(errs).toEqual([
+      "Cannot call PRIVATE method 'PRIV' of 'B' from outside 'B'.",
+    ]);
+  });
+
+  it("reports a method call on a member that is not a method", () => {
+    const errs = errorsOf(`
+FUNCTION_BLOCK Inner VAR_INPUT a : INT; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK Mid VAR sub : Inner; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK Outer VAR_OUTPUT mm : Mid; END_VAR END_FUNCTION_BLOCK
+PROGRAM main
+  VAR o : Outer; ms : ARRAY[0..1] OF Mid; END_VAR
+  o.mm.sub(a := 5);
+  ms[1].sub(a := 7);
+END_PROGRAM`);
+    expect(errs).toEqual([
+      "'MID' has no method 'SUB'",
+      "'MID' has no method 'SUB'",
+    ]);
+  });
+
+  it("checks named arguments of a library function block", () => {
+    const lib = compileStlib(
+      [
+        {
+          fileName: "l.st",
+          source:
+            "FUNCTION_BLOCK LibFb VAR_INPUT a : INT; END_VAR VAR hidden : INT; END_VAR END_FUNCTION_BLOCK",
+        },
+      ],
+      { name: "l", version: "1.0.0", namespace: "l" },
+    );
+    expect(lib.success).toBe(true);
+    const errs = compile(
+      `PROGRAM main
+  VAR f : LibFb; END_VAR
+  f(a := 1);
+  f(Nope := 1);
+END_PROGRAM`,
+      { libraries: [lib.archive] },
+    ).errors.map((e) => e.message);
+    expect(errs).toEqual(["'LIBFB' has no input or output 'NOPE'"]);
   });
 });

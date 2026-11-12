@@ -29,10 +29,8 @@
  * {@link MemberManglingContext} rather than being computed here.
  */
 
-import type {
-  CompilationUnit,
-  FunctionBlockDeclaration,
-} from "../frontend/ast.js";
+import type { CompilationUnit } from "../frontend/ast.js";
+import { fbLineage, type FunctionBlockLookup } from "../semantic/fb-lineage.js";
 
 /**
  * Upper-cased names of every user-defined type in a compilation unit — function
@@ -126,7 +124,7 @@ export function mangledMemberName(
  */
 export function methodNamesByBlock(
   ast: CompilationUnit,
-  lookupBase?: (upperName: string) => FunctionBlockDeclaration | undefined,
+  lookupBase?: FunctionBlockLookup,
 ): Map<string, Set<string>> {
   const local = new Map(
     ast.functionBlocks.map((fb) => [fb.name.toUpperCase(), fb] as const),
@@ -134,8 +132,8 @@ export function methodNamesByBlock(
   const interfaces = new Map(
     ast.interfaces.map((i) => [i.name.toUpperCase(), i] as const),
   );
-  const fbDecl = (upper: string): FunctionBlockDeclaration | undefined =>
-    local.get(upper) ?? lookupBase?.(upper);
+  const lookup: FunctionBlockLookup = (name) =>
+    local.get(name.toUpperCase()) ?? lookupBase?.(name);
   const interfaceMethods = (
     upper: string,
     into: Set<string>,
@@ -150,23 +148,12 @@ export function methodNamesByBlock(
       interfaceMethods(base.toUpperCase(), into, seen);
     }
   };
-  const lineage = (upper: string): string[] => {
-    const out: string[] = [];
-    let current: string | undefined = upper;
-    while (current !== undefined && !out.includes(current)) {
-      out.push(current);
-      current = fbDecl(current)?.extends?.toUpperCase();
-    }
-    return out;
-  };
 
   const result = new Map<string, Set<string>>();
   for (const [name] of local) {
     const names = new Set<string>();
     const seenInterfaces = new Set<string>();
-    for (const owner of lineage(name)) {
-      const decl = fbDecl(owner);
-      if (!decl) break;
+    for (const decl of fbLineage(name, lookup)) {
       for (const m of decl.methods) names.add(m.name.toUpperCase());
       for (const i of decl.implements ?? []) {
         interfaceMethods(i.toUpperCase(), names, seenInterfaces);
@@ -175,8 +162,8 @@ export function methodNamesByBlock(
     result.set(name, names);
   }
   for (const [name, fb] of local) {
-    for (const ancestor of lineage(name).slice(1)) {
-      const set = result.get(ancestor);
+    for (const ancestor of fbLineage(name, lookup).slice(1)) {
+      const set = result.get(ancestor.name.toUpperCase());
       if (!set) continue;
       for (const m of fb.methods) set.add(m.name.toUpperCase());
     }

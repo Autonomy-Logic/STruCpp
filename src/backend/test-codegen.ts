@@ -20,7 +20,6 @@ import type {
 } from "../frontend/ast.js";
 import type { POUInfo } from "./test-main-gen.js";
 import { CodeGenerator } from "./codegen.js";
-import { methodNamesByBlock } from "./member-mangling.js";
 import type { CodeGenOptions } from "./codegen.js";
 import { buildEnumMemberMap } from "../semantic/type-utils.js";
 
@@ -81,7 +80,7 @@ export class TestCodeGenerator extends CodeGenerator {
         );
       }
     }
-    this.fbMemberMethodNames = methodNamesByBlock(ast);
+    this.initMemberNaming(ast);
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());

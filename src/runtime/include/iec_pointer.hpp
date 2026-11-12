@@ -642,9 +642,21 @@ public:
     }
     bool operator==(std::nullptr_t) const noexcept { return ptr_ == nullptr; }
     bool operator!=(std::nullptr_t) const noexcept { return ptr_ != nullptr; }
-    /** Same-interface identity; IEC compares interface references of one type only. */
-    bool operator==(const IEC_INTERFACE& other) const noexcept { return ptr_ == other.ptr_; }
-    bool operator!=(const IEC_INTERFACE& other) const noexcept { return ptr_ != other.ptr_; }
 };
+
+/** Interfaces that are the same or where one extends the other. */
+template<typename A, typename B>
+struct iec_interfaces_related
+    : std::integral_constant<bool, std::is_base_of<A, B>::value || std::is_base_of<B, A>::value> {};
+
+/** Identity of two interface references, in either operand order. */
+template<typename A, typename B, std::enable_if_t<iec_interfaces_related<A, B>::value, int> = 0>
+bool operator==(const IEC_INTERFACE<A>& a, const IEC_INTERFACE<B>& b) noexcept {
+    return a.get() == b.get();
+}
+template<typename A, typename B, std::enable_if_t<iec_interfaces_related<A, B>::value, int> = 0>
+bool operator!=(const IEC_INTERFACE<A>& a, const IEC_INTERFACE<B>& b) noexcept {
+    return !(a == b);
+}
 
 }  // namespace strucpp

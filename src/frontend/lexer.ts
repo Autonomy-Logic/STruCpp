@@ -151,10 +151,13 @@ function matchAttributePragma(
   if (text.charAt(startOffset) !== "{") return null;
   let i = startOffset + 1;
   while (i < text.length && /\s/.test(text.charAt(i))) i++;
-  if (text.substring(i, i + 9).toLowerCase() !== "attribute") return null;
-  const after = text.charAt(i + 9);
+  const keyword = "attribute";
+  if (text.substring(i, i + keyword.length).toLowerCase() !== keyword) {
+    return null;
+  }
+  i += keyword.length;
+  const after = text.charAt(i);
   if (after !== "" && !/[\s']/.test(after)) return null;
-  i += 9;
   while (i < text.length) {
     const ch = text.charAt(i);
     if (ch === "'" || ch === '"') {

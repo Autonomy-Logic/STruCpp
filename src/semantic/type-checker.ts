@@ -18,6 +18,7 @@ import type {
   VariableExpression,
   FunctionCallExpression,
   MethodCallExpression,
+  MethodDeclaration,
   IECType,
   ElementaryType,
   ReferenceType,
@@ -48,10 +49,16 @@ import {
   resolveAccessType,
   resolveArrayElementAccessType,
   resolveFieldDeclaration,
+  parseConversionName,
   type AccessLookup,
   type AccessType,
 } from "./type-utils.js";
 import { stripEnEno } from "../ast-utils.js";
+import {
+  fbLineage,
+  functionBlockLookup,
+  type FunctionBlockLookup,
+} from "./fb-lineage.js";
 
 // Re-export from type-utils for backward compatibility
 export { ELEMENTARY_TYPES, TYPE_CATEGORIES } from "./type-utils.js";
@@ -165,10 +172,22 @@ function referenceShapeOf(
   return { chain, base: type.name };
 }
 
+/** What {@link TypeChecker.declaredMembers} found for a type. */
+interface DeclaredMembers {
+  kind: "functionBlock" | "struct" | "interface";
+  vars: Map<string, VarBlockType>;
+  callables: Set<string>;
+  /** False when some members are unknown, so a missing one is not an error. */
+  complete: boolean;
+}
+
 export class TypeChecker {
   private errors: CompileError[] = [];
   private warnings: CompileError[] = [];
   private ast: CompilationUnit | undefined;
+  private fbLookup: FunctionBlockLookup = () => undefined;
+  /** The function block whose body, method or property is being checked. */
+  private currentFB: FunctionBlockDeclaration | undefined;
 
   constructor(
     private symbolTables: SymbolTables,
@@ -186,6 +205,7 @@ export class TypeChecker {
     this.errors = [];
     this.warnings = [];
     this.ast = ast;
+    this.fbLookup = functionBlockLookup(ast, this.symbolTables);
 
     // Walk all programs
     for (const prog of ast.programs) {
@@ -208,6 +228,7 @@ export class TypeChecker {
     // Walk all function blocks
     for (const fb of ast.functionBlocks) {
       const scope = this.symbolTables.getFBScope(fb.name);
+      this.currentFB = fb;
       if (scope) {
         // FB body
         this.checkVarBlocks(fb.varBlocks, scope);
@@ -230,6 +251,7 @@ export class TypeChecker {
         }
       }
     }
+    this.currentFB = undefined;
 
     return {
       errors: this.errors,
@@ -657,6 +679,12 @@ export class TypeChecker {
 
     const nameUpper = expr.functionName.toUpperCase();
 
+    const dotted = this.dottedMethodCall(expr, scope);
+    if (dotted !== undefined) {
+      if (dotted.returnType) expr.resolvedType = dotted.returnType;
+      return dotted.returnType;
+    }
+
     // Check user-defined functions in symbol tables
     const funcSymbol = this.symbolTables.lookupFunction(expr.functionName);
     if (funcSymbol !== undefined) {
@@ -683,15 +711,15 @@ export class TypeChecker {
     this.validateFunctionCallArgs(expr, scope);
 
     // Conversions involving an enumeration: TO_<ENUM>, <ANY>_TO_<ENUM>, <ENUM>_TO_<ANY>
-    const enumConv = /^(?:(\w+?)_)?TO_(\w+)$/.exec(nameUpper);
+    const enumConv = parseConversionName(nameUpper);
     if (enumConv) {
-      const target = this.enumTypeOf(enumConv[2]!);
+      const target = this.enumTypeOf(enumConv.target);
       if (target) {
         expr.resolvedType = target;
         return target;
       }
-      const source = enumConv[1];
-      const elementary = ELEMENTARY_TYPES[enumConv[2]!];
+      const source = enumConv.source;
+      const elementary = ELEMENTARY_TYPES[enumConv.target];
       if (source !== undefined && this.enumTypeOf(source) && elementary) {
         expr.resolvedType = elementary;
         return elementary;
@@ -786,27 +814,100 @@ export class TypeChecker {
 
     if (!objTypeName) return undefined;
 
-    // Find the FB declaration and the method
-    const fb = this.ast.functionBlocks.find(
-      (f) => f.name.toUpperCase() === objTypeName.toUpperCase(),
+    const returnType = this.methodReturnType(
+      objTypeName,
+      expr.methodName,
+      expr,
     );
-    if (fb) {
-      const method = fb.methods.find(
-        (m) => m.name.toUpperCase() === expr.methodName.toUpperCase(),
-      );
-      if (method?.returnType) {
-        const retType =
-          ELEMENTARY_TYPES[method.returnType.name.toUpperCase()] ??
-          ({
-            typeKind: "elementary",
-            name: method.returnType.name,
-            sizeBits: 0,
-          } as ElementaryType);
-        expr.resolvedType = retType;
-        return retType;
+    if (returnType) expr.resolvedType = returnType;
+    return returnType;
+  }
+
+  /**
+   * `inst.M(...)`, `THIS.M(...)` or `SUPER.M(...)` parsed as a dotted call:
+   * the method's return type, or undefined (inside the result) when the
+   * prefix is not an instance, THIS or SUPER, so the name is not a method call.
+   */
+  private dottedMethodCall(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ): { returnType: IECType | undefined } | undefined {
+    const dot = expr.functionName.indexOf(".");
+    if (dot <= 0) return undefined;
+    const prefix = expr.functionName.substring(0, dot);
+    const method = expr.functionName.substring(dot + 1);
+    if (method.includes(".")) return undefined;
+    let ownerType: string | undefined;
+    switch (prefix.toUpperCase()) {
+      case "THIS":
+        ownerType = this.currentFB?.name;
+        break;
+      case "SUPER":
+        ownerType = this.currentFB?.extends;
+        break;
+      default: {
+        const sym = scope.lookup(prefix);
+        if (sym?.kind !== "variable") return undefined;
+        ownerType = sym.declaration?.type?.name;
       }
     }
+    if (ownerType === undefined) return { returnType: undefined };
+    return { returnType: this.methodReturnType(ownerType, method, expr) };
+  }
 
+  /** Return type of `typeName.methodName`; reports a method the type does not have. */
+  private methodReturnType(
+    typeName: string,
+    methodName: string,
+    at: Expression,
+  ): IECType | undefined {
+    const method = this.findMethod(typeName, methodName);
+    if (method === undefined) {
+      if (this.declaredMembers(typeName)?.complete === true) {
+        this.addError(
+          `'${typeName}' has no method '${methodName}'`,
+          at.sourceSpan.startLine,
+          at.sourceSpan.startCol,
+          at.sourceSpan.file,
+        );
+      }
+      return undefined;
+    }
+    if (!method.returnType) return undefined;
+    return (
+      ELEMENTARY_TYPES[method.returnType.name.toUpperCase()] ??
+      ({
+        typeKind: "elementary",
+        name: method.returnType.name,
+        sizeBits: 0,
+      } as ElementaryType)
+    );
+  }
+
+  /** A method of a function block's lineage, or of an interface and the interfaces it extends. */
+  private findMethod(
+    typeName: string,
+    methodName: string,
+  ): MethodDeclaration | undefined {
+    const upper = methodName.toUpperCase();
+    const named = (m: MethodDeclaration): boolean =>
+      m.name.toUpperCase() === upper;
+    for (const fb of fbLineage(typeName, this.fbLookup)) {
+      const method = fb.methods.find(named);
+      if (method) return method;
+    }
+    const pending = [typeName.toUpperCase()];
+    const seen = new Set<string>();
+    for (let name = pending.pop(); name; name = pending.pop()) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const iface = this.ast?.interfaces.find(
+        (i) => i.name.toUpperCase() === name,
+      );
+      const method = iface?.methods.find(named);
+      if (method) return method;
+      for (const e of iface?.extends ?? []) pending.push(e.toUpperCase());
+    }
     return undefined;
   }
 
@@ -882,6 +983,7 @@ export class TypeChecker {
         const targetType = this.resolveExprType(stmt.target, scope);
         const valueType = this.resolveExprType(stmt.value, scope);
         const errorsBefore = this.errors.length;
+        // ADR() yields an untyped address; POINTER TO accepts any target type.
         if (this.isPointerTargetFromAddress(stmt.target, valueType, scope)) {
           break;
         }
@@ -890,14 +992,15 @@ export class TypeChecker {
           valueType,
           stmt.value,
         );
-        if (ifaceCheck !== null && ifaceCheck.ok) break;
-        if (ifaceCheck !== null && !ifaceCheck.ok) {
-          this.addError(
-            ifaceCheck.error,
-            stmt.value.sourceSpan.startLine,
-            stmt.value.sourceSpan.startCol,
-            stmt.value.sourceSpan.file,
-          );
+        if (ifaceCheck !== null) {
+          if (!ifaceCheck.ok) {
+            this.addError(
+              ifaceCheck.error,
+              stmt.value.sourceSpan.startLine,
+              stmt.value.sourceSpan.startCol,
+              stmt.value.sourceSpan.file,
+            );
+          }
           break;
         }
         this.validateAssignment(targetType, valueType, stmt.target, stmt.value);
@@ -1154,78 +1257,114 @@ export class TypeChecker {
   }
 
   /**
-   * Members a type declares through its lineage: variables with their block
-   * kind (struct fields as VAR), and methods and properties. Undefined when the
-   * type is not a function block, structure or interface this compile knows.
+   * Members a type declares: variables with their block kind (struct fields
+   * as VAR), and methods and properties. Undefined when the type is not a
+   * function block, structure or interface this compile knows.
    */
-  private declaredMembers(
-    typeName: string,
-  ): { vars: Map<string, VarBlockType>; callables: Set<string> } | undefined {
+  private declaredMembers(typeName: string): DeclaredMembers | undefined {
     const upper = typeName.toUpperCase();
-    const vars = new Map<string, VarBlockType>();
-    const callables = new Set<string>();
-    const fbDecl = (u: string): FunctionBlockDeclaration | undefined =>
-      this.ast?.functionBlocks.find((f) => f.name.toUpperCase() === u) ??
-      this.symbolTables.lookupFunctionBlock(u)?.declaration;
-    if (fbDecl(upper)) {
-      const seen = new Set<string>();
-      let current: string | undefined = upper;
-      while (current !== undefined && !seen.has(current)) {
-        seen.add(current);
-        const d = fbDecl(current);
-        if (!d) return undefined;
-        for (const block of d.varBlocks) {
-          for (const decl of block.declarations) {
-            for (const n of decl.names) {
-              if (!vars.has(n.toUpperCase())) {
-                vars.set(n.toUpperCase(), block.blockType);
-              }
-            }
-          }
-        }
-        for (const m of d.methods) callables.add(m.name.toUpperCase());
-        for (const p of d.properties) callables.add(p.name.toUpperCase());
-        current = d.extends?.toUpperCase();
-      }
-      return { vars, callables };
+    if (this.fbLookup(upper) !== undefined) {
+      return this.functionBlockMembers(upper);
     }
+    return this.structMembers(upper) ?? this.interfaceMembers(upper);
+  }
+
+  /**
+   * Members of a function block and its bases, plus the implicit ENO output.
+   * A library block exports only its variables, so a lineage that reaches one
+   * (or an unresolved base) is incomplete.
+   */
+  private functionBlockMembers(upper: string): DeclaredMembers {
+    const members: DeclaredMembers = {
+      kind: "functionBlock",
+      vars: new Map<string, VarBlockType>([["ENO", "VAR_OUTPUT"]]),
+      callables: new Set<string>(),
+      complete: true,
+    };
+    const addVar = (name: string, kind: VarBlockType): void => {
+      if (!members.vars.has(name.toUpperCase())) {
+        members.vars.set(name.toUpperCase(), kind);
+      }
+    };
+    const lineage = fbLineage(upper, this.fbLookup);
+    for (const fb of lineage) {
+      if (this.ast?.functionBlocks.includes(fb) !== true) {
+        const library = this.symbolTables.lookupFunctionBlock(fb.name);
+        for (const v of library?.inputs ?? []) addVar(v.name, "VAR_INPUT");
+        for (const v of library?.outputs ?? []) addVar(v.name, "VAR_OUTPUT");
+        for (const v of library?.inouts ?? []) addVar(v.name, "VAR_IN_OUT");
+        for (const v of library?.locals ?? []) addVar(v.name, "VAR");
+        members.complete = false;
+        continue;
+      }
+      for (const block of fb.varBlocks) {
+        for (const decl of block.declarations) {
+          for (const n of decl.names) addVar(n, block.blockType);
+        }
+      }
+      for (const m of fb.methods) members.callables.add(m.name.toUpperCase());
+      for (const p of fb.properties) {
+        members.callables.add(p.name.toUpperCase());
+      }
+    }
+    if (lineage[lineage.length - 1]?.extends !== undefined) {
+      members.complete = false;
+    }
+    return members;
+  }
+
+  /** Fields of a structure, local or from a library. */
+  private structMembers(upper: string): DeclaredMembers | undefined {
+    const members: DeclaredMembers = {
+      kind: "struct",
+      vars: new Map<string, VarBlockType>(),
+      callables: new Set<string>(),
+      complete: true,
+    };
     const local = this.ast?.types.find((t) => t.name.toUpperCase() === upper);
-    if (local) {
+    if (local !== undefined) {
       if (local.definition.kind !== "StructDefinition") return undefined;
       for (const decl of local.definition.fields) {
-        for (const n of decl.names) vars.set(n.toUpperCase(), "VAR");
+        for (const n of decl.names) members.vars.set(n.toUpperCase(), "VAR");
       }
-      return { vars, callables };
-    }
-    const iface = this.ast?.interfaces.find(
-      (i) => i.name.toUpperCase() === upper,
-    );
-    if (iface) {
-      const pending = [iface];
-      const seen = new Set<string>();
-      while (pending.length > 0) {
-        const i = pending.pop()!;
-        if (seen.has(i.name.toUpperCase())) continue;
-        seen.add(i.name.toUpperCase());
-        for (const m of i.methods) callables.add(m.name.toUpperCase());
-        for (const e of i.extends ?? []) {
-          const base = this.ast?.interfaces.find(
-            (x) => x.name.toUpperCase() === e.toUpperCase(),
-          );
-          if (!base) return undefined;
-          pending.push(base);
-        }
-      }
-      return { vars, callables };
+      return members;
     }
     const sym = this.symbolTables.lookupType(upper);
-    if (sym?.kind === "type" && sym.resolvedType?.typeKind === "struct") {
-      for (const f of (sym.resolvedType as StructType).fields.keys()) {
-        vars.set(f.toUpperCase(), "VAR");
-      }
-      return { vars, callables };
+    if (sym?.kind !== "type" || sym.resolvedType?.typeKind !== "struct") {
+      return undefined;
     }
-    return undefined;
+    for (const f of (sym.resolvedType as StructType).fields.keys()) {
+      members.vars.set(f.toUpperCase(), "VAR");
+    }
+    return members;
+  }
+
+  /** Methods of an interface and the interfaces it extends. */
+  private interfaceMembers(upper: string): DeclaredMembers | undefined {
+    const findInterface = (name: string) =>
+      this.ast?.interfaces.find((i) => i.name.toUpperCase() === name);
+    const root = findInterface(upper);
+    if (root === undefined) return undefined;
+    const members: DeclaredMembers = {
+      kind: "interface",
+      vars: new Map<string, VarBlockType>(),
+      callables: new Set<string>(),
+      complete: true,
+    };
+    const pending = [root];
+    const seen = new Set<string>();
+    for (let iface = pending.pop(); iface; iface = pending.pop()) {
+      if (seen.has(iface.name.toUpperCase())) continue;
+      seen.add(iface.name.toUpperCase());
+      for (const m of iface.methods)
+        members.callables.add(m.name.toUpperCase());
+      for (const e of iface.extends ?? []) {
+        const base = findInterface(e.toUpperCase());
+        if (base === undefined) return undefined;
+        pending.push(base);
+      }
+    }
+    return members;
   }
 
   /** `x.name` where the type of `x` is fully known and declares no `name`. */
@@ -1235,7 +1374,7 @@ export class TypeChecker {
     at: Expression,
   ): void {
     const members = this.declaredMembers(typeName);
-    if (!members) return;
+    if (members?.complete !== true) return;
     const upper = name.toUpperCase();
     if (members.vars.has(upper) || members.callables.has(upper)) return;
     this.addError(
@@ -1256,12 +1395,7 @@ export class TypeChecker {
     const declType = sym.declaration?.type;
     if (!declType || declType.arrayDimensions) return;
     const members = this.declaredMembers(declType.name);
-    if (!members || members.callables.size + members.vars.size === 0) return;
-    const isFB =
-      this.ast?.functionBlocks.some(
-        (f) => f.name.toUpperCase() === declType.name.toUpperCase(),
-      ) ?? this.symbolTables.lookupFunctionBlock(declType.name) !== undefined;
-    if (!isFB) return;
+    if (members?.kind !== "functionBlock") return;
     for (const arg of expr.arguments) {
       if (arg.name === undefined) continue;
       const upper = arg.name.toUpperCase();
@@ -1293,16 +1427,21 @@ export class TypeChecker {
       : undefined;
   }
 
-  /** Upper-cased type name of an elementary-named type (FBs and interfaces resolve this way). */
+  /**
+   * Upper-cased name of a type that resolves as a named elementary type. A
+   * function block or interface variable is typed this way, carrying the
+   * block or interface name.
+   */
   private namedTypeOf(t: IECType | undefined): string | undefined {
-    if (!t) return undefined;
-    if (t.typeKind === "elementary")
-      return (t as ElementaryType).name.toUpperCase();
-    return undefined;
+    if (t?.typeKind !== "elementary") return undefined;
+    return (t as ElementaryType).name.toUpperCase();
   }
 
   private isInterfaceName(name: string): boolean {
-    return !!this.ast?.interfaces.some((i) => i.name.toUpperCase() === name);
+    const upper = name.toUpperCase();
+    return (
+      this.ast?.interfaces.some((i) => i.name.toUpperCase() === upper) === true
+    );
   }
 
   /** Interfaces `name` is, directly or through EXTENDS (interfaces) / EXTENDS + IMPLEMENTS (FBs). */
@@ -1310,34 +1449,25 @@ export class TypeChecker {
     name: string,
     seen = new Set<string>(),
   ): Set<string> {
+    const upper = name.toUpperCase();
     const out = new Set<string>();
-    if (!this.ast || seen.has(name)) return out;
-    seen.add(name);
+    if (!this.ast || seen.has(upper)) return out;
+    seen.add(upper);
+    const addAll = (names: Iterable<string>): void => {
+      for (const n of names) {
+        for (const x of this.implementedInterfaces(n, seen)) out.add(x);
+      }
+    };
     const iface = this.ast.interfaces.find(
-      (i) => i.name.toUpperCase() === name,
+      (i) => i.name.toUpperCase() === upper,
     );
     if (iface) {
-      out.add(name);
-      for (const e of iface.extends ?? []) {
-        for (const x of this.implementedInterfaces(e.toUpperCase(), seen))
-          out.add(x);
-      }
+      out.add(upper);
+      addAll(iface.extends ?? []);
       return out;
     }
-    const fb =
-      this.ast.functionBlocks.find((f) => f.name.toUpperCase() === name) ??
-      this.symbolTables.lookupFunctionBlock(name)?.declaration;
-    if (!fb) return out;
-    for (const i of fb.implements ?? []) {
-      for (const x of this.implementedInterfaces(i.toUpperCase(), seen))
-        out.add(x);
-    }
-    if (fb.extends) {
-      for (const x of this.implementedInterfaces(
-        fb.extends.toUpperCase(),
-        seen,
-      ))
-        out.add(x);
+    for (const fb of fbLineage(upper, this.fbLookup)) {
+      addAll(fb.implements ?? []);
     }
     return out;
   }

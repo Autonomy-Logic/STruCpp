@@ -26,7 +26,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 |------|--------|-------|
 | TYPE ... END_TYPE | Supported | Type aliases |
 | STRUCT ... END_STRUCT | Supported | With nested structs |
-| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value |
+| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value. A user or library FUNCTION with one of these names is called instead |
 | Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
@@ -51,7 +51,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | PROGRAM | Supported | With CONFIGURATION/RESOURCE/TASK structure |
 | FUNCTION | Supported | With return type, all parameter modes |
 | FUNCTION_BLOCK | Supported | Instantiation, invocation, member access |
-| INTERFACE | Supported | Method and property signatures. Interface-typed variables and arrays hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); interfaces from a linked library are not recognised as interface types yet |
+| INTERFACE | Supported | Method and property signatures. Interface-typed variables, arrays and structure fields hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); a method returning an interface returns such a reference, which may be 0; interfaces from a linked library are not recognised as interface types yet |
 
 ## Variable Declarations
 
@@ -127,15 +127,16 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | ABSTRACT | Supported | Abstract FB (no instantiation) and abstract methods (pure virtual) |
 | FINAL | Supported | Sealed FB and methods |
 | OVERRIDE | Supported | Method override with C++ override specifier |
-| PUBLIC/PRIVATE/PROTECTED/INTERNAL | Supported | Enforced on methods: PRIVATE only from the declaring FB; PROTECTED from the declaring FB or a derived one, through `THIS^`/`SUPER^`/an unqualified call or an instance of the caller's own lineage; INTERNAL only within the compilation unit (library) that declares it. INTERNAL remains usable as an identifier |
+| PUBLIC/PRIVATE/PROTECTED/INTERNAL | Supported | Enforced on methods: PRIVATE only from the declaring FB; PROTECTED from the declaring FB or a derived one, through `THIS^`/`SUPER^`/an unqualified call or an instance of the caller's own lineage; INTERNAL only within the compilation unit (library) that declares it. INTERNAL remains usable as a variable, type, enumeration member, method or property name |
 | THIS | Supported | Self-reference in methods: `THIS^`, `THIS^.member`, `THIS^.method(args)` (and `THIS.member`) |
 
 ## Diagnostics beyond the standard
 
 | Check | Notes |
 |-------|-------|
-| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error |
-| Unknown FB argument | `fb(x := ...)` where `x` is not an input, output or in-out of the block is an error |
+| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error; `ENO` is a member of every function block. Not checked when the block extends a library block, whose methods and properties a library does not export |
+| Unknown method | `x.m()` where the type of `x` has no method `m` (a function block member that is an FB instance, say) is an error |
+| Unknown FB argument | `fb(x := ...)` where `x` is not an input, output or in-out of the block is an error, for local and library blocks |
 | Members named like methods | A variable named like a method of its block's class hierarchy is emitted under a mangled C++ name; a method-local variable hides a member of the same name, and the block's methods stay callable |
 
 ## Standard Functions
