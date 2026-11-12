@@ -887,14 +887,7 @@ export class TypeChecker {
       return undefined;
     }
     if (!method.returnType) return undefined;
-    return (
-      ELEMENTARY_TYPES[method.returnType.name.toUpperCase()] ??
-      ({
-        typeKind: "elementary",
-        name: method.returnType.name,
-        sizeBits: 0,
-      } as ElementaryType)
-    );
+    return this.resolveNamedType(method.returnType.name);
   }
 
   /** A method of a function block's lineage, or of an interface and the interfaces it extends. */

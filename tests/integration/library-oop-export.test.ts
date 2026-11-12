@@ -40,6 +40,10 @@ FUNCTION_BLOCK Elem IMPLEMENTS IElem
   METHOD FINAL Fixed : DINT Fixed := 2; END_METHOD
   PROPERTY Size : DINT GET Size := 3; END_GET END_PROPERTY
 END_FUNCTION_BLOCK
+FUNCTION_BLOCK Geo IMPLEMENTS IGeo
+  VAR_INPUT Base : DINT := 1; END_VAR
+  METHOD Origin : GeoPoint Origin.x := Base; END_METHOD
+END_FUNCTION_BLOCK
 FUNCTION_BLOCK Panel EXTENDS Elem
   METHOD OVERRIDE Draw : DINT Draw := 5; END_METHOD
 END_FUNCTION_BLOCK`;
@@ -234,6 +238,15 @@ END_FUNCTION_BLOCK`,
     ).toEqual([]);
   });
 
+  it("types a library method's STRUCT result as the library's STRUCT", () => {
+    const result = compile(
+      "PROGRAM P VAR g : Geo; p : GeoPoint; END_VAR p := g.Origin(); END_PROGRAM",
+      { libraries: [archive] },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.headerCode + result.cppCode).toContain("GEOPOINT");
+  });
+
   it("reports an interface named like a library's", () => {
     const local = compile(
       "INTERFACE IElem METHOD Other : BOOL END_METHOD END_INTERFACE",
@@ -263,6 +276,22 @@ END_FUNCTION_BLOCK`,
           "INTERFACE 'IELEM' of library 'second' clashes with INTERFACE 'IELEM' of library 'uilib'; rename one of them.",
         file: "uilib",
       },
+    ]);
+  });
+
+  it("reports a TYPE or FUNCTION_BLOCK named like a library interface", () => {
+    expect(
+      errorsWith(
+        "TYPE IElem : STRUCT a : DINT; END_STRUCT; END_TYPE PROGRAM P END_PROGRAM",
+        archive,
+      ),
+    ).toEqual([
+      "INTERFACE 'IELEM' of library 'uilib' clashes with TYPE 'IELEM' of this program; rename one of them.",
+    ]);
+    expect(
+      errorsWith("FUNCTION_BLOCK IElem END_FUNCTION_BLOCK", archive),
+    ).toEqual([
+      "INTERFACE 'IELEM' of library 'uilib' clashes with FUNCTION_BLOCK 'IELEM' of this program; rename one of them.",
     ]);
   });
 

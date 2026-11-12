@@ -204,7 +204,7 @@ function serializeLocal(
   name: string,
   decl: VarDeclaration,
   block: VarBlock,
-  ctx: MemberManglingContext,
+  ctx: MemberManglingContext | undefined,
 ): LibraryVarType {
   const entry = withCppName(serializeVarType(name, decl.type), ctx);
   if (block.isConstant) entry.readOnly = true;
@@ -348,9 +348,11 @@ function emptyManifest(options: {
 /**
  * Build a manifest entry for one function block from its AST node.
  *
- * Shared by the ST pass and the native-header pass so both describe an
- * interface identically — the native path differs only in what it adds
- * afterwards (`implementation`, `sourceFile`).
+ * Shared by the ST pass and the native-header pass so both describe a
+ * block's members identically — the native path differs only in what it adds
+ * afterwards (`implementation`, `sourceFile`). `locals` holds the block's own
+ * `VAR` members: RETAIN covers them, and the type checker treats an entry
+ * with `methods` as listing every member.
  */
 function buildFBEntry(
   fb: FunctionBlockDeclaration,
@@ -376,6 +378,13 @@ function buildFBEntry(
       : {}),
     ...(fb.isAbstract ? { isAbstract: true as const } : {}),
     ...(fb.isFinal ? { isFinal: true as const } : {}),
+    locals: fb.varBlocks
+      .filter((b) => b.blockType === "VAR")
+      .flatMap((b) =>
+        b.declarations.flatMap((d) =>
+          d.names.map((n) => serializeLocal(n, d, b, ctx)),
+        ),
+      ),
     methods: fb.methods.map(serializeMethod),
     properties: fb.properties.map(serializeProperty),
   };
@@ -725,25 +734,7 @@ export function compileLibrary(
     functionBlocks: [
       ...ast.functionBlocks.map((fb) =>
         tagDocumentation(
-          tagCategory(
-            {
-              ...buildFBEntry(fb, manglingCtx(fb)),
-              // The block's own VAR members, declared the same way the
-              // interface arrays above are. A RETAINed instance retains these
-              // too; without them a retained TON keeps Q and ET and loses the
-              // state that makes them mean anything.
-              locals: fb.varBlocks
-                .filter((b) => b.blockType === "VAR")
-                .flatMap((b) =>
-                  b.declarations.flatMap((d) =>
-                    d.names.map((n) =>
-                      serializeLocal(n, d, b, manglingCtx(fb)),
-                    ),
-                  ),
-                ),
-            },
-            catByName,
-          ),
+          tagCategory(buildFBEntry(fb, manglingCtx(fb)), catByName),
           docByName,
         ),
       ),

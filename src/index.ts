@@ -12,6 +12,7 @@ import {
   CompileResult,
   CompileError,
   AnalysisResult,
+  SourceSpan,
 } from "./types.js";
 import { parse as parseSource } from "./frontend/parser.js";
 import { suggestionForParseError } from "./frontend/parser-error-message-provider.js";
@@ -251,6 +252,14 @@ function collectUsedSymbols(
 // ---------------------------------------------------------------------------
 // Shared pipeline
 // ---------------------------------------------------------------------------
+
+/** A unit-level name a library INTERFACE must not reuse. */
+interface DeclaredName {
+  kind: "TYPE" | "FUNCTION_BLOCK" | "INTERFACE";
+  name: string;
+  library?: string;
+  sourceSpan: SourceSpan;
+}
 
 interface PipelineResult {
   ast: CompilationUnit | undefined;
@@ -617,14 +626,30 @@ function runPipeline(
     for (const archive of allArchives) {
       registerLibrarySymbols(archive.manifest, semanticSymbolTables);
     }
-    const declared = new Map(
-      ast.interfaces.map((i) => [i.name.toUpperCase(), i]),
-    );
+    const declared = new Map<string, DeclaredName>();
+    const declare = (entry: DeclaredName): void => {
+      declared.set(entry.name.toUpperCase(), entry);
+    };
+    for (const t of ast.types)
+      declare({ kind: "TYPE", name: t.name, sourceSpan: t.sourceSpan });
+    for (const fb of ast.functionBlocks)
+      declare({
+        kind: "FUNCTION_BLOCK",
+        name: fb.name,
+        sourceSpan: fb.sourceSpan,
+      });
+    for (const i of ast.interfaces)
+      declare({ kind: "INTERFACE", name: i.name, sourceSpan: i.sourceSpan });
     for (const archive of allArchives) {
       for (const iface of libraryInterfaceDeclarations(archive.manifest)) {
         const clash = declared.get(iface.name.toUpperCase());
         if (clash === undefined) {
-          declared.set(iface.name.toUpperCase(), iface);
+          declare({
+            kind: "INTERFACE",
+            name: iface.name,
+            library: archive.manifest.name,
+            sourceSpan: iface.sourceSpan,
+          });
           ast.interfaces.push(iface);
           continue;
         }
@@ -633,7 +658,7 @@ function runPipeline(
             ? "this program"
             : `library '${clash.library}'`;
         errors.push({
-          message: `INTERFACE '${iface.name}' of library '${archive.manifest.name}' clashes with INTERFACE '${clash.name}' of ${other}; rename one of them.`,
+          message: `INTERFACE '${iface.name}' of library '${archive.manifest.name}' clashes with ${clash.kind} '${clash.name}' of ${other}; rename one of them.`,
           line: clash.sourceSpan.startLine,
           column: clash.sourceSpan.startCol,
           severity: "error",

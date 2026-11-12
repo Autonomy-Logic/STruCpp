@@ -2212,71 +2212,25 @@ export class SemanticAnalyzer {
 
   /**
    * Validate that abstract function blocks, the unit's own or a library's, are not instantiated directly.
+   * A pointer or reference to one is allowed.
    */
   private validateAbstractInstantiation(ast: CompilationUnit): void {
     const lookup = functionBlockLookup(ast, this.symbolTables);
-    const abstractFBs = new Set<string>();
-    for (const prog of ast.programs)
-      this.collectAbstractTypes(prog.varBlocks, lookup, abstractFBs);
-    for (const fb of ast.functionBlocks)
-      this.collectAbstractTypes(fb.varBlocks, lookup, abstractFBs);
-    for (const func of ast.functions)
-      this.collectAbstractTypes(func.varBlocks, lookup, abstractFBs);
-    if (abstractFBs.size === 0) return;
-
-    // Check variable declarations in programs
-    for (const prog of ast.programs) {
-      this.checkVarBlocksForAbstractInstantiation(prog.varBlocks, abstractFBs);
-    }
-
-    // Check variable declarations in function blocks
-    for (const fb of ast.functionBlocks) {
-      this.checkVarBlocksForAbstractInstantiation(fb.varBlocks, abstractFBs);
-    }
-
-    // Check variable declarations in functions
-    for (const func of ast.functions) {
-      this.checkVarBlocksForAbstractInstantiation(func.varBlocks, abstractFBs);
-    }
-  }
-
-  /** Adds to `into` the upper-cased names of the ABSTRACT blocks the declarations in `varBlocks` use as types. */
-  private collectAbstractTypes(
-    varBlocks: VarBlock[],
-    lookup: FunctionBlockLookup,
-    into: Set<string>,
-  ): void {
-    for (const block of varBlocks) {
-      for (const decl of block.declarations) {
-        if (
-          decl.type.referenceKind === "none" &&
-          lookup(decl.type.name)?.isAbstract === true
-        ) {
-          into.add(decl.type.name.toUpperCase());
-        }
-      }
-    }
-  }
-
-  /**
-   * Check var blocks for instantiation of abstract FBs.
-   */
-  private checkVarBlocksForAbstractInstantiation(
-    varBlocks: VarBlock[],
-    abstractFBs: Set<string>,
-  ): void {
-    for (const block of varBlocks) {
-      for (const decl of block.declarations) {
-        if (
-          decl.type.referenceKind === "none" &&
-          abstractFBs.has(decl.type.name.toUpperCase())
-        ) {
-          this.addError(
-            `Cannot instantiate ABSTRACT FUNCTION_BLOCK '${decl.type.name}'.`,
-            decl.sourceSpan.startLine,
-            decl.sourceSpan.startCol,
-            decl.sourceSpan.file,
-          );
+    const pous = [...ast.programs, ...ast.functionBlocks, ...ast.functions];
+    for (const pou of pous) {
+      for (const block of pou.varBlocks) {
+        for (const decl of block.declarations) {
+          if (
+            decl.type.referenceKind === "none" &&
+            lookup(decl.type.name)?.isAbstract === true
+          ) {
+            this.addError(
+              `Cannot instantiate ABSTRACT FUNCTION_BLOCK '${decl.type.name}'.`,
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
+            );
+          }
         }
       }
     }
