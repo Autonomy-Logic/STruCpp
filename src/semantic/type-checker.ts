@@ -1604,7 +1604,6 @@ export class TypeChecker {
     if (!sym || sym.kind !== "variable" || !sym.declaration?.type) return false;
     if (sym.declaration.type.referenceKind !== "pointer_to") return false;
     const chain = target.accessChain ?? [];
-    // The pointer itself, or one element of an array of pointers.
     return (
       chain.length === 0 ||
       (chain.length === 1 && chain[0]!.kind === "subscript")

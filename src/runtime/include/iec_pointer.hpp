@@ -564,10 +564,6 @@ using REFERENCE_TO = IEC_REFERENCE_TO<T>;
  *   elem_ref.deref().set(100);
  */
 
-// =============================================================================
-// Interface variables (CODESYS)
-// =============================================================================
-
 /**
  * A variable of an interface type: a reference to an instance of a function
  * block that implements the interface, or 0 (unassigned). Assigning an FB

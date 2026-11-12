@@ -51,7 +51,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | PROGRAM | Supported | With CONFIGURATION/RESOURCE/TASK structure |
 | FUNCTION | Supported | With return type, all parameter modes |
 | FUNCTION_BLOCK | Supported | Instantiation, invocation, member access |
-| INTERFACE | Supported | Method and property signatures; a property lists GET, SET or both without bodies, and an implementing block must provide it with the same type and those accessors. Interface-typed variables, arrays and structure fields hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); a method returning an interface returns such a reference, which may be 0; interfaces from a linked library are not recognised as interface types yet |
+| INTERFACE | Supported | Method and property signatures; a property lists GET, SET or both without bodies, and an implementing block must provide it with the same type and those accessors. Methods and properties implementing an interface member must be PUBLIC. Interface-typed variables, arrays and structure fields hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); a method returning an interface returns such a reference, which may be 0; interfaces from a linked library are not recognised as interface types yet |
 
 ## Variable Declarations
 
