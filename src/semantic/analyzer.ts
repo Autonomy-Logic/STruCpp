@@ -44,6 +44,7 @@ import {
   fbLineage,
   fbLineageNames,
   functionBlockLookup,
+  type FunctionBlockLookup,
 } from "./fb-lineage.js";
 import {
   getBitAccessWidth,
@@ -1935,11 +1936,7 @@ export class SemanticAnalyzer {
    * Validate OOP modifier contradictions on function blocks and methods.
    */
   private validateOOPModifiers(ast: CompilationUnit): void {
-    // Build FB lookup map for OVERRIDE and IMPLEMENTS validation
-    const fbMap = new Map<string, FunctionBlockDeclaration>();
-    for (const fb of ast.functionBlocks) {
-      fbMap.set(fb.name.toUpperCase(), fb);
-    }
+    const lookup = functionBlockLookup(ast, this.symbolTables);
 
     // Build interface lookup map
     const ifaceMap = new Map<string, Set<string>>();
@@ -1963,11 +1960,11 @@ export class SemanticAnalyzer {
       }
 
       // Collect parent methods for OVERRIDE / FINAL validation
-      const parentMethods = this.collectParentMethods(fb, fbMap);
+      const parentMethods = this.collectParentMethods(fb, lookup);
 
       // Cannot extend a FINAL FB
       if (fb.extends) {
-        const parentFB = fbMap.get(fb.extends.toUpperCase());
+        const parentFB = lookup(fb.extends);
         if (parentFB && parentFB.isFinal) {
           this.addError(
             `Cannot extend FINAL FUNCTION_BLOCK '${fb.extends}'.`,
@@ -1978,8 +1975,10 @@ export class SemanticAnalyzer {
         }
       }
 
-      // ABSTRACT method in non-abstract FB is an error
       for (const method of fb.methods) {
+        this.validateOverrideAccess(fb, method, parentMethods, lookup, ast);
+
+        // ABSTRACT method in non-abstract FB is an error
         if (method.isAbstract && !fb.isAbstract) {
           this.addError(
             `Method '${method.name}' is ABSTRACT but FUNCTION_BLOCK '${fb.name}' is not ABSTRACT. ` +
@@ -2088,25 +2087,15 @@ export class SemanticAnalyzer {
    */
   private collectParentMethods(
     fb: FunctionBlockDeclaration,
-    fbMap: Map<string, FunctionBlockDeclaration>,
+    lookup: FunctionBlockLookup,
   ): Map<string, MethodDeclaration> {
     const methods = new Map<string, MethodDeclaration>();
-    let current = fb.extends;
-    const visited = new Set<string>(); // prevent infinite loops on circular extends
-    while (current) {
-      const upper = current.toUpperCase();
-      if (visited.has(upper)) break;
-      visited.add(upper);
-      const parent = fbMap.get(upper);
-      if (!parent) break;
+    if (fb.extends === undefined) return methods;
+    for (const parent of fbLineage(fb.extends, lookup)) {
       for (const m of parent.methods) {
         const key = m.name.toUpperCase();
-        // Only store the nearest parent's version (first encountered wins)
-        if (!methods.has(key)) {
-          methods.set(key, m);
-        }
+        if (!methods.has(key)) methods.set(key, m);
       }
-      current = parent.extends;
     }
     return methods;
   }
@@ -2183,50 +2172,69 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * Validate that abstract function blocks are not instantiated directly.
+   * Access rules for a method named like one of a base block, with or without OVERRIDE (as CODESYS checks them).
+   * A PRIVATE method, or an INTERNAL one of a library base, cannot be overridden: in C++ virtual dispatch the base's
+   * own calls would run the derived code. Any other override keeps the base method's access modifier.
    */
-  private validateAbstractInstantiation(ast: CompilationUnit): void {
-    // Build set of abstract FB names
-    const abstractFBs = new Set<string>();
-    for (const fb of ast.functionBlocks) {
-      if (fb.isAbstract) {
-        abstractFBs.add(fb.name.toUpperCase());
+  private validateOverrideAccess(
+    fb: FunctionBlockDeclaration,
+    method: MethodDeclaration,
+    parentMethods: Map<string, MethodDeclaration>,
+    lookup: FunctionBlockLookup,
+    ast: CompilationUnit,
+  ): void {
+    const base = parentMethods.get(method.name.toUpperCase());
+    if (base === undefined || fb.extends === undefined) return;
+    const owner = fbLineage(fb.extends, lookup).find((p) =>
+      p.methods.includes(base),
+    );
+    if (owner === undefined) return;
+    const fromLibrary = !ast.functionBlocks.includes(owner);
+    if (
+      base.visibility !== "PRIVATE" &&
+      !(base.visibility === "INTERNAL" && fromLibrary)
+    ) {
+      if (method.visibility !== base.visibility) {
+        this.addError(
+          `Method '${method.name}' in '${fb.name}' cannot change the access modifier ${base.visibility} of method '${base.name}' of '${owner.name}' it overrides.`,
+          method.sourceSpan.startLine,
+          method.sourceSpan.startCol,
+          method.sourceSpan.file,
+        );
       }
+      return;
     }
-    if (abstractFBs.size === 0) return;
-
-    // Check variable declarations in programs
-    for (const prog of ast.programs) {
-      this.checkVarBlocksForAbstractInstantiation(prog.varBlocks, abstractFBs);
-    }
-
-    // Check variable declarations in function blocks
-    for (const fb of ast.functionBlocks) {
-      this.checkVarBlocksForAbstractInstantiation(fb.varBlocks, abstractFBs);
-    }
-
-    // Check variable declarations in functions
-    for (const func of ast.functions) {
-      this.checkVarBlocksForAbstractInstantiation(func.varBlocks, abstractFBs);
-    }
+    const where =
+      base.visibility === "INTERNAL" ? " from outside its library" : "";
+    this.addError(
+      `Method '${method.name}' in '${fb.name}' cannot override ${base.visibility} method '${base.name}' of '${owner.name}'${where}.`,
+      method.sourceSpan.startLine,
+      method.sourceSpan.startCol,
+      method.sourceSpan.file,
+    );
   }
 
   /**
-   * Check var blocks for instantiation of abstract FBs.
+   * Validate that abstract function blocks, the unit's own or a library's, are not instantiated directly.
+   * A pointer or reference to one is allowed.
    */
-  private checkVarBlocksForAbstractInstantiation(
-    varBlocks: VarBlock[],
-    abstractFBs: Set<string>,
-  ): void {
-    for (const block of varBlocks) {
-      for (const decl of block.declarations) {
-        if (abstractFBs.has(decl.type.name.toUpperCase())) {
-          this.addError(
-            `Cannot instantiate ABSTRACT FUNCTION_BLOCK '${decl.type.name}'.`,
-            decl.sourceSpan.startLine,
-            decl.sourceSpan.startCol,
-            decl.sourceSpan.file,
-          );
+  private validateAbstractInstantiation(ast: CompilationUnit): void {
+    const lookup = functionBlockLookup(ast, this.symbolTables);
+    const pous = [...ast.programs, ...ast.functionBlocks, ...ast.functions];
+    for (const pou of pous) {
+      for (const block of pou.varBlocks) {
+        for (const decl of block.declarations) {
+          if (
+            decl.type.referenceKind === "none" &&
+            lookup(decl.type.name)?.isAbstract === true
+          ) {
+            this.addError(
+              `Cannot instantiate ABSTRACT FUNCTION_BLOCK '${decl.type.name}'.`,
+              decl.sourceSpan.startLine,
+              decl.sourceSpan.startCol,
+              decl.sourceSpan.file,
+            );
+          }
         }
       }
     }
@@ -3599,6 +3607,13 @@ export class SemanticAnalyzer {
           if (parentScope?.lookupLocal(upper)) return;
           const parentSym = this.symbolTables.globalScope.lookup(parentUpper);
           if (parentSym?.kind !== "functionBlock") break;
+          const parentVars = [
+            ...parentSym.inputs,
+            ...parentSym.outputs,
+            ...parentSym.inouts,
+            ...parentSym.locals,
+          ];
+          if (parentVars.some((v) => v.name.toUpperCase() === upper)) return;
           parentName = parentSym.declaration.extends;
         }
       }

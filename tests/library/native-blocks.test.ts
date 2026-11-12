@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from "vitest";
 
+import { compile } from "../../src/index.js";
 import {
   compileLibrary,
   compileStlib,
@@ -159,24 +160,32 @@ describe("projectNativeHeaderToSt", () => {
   it("rejects a FUNCTION — a native block has no instance state", () => {
     const out = projectNativeHeaderToSt({
       fileName: "CPP_ADD.cpp",
-      source: "FUNCTION CPP_ADD : INT\nVAR_INPUT A : INT; END_VAR\nint add(){}\nEND_FUNCTION\n",
+      source:
+        "FUNCTION CPP_ADD : INT\nVAR_INPUT A : INT; END_VAR\nint add(){}\nEND_FUNCTION\n",
       language: "cpp",
     });
-    expect("message" in out && out.message).toContain("must be a FUNCTION_BLOCK, not a FUNCTION");
+    expect("message" in out && out.message).toContain(
+      "must be a FUNCTION_BLOCK, not a FUNCTION",
+    );
     expect("message" in out && out.message).toContain("CPP_ADD.cpp");
   });
 
   it("names Python in the rejection when the file is a .py", () => {
     const out = projectNativeHeaderToSt({
       fileName: "PY_ADD.py",
-      source: "FUNCTION PY_ADD : INT\nVAR_INPUT A : INT; END_VAR\ndef f(): pass\nEND_FUNCTION\n",
+      source:
+        "FUNCTION PY_ADD : INT\nVAR_INPUT A : INT; END_VAR\ndef f(): pass\nEND_FUNCTION\n",
       language: "python",
     });
     expect("message" in out && out.message).toContain("Python library block");
   });
 
   it("closes the projected block as a FUNCTION_BLOCK", () => {
-    const out = projectNativeHeaderToSt({ fileName: "X.cpp", source: CPP_BLOCK, language: "cpp" });
+    const out = projectNativeHeaderToSt({
+      fileName: "X.cpp",
+      source: CPP_BLOCK,
+      language: "cpp",
+    });
     if ("message" in out) throw new Error(out.message);
     expect(out.st).toContain("END_FUNCTION_BLOCK");
   });
@@ -315,13 +324,36 @@ describe("compileStlib with native sources", () => {
     expect(loaded.chunks).toEqual([]);
     expect(loaded.manifest.functionBlocks[0]?.sourceFile).toBe("PY_OFFSET.py");
   });
+
+  it("exports a native block's VAR members so consumers can read them", () => {
+    const source = CPP_BLOCK.replace(
+      "VAR_OUTPUT\n  SCALED : INT;\nEND_VAR\n",
+      "VAR_OUTPUT\n  SCALED : INT;\nEND_VAR\nVAR\n  ACC : INT;\nEND_VAR\n",
+    );
+    expect(source).toContain("ACC : INT");
+    const { success, archive } = compileStlib(
+      [{ fileName: "CPP_SCALE.cpp", source }],
+      OPTS,
+    );
+    expect(success).toBe(true);
+    expect(archive.manifest.functionBlocks[0]?.locals).toEqual([
+      { name: "ACC", type: "INT" },
+    ]);
+    const consumer = compile(
+      "PROGRAM P VAR c : CPP_SCALE; x : INT; END_VAR x := c.ACC; END_PROGRAM",
+      { libraries: [archive] },
+    );
+    expect(consumer.errors).toEqual([]);
+  });
 });
 
 describe("duplicate exports", () => {
-  const FN = (n: string) => `FUNCTION ${n} : INT\nVAR_INPUT A : INT; END_VAR\n${n} := A;\nEND_FUNCTION\n`;
+  const FN = (n: string) =>
+    `FUNCTION ${n} : INT\nVAR_INPUT A : INT; END_VAR\n${n} := A;\nEND_FUNCTION\n`;
   const FB = (n: string) =>
     `FUNCTION_BLOCK ${n}\nVAR_INPUT A : INT; END_VAR\nVAR_OUTPUT Q : INT; END_VAR\nQ := A;\nEND_FUNCTION_BLOCK\n`;
-  const TY = (n: string) => `TYPE\n  ${n} : STRUCT\n    f : INT;\n  END_STRUCT;\nEND_TYPE\n`;
+  const TY = (n: string) =>
+    `TYPE\n  ${n} : STRUCT\n    f : INT;\n  END_STRUCT;\nEND_TYPE\n`;
   const GV = (n: string) => `VAR_GLOBAL\n  ${n} : INT := 1;\nEND_VAR\n`;
   const CFB = (n: string) =>
     `FUNCTION_BLOCK ${n}\nVAR_INPUT Z : BOOL; END_VAR\nVAR_OUTPUT Q : INT; END_VAR\nvoid loop() {}\nEND_FUNCTION_BLOCK\n`;
@@ -338,11 +370,32 @@ describe("duplicate exports", () => {
   // used to catch. A published `.stlib` is immutable in the field, so emitting
   // an ambiguous manifest costs more than refusing to.
   it.each([
-    ["an ST function and an ST function block", [["a.st", FN("FOO") + FB("FOO")]]],
+    [
+      "an ST function and an ST function block",
+      [["a.st", FN("FOO") + FB("FOO")]],
+    ],
     ["an ST type and an ST function block", [["a.st", TY("FOO") + FB("FOO")]]],
-    ["a native block and an ST function", [["a.st", FN("FOO")], ["FOO.cpp", CFB("FOO")]]],
-    ["a native block and an ST type", [["a.st", TY("FOO")], ["FOO.cpp", CFB("FOO")]]],
-    ["a native block and an ST global", [["a.st", GV("FOO")], ["FOO.cpp", CFB("FOO")]]],
+    [
+      "a native block and an ST function",
+      [
+        ["a.st", FN("FOO")],
+        ["FOO.cpp", CFB("FOO")],
+      ],
+    ],
+    [
+      "a native block and an ST type",
+      [
+        ["a.st", TY("FOO")],
+        ["FOO.cpp", CFB("FOO")],
+      ],
+    ],
+    [
+      "a native block and an ST global",
+      [
+        ["a.st", GV("FOO")],
+        ["FOO.cpp", CFB("FOO")],
+      ],
+    ],
   ])("rejects a name claimed by %s", (_label, files) => {
     const res = build(files as Array<[string, string]>);
     expect(res.success).toBe(false);
@@ -356,10 +409,15 @@ describe("duplicate exports", () => {
     // does not.
     const res = build([
       ["FOO.cpp", CFB("FOO")],
-      ["FOO.py", `FUNCTION_BLOCK FOO\nVAR_INPUT P : INT; END_VAR\ndef block_loop():\n    pass\nEND_FUNCTION_BLOCK\n`],
+      [
+        "FOO.py",
+        `FUNCTION_BLOCK FOO\nVAR_INPUT P : INT; END_VAR\ndef block_loop():\n    pass\nEND_FUNCTION_BLOCK\n`,
+      ],
     ]);
     expect(res.success).toBe(false);
-    expect(res.errors[0]?.message).toMatch(/Duplicate function block declaration|exported 2 times/);
+    expect(res.errors[0]?.message).toMatch(
+      /Duplicate function block declaration|exported 2 times/,
+    );
   });
 
   it("names both kinds so the author knows which two files to look at", () => {
@@ -378,7 +436,10 @@ describe("duplicate exports", () => {
     expect(res.errors).toEqual([]);
     expect(res.success).toBe(true);
     expect(res.manifest.functions.map((f) => f.name)).toEqual(["ADD2"]);
-    expect(res.manifest.functionBlocks.map((f) => f.name).sort()).toEqual(["SCALE", "TANK"]);
+    expect(res.manifest.functionBlocks.map((f) => f.name).sort()).toEqual([
+      "SCALE",
+      "TANK",
+    ]);
   });
 
   it("compares names case-insensitively, as the front end does", () => {

@@ -58,6 +58,7 @@ export function getDocumentSymbols(
     if (inFile(fb.sourceSpan)) symbols.push(buildFBSymbol(fb));
   }
   for (const iface of ast.interfaces) {
+    if (iface.library !== undefined) continue;
     if (inFile(iface.sourceSpan)) symbols.push(buildInterfaceSymbol(iface));
   }
   for (const type of ast.types) {

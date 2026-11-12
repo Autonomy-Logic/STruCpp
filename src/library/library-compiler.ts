@@ -29,12 +29,19 @@ import {
 } from "./native-sources.js";
 import type {
   LibraryFBEntry,
+  LibraryInterfaceEntry,
   LibraryManifest,
+  LibraryMethodEntry,
+  LibraryPropertyEntry,
+  LibraryTypeRef,
   LibraryVarType,
 } from "./library-manifest.js";
 import type {
   Expression,
   FunctionBlockDeclaration,
+  InterfaceDeclaration,
+  MethodDeclaration,
+  PropertyDeclaration,
   TypeReference,
   VarBlock,
   VarDeclaration,
@@ -82,14 +89,11 @@ function serializeInitialValue(expr: Expression): string | undefined {
 }
 
 /**
- * Serialize a variable's type reference into the manifest format,
- * preserving array dimensions and reference qualifiers.
+ * Serialize a type reference into the manifest format, preserving array dimensions, string lengths and reference
+ * qualifiers.
  */
-function serializeVarType(
-  name: string,
-  typeRef: TypeReference,
-): LibraryVarType {
-  const entry: LibraryVarType = { name, type: typeRef.name };
+function serializeTypeRef(typeRef: TypeReference): LibraryTypeRef {
+  const entry: LibraryTypeRef = { type: typeRef.name };
   if (typeRef.arrayDimensions && typeRef.arrayDimensions.length > 0) {
     entry.arrayDimensions = typeRef.arrayDimensions;
   }
@@ -98,6 +102,9 @@ function serializeVarType(
   }
   if (typeRef.elementMaxLength !== undefined) {
     entry.elementMaxLength = typeRef.elementMaxLength;
+  }
+  if (typeRef.maxLength !== undefined) {
+    entry.maxLength = typeRef.maxLength;
   }
   if (typeRef.elementReferenceChain) {
     entry.elementReferenceChain = typeRef.elementReferenceChain;
@@ -109,6 +116,61 @@ function serializeVarType(
     entry.referenceChain = typeRef.referenceChain;
   }
   return entry;
+}
+
+/** Serialize a variable's type reference into the manifest format. */
+function serializeVarType(
+  name: string,
+  typeRef: TypeReference,
+): LibraryVarType {
+  return { name, ...serializeTypeRef(typeRef) };
+}
+
+/** Variables of the given block kind, in declaration order. */
+function blockVars(
+  varBlocks: readonly VarBlock[],
+  blockType: string,
+): LibraryVarType[] {
+  return varBlocks
+    .filter((b) => b.blockType === blockType)
+    .flatMap((b) =>
+      b.declarations.flatMap((d) =>
+        d.names.map((n) => serializeVarType(n, d.type)),
+      ),
+    );
+}
+
+function serializeMethod(m: MethodDeclaration): LibraryMethodEntry {
+  return {
+    name: m.name,
+    visibility: m.visibility,
+    ...(m.returnType ? { returnType: serializeTypeRef(m.returnType) } : {}),
+    ...(m.isAbstract ? { isAbstract: true as const } : {}),
+    ...(m.isFinal ? { isFinal: true as const } : {}),
+    ...(m.isOverride ? { isOverride: true as const } : {}),
+    inputs: blockVars(m.varBlocks, "VAR_INPUT"),
+    outputs: blockVars(m.varBlocks, "VAR_OUTPUT"),
+    inouts: blockVars(m.varBlocks, "VAR_IN_OUT"),
+  };
+}
+
+function serializeProperty(p: PropertyDeclaration): LibraryPropertyEntry {
+  return {
+    name: p.name,
+    type: serializeTypeRef(p.type),
+    visibility: p.visibility,
+    ...(p.getter ? { getter: true as const } : {}),
+    ...(p.setter ? { setter: true as const } : {}),
+  };
+}
+
+function serializeInterface(i: InterfaceDeclaration): LibraryInterfaceEntry {
+  return {
+    name: i.name,
+    ...(i.extends && i.extends.length > 0 ? { extends: i.extends } : {}),
+    methods: i.methods.map(serializeMethod),
+    properties: i.properties.map(serializeProperty),
+  };
 }
 
 /** Records `cppName` when the member-mangling rule renames the member in C++. */
@@ -142,7 +204,7 @@ function serializeLocal(
   name: string,
   decl: VarDeclaration,
   block: VarBlock,
-  ctx: MemberManglingContext,
+  ctx: MemberManglingContext | undefined,
 ): LibraryVarType {
   const entry = withCppName(serializeVarType(name, decl.type), ctx);
   if (block.isConstant) entry.readOnly = true;
@@ -286,18 +348,14 @@ function emptyManifest(options: {
 /**
  * Build a manifest entry for one function block from its AST node.
  *
- * Shared by the ST pass and the native-header pass so both describe an
- * interface identically — the native path differs only in what it adds
- * afterwards (`implementation`, `sourceFile`).
+ * Shared by the ST pass and the native-header pass so both describe a
+ * block's members identically — the native path differs only in what it adds
+ * afterwards (`implementation`, `sourceFile`). `locals` holds the block's own
+ * `VAR` members: RETAIN covers them, and the type checker treats an entry
+ * with `methods` as listing every member.
  */
 function buildFBEntry(
-  fb: {
-    name: string;
-    varBlocks: Array<{
-      blockType: string;
-      declarations: Array<{ names: string[]; type: TypeReference }>;
-    }>;
-  },
+  fb: FunctionBlockDeclaration,
   ctx?: MemberManglingContext,
 ): LibraryFBEntry {
   const varsOfBlock = (blockType: string): LibraryVarType[] =>
@@ -314,6 +372,21 @@ function buildFBEntry(
     inputs: varsOfBlock("VAR_INPUT"),
     outputs: varsOfBlock("VAR_OUTPUT"),
     inouts: varsOfBlock("VAR_IN_OUT"),
+    ...(fb.extends !== undefined ? { extends: fb.extends } : {}),
+    ...(fb.implements && fb.implements.length > 0
+      ? { implements: fb.implements }
+      : {}),
+    ...(fb.isAbstract ? { isAbstract: true as const } : {}),
+    ...(fb.isFinal ? { isFinal: true as const } : {}),
+    locals: fb.varBlocks
+      .filter((b) => b.blockType === "VAR")
+      .flatMap((b) =>
+        b.declarations.flatMap((d) =>
+          d.names.map((n) => serializeLocal(n, d, b, ctx)),
+        ),
+      ),
+    methods: fb.methods.map(serializeMethod),
+    properties: fb.properties.map(serializeProperty),
   };
 }
 
@@ -661,30 +734,15 @@ export function compileLibrary(
     functionBlocks: [
       ...ast.functionBlocks.map((fb) =>
         tagDocumentation(
-          tagCategory(
-            {
-              ...buildFBEntry(fb, manglingCtx(fb)),
-              // The block's own VAR members, declared the same way the
-              // interface arrays above are. A RETAINed instance retains these
-              // too; without them a retained TON keeps Q and ET and loses the
-              // state that makes them mean anything.
-              locals: fb.varBlocks
-                .filter((b) => b.blockType === "VAR")
-                .flatMap((b) =>
-                  b.declarations.flatMap((d) =>
-                    d.names.map((n) =>
-                      serializeLocal(n, d, b, manglingCtx(fb)),
-                    ),
-                  ),
-                ),
-            },
-            catByName,
-          ),
+          tagCategory(buildFBEntry(fb, manglingCtx(fb)), catByName),
           docByName,
         ),
       ),
       ...nativeEntries.functionBlocks,
     ],
+    interfaces: ast.interfaces
+      .filter((i) => i.library === undefined)
+      .map((i) => tagCategory(serializeInterface(i), catByName)),
     types: ast.types.map((t) => {
       const kind: "struct" | "enum" | "alias" =
         t.definition.kind === "StructDefinition"

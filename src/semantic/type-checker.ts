@@ -887,14 +887,7 @@ export class TypeChecker {
       return undefined;
     }
     if (!method.returnType) return undefined;
-    return (
-      ELEMENTARY_TYPES[method.returnType.name.toUpperCase()] ??
-      ({
-        typeKind: "elementary",
-        name: method.returnType.name,
-        sizeBits: 0,
-      } as ElementaryType)
-    );
+    return this.resolveNamedType(method.returnType.name);
   }
 
   /** A method of a function block's lineage, or of an interface and the interfaces it extends. */
@@ -1283,9 +1276,8 @@ export class TypeChecker {
   }
 
   /**
-   * Members of a function block and its bases, plus the implicit ENO output.
-   * A library block exports only its variables, so a lineage that reaches one
-   * (or an unresolved base) is incomplete.
+   * Members of a function block and its bases, plus the implicit ENO output. A lineage that reaches an unresolved
+   * base, or a library block from an archive built before members were exported, is incomplete.
    */
   private functionBlockMembers(upper: string): DeclaredMembers {
     const members: DeclaredMembers = {
@@ -1307,7 +1299,10 @@ export class TypeChecker {
         for (const v of library?.outputs ?? []) addVar(v.name, "VAR_OUTPUT");
         for (const v of library?.inouts ?? []) addVar(v.name, "VAR_IN_OUT");
         for (const v of library?.locals ?? []) addVar(v.name, "VAR");
-        members.complete = false;
+        if (library?.membersExported !== true) members.complete = false;
+        for (const m of fb.methods) members.callables.add(m.name.toUpperCase());
+        for (const p of fb.properties)
+          members.callables.add(p.name.toUpperCase());
         continue;
       }
       for (const block of fb.varBlocks) {

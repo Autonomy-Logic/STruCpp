@@ -358,6 +358,7 @@ function buildVarBlockMap(
     for (const method of fb.methods) indexBlocks(method.varBlocks);
   }
   for (const iface of ast.interfaces ?? []) {
+    if (iface.library !== undefined) continue;
     for (const method of iface.methods) indexBlocks(method.varBlocks);
   }
   if (ast.globalVarBlocks) indexBlocks(ast.globalVarBlocks);

@@ -12,6 +12,7 @@ import {
   CompileResult,
   CompileError,
   AnalysisResult,
+  SourceSpan,
 } from "./types.js";
 import { parse as parseSource } from "./frontend/parser.js";
 import { suggestionForParseError } from "./frontend/parser-error-message-provider.js";
@@ -37,7 +38,10 @@ import type {
 import { mergeCompilationUnits } from "./merge.js";
 import { lowerInlineTypes } from "./frontend/lower-inline-types.js";
 import { walkAST } from "./ast-utils.js";
-import { registerLibrarySymbols } from "./library/library-loader.js";
+import {
+  libraryInterfaceDeclarations,
+  registerLibrarySymbols,
+} from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
 import { annotateErrorsWithPouContext } from "./diagnostic-pou-context.js";
 
@@ -135,7 +139,9 @@ function collectUsedSymbols(
 
   // Seed the reachable set from names the user AST references.
   const referencedNames = new Set<string>();
-  walkAST(ast, (node: ASTNode): void => {
+  const ownInterfaces = ast.interfaces.filter((i) => i.library === undefined);
+  const ownUnit: CompilationUnit = { ...ast, interfaces: ownInterfaces };
+  walkAST(ownUnit, (node: ASTNode): void => {
     switch (node.kind) {
       case "FunctionCallExpression": {
         const fc = node as FunctionCallExpression;
@@ -246,6 +252,14 @@ function collectUsedSymbols(
 // ---------------------------------------------------------------------------
 // Shared pipeline
 // ---------------------------------------------------------------------------
+
+/** A unit-level name a library INTERFACE must not reuse. */
+interface DeclaredName {
+  kind: "TYPE" | "FUNCTION_BLOCK" | "INTERFACE";
+  name: string;
+  library?: string;
+  sourceSpan: SourceSpan;
+}
 
 interface PipelineResult {
   ast: CompilationUnit | undefined;
@@ -611,6 +625,46 @@ function runPipeline(
     semanticSymbolTables = new SymbolTables();
     for (const archive of allArchives) {
       registerLibrarySymbols(archive.manifest, semanticSymbolTables);
+    }
+    const declared = new Map<string, DeclaredName>();
+    const declare = (entry: DeclaredName): void => {
+      declared.set(entry.name.toUpperCase(), entry);
+    };
+    for (const t of ast.types)
+      declare({ kind: "TYPE", name: t.name, sourceSpan: t.sourceSpan });
+    for (const fb of ast.functionBlocks)
+      declare({
+        kind: "FUNCTION_BLOCK",
+        name: fb.name,
+        sourceSpan: fb.sourceSpan,
+      });
+    for (const i of ast.interfaces)
+      declare({ kind: "INTERFACE", name: i.name, sourceSpan: i.sourceSpan });
+    for (const archive of allArchives) {
+      for (const iface of libraryInterfaceDeclarations(archive.manifest)) {
+        const clash = declared.get(iface.name.toUpperCase());
+        if (clash === undefined) {
+          declare({
+            kind: "INTERFACE",
+            name: iface.name,
+            library: archive.manifest.name,
+            sourceSpan: iface.sourceSpan,
+          });
+          ast.interfaces.push(iface);
+          continue;
+        }
+        const other =
+          clash.library === undefined
+            ? "this program"
+            : `library '${clash.library}'`;
+        errors.push({
+          message: `INTERFACE '${iface.name}' of library '${archive.manifest.name}' clashes with ${clash.kind} '${clash.name}' of ${other}; rename one of them.`,
+          line: clash.sourceSpan.startLine,
+          column: clash.sourceSpan.startCol,
+          severity: "error",
+          file: clash.sourceSpan.file,
+        });
+      }
     }
   }
 

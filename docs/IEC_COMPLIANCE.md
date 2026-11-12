@@ -51,7 +51,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | PROGRAM | Supported | With CONFIGURATION/RESOURCE/TASK structure |
 | FUNCTION | Supported | With return type, all parameter modes |
 | FUNCTION_BLOCK | Supported | Instantiation, invocation, member access |
-| INTERFACE | Supported | Method and property signatures; a property lists GET, SET or both without bodies, and an implementing block must provide it with the same type and those accessors. Methods and properties implementing an interface member must be PUBLIC. Interface-typed variables, arrays and structure fields hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); a method returning an interface returns such a reference, which may be 0; interfaces from a linked library are not recognised as interface types yet |
+| INTERFACE | Supported | Method and property signatures; a property lists GET, SET or both without bodies, and an implementing block must provide it with the same type and those accessors. Methods and properties implementing an interface member must be PUBLIC. Interface-typed variables, arrays and structure fields hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); a method returning an interface returns such a reference, which may be 0. Interfaces of a linked library are used like the unit's own: as variable types, in `IMPLEMENTS`, and for calls and properties |
 
 ## Variable Declarations
 
@@ -124,17 +124,17 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Properties (GET/SET) | Supported | Virtual getter/setter methods in C++; a GET may call methods. Inside its block a property is reached as `THIS^.P` (a bare `P` is not resolved) |
 | Inheritance (EXTENDS) | Supported | Single inheritance |
 | Interfaces (IMPLEMENTS) | Supported | Multiple interfaces, generates C++ abstract classes |
-| ABSTRACT | Supported | Abstract FB (no instantiation) and abstract methods (pure virtual) |
+| ABSTRACT | Supported | Abstract FB (no instantiation, including a linked library's; a `POINTER TO` or `REFERENCE TO` one is allowed) and abstract methods (pure virtual) |
 | FINAL | Supported | Sealed FB and methods |
-| OVERRIDE | Supported | Method override with C++ override specifier |
-| PUBLIC/PRIVATE/PROTECTED/INTERNAL | Supported | Enforced on methods and on property reads and writes: PRIVATE only from the declaring FB; PROTECTED from the declaring FB or a derived one, through `THIS^`/`SUPER^`/an unqualified call or an instance of the caller's own lineage; INTERNAL only within the compilation unit (library) that declares it. INTERNAL remains usable as a variable, type, enumeration member, method or property name |
+| OVERRIDE | Supported | Method override with C++ override specifier. A method named like a PRIVATE method of a base block, or an INTERNAL method of a linked library's base block, is an error, with or without OVERRIDE. Any other override keeps the base method's access modifier (none is PUBLIC), as CODESYS requires |
+| PUBLIC/PRIVATE/PROTECTED/INTERNAL | Supported | Enforced on methods and on property reads and writes: PRIVATE only from the declaring FB; PROTECTED from the declaring FB or a derived one, through `THIS^`/`SUPER^`/an unqualified call or an instance of the caller's own lineage; INTERNAL only within the compilation unit (library) that declares it. The same rules apply to members of a linked library's blocks, which a consumer may extend and `OVERRIDE` like its own; a block extending a library block uses the variables it inherits. An interface named like one of a linked library is an error. INTERNAL remains usable as a variable, type, enumeration member, method or property name |
 | THIS | Supported | Self-reference in methods: `THIS^`, and `THIS^.path` with any variable path (members, subscripts, dereferences), optionally called: `THIS^.s.v`, `THIS^.s.M()`, `THIS^.arr[1].M()`, `THIS^.fbs[0](x := 1)` (also `THIS.path`) |
 
 ## Diagnostics beyond the standard
 
 | Check | Notes |
 |-------|-------|
-| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error; `ENO` is a member of every function block. Not checked when the block extends a library block, whose methods and properties a library does not export |
+| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error; `ENO` is a member of every function block. A library archive built before members were exported lists only a block's variables, so calls and properties on its blocks are not checked |
 | Unknown method | `x.m()` where the type of `x` has no method `m` (a function block member that is an FB instance, say) is an error |
 | Unknown FB argument | `fb(x := ...)` where `x` is not an input, output or in-out of the block is an error, for local and library blocks |
 | Members named like methods | A variable named like a method of its block's class hierarchy is a warning and is emitted under a mangled C++ name; so is a method named like a variable inherited from a block of the same unit. A method named like a variable inherited from a library block is an error, since the library's member names are fixed. A method-local variable hides a member of the same name, and the block's methods stay callable |

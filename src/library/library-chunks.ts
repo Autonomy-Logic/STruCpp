@@ -128,7 +128,8 @@ function buildSymbolOwnership(
   for (const t of ast.types)
     ownership.set(t.name.toUpperCase(), ownLibraryName);
   for (const i of ast.interfaces)
-    ownership.set(i.name.toUpperCase(), ownLibraryName);
+    if (i.library === undefined)
+      ownership.set(i.name.toUpperCase(), ownLibraryName);
   for (const fb of ast.functionBlocks)
     ownership.set(fb.name.toUpperCase(), ownLibraryName);
   for (const fn of ast.functions)

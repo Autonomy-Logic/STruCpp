@@ -191,6 +191,8 @@ export interface InterfaceDeclaration extends ASTNode {
   methods: MethodDeclaration[];
   /** Property signatures: the accessors present (empty bodies) are the ones implementations must provide. */
   properties: PropertyDeclaration[];
+  /** Set on an interface a linked library declares: checked like the unit's own, emitted by the library. */
+  library?: string;
 }
 
 /**
