@@ -42,6 +42,8 @@
 
 #include <cstdint>
 
+#include "debug_string_ops.hpp"
+
 // ---------------------------------------------------------------------------
 // Flash-placement attribute for per-project pointer tables.
 //
@@ -86,6 +88,8 @@ enum TypeTag : uint8_t {
     TAG_DT      = 18,
     TAG_STRING  = 19,
     TAG_WSTRING = 20,
+    TAG_STRING_REF  = 21,  // a StringLeaf for STRING[n] (debug_string_ops.hpp)
+    TAG_WSTRING_REF = 22,  // a StringLeaf for WSTRING[n]
     TAG__COUNT
 };
 

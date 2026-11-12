@@ -322,6 +322,20 @@ END_PROGRAM${CFG}`,
     ).toBe("");
   });
 
+  it("compiles for members inherited through EXTENDS", () => {
+    expect(
+      buildDebugTable(
+        `FUNCTION_BLOCK A VAR_INPUT Z : INT; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK B EXTENDS A VAR_INPUT X : DINT; END_VAR VAR hidden : BOOL; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B VAR_INPUT Y : DINT; END_VAR END_FUNCTION_BLOCK
+PROGRAM Main
+VAR d : D; END_VAR
+END_PROGRAM${CFG}`,
+        "inherited_members",
+      ),
+    ).toBe("");
+  });
+
   it("compiles for multi-dimensional arrays", () => {
     // `Array2D`/`Array3D` have no chained `[i][j]` operator, so the table has to
     // address an element as `(i, j)` — `formatArrayElementAccess` owns that rank

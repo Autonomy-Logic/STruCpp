@@ -1191,3 +1191,56 @@ END_PROGRAM${CFG_R}`,
     });
   });
 });
+
+describe("members inherited through EXTENDS", () => {
+  const CONFIG = `
+CONFIGURATION C RESOURCE R ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1);
+  PROGRAM I WITH T : P; END_RESOURCE END_CONFIGURATION`;
+
+  it("lists every level of the chain, base members first", () => {
+    const result = compile(`FUNCTION_BLOCK A VAR_INPUT Z : INT; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK B EXTENDS A VAR_INPUT X : DINT; END_VAR VAR hidden : BOOL; END_VAR END_FUNCTION_BLOCK
+FUNCTION_BLOCK D EXTENDS B VAR_INPUT Y : DINT; END_VAR END_FUNCTION_BLOCK
+PROGRAM P VAR d : D; END_VAR END_PROGRAM${CONFIG}`);
+    expect(result.errors).toEqual([]);
+    expect(result.debugMap?.leaves.map((l) => l.path)).toEqual([
+      "I.D.Z",
+      "I.D.X",
+      "I.D.HIDDEN",
+      "I.D.Y",
+    ]);
+  });
+
+  it("lists the interface a block inherits from a library block", () => {
+    const lib = compileLibrary(
+      [
+        {
+          fileName: "base.st",
+          source:
+            "FUNCTION_BLOCK Base VAR_INPUT Level : REAL; END_VAR VAR inner : DINT; END_VAR END_FUNCTION_BLOCK",
+        },
+      ],
+      { name: "baselib", version: "1.0.0", namespace: "baselib" },
+    );
+    expect(lib.errors).toEqual([]);
+    const result = compile(
+      `FUNCTION_BLOCK D EXTENDS Base VAR_INPUT Y : DINT; END_VAR END_FUNCTION_BLOCK
+PROGRAM P VAR d : D; END_VAR END_PROGRAM${CONFIG}`,
+      {
+        libraries: [
+          {
+            manifest: lib.manifest,
+            headerCode: lib.headerCode,
+            cppCode: lib.cppCode,
+            ...(lib.chunks ? { chunks: lib.chunks } : {}),
+          },
+        ],
+      },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.debugMap?.leaves.map((l) => l.path)).toEqual([
+      "I.D.LEVEL",
+      "I.D.Y",
+    ]);
+  });
+});

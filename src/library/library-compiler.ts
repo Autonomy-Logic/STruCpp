@@ -30,6 +30,7 @@ import {
 import type {
   LibraryAttribute,
   LibraryFBEntry,
+  LibraryTypeEntry,
   LibraryInterfaceEntry,
   LibraryManifest,
   LibraryMethodEntry,
@@ -37,6 +38,7 @@ import type {
   LibraryTypeRef,
   LibraryVarType,
 } from "./library-manifest.js";
+import type { SourceSpan } from "../types.js";
 import type {
   Attribute,
   Expression,
@@ -137,46 +139,113 @@ function attributesOf(node: { attributes?: Attribute[] }): {
     : {};
 }
 
-/** Copies a declaration's attribute pragmas onto its manifest entry. */
-function withAttributes(
+/**
+ * The library's source files, to read back what the AST normalises away: the spelling of names (the lexer
+ * upper-cases identifiers) and the text of default values.
+ */
+export class SourceText {
+  private readonly lines = new Map<string, string[]>();
+
+  constructor(
+    files: ReadonlyArray<{ fileName: string; source: string }>,
+    private readonly fallback: string,
+  ) {
+    for (const f of files)
+      this.lines.set(f.fileName, f.source.split(/\r\n|\r|\n/));
+  }
+
+  /** Text a span covers, end column included; undefined when the span has no position. */
+  slice(span: SourceSpan): string | undefined {
+    if (span.startLine <= 0 || span.endLine < span.startLine) return undefined;
+    const lines =
+      this.lines.get(span.file) ?? this.fallback.split(/\r\n|\r|\n/);
+    const parts: string[] = [];
+    for (let l = span.startLine; l <= span.endLine; l++) {
+      const line = lines[l - 1];
+      if (line === undefined) return undefined;
+      const from = l === span.startLine ? span.startCol - 1 : 0;
+      const to = l === span.endLine ? span.endCol : line.length;
+      parts.push(line.slice(from, to));
+    }
+    return parts.join("\n");
+  }
+
+  /** `{ displayName }` when the name is written in another case within the span, else nothing. */
+  spelling(span: SourceSpan, name: string): { displayName?: string } {
+    const text = this.slice(span);
+    if (text === undefined) return {};
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const found = new RegExp(
+      `(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`,
+      "i",
+    ).exec(text)?.[0];
+    return found !== undefined && found !== name ? { displayName: found } : {};
+  }
+}
+
+/** Adds a variable's attribute pragmas, written spelling and default value text to its manifest entry. */
+function describeVar(
   entry: LibraryVarType,
   decl: VarDeclaration,
+  index: number,
+  text: SourceText | undefined,
 ): LibraryVarType {
-  return Object.assign(entry, attributesOf(decl));
+  Object.assign(entry, attributesOf(decl));
+  const nameSpan = decl.nameSpans?.[index];
+  if (text !== undefined && nameSpan !== undefined) {
+    Object.assign(entry, text.spelling(nameSpan, entry.name));
+  }
+  const initial =
+    decl.initialValue !== undefined
+      ? text?.slice(decl.initialValue.sourceSpan)
+      : undefined;
+  if (initial !== undefined) entry.initialValue = initial.trim();
+  return entry;
 }
 
 /** Variables of the given block kind, in declaration order. */
 function blockVars(
   varBlocks: readonly VarBlock[],
   blockType: string,
+  text: SourceText | undefined,
 ): LibraryVarType[] {
   return varBlocks
     .filter((b) => b.blockType === blockType)
     .flatMap((b) =>
       b.declarations.flatMap((d) =>
-        d.names.map((n) => withAttributes(serializeVarType(n, d.type), d)),
+        d.names.map((n, i) =>
+          describeVar(serializeVarType(n, d.type), d, i, text),
+        ),
       ),
     );
 }
 
-function serializeMethod(m: MethodDeclaration): LibraryMethodEntry {
+function serializeMethod(
+  m: MethodDeclaration,
+  text: SourceText | undefined,
+): LibraryMethodEntry {
   return {
     name: m.name,
+    ...(text !== undefined ? text.spelling(m.sourceSpan, m.name) : {}),
     ...attributesOf(m),
     visibility: m.visibility,
     ...(m.returnType ? { returnType: serializeTypeRef(m.returnType) } : {}),
     ...(m.isAbstract ? { isAbstract: true as const } : {}),
     ...(m.isFinal ? { isFinal: true as const } : {}),
     ...(m.isOverride ? { isOverride: true as const } : {}),
-    inputs: blockVars(m.varBlocks, "VAR_INPUT"),
-    outputs: blockVars(m.varBlocks, "VAR_OUTPUT"),
-    inouts: blockVars(m.varBlocks, "VAR_IN_OUT"),
+    inputs: blockVars(m.varBlocks, "VAR_INPUT", text),
+    outputs: blockVars(m.varBlocks, "VAR_OUTPUT", text),
+    inouts: blockVars(m.varBlocks, "VAR_IN_OUT", text),
   };
 }
 
-function serializeProperty(p: PropertyDeclaration): LibraryPropertyEntry {
+function serializeProperty(
+  p: PropertyDeclaration,
+  text: SourceText | undefined,
+): LibraryPropertyEntry {
   return {
     name: p.name,
+    ...(text !== undefined ? text.spelling(p.sourceSpan, p.name) : {}),
     ...attributesOf(p),
     type: serializeTypeRef(p.type),
     visibility: p.visibility,
@@ -185,13 +254,17 @@ function serializeProperty(p: PropertyDeclaration): LibraryPropertyEntry {
   };
 }
 
-function serializeInterface(i: InterfaceDeclaration): LibraryInterfaceEntry {
+function serializeInterface(
+  i: InterfaceDeclaration,
+  text: SourceText | undefined,
+): LibraryInterfaceEntry {
   return {
     name: i.name,
+    ...(text !== undefined ? text.spelling(i.sourceSpan, i.name) : {}),
     ...attributesOf(i),
     ...(i.extends && i.extends.length > 0 ? { extends: i.extends } : {}),
-    methods: i.methods.map(serializeMethod),
-    properties: i.properties.map(serializeProperty),
+    methods: i.methods.map((m) => serializeMethod(m, text)),
+    properties: i.properties.map((p) => serializeProperty(p, text)),
   };
 }
 
@@ -224,13 +297,17 @@ function withCppName(
  */
 function serializeLocal(
   name: string,
+  index: number,
   decl: VarDeclaration,
   block: VarBlock,
   ctx: MemberManglingContext | undefined,
+  text: SourceText | undefined,
 ): LibraryVarType {
-  const entry = withAttributes(
+  const entry = describeVar(
     withCppName(serializeVarType(name, decl.type), ctx),
     decl,
+    index,
+    text,
   );
   if (block.isConstant) entry.readOnly = true;
   if (block.isRetain) entry.retain = true;
@@ -381,6 +458,7 @@ function emptyManifest(options: {
  */
 function buildFBEntry(
   fb: FunctionBlockDeclaration,
+  text: SourceText,
   ctx?: MemberManglingContext,
 ): LibraryFBEntry {
   const varsOfBlock = (blockType: string): LibraryVarType[] =>
@@ -388,14 +466,20 @@ function buildFBEntry(
       .filter((b) => b.blockType === blockType)
       .flatMap((b) =>
         b.declarations.flatMap((d) =>
-          d.names.map((n) =>
-            withAttributes(withCppName(serializeVarType(n, d.type), ctx), d),
+          d.names.map((n, i) =>
+            describeVar(
+              withCppName(serializeVarType(n, d.type), ctx),
+              d,
+              i,
+              text,
+            ),
           ),
         ),
       );
 
   return {
     name: fb.name,
+    ...text.spelling(fb.sourceSpan, fb.name),
     inputs: varsOfBlock("VAR_INPUT"),
     outputs: varsOfBlock("VAR_OUTPUT"),
     inouts: varsOfBlock("VAR_IN_OUT"),
@@ -410,11 +494,11 @@ function buildFBEntry(
       .filter((b) => b.blockType === "VAR")
       .flatMap((b) =>
         b.declarations.flatMap((d) =>
-          d.names.map((n) => serializeLocal(n, d, b, ctx)),
+          d.names.map((n, i) => serializeLocal(n, i, d, b, ctx, text)),
         ),
       ),
-    methods: fb.methods.map(serializeMethod),
-    properties: fb.properties.map(serializeProperty),
+    methods: fb.methods.map((m) => serializeMethod(m, text)),
+    properties: fb.properties.map((p) => serializeProperty(p, text)),
   };
 }
 
@@ -509,7 +593,7 @@ function compileNativeEntries(
 
   return {
     functionBlocks: result.ast.functionBlocks.map((fb) =>
-      tagNative(buildFBEntry(fb)),
+      tagNative(buildFBEntry(fb, new SourceText([], projected.join("\n")))),
     ),
     errors: [],
   };
@@ -694,6 +778,7 @@ export function compileLibrary(
 
   // Extract manifest entries from the AST
   const ast = result.ast!;
+  const text = new SourceText(stSources, primarySource.source);
 
   const headerFileName = `${options.name}.hpp`;
 
@@ -731,6 +816,7 @@ export function compileLibrary(
         tagCategory(
           {
             name: fn.name,
+            ...text.spelling(fn.sourceSpan, fn.name),
             ...attributesOf(fn),
             returnType: fn.returnType.name,
             parameters: fn.varBlocks.flatMap((block) =>
@@ -739,8 +825,11 @@ export function compileLibrary(
                   decl.initialValue !== undefined
                     ? serializeInitialValue(decl.initialValue)
                     : undefined;
-                return decl.names.map((name) => ({
+                return decl.names.map((name, i) => ({
                   name,
+                  ...(decl.nameSpans?.[i] !== undefined
+                    ? text.spelling(decl.nameSpans[i], name)
+                    : {}),
                   type: decl.type.name,
                   direction:
                     block.blockType === "VAR_OUTPUT"
@@ -764,7 +853,7 @@ export function compileLibrary(
     functionBlocks: [
       ...ast.functionBlocks.map((fb) =>
         tagDocumentation(
-          tagCategory(buildFBEntry(fb, manglingCtx(fb)), catByName),
+          tagCategory(buildFBEntry(fb, text, manglingCtx(fb)), catByName),
           docByName,
         ),
       ),
@@ -772,7 +861,7 @@ export function compileLibrary(
     ],
     interfaces: ast.interfaces
       .filter((i) => i.library === undefined)
-      .map((i) => tagCategory(serializeInterface(i), catByName)),
+      .map((i) => tagCategory(serializeInterface(i, text), catByName)),
     types: ast.types.map((t) => {
       const kind: "struct" | "enum" | "alias" =
         t.definition.kind === "StructDefinition"
@@ -780,26 +869,37 @@ export function compileLibrary(
           : t.definition.kind === "EnumDefinition"
             ? "enum"
             : "alias";
-      const entry: {
-        name: string;
-        kind: typeof kind;
-        attributes?: LibraryAttribute[];
-        fields?: Array<{
-          name: string;
-          type: string;
-          attributes?: LibraryAttribute[];
-        }>;
-      } = { name: t.name, kind, ...attributesOf(t) };
+      const entry: LibraryTypeEntry = {
+        name: t.name,
+        ...text.spelling(t.sourceSpan, t.name),
+        kind,
+        ...attributesOf(t),
+      };
       // Export struct member fields so consumers can type `x.field` access
       // on a dependency struct.
       if (t.definition.kind === "StructDefinition") {
         entry.fields = t.definition.fields.flatMap((decl) =>
-          decl.names.map((name) => ({
+          decl.names.map((name, i) => ({
             name,
+            ...(decl.nameSpans?.[i] !== undefined
+              ? text.spelling(decl.nameSpans[i], name)
+              : {}),
             type: decl.type.name,
             ...attributesOf(decl),
           })),
         );
+      }
+      if (t.definition.kind === "EnumDefinition") {
+        entry.members = t.definition.members.map((m) => {
+          const value =
+            m.value !== undefined ? text.slice(m.value.sourceSpan) : undefined;
+          return {
+            name: m.name,
+            ...text.spelling(m.sourceSpan, m.name),
+            ...(value !== undefined ? { value: value.trim() } : {}),
+            ...attributesOf(m),
+          };
+        });
       }
       return tagDocumentation(tagCategory(entry, catByName), docByName);
     }),
@@ -808,17 +908,27 @@ export function compileLibrary(
     // importing program merges all libraries' globals into one global scope.
     globals: ast.globalVarBlocks.flatMap((block) =>
       block.declarations.flatMap((decl) =>
-        decl.names.map((name) =>
-          tagCategory(
+        decl.names.map((name, i) => {
+          const initialValue =
+            decl.initialValue !== undefined
+              ? text.slice(decl.initialValue.sourceSpan)
+              : undefined;
+          return tagCategory(
             {
               name,
+              ...(decl.nameSpans?.[i] !== undefined
+                ? text.spelling(decl.nameSpans[i], name)
+                : {}),
               type: decl.type.name,
               ...(block.isConstant ? { constant: true } : {}),
+              ...(initialValue !== undefined
+                ? { initialValue: initialValue.trim() }
+                : {}),
               ...attributesOf(decl),
             },
             catByName,
-          ),
-        ),
+          );
+        }),
       ),
     ),
     headers: [headerFileName],
@@ -874,12 +984,25 @@ export function compileStlib(
     noSource?: boolean;
     /** Mark this library as a built-in runtime library */
     builtin?: boolean;
+    /**
+     * Headers the library's `{external}` code needs, such as a C API it calls. They are recorded in the manifest, so
+     * every program using the library includes them; the consumer supplies the files on its include path.
+     */
+    headers?: string[];
     /** Library archives this library depends on */
     dependencies?: StlibArchive[];
     /** Global constants available during compilation (e.g., STRING_LENGTH) */
     globalConstants?: Record<string, number>;
   },
 ): StlibCompileResult {
+  for (const header of options.headers ?? []) {
+    if (!/^[\w./+-]+$/.test(header)) {
+      throw new TypeError(
+        `headers entry ${JSON.stringify(header)} is not a valid include filename ` +
+          `(allowed characters: alphanumerics, '.', '/', '-', '_', '+').`,
+      );
+    }
+  }
   const libResult = compileLibrary(sources, options);
   if (options.builtin) {
     libResult.manifest.isBuiltin = true;
@@ -898,10 +1021,12 @@ export function compileStlib(
     };
   }
 
-  // Clear manifest.headers — the .stlib archive inlines its C++ code
-  // directly into the consumer's output via addLibraryChunks(), so
-  // there are no external .hpp files to #include.
-  const manifest = { ...libResult.manifest, headers: [] as string[] };
+  // The library's own header is not listed: its C++ is inlined into the consumer's output through
+  // addLibraryChunks(). Only the headers its {external} code needs are.
+  const manifest = {
+    ...libResult.manifest,
+    headers: [...(options.headers ?? [])],
+  };
 
   // Chunks own each declared symbol's emit slices, so the dep-preamble
   // strip that used to operate on the library-wide blob is no longer

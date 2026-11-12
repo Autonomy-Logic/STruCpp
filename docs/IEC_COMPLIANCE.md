@@ -96,7 +96,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Reference | `REF()` | Supported |
 | Parentheses | `( )` | Supported |
 | Function call | `name(args)` | Supported (positional + named) |
-| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)` | Supported |
+| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)`; named arguments bind by name and omitted inputs take their declared default, for local, interface and library methods | Supported |
 | Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
 | Typed literals | `INT#5`, `DINT#42`, `REAL#3.14` | Supported |

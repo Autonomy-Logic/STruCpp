@@ -543,6 +543,19 @@ function runPipeline(
   try {
     const projectModelResult = buildProjectModel(ast);
     projectModel = projectModelResult.model;
+    const ns = mergedOptions.namespace;
+    if (ns !== undefined) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(ns)) {
+        projectModel.config = { name: ns, namespace: ns, libraries: [] };
+      } else {
+        errors.push({
+          message: `Namespace '${ns}' is not a C++ identifier.`,
+          line: 0,
+          column: 0,
+          severity: "error",
+        });
+      }
+    }
     for (const err of projectModelResult.errors) {
       errors.push({
         message: err.message,
@@ -823,6 +836,9 @@ export function compile(
     pouIncludes: pipeline.mergedOptions.pouIncludes ?? [],
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
+    ...(pipeline.mergedOptions.separateLibraryFiles === true
+      ? { separateLibraryFiles: true }
+      : {}),
     ...(pipeline.mergedOptions.emitChunkMarkers
       ? { emitChunkMarkers: true }
       : {}),
@@ -918,6 +934,9 @@ export function compile(
     cppFiles: codeResult.cppFiles,
     cppCode: codeResult.cppCode,
     headerCode: codeResult.headerCode,
+    ...(codeResult.libraryHeader !== undefined
+      ? { libraryHeader: codeResult.libraryHeader }
+      : {}),
     lineMap: codeResult.lineMap,
     headerLineMap: codeResult.headerLineMap,
     errors: pipeline.errors,
@@ -962,10 +981,18 @@ export function analyze(
  * Parse ST source code and return the AST without code generation.
  * Useful for syntax checking and IDE integration.
  *
+ * With `recover`, source with syntax errors still yields the AST the parser recovered, together with the errors, so
+ * an editor can keep working on the declarations around the code being typed. Without it, any syntax error means no
+ * AST.
+ *
  * @param source - The ST source code to parse
- * @returns The parsed AST or parse errors
+ * @param options - `recover`: return a partial AST alongside syntax errors
+ * @returns The parsed AST and/or the errors
  */
-export function parse(source: string): {
+export function parse(
+  source: string,
+  options: { recover?: boolean } = {},
+): {
   ast?: CompilationUnit;
   errors: CompileError[];
 } {
@@ -987,7 +1014,7 @@ export function parse(source: string): {
         severity: "error",
       });
     }
-    return { errors };
+    if (options.recover !== true) return { errors };
   }
 
   // Build AST from CST

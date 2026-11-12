@@ -27,6 +27,8 @@ export interface LibraryFunctionEntry {
   name: string;
   /** CODESYS attribute pragmas written before the declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Return type name (concrete IEC type or generic — see above) */
   returnType: string;
   /** Parameter list */
@@ -45,6 +47,8 @@ export interface LibraryFunctionEntry {
     initialValue?: string;
     /** CODESYS attribute pragmas written before the parameter. */
     attributes?: LibraryAttribute[];
+    /** The name as written, when it differs from `name`. */
+    displayName?: string;
   }>;
   /** Variadic call shape. When set, `parameters` describes the leading
    *  required parameters and the function accepts any number of
@@ -110,6 +114,10 @@ export interface LibraryVarType {
   retain?: true;
   /** CODESYS attribute pragmas written before the variable's declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
+  /** Initial value as written in the declaration (ST text). */
+  initialValue?: string;
 }
 
 /** A CODESYS attribute pragma, `{attribute 'name' [:= 'value']}`. */
@@ -121,7 +129,13 @@ export interface LibraryAttribute {
 /** A type as the manifest records it: a {@link LibraryVarType} without the member-only fields. */
 export type LibraryTypeRef = Omit<
   LibraryVarType,
-  "name" | "cppName" | "readOnly" | "retain" | "attributes"
+  | "name"
+  | "cppName"
+  | "readOnly"
+  | "retain"
+  | "attributes"
+  | "displayName"
+  | "initialValue"
 >;
 
 export type LibraryVisibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
@@ -134,6 +148,8 @@ export interface LibraryMethodEntry {
   name: string;
   /** CODESYS attribute pragmas written before the declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   visibility: LibraryVisibility;
   returnType?: LibraryTypeRef;
   isAbstract?: true;
@@ -149,6 +165,8 @@ export interface LibraryPropertyEntry {
   name: string;
   /** CODESYS attribute pragmas written before the declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   type: LibraryTypeRef;
   visibility: LibraryVisibility;
   getter?: true;
@@ -160,6 +178,8 @@ export interface LibraryInterfaceEntry {
   name: string;
   /** CODESYS attribute pragmas written before the declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   extends?: string[];
   methods: LibraryMethodEntry[];
   properties: LibraryPropertyEntry[];
@@ -195,6 +215,8 @@ export interface LibraryFBEntry {
   sourceFile?: string;
   /** CODESYS attribute pragmas written before the block's declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Input variables */
   inputs: LibraryVarType[];
   /** Output variables */
@@ -252,6 +274,8 @@ export interface LibraryTypeEntry {
   name: string;
   /** CODESYS attribute pragmas written before the declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Type kind (struct, enum, alias) */
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
@@ -262,6 +286,14 @@ export interface LibraryTypeEntry {
   fields?: Array<{
     name: string;
     type: string;
+    attributes?: LibraryAttribute[];
+    displayName?: string;
+  }>;
+  /** Members of an enumeration, in declaration order, with their explicit values as written. */
+  members?: Array<{
+    name: string;
+    displayName?: string;
+    value?: string;
     attributes?: LibraryAttribute[];
   }>;
   /** Type-level help text — same lifecycle as `LibraryFBEntry.documentation`,
@@ -288,12 +320,16 @@ export interface LibraryGlobalEntry {
   name: string;
   /** CODESYS attribute pragmas written before the declaration. */
   attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Declared type name (elementary or a library type, e.g. CONSTANTS_MATH). */
   type: string;
   /** True for `VAR_GLOBAL CONSTANT` entries. */
   constant?: boolean;
   /** Folder path within the library — see `LibraryFunctionEntry.category`. */
   category?: string;
+  /** Initial value as written in the declaration (ST text). */
+  initialValue?: string;
 }
 
 /**

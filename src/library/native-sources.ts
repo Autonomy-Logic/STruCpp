@@ -128,6 +128,9 @@ export interface NativeHeaderError {
  * interface. The native body is dropped here and never reaches the parser,
  * which is what allows a Python body to sit in a library at all.
  *
+ * Attribute pragmas and comments may precede the declaration; they stay in
+ * the projected ST, so the pragmas attach to the block as in an ST source.
+ *
  * Returns an error rather than throwing when the header is missing or
  * malformed, so one bad file names itself in the build output instead of
  * failing the whole library anonymously.
@@ -145,8 +148,6 @@ export function projectNativeHeaderToSt(
     ? source.source.slice(docMatch[0].length)
     : source.source;
 
-  // Attribute pragmas and comments may precede the declaration; they stay in the projected ST, so the pragmas
-  // attach to the block as they do in an ST source.
   const declaration =
     /^(?:\s|\{\s*attribute\b(?:[^}'"]|'[^']*'|"[^"]*")*\}|\(\*[\s\S]*?\*\))*(FUNCTION_BLOCK|FUNCTION|PROGRAM)\s+([A-Za-z_]\w*)/i.exec(
       body,

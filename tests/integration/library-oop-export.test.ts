@@ -77,6 +77,7 @@ describe("library manifests export methods, properties and interfaces", () => {
     expect(elem?.properties).toEqual([
       {
         name: "SIZE",
+        displayName: "Size",
         type: { type: "DINT" },
         visibility: "PUBLIC",
         getter: true,
