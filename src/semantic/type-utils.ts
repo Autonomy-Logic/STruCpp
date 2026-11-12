@@ -957,3 +957,16 @@ export function describeType(t: IECType): string {
       return t.typeKind;
   }
 }
+
+/**
+ * Splits a conversion name, `TO_<T>` or `<S>_TO_<T>`, into its source (absent
+ * for `TO_<T>`) and target. Upper-cases both; undefined for any other name.
+ */
+export function parseConversionName(
+  name: string,
+): { source?: string; target: string } | undefined {
+  const match = /^(?:(\w+?)_)?TO_(\w+)$/.exec(name.toUpperCase());
+  if (match === null) return undefined;
+  const target = match[2]!;
+  return match[1] === undefined ? { target } : { source: match[1], target };
+}

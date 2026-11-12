@@ -41,7 +41,7 @@ describe("VAR_EXTERNAL against a file-level VAR_GLOBAL", () => {
     expect(result.success).toBe(true);
     // Plain file-scope storage, and the body writes it directly.
     expect(result.headerCode).toContain("inline IEC_REAL GX = 1.0;");
-    expect(result.cppCode).toContain("GX = GX * 2.0;");
+    expect(result.cppCode).toContain("GX = GX * 2.0f;");
   });
 
   it("adds no pointer member or constructor parameter for it", () => {

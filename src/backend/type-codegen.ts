@@ -60,6 +60,8 @@ export interface TypeCodeGenOptions {
    *  back to "anything that is not elementary", all a bare TypeCodeGenerator
    *  can tell from a list of type declarations. */
   isUserDefinedType: (typeName: string) => boolean;
+  /** Whether a type name is an INTERFACE; a field of that type holds an `IEC_INTERFACE<I>`. */
+  isInterfaceType: (typeName: string) => boolean;
 }
 
 /**
@@ -71,6 +73,7 @@ export const defaultTypeCodeGenOptions: TypeCodeGenOptions = {
   emitChunkMarkers: false,
   isUserDefinedType: (typeName: string) =>
     !isElementaryType(typeName.toUpperCase()),
+  isInterfaceType: () => false,
 };
 
 /**
@@ -352,6 +355,7 @@ export class TypeCodeGenerator {
         const elemCpp = this.arrayElementTypeToCpp(
           field.type.elementTypeName,
           field.type.elementReferenceChain,
+          field.type.elementMaxLength,
         );
         cppType = formatArrayType(elemCpp, field.type.arrayDimensions);
       } else {
@@ -469,6 +473,7 @@ export class TypeCodeGenerator {
       elementKind === undefined || elementKind === "none"
         ? undefined
         : (def.elementType.referenceChain ?? [elementKind]),
+      def.elementType.maxLength,
     );
     const numDims = def.dimensions.length;
 
@@ -567,10 +572,11 @@ export class TypeCodeGenerator {
   private arrayElementTypeToCpp(
     typeName: string,
     referenceChain: readonly string[] | undefined,
+    maxLength?: number | string,
   ): string {
     return referenceChain
       ? wrapReferenceChain(referenceChain, this.mapTypeToCpp(typeName))
-      : this.mapStructFieldTypeToCpp(typeName);
+      : this.mapStructFieldTypeToCpp(typeName, maxLength);
   }
 
   /**
@@ -616,6 +622,10 @@ export class TypeCodeGenerator {
     // Enum types → IEC_<Name> (resolves to IEC_ENUM<Name> via alias)
     if (this.knownEnumNames.has(upperName)) {
       return `IEC_${typeName}`;
+    }
+
+    if (this.options.isInterfaceType(typeName)) {
+      return `IEC_INTERFACE<${typeName}>`;
     }
 
     // Composite types (struct, array, FB) → bare name

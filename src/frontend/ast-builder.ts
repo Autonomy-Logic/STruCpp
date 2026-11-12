@@ -67,6 +67,7 @@ import type {
   UnaryOperator,
 } from "./ast.js";
 import { applyTypeDefaults } from "./type-defaults.js";
+import { contextualKeywordTokens } from "./lexer.js";
 import type { SourceSpan } from "../types.js";
 
 // =============================================================================
@@ -243,8 +244,7 @@ function getNodeStartOffset(node: CstNode): number {
 
 /**
  * Extract the identifier string from an identifierOrKeyword CST node.
- * The node contains either an Identifier token or one of the contextual keyword tokens
- * (SET, GET, ON, OVERRIDE, ABSTRACT, FINAL).
+ * The node contains either an Identifier token or one of `contextualKeywordTokens`.
  */
 function getIdentifierOrKeywordImage(node: CstNode): string {
   const children = node.children as CstChildren;
@@ -252,23 +252,19 @@ function getIdentifierOrKeywordImage(node: CstNode): string {
   const identToken = getFirstToken(children.Identifier);
   if (identToken) return identToken.image;
   // Check each contextual keyword token
-  for (const key of [
-    "SET",
-    "GET",
-    "ON",
-    "OVERRIDE",
-    "ABSTRACT",
-    "FINAL",
-    "AND",
-    "OR",
-    "XOR",
-    "NOT",
-    "MOD",
-  ]) {
+  for (const key of contextualKeywordTokens.map((t) => t.name)) {
     const kwToken = getFirstToken(children[key]);
     if (kwToken) return kwToken.image;
   }
   return "";
+}
+
+/** The type name of a `dataType` CST node, without its reference prefixes or length. */
+function dataTypeName(node: CstNode): string | undefined {
+  const nameNode = getFirstNode(
+    (node.children as CstChildren).identifierOrKeyword,
+  );
+  return nameNode ? getIdentifierOrKeywordImage(nameNode) : undefined;
 }
 
 /**
@@ -680,12 +676,16 @@ export class ASTBuilder {
     for (const methodNode of getAllNodes(children.interfaceMethodDeclaration)) {
       methods.push(this.buildInterfaceMethodDeclaration(methodNode));
     }
+    const properties = getAllNodes(children.propertyDeclaration).map((n) =>
+      this.buildPropertyDeclaration(n),
+    );
 
     return {
       kind: "InterfaceDeclaration",
       sourceSpan: nodeToSourceSpan(node),
       name,
       methods,
+      properties,
       ...(extendsList !== undefined ? { extends: extendsList } : {}),
     };
   }
@@ -731,13 +731,14 @@ export class ASTBuilder {
    */
   buildMethodDeclaration(node: CstNode): MethodDeclaration {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+    const nameNode = getFirstNode(children.identifierOrKeyword);
+    const name = nameNode ? getIdentifierOrKeywordImage(nameNode) : "";
 
     // Visibility modifier
     let visibility: Visibility = "PUBLIC";
     if (children.PRIVATE) visibility = "PRIVATE";
     else if (children.PROTECTED) visibility = "PROTECTED";
+    else if (children.INTERNAL) visibility = "INTERNAL";
 
     // Modifiers
     const isAbstract = !!children.ABSTRACT;
@@ -821,13 +822,14 @@ export class ASTBuilder {
    */
   buildPropertyDeclaration(node: CstNode): PropertyDeclaration {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+    const nameNode = getFirstNode(children.identifierOrKeyword);
+    const name = nameNode ? getIdentifierOrKeywordImage(nameNode) : "";
 
     // Visibility modifier
     let visibility: Visibility = "PUBLIC";
     if (children.PRIVATE) visibility = "PRIVATE";
     else if (children.PROTECTED) visibility = "PROTECTED";
+    else if (children.INTERNAL) visibility = "INTERNAL";
 
     // Property type
     const dataTypeNode = getFirstNode(children.dataType);
@@ -1043,8 +1045,8 @@ export class ASTBuilder {
    */
   buildEnumMember(node: CstNode): EnumMember {
     const children = node.children as CstChildren;
-    const nameToken = getAllTokens(children.Identifier)[0];
-    const name = nameToken?.image ?? "";
+    const nameNode = getFirstNode(children.identifierOrKeyword);
+    const name = nameNode ? getIdentifierOrKeywordImage(nameNode) : "";
 
     // Check for explicit value: := expression
     let value: Expression | undefined;
@@ -1107,11 +1109,7 @@ export class ASTBuilder {
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
     if (elementTypeNode) {
-      const elemChildren = elementTypeNode.children as CstChildren;
-      const elemNameToken = getFirstToken(elemChildren.Identifier);
-      if (elemNameToken) {
-        elementTypeName = elemNameToken.image;
-      }
+      elementTypeName = dataTypeName(elementTypeNode) ?? elementTypeName;
     }
 
     // Extract integer bounds from dimensions
@@ -1663,8 +1661,7 @@ export class ASTBuilder {
   buildTypeReference(node: CstNode): TypeReference {
     const children = node.children as CstChildren;
 
-    const nameToken = getFirstToken(children.Identifier);
-    const name = nameToken?.image ?? "INT";
+    const name = dataTypeName(node) ?? "INT";
 
     // The prefixes in source order: CST children are grouped by token type,
     // so their relative order comes from the offsets.
@@ -1692,12 +1689,8 @@ export class ASTBuilder {
     if (lengthToken) {
       maxLength = parseInt(lengthToken.image, 10);
     } else {
-      // Check for identifier-based length (STRING(CONSTANT_NAME))
-      // Note: children.Identifier[0] is the type name itself; [1] would be the length constant
-      const allIdents = getAllTokens(children.Identifier);
-      if (allIdents.length > 1) {
-        maxLength = allIdents[1]!.image;
-      }
+      const lengthName = getFirstToken(children.Identifier);
+      if (lengthName) maxLength = lengthName.image;
     }
 
     const result: TypeReference = {
@@ -1739,11 +1732,7 @@ export class ASTBuilder {
     const elementTypeNode = getFirstNode(arrayChildren.dataType);
     let elementTypeName = "INT";
     if (elementTypeNode) {
-      const elemChildren = elementTypeNode.children as CstChildren;
-      const elemNameToken = getFirstToken(elemChildren.Identifier);
-      if (elemNameToken) {
-        elementTypeName = elemNameToken.image;
-      }
+      elementTypeName = dataTypeName(elementTypeNode) ?? elementTypeName;
     }
 
     // Create synthetic name based on whether it's VLA or fixed
@@ -1787,6 +1776,10 @@ export class ASTBuilder {
     if (arrayDimensions) {
       result.arrayDimensions = arrayDimensions;
       result.elementTypeName = elementTypeName;
+      const elementLength = elementTypeNode
+        ? this.buildTypeReference(elementTypeNode).maxLength
+        : undefined;
+      if (elementLength !== undefined) result.elementMaxLength = elementLength;
     }
     // Also on an ARRAY[*], whose element type is otherwise only in its name.
     const elementChain = this.elementReferenceChain(elementTypeNode);
@@ -1865,6 +1858,17 @@ export class ASTBuilder {
       return this.buildInstanceCallStatement(
         getFirstNode(children.instanceCallStatement)!,
       );
+    }
+    if (children.memberMethodCallStatement) {
+      const stmtNode = getFirstNode(children.memberMethodCallStatement)!;
+      const callNode = getFirstNode(
+        (stmtNode.children as CstChildren).memberMethodCall,
+      )!;
+      return {
+        kind: "FunctionCallStatement",
+        sourceSpan: nodeToSourceSpan(stmtNode),
+        call: this.buildMemberMethodCall(callNode),
+      };
     }
     if (children.methodCallStatement) {
       return this.buildMethodCallStatement(
@@ -2632,6 +2636,12 @@ export class ASTBuilder {
       );
     }
 
+    if (children.memberMethodCall) {
+      return this.buildMemberMethodCall(
+        getFirstNode(children.memberMethodCall)!,
+      );
+    }
+
     // Check for method call expression: instance.method(args)
     if (children.methodCall) {
       return this.buildMethodCallExpression(getFirstNode(children.methodCall)!);
@@ -3229,15 +3239,16 @@ export class ASTBuilder {
   }
 
   /**
-   * Build a THIS access expression from a thisAccess CST node.
-   * THIS.member -> VariableExpression { name: "THIS", fieldAccess: ["member"] }
-   * THIS.method(args) -> FunctionCallExpression { functionName: "THIS.method", ... }
+   * Build a THIS access expression from a thisAccess CST node:
+   * - `THIS^` alone: VariableExpression { name: "THIS", isDereference: true };
+   * - `THIS^.path`: VariableExpression rooted at THIS, the path in `accessChain`;
+   * - `THIS^.M(args)`: FunctionCallExpression { functionName: "THIS.M" };
+   * - `THIS^.path.M(args)`: MethodCallExpression on the path;
+   * - `THIS^.arr[i](args)`: FunctionCallExpression { functionName: "arr" } with the path as `instance`.
    */
   buildThisAccessExpression(node: CstNode): Expression {
-    const children = node.children as CstChildren;
-
-    // THIS^ (dereference - return self)
-    if (children.Caret) {
+    const tail = getFirstNode((node.children as CstChildren).thisPathTail);
+    if (!tail) {
       return {
         kind: "VariableExpression",
         sourceSpan: nodeToSourceSpan(node),
@@ -3247,39 +3258,73 @@ export class ASTBuilder {
         isDereference: true,
       };
     }
+    const tailChildren = tail.children as CstChildren;
+    return this.buildThisPath(
+      node,
+      getFirstNode(tailChildren.variable)!,
+      tailChildren.LParen ? getFirstNode(tailChildren.argumentList) : undefined,
+      tailChildren.LParen !== undefined,
+    );
+  }
 
-    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
-    const memberName =
-      idOrKwNodes.length > 0
-        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
-        : "";
-
-    // If there's a LParen, it's a method call
-    if (children.LParen) {
-      const args: Argument[] = [];
-      const argListNode = getFirstNode(children.argumentList);
-      if (argListNode) {
-        const argListChildren = argListNode.children as CstChildren;
-        for (const argNode of getAllNodes(argListChildren.argument)) {
-          args.push(this.buildArgument(argNode));
-        }
+  /** The THIS path of `variableNode` re-rooted at THIS; with `isCall`, the call it ends in (see buildThisAccessExpression). */
+  private buildThisPath(
+    node: CstNode,
+    variableNode: CstNode,
+    argListNode: CstNode | undefined,
+    isCall: boolean,
+  ): Expression {
+    const span = nodeToSourceSpan(node);
+    const tail = this.buildVariableExpression(variableNode);
+    const steps: AccessStep[] = [
+      { kind: "field", name: tail.name },
+      ...(tail.accessChain ?? []),
+    ];
+    const rooted = (chain: AccessStep[]): VariableExpression => ({
+      kind: "VariableExpression",
+      sourceSpan: span,
+      name: "THIS",
+      subscripts: [],
+      fieldAccess: chain.flatMap((step) =>
+        step.kind === "field" ? [step.name] : [],
+      ),
+      isDereference: false,
+      ...(chain.length > 1 || chain[0]?.kind !== "field"
+        ? { accessChain: chain }
+        : {}),
+    });
+    if (!isCall) return rooted(steps);
+    const args: Argument[] = [];
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
       }
+    }
+    const last = steps[steps.length - 1]!;
+    if (last.kind !== "field") {
       return {
         kind: "FunctionCallExpression",
-        sourceSpan: nodeToSourceSpan(node),
-        functionName: `THIS.${memberName}`,
+        sourceSpan: span,
+        functionName: tail.name,
+        arguments: args,
+        instance: rooted(steps),
+      };
+    }
+    if (steps.length === 1) {
+      return {
+        kind: "FunctionCallExpression",
+        sourceSpan: span,
+        functionName: `THIS.${last.name}`,
         arguments: args,
       };
     }
-
-    // Otherwise it's member access
     return {
-      kind: "VariableExpression",
-      sourceSpan: nodeToSourceSpan(node),
-      name: "THIS",
-      subscripts: [],
-      fieldAccess: [memberName],
-      isDereference: false,
+      kind: "MethodCallExpression",
+      sourceSpan: span,
+      object: rooted(steps.slice(0, -1)),
+      methodName: last.name,
+      arguments: args,
     };
   }
 
@@ -3381,6 +3426,49 @@ export class ASTBuilder {
     }
 
     return result;
+  }
+
+  /**
+   * Build a method call on a variable path (`arr[i].m()`, `p^.m()`, `a.b.m()`):
+   * the path's last field is the method, the rest is the object.
+   */
+  buildMemberMethodCall(node: CstNode): MethodCallExpression {
+    const children = node.children as CstChildren;
+    const v = this.buildVariableExpression(getFirstNode(children.variable)!);
+    const chain = v.accessChain ?? [];
+    const last = chain[chain.length - 1];
+    if (!last || last.kind !== "field") {
+      throw new Error(
+        `Method call target must end in a method name (line ${nodeToSourceSpan(node).startLine})`,
+      );
+    }
+    const methodName = last.name;
+    const rest = chain.slice(0, -1);
+    const object: VariableExpression = {
+      ...v,
+      fieldAccess: v.fieldAccess.slice(0, -1),
+      isDereference: rest.some((step) => step.kind === "dereference"),
+    };
+    if (rest.length > 0) {
+      object.accessChain = rest;
+    } else {
+      delete object.accessChain;
+    }
+    const args: Argument[] = [];
+    const argListNode = getFirstNode(children.argumentList);
+    if (argListNode) {
+      const argListChildren = argListNode.children as CstChildren;
+      for (const argNode of getAllNodes(argListChildren.argument)) {
+        args.push(this.buildArgument(argNode));
+      }
+    }
+    return {
+      kind: "MethodCallExpression",
+      sourceSpan: nodeToSourceSpan(node),
+      object,
+      methodName,
+      arguments: args,
+    };
   }
 
   /**
@@ -3581,60 +3669,34 @@ export class ASTBuilder {
   }
 
   /**
-   * Build a THIS statement: THIS.member := expr; or THIS.method(args);
-   * Assignment maps to AssignmentStatement; method call maps to FunctionCallStatement.
+   * Build a THIS statement: `THIS^.path := expr;` maps to an AssignmentStatement; `THIS^.path(args);` and
+   * `THIS^.path;` (a call without arguments) map to a FunctionCallStatement (see buildThisPath).
    */
   buildThisStatement(node: CstNode): Statement {
     const children = node.children as CstChildren;
-    const idOrKwNodes = getAllNodes(children.identifierOrKeyword);
-    const memberName =
-      idOrKwNodes.length > 0
-        ? getIdentifierOrKeywordImage(idOrKwNodes[0]!)
-        : "";
-
-    // Check if it's an assignment (has Assign token)
+    const variableNode = getFirstNode(children.variable)!;
     if (children.Assign) {
       const exprNode = getFirstNode(children.expression);
       const value = exprNode
         ? (this.buildExpression(exprNode) ?? this.createDummyLiteral(node))
         : this.createDummyLiteral(node);
-
-      const target: VariableExpression = {
-        kind: "VariableExpression",
-        sourceSpan: nodeToSourceSpan(node),
-        name: "THIS",
-        subscripts: [],
-        fieldAccess: [memberName],
-        isDereference: false,
-      };
-
       return {
         kind: "AssignmentStatement",
         sourceSpan: nodeToSourceSpan(node),
-        target,
+        target: this.buildThisPath(node, variableNode, undefined, false),
         value,
       } as AssignmentStatement;
     }
-
-    // Otherwise it's a method call: THIS.method(args);
-    const args: Argument[] = [];
-    const argListNode = getFirstNode(children.argumentList);
-    if (argListNode) {
-      const argListChildren = argListNode.children as CstChildren;
-      for (const argNode of getAllNodes(argListChildren.argument)) {
-        args.push(this.buildArgument(argNode));
-      }
-    }
-
+    const call = this.buildThisPath(
+      node,
+      variableNode,
+      getFirstNode(children.argumentList),
+      true,
+    );
     return {
       kind: "FunctionCallStatement",
       sourceSpan: nodeToSourceSpan(node),
-      call: {
-        kind: "FunctionCallExpression",
-        sourceSpan: nodeToSourceSpan(node),
-        functionName: `THIS.${memberName}`,
-        arguments: args,
-      },
+      call,
     } as FunctionCallStatement;
   }
 

@@ -42,7 +42,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('X = 3.14;');
+      expect(result.cppCode).toContain('X = 3.14f;');
     });
 
     it('should generate variable-to-variable assignment', () => {
@@ -363,7 +363,7 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('X = 2.718;');
+      expect(result.cppCode).toContain('X = 2.718f;');
     });
   });
 
@@ -473,8 +473,8 @@ describe('Phase 3.1 - Expression and Assignment Code Generation', () => {
       `;
       const result = compile(source);
       expect(result.success).toBe(true);
-      expect(result.cppCode).toContain('X = 3.5;');
-      expect(result.cppCode).toContain('Y = 2.0;');
+      expect(result.cppCode).toContain('X = 3.5f;');
+      expect(result.cppCode).toContain('Y = 2.0f;');
       expect(result.cppCode).toContain('SUM = X + Y;');
       expect(result.cppCode).toContain('PRODUCT = X * Y;');
     });

@@ -54,6 +54,8 @@ function makeTypeRef(v: LibraryVarType): TypeReference {
   };
   if (v.arrayDimensions) ref.arrayDimensions = v.arrayDimensions;
   if (v.elementTypeName) ref.elementTypeName = v.elementTypeName;
+  if (v.elementMaxLength !== undefined)
+    ref.elementMaxLength = v.elementMaxLength;
   if (v.elementReferenceChain) {
     ref.elementReferenceChain = v.elementReferenceChain.filter(isReferenceKind);
   }

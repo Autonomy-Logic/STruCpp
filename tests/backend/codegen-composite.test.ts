@@ -113,8 +113,8 @@ describe("Phase 3.3: Array Element Access", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("MATRIX.at(0, 0) = 1.0;");
-    expect(result.cppCode).toContain("MATRIX.at(I, J) = 0.0;");
+    expect(result.cppCode).toContain("MATRIX.at(0, 0) = 1.0f;");
+    expect(result.cppCode).toContain("MATRIX.at(I, J) = 0.0f;");
   });
 
   it("should generate array access in FOR loop", () => {
