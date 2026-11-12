@@ -142,6 +142,7 @@ function makeVarBlock(
       sourceSpan: createDefaultSourceSpan(),
       names: [v.name],
       type: makeTypeRef(v),
+      ...(v.attributes !== undefined ? { attributes: v.attributes } : {}),
     })),
   };
 }
@@ -192,6 +193,7 @@ function makeFunctionBlockDeclaration(
     name: fb.name,
     isAbstract: fb.isAbstract === true,
     isFinal: fb.isFinal === true,
+    ...(fb.attributes !== undefined ? { attributes: fb.attributes } : {}),
     ...(fb.extends !== undefined ? { extends: fb.extends } : {}),
     ...(fb.implements !== undefined ? { implements: fb.implements } : {}),
     varBlocks: [
@@ -240,6 +242,7 @@ function makeVarSymbol(
     sourceSpan: createDefaultSourceSpan(),
     names: [v.name],
     type: makeTypeRef(v),
+    ...(v.attributes !== undefined ? { attributes: v.attributes } : {}),
   };
   return {
     name: v.name,
@@ -276,6 +279,28 @@ const VISIBILITIES: readonly string[] = [
  * Checks the `methods` and `properties` of an exported block or interface (required for an interface, optional for
  * a block): arrays of named entries with a known visibility, methods with their three parameter lists.
  */
+/** Refuses an `attributes` field that is not a list of named attribute pragmas. */
+function validateAttributes(owner: unknown, where: string): void {
+  if (!isRecord(owner) || owner.attributes === undefined) return;
+  if (!Array.isArray(owner.attributes)) {
+    throw new LibraryManifestError(
+      `Invalid library manifest: ${where}.attributes must be an array`,
+    );
+  }
+  owner.attributes.forEach((a: unknown, k) => {
+    if (
+      !isRecord(a) ||
+      typeof a.name !== "string" ||
+      a.name === "" ||
+      (a.value !== undefined && typeof a.value !== "string")
+    ) {
+      throw new LibraryManifestError(
+        `Invalid library manifest: ${where}.attributes[${k}] must have a non-empty string name and an optional string value`,
+      );
+    }
+  });
+}
+
 function validateMembers(
   owner: Record<string, unknown>,
   where: string,
@@ -415,6 +440,14 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
         );
       }
       validateMembers(fb, `functionBlocks[${i}]`, false);
+      validateAttributes(fb, `functionBlocks[${i}]`);
+      for (const list of ["inputs", "outputs", "inouts", "locals"] as const) {
+        const vars = fb[list];
+        if (!Array.isArray(vars)) continue;
+        vars.forEach((v: unknown, k) =>
+          validateAttributes(v, `functionBlocks[${i}].${list}[${k}]`),
+        );
+      }
       functionBlocks.push(
         fb as unknown as LibraryManifest["functionBlocks"][0],
       );

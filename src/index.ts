@@ -17,6 +17,7 @@ import {
 import { parse as parseSource } from "./frontend/parser.js";
 import { suggestionForParseError } from "./frontend/parser-error-message-provider.js";
 import { buildAST } from "./frontend/ast-builder.js";
+import { attachAttributes } from "./frontend/attributes.js";
 import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
@@ -397,6 +398,7 @@ function runPipeline(
       mergedOptions.fileName ?? "main.st",
       globalConstants,
     );
+    attachAttributes(primaryAst, effectiveSource, parseResult.pragmas);
     const units: CompilationUnit[] = [primaryAst];
 
     // Parse additional source files. Each gets the same Phase 0
@@ -453,13 +455,17 @@ function runPipeline(
         }
         if (addlParseResult.cst) {
           try {
-            units.push(
-              buildAST(
-                addlParseResult.cst,
-                addlSource.fileName,
-                globalConstants,
-              ),
+            const addlAst = buildAST(
+              addlParseResult.cst,
+              addlSource.fileName,
+              globalConstants,
             );
+            attachAttributes(
+              addlAst,
+              effectiveAddlSource,
+              addlParseResult.pragmas,
+            );
+            units.push(addlAst);
           } catch (e) {
             errors.push({
               message: `AST build failed for ${addlSource.fileName}: ${e instanceof Error ? e.message : String(e)}`,
@@ -996,6 +1002,7 @@ export function parse(source: string): {
   }
   try {
     const ast = buildAST(parseResult.cst);
+    attachAttributes(ast, source, parseResult.pragmas);
     return { ast, errors };
   } catch (e) {
     errors.push({

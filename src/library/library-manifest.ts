@@ -104,12 +104,20 @@ export interface LibraryVarType {
   /** The declaring block was `VAR RETAIN`: retained in every instance, whether
    *  or not the instance itself was declared RETAIN. */
   retain?: true;
+  /** CODESYS attribute pragmas written before the variable's declaration. */
+  attributes?: LibraryAttribute[];
+}
+
+/** A CODESYS attribute pragma, `{attribute 'name' [:= 'value']}`. */
+export interface LibraryAttribute {
+  name: string;
+  value?: string;
 }
 
 /** A type as the manifest records it: a {@link LibraryVarType} without the member-only fields. */
 export type LibraryTypeRef = Omit<
   LibraryVarType,
-  "name" | "cppName" | "readOnly" | "retain"
+  "name" | "cppName" | "readOnly" | "retain" | "attributes"
 >;
 
 export type LibraryVisibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
@@ -175,6 +183,8 @@ export interface LibraryFBEntry {
    * case-insensitive guess would be wrong on a case-sensitive filesystem.
    */
   sourceFile?: string;
+  /** CODESYS attribute pragmas written before the block's declaration. */
+  attributes?: LibraryAttribute[];
   /** Input variables */
   inputs: LibraryVarType[];
   /** Output variables */

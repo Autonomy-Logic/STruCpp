@@ -204,7 +204,7 @@ edges on `CU` and `CD` leave `CV` unchanged. CODESYS does not document that case
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Nested comments `(* (* *) *)` | Supported | Arbitrary nesting depth |
-| Pragmas `{...}` | Supported | Including `{external}` for inline C++; CODESYS `{attribute 'name' [:= 'value']}` pragmas are accepted and ignored |
+| Pragmas `{...}` | Supported | Including `{external}` for inline C++; CODESYS `{attribute 'name' [:= 'value']}` pragmas attach to the declaration that follows them (POU, method, property, interface, type or variable; only whitespace, comments and other pragmas in between), in the AST and in library manifests, and do not change the generated code |
 | Inline C++ | Supported | Via `{external ...}` pragma blocks |
 | Inline function calls | Supported | Via `{call ...}` pragma |
 | Global constants (`-D`) | Supported | CLI `-D NAME=VALUE`, emits `constexpr` |

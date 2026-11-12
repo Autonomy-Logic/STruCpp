@@ -107,6 +107,14 @@ export interface FunctionBlockType extends IECType {
 // =============================================================================
 
 /**
+ * A CODESYS attribute pragma, `{attribute 'name'}` or `{attribute 'name' := 'value'}`, as written.
+ */
+export interface Attribute {
+  name: string;
+  value?: string;
+}
+
+/**
  * Root node representing a complete compilation unit.
  */
 export interface CompilationUnit extends ASTNode {
@@ -129,6 +137,8 @@ export interface CompilationUnit extends ASTNode {
  */
 export interface ProgramDeclaration extends ASTNode {
   kind: "ProgramDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   varBlocks: VarBlock[];
   body: Statement[];
@@ -139,6 +149,8 @@ export interface ProgramDeclaration extends ASTNode {
  */
 export interface FunctionDeclaration extends ASTNode {
   kind: "FunctionDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   returnType: TypeReference;
   varBlocks: VarBlock[];
@@ -150,6 +162,8 @@ export interface FunctionDeclaration extends ASTNode {
  */
 export interface FunctionBlockDeclaration extends ASTNode {
   kind: "FunctionBlockDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   isAbstract: boolean;
   isFinal: boolean;
@@ -171,6 +185,8 @@ export type Visibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
  */
 export interface MethodDeclaration extends ASTNode {
   kind: "MethodDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   visibility: Visibility;
   isAbstract: boolean;
@@ -186,6 +202,8 @@ export interface MethodDeclaration extends ASTNode {
  */
 export interface InterfaceDeclaration extends ASTNode {
   kind: "InterfaceDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   extends?: string[];
   methods: MethodDeclaration[];
@@ -200,6 +218,8 @@ export interface InterfaceDeclaration extends ASTNode {
  */
 export interface PropertyDeclaration extends ASTNode {
   kind: "PropertyDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   type: TypeReference;
   visibility: Visibility;
@@ -259,6 +279,8 @@ export interface VarBlock extends ASTNode {
  */
 export interface VarDeclaration extends ASTNode {
   kind: "VarDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   names: string[];
   type: TypeReference;
   initialValue?: Expression;
@@ -300,6 +322,8 @@ export interface VarDeclaration extends ASTNode {
  */
 export interface TypeDeclaration extends ASTNode {
   kind: "TypeDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   definition: TypeDefinition;
   /**

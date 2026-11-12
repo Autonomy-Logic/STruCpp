@@ -126,6 +126,17 @@ function serializeVarType(
   return { name, ...serializeTypeRef(typeRef) };
 }
 
+/** Copies a declaration's attribute pragmas onto its manifest entry. */
+function withAttributes(
+  entry: LibraryVarType,
+  decl: VarDeclaration,
+): LibraryVarType {
+  if (decl.attributes !== undefined && decl.attributes.length > 0) {
+    entry.attributes = decl.attributes.map((a) => ({ ...a }));
+  }
+  return entry;
+}
+
 /** Variables of the given block kind, in declaration order. */
 function blockVars(
   varBlocks: readonly VarBlock[],
@@ -206,7 +217,10 @@ function serializeLocal(
   block: VarBlock,
   ctx: MemberManglingContext | undefined,
 ): LibraryVarType {
-  const entry = withCppName(serializeVarType(name, decl.type), ctx);
+  const entry = withAttributes(
+    withCppName(serializeVarType(name, decl.type), ctx),
+    decl,
+  );
   if (block.isConstant) entry.readOnly = true;
   if (block.isRetain) entry.retain = true;
   return entry;
@@ -363,7 +377,9 @@ function buildFBEntry(
       .filter((b) => b.blockType === blockType)
       .flatMap((b) =>
         b.declarations.flatMap((d) =>
-          d.names.map((n) => withCppName(serializeVarType(n, d.type), ctx)),
+          d.names.map((n) =>
+            withAttributes(withCppName(serializeVarType(n, d.type), ctx), d),
+          ),
         ),
       );
 
@@ -378,6 +394,9 @@ function buildFBEntry(
       : {}),
     ...(fb.isAbstract ? { isAbstract: true as const } : {}),
     ...(fb.isFinal ? { isFinal: true as const } : {}),
+    ...(fb.attributes !== undefined && fb.attributes.length > 0
+      ? { attributes: fb.attributes.map((a) => ({ ...a })) }
+      : {}),
     locals: fb.varBlocks
       .filter((b) => b.blockType === "VAR")
       .flatMap((b) =>
