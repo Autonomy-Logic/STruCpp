@@ -17,6 +17,8 @@ import {
 import { parse as parseSource } from "./frontend/parser.js";
 import { suggestionForParseError } from "./frontend/parser-error-message-provider.js";
 import { buildAST } from "./frontend/ast-builder.js";
+import type { IToken } from "chevrotain";
+import { attachAttributes } from "./frontend/attributes.js";
 import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
@@ -261,6 +263,28 @@ interface DeclaredName {
   sourceSpan: SourceSpan;
 }
 
+/** A warning for each attribute pragma that is not `{attribute 'name' [:= 'value']}`, so a typo is not silent. */
+function warnUnreadablePragmas(
+  pragmas: readonly IToken[],
+  source: string,
+  file: string,
+  warnings: CompileError[],
+): void {
+  for (const p of pragmas) {
+    const text = source.slice(
+      p.startOffset,
+      (p.endOffset ?? p.startOffset) + 1,
+    );
+    warnings.push({
+      message: `Attribute pragma ${text.replace(/\s+/g, " ")} is ignored: write it as {attribute 'name'} or {attribute 'name' := 'value'}.`,
+      line: p.startLine ?? 0,
+      column: p.startColumn ?? 0,
+      severity: "warning",
+      file,
+    });
+  }
+}
+
 interface PipelineResult {
   ast: CompilationUnit | undefined;
   projectModel: import("./project-model.js").ProjectModel | undefined;
@@ -397,6 +421,12 @@ function runPipeline(
       mergedOptions.fileName ?? "main.st",
       globalConstants,
     );
+    warnUnreadablePragmas(
+      attachAttributes(primaryAst, parseResult.pragmas, parseResult.tokens),
+      effectiveSource,
+      mergedOptions.fileName ?? "main.st",
+      warnings,
+    );
     const units: CompilationUnit[] = [primaryAst];
 
     // Parse additional source files. Each gets the same Phase 0
@@ -453,13 +483,22 @@ function runPipeline(
         }
         if (addlParseResult.cst) {
           try {
-            units.push(
-              buildAST(
-                addlParseResult.cst,
-                addlSource.fileName,
-                globalConstants,
-              ),
+            const addlAst = buildAST(
+              addlParseResult.cst,
+              addlSource.fileName,
+              globalConstants,
             );
+            warnUnreadablePragmas(
+              attachAttributes(
+                addlAst,
+                addlParseResult.pragmas,
+                addlParseResult.tokens,
+              ),
+              effectiveAddlSource,
+              addlSource.fileName,
+              warnings,
+            );
+            units.push(addlAst);
           } catch (e) {
             errors.push({
               message: `AST build failed for ${addlSource.fileName}: ${e instanceof Error ? e.message : String(e)}`,
@@ -996,6 +1035,7 @@ export function parse(source: string): {
   }
   try {
     const ast = buildAST(parseResult.cst);
+    attachAttributes(ast, parseResult.pragmas, parseResult.tokens);
     return { ast, errors };
   } catch (e) {
     errors.push({
