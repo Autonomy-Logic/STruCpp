@@ -17,6 +17,7 @@ import type {
   LibraryVarType,
   StlibArchive,
 } from "./library-manifest.js";
+import { HEADER_NAME_RE } from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
@@ -129,33 +130,60 @@ function buildLibraryTypeDefinition(
   };
 }
 
-/** A var block of library variables, as a declaration holds them. */
+/** Parses default value texts as initial values, in one parse; undefined when any of them is not an ST expression. */
+function parseInitialValues(
+  texts: readonly string[],
+): Array<Expression | undefined> | undefined {
+  if (texts.length === 0) return [];
+  const lines = texts.map((t, i) => `  __D${i} : DINT := ${t};`);
+  const parsed = parseSource(
+    `PROGRAM __DEFAULTS\nVAR\n${lines.join("\n")}\nEND_VAR\nEND_PROGRAM\n`,
+  );
+  if (parsed.cst === null || parsed.errors.length > 0) return undefined;
+  const decls =
+    buildAST(parsed.cst).programs[0]?.varBlocks[0]?.declarations ?? [];
+  if (decls.length !== texts.length) return undefined;
+  return decls.map((d) => d.initialValue);
+}
+
+/** The parameters of `vars` whose default value text is not an ST expression. */
+function unparsableDefaults<V extends { name: string; initialValue?: string }>(
+  vars: readonly V[],
+): V[] {
+  const withDefault = vars.filter((v) => v.initialValue !== undefined);
+  if (parseInitialValues(withDefault.map((v) => v.initialValue ?? "")))
+    return [];
+  return withDefault.filter(
+    (v) => parseInitialValues([v.initialValue ?? ""]) === undefined,
+  );
+}
+
 /**
  * The default values of `vars` parsed back into expressions, in one parse: a caller of a library method fills the
- * inputs it omits with them. A default that does not parse is left out.
+ * inputs it omits with them. A default that is not an ST expression refuses the archive.
  */
 function parseDefaults(
   vars: readonly LibraryVarType[],
 ): Map<LibraryVarType, Expression> {
   const out = new Map<LibraryVarType, Expression>();
   const withDefault = vars.filter((v) => v.initialValue !== undefined);
-  if (withDefault.length === 0) return out;
-  const lines = withDefault.map(
-    (v, i) => `  __D${i} : DINT := ${v.initialValue ?? ""};`,
+  const values = parseInitialValues(
+    withDefault.map((v) => v.initialValue ?? ""),
   );
-  const parsed = parseSource(
-    `PROGRAM __DEFAULTS\nVAR\n${lines.join("\n")}\nEND_VAR\nEND_PROGRAM\n`,
-  );
-  if (parsed.cst === null || parsed.errors.length > 0) return out;
-  const decls =
-    buildAST(parsed.cst).programs[0]?.varBlocks[0]?.declarations ?? [];
+  if (values === undefined) {
+    const bad = unparsableDefaults(withDefault)[0];
+    throw new LibraryManifestError(
+      `Invalid library manifest: the default value '${bad?.initialValue ?? ""}' of parameter '${bad?.name ?? ""}' is not an ST expression`,
+    );
+  }
   withDefault.forEach((v, i) => {
-    const value = decls[i]?.initialValue;
+    const value = values[i];
     if (value !== undefined) out.set(v, value);
   });
   return out;
 }
 
+/** A var block of library variables, as a declaration holds them. */
 function makeVarBlock(
   blockType: VarBlockType,
   vars: LibraryVarType[],
@@ -314,9 +342,6 @@ const VISIBILITIES: readonly string[] = [
   "INTERNAL",
 ];
 
-/** Characters an `#include "..."` file name may use: no quote, backslash or line break can end the directive. */
-const HEADER_NAME_RE = /^[\w./+-]+$/;
-
 /**
  * The manifest's `headers`, each emitted as `#include "<name>"` into every program using the library: refused unless
  * every entry is a plain file name, so an archive cannot splice code into the consumer's build.
@@ -331,7 +356,7 @@ function validateHeaders(headers: unknown): string[] {
   return headers.map((h: unknown, i) => {
     if (typeof h !== "string" || !HEADER_NAME_RE.test(h)) {
       throw new LibraryManifestError(
-        `Invalid library manifest: headers[${i}] must be a file name (letters, digits, '.', '/', '-', '_', '+')`,
+        `Invalid library manifest: headers[${i}] must be a relative file name without '.' or '..' segments (letters, digits, '.', '/', '-', '_', '+')`,
       );
     }
     return h;
@@ -420,6 +445,19 @@ function validateMembers(
             }
             validateDescription(v, `${at}.${params}[${k}]`);
           });
+          const bad = unparsableDefaults(
+            vars.filter(isRecord).map((v) => ({
+              name: String(v.name),
+              ...(typeof v.initialValue === "string"
+                ? { initialValue: v.initialValue }
+                : {}),
+            })),
+          )[0];
+          if (bad !== undefined) {
+            throw new LibraryManifestError(
+              `Invalid library manifest: ${at}.${params}: the default value '${bad.initialValue ?? ""}' of parameter '${bad.name}' is not an ST expression`,
+            );
+          }
         }
       } else if (typeof m.type !== "object" || m.type === null) {
         throw new LibraryManifestError(

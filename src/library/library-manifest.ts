@@ -507,3 +507,10 @@ export interface StlibCompileResult {
   /** Compilation errors */
   errors: Array<{ message: string; file?: string; line?: number }>;
 }
+
+/**
+ * An `#include "..."` file name: relative, no `.` or `..` segment, and only letters, digits, '.', '-', '_', '+' and
+ * '/' between segments, so no quote, backslash or line break can end the directive.
+ */
+export const HEADER_NAME_RE =
+  /^(?!\.{1,2}(?:\/|$))[\w.+-]+(?:\/(?!\.{1,2}(?:\/|$))[\w.+-]+)*$/;

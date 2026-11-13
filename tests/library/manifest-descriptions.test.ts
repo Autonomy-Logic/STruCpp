@@ -80,6 +80,18 @@ describe("library manifest descriptions", () => {
     });
   });
 
+  it("refuses a method default that is not an ST expression", () => {
+    const copy = JSON.parse(JSON.stringify(build())) as StlibArchive;
+    const bump = copy.manifest.functionBlocks
+      .find((f) => f.name === "HMIGAUGE")
+      ?.methods?.find((m) => m.name === "BUMP");
+    const step = bump?.inputs[0];
+    if (step) step.initialValue = "7 +";
+    expect(() => loadStlibFromString(JSON.stringify(copy), "w")).toThrow(
+      /default value '7 \+' of parameter 'STEP' is not an ST expression/,
+    );
+  });
+
   it("refuses malformed descriptions in an archive", () => {
     const archive = build();
     const load = (patch: (a: StlibArchive) => void): (() => void) => {
@@ -148,5 +160,35 @@ END_FUNCTION`;
     expect(() =>
       loadStlibFromString(JSON.stringify(tampered), "prims"),
     ).toThrow(/headers\[0\]/);
+  });
+});
+
+describe("library sources", () => {
+  it("reads each declaration's text from its own file, even beside a file named main.st", () => {
+    const lib = compileStlib(
+      [
+        {
+          fileName: "a.st",
+          source:
+            "FUNCTION_BLOCK Alpha VAR_INPUT Speed : DINT := 12; END_VAR END_FUNCTION_BLOCK",
+        },
+        {
+          fileName: "main.st",
+          source:
+            "(* other *)\nFUNCTION_BLOCK Beta VAR_INPUT Gain : REAL := 2.5; END_VAR END_FUNCTION_BLOCK",
+        },
+      ],
+      { name: "two", version: "1.0.0", namespace: "two" },
+    );
+    expect(lib.errors).toEqual([]);
+    const fbs = lib.archive.manifest.functionBlocks;
+    expect(fbs.find((f) => f.name === "ALPHA")?.inputs[0]).toMatchObject({
+      displayName: "Speed",
+      initialValue: "12",
+    });
+    expect(fbs.find((f) => f.name === "BETA")?.inputs[0]).toMatchObject({
+      displayName: "Gain",
+      initialValue: "2.5",
+    });
   });
 });

@@ -96,6 +96,29 @@ export function stripEnEno(args: Argument[]): Argument[] {
 }
 
 /**
+ * The parameters (upper-cased names, in declaration order) a call's arguments fill, as the code generator binds
+ * them: each named argument its own parameter, then the positional ones the remaining parameters in order.
+ */
+export function suppliedParameters(
+  params: readonly string[],
+  args: readonly Argument[],
+): Set<string> {
+  const supplied = new Set<string>();
+  let positional = 0;
+  for (const arg of args) {
+    if (arg.name !== undefined) supplied.add(arg.name.toUpperCase());
+    else positional++;
+  }
+  for (const p of params) {
+    if (positional === 0) break;
+    if (supplied.has(p)) continue;
+    supplied.add(p);
+    positional--;
+  }
+  return supplied;
+}
+
+/**
  * Recursively walk an AST subtree, calling visitor for each node.
  * If visitor returns false, children of that node are skipped.
  */

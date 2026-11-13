@@ -193,12 +193,12 @@ Libraries use a single-file `.stlib` archive format (JSON):
 
 `compileStlib()` compiles ST sources into a `.stlib` archive: parse -> codegen -> extract manifest from AST -> bundle C++ output + optional sources. Dependencies are flattened (transitive closure) and their C++ preambles are stripped to avoid duplication when consumers load them separately.
 
-The manifest describes every exported declaration for tools such as a widget catalogue: names as written (`displayName` when the spelling differs from the upper-cased `name`), default values as ST text (`initialValue`), enumeration members, attribute pragmas, and FB methods, properties and interfaces. A library whose `{external}` code calls a C API passes `headers` to `compileStlib()`; they are recorded in the manifest and every consumer's generated header includes them.
+The manifest describes every exported declaration for tools such as a widget catalogue: names as written (`displayName` when the spelling differs from the upper-cased `name`), default values as ST text (`initialValue`), enumeration members, attribute pragmas, and FB methods, properties and interfaces. A library whose `{external}` code calls a C API passes `headers` to `compileStlib()`; they are recorded in the manifest, and a consumer's generated header includes those of every library it uses. A header name is a relative path without `.` or `..` segments; `compileStlib()` and the loader refuse any other.
 
 ### Embedding several units
 
 - `namespace` (compile option) puts everything a unit declares in its own C++ namespace, so two units, such as a PLC program and an HMI unit, link into one binary. Only one unit of a binary links its debug table, whose arrays live in `strucpp::debug`.
-- `separateLibraryFiles` (compile option) emits linked libraries apart from the unit's own code: `<header>_libraries.hpp` for their declarations and `lib_<library>.cpp` per library, which includes only that header. A build can keep a library's object while the unit's code changes; it changes only when the unit starts or stops using a library symbol.
+- `separateLibraryFiles` (compile option) emits linked libraries apart from the unit's own code: `<header>_libraries.hpp` for their declarations and `lib_<library>.cpp` per library, which includes only that header. File names are unique per library (`lib_<library>_2.cpp` on a collision). A build can keep a library's object while the unit's code changes; the library files change when the unit starts or stops using a library symbol, or when the namespace, the global constants or the header name change. With this option the global constants are declared only in the libraries header, guarded so that two unit headers can be included in one translation unit.
 - `parse(source, { recover: true })` returns the AST the parser recovered alongside syntax errors, for editors working on code mid-edit.
 
 ### CODESYS Import

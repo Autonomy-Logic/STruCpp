@@ -255,6 +255,19 @@ function collectUsedSymbols(
 // Shared pipeline
 // ---------------------------------------------------------------------------
 
+/** Names a unit's namespace cannot take: C++ keywords and alternative tokens, and `std`. */
+const RESERVED_NAMESPACES = new Set(
+  (
+    "alignas alignof and and_eq asm auto bitand bitor bool break case catch char char8_t char16_t char32_t class " +
+    "compl concept const consteval constexpr constinit const_cast continue co_await co_return co_yield decltype " +
+    "default delete do double dynamic_cast else enum explicit export extern false float for friend goto if inline " +
+    "int long mutable namespace new noexcept not not_eq nullptr operator or or_eq private protected public register " +
+    "reinterpret_cast requires return short signed sizeof static static_assert static_cast struct switch template " +
+    "this thread_local throw true try typedef typeid typename union unsigned using virtual void volatile wchar_t " +
+    "while xor xor_eq std"
+  ).split(" "),
+);
+
 /** A unit-level name a library INTERFACE must not reuse. */
 interface DeclaredName {
   kind: "TYPE" | "FUNCTION_BLOCK" | "INTERFACE";
@@ -578,11 +591,11 @@ function runPipeline(
     projectModel = projectModelResult.model;
     const ns = mergedOptions.namespace;
     if (ns !== undefined) {
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(ns)) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(ns) && !RESERVED_NAMESPACES.has(ns)) {
         projectModel.config = { name: ns, namespace: ns, libraries: [] };
       } else {
         errors.push({
-          message: `Namespace '${ns}' is not a C++ identifier.`,
+          message: `Namespace '${ns}' is not a C++ identifier, or is reserved (a C++ keyword or 'std').`,
           line: 0,
           column: 0,
           severity: "error",
@@ -846,9 +859,26 @@ export function compile(
   }
 
   // Phase 6: Generate C++ code
-  // Collect library headers for #include directives
+  // Function-level tree-shake: figure out which library chunks the
+  // user's AST actually reaches (transitively through chunk dep
+  // edges), then hand the reachable subset of each archive to the
+  // codegen for emission. Test builds bypass the shake — the test
+  // harness may reference symbols not present in the source AST.
+  const isTestBuild = pipeline.mergedOptions.isTestBuild ?? false;
+  const reachableByArchive = collectUsedSymbols(
+    pipeline.ast,
+    pipeline.allArchives,
+    isTestBuild,
+  );
+
+  // Collect library headers for #include directives: those of a library whose code the unit uses, and those of a
+  // library without chunks, whose code is in the headers themselves.
   const libraryHeaders: string[] = [];
   for (const archive of pipeline.allArchives) {
+    const used =
+      (archive.chunks ?? []).length === 0 ||
+      (reachableByArchive.get(archive.manifest.name)?.size ?? 0) > 0;
+    if (!used) continue;
     for (const header of archive.manifest.headers) {
       if (!libraryHeaders.includes(header)) {
         libraryHeaders.push(header);
@@ -880,18 +910,6 @@ export function compile(
 
   // Register all library metadata (FB types, field mappings, enum/struct types)
   codegen.registerLibraryArchives(pipeline.allArchives);
-
-  // Function-level tree-shake: figure out which library chunks the
-  // user's AST actually reaches (transitively through chunk dep
-  // edges), then hand the reachable subset of each archive to the
-  // codegen for emission. Test builds bypass the shake — the test
-  // harness may reference symbols not present in the source AST.
-  const isTestBuild = pipeline.mergedOptions.isTestBuild ?? false;
-  const reachableByArchive = collectUsedSymbols(
-    pipeline.ast,
-    pipeline.allArchives,
-    isTestBuild,
-  );
 
   for (const archive of pipeline.allArchives) {
     const reachable = reachableByArchive.get(archive.manifest.name);

@@ -36,7 +36,9 @@ import { formatArrayElementAccess } from "./codegen-utils.js";
 import { mangledMemberName, methodNamesByBlock } from "./member-mangling.js";
 
 // ---------------------------------------------------------------------------
-// Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
+// Type tags — MUST match TypeTag enum in runtime/include/debug_table.hpp.
+// TAG_STRING_REF / TAG_WSTRING_REF are left out: they only mark a STRING(n) entry
+// in the C++ table, and the debug map reports those leaves as STRING / WSTRING.
 // ---------------------------------------------------------------------------
 export const TAG = {
   BOOL: 0,
@@ -554,7 +556,16 @@ export function generateDebugTable(
         cppExpr,
         typeRef.arrayDimensions,
         0,
-        typeRef.elementTypeName,
+        {
+          kind: "TypeReference",
+          sourceSpan: typeRef.sourceSpan,
+          name: typeRef.elementTypeName,
+          isReference: false,
+          referenceKind: "none",
+          ...(typeRef.elementMaxLength !== undefined
+            ? { maxLength: typeRef.elementMaxLength }
+            : {}),
+        },
         flags,
       );
       return;
@@ -625,7 +636,7 @@ export function generateDebugTable(
           cppExpr,
           dims as Array<{ start: number; end: number }>,
           0,
-          def.elementType.name,
+          def.elementType,
           flags,
         );
         return;
@@ -730,8 +741,7 @@ export function generateDebugTable(
     }
 
     const interfaceVars = [...fbSym.inputs, ...fbSym.outputs, ...fbSym.inouts];
-    // `fbName` is the FB type declaring these members, so it is the owner for
-    // both mangling collisions.
+    // `fbName` declares these members, so it owns both mangling collisions.
     if (interfaceVars.length > 0) {
       for (const v of interfaceVars) {
         visitTypeRef(
@@ -742,30 +752,16 @@ export function generateDebugTable(
         );
       }
 
-      // The block's own VAR members, from the manifest's `locals`.
-      //
-      // Only when the instance is RETAINed. The debugger keeps its
-      // black-box view of a library block everywhere else — the
-      // long-standing contract, and what stops a project instantiating a few
-      // hundred OSCAT blocks from paying for internals nobody addresses.
-      // Retain overrides it because a block restored from half its state
-      // comes back in a configuration it could never have run into: a TON
-      // with Q and ET but no STATE restarts its wait on the next scan.
-      // Two reasons to descend into a library block's own VAR members:
-      // the instance is RETAINed, or the library itself declared one of them
-      // `VAR RETAIN` — which retains it in every instance, exactly as it
-      // does for a user-defined block.
+      // Library block locals (manifest `locals`) are walked only when the
+      // instance is RETAINed, or for members the library declared VAR RETAIN;
+      // otherwise the block stays a black box to the debugger.
       const instanceRetained = (flags & LEAF_FLAG_RETAIN) !== 0;
       const localsToWalk = instanceRetained
         ? fbSym.locals
         : fbSym.locals.filter((v) => v.isRetain);
       if (localsToWalk.length > 0 || instanceRetained) {
         if (instanceRetained && fbSym.locals.length === 0) {
-          // An archive whose manifest does not export locals. Retain still
-          // covers the visible surface — refusing the build would strand
-          // anyone using a third-party .stlib they cannot rebuild — but it
-          // is a partial retain, so it is said out loud rather than left to
-          // be discovered after a power cycle.
+          // Archive without exported locals: retain covers inputs and outputs only.
           incomplete.push({
             path,
             reason:
@@ -792,10 +788,7 @@ export function generateDebugTable(
           block.blockType === "VAR_OUTPUT" ||
           block.blockType === "VAR_IN_OUT"
         ) {
-          // A `VAR CONSTANT` inside a function block is read-only for every
-          // instance of it, and a `VAR RETAIN` member is retained in every
-          // instance, so the block's own qualifiers are folded in here rather
-          // than only at the program level.
+          // Fold the block's own CONSTANT / RETAIN qualifiers into every instance.
           const memberFlags = applyBlockFlags(flags, block);
           for (const fieldDecl of block.declarations) {
             for (const fieldName of fieldDecl.names) {
@@ -852,22 +845,15 @@ export function generateDebugTable(
     cppExpr: string,
     dims: Array<{ start: number; end: number }>,
     dimIdx: number,
-    elementTypeName: string,
+    elementType: TypeReference,
     flags: number,
     indices: number[] = [],
   ): void => {
     if (dimIdx >= dims.length) {
-      // Innermost element — visit as a TypeReference with the element type
-      // name. Manufacture a minimal TypeReference for recursion.
       visitTypeRef(
         path,
         formatArrayElementAccess(cppExpr, indices),
-        {
-          kind: "TypeReference",
-          name: elementTypeName,
-          isReference: false,
-          referenceKind: "none",
-        } as TypeReference,
+        elementType,
         flags,
       );
       return;
@@ -879,7 +865,7 @@ export function generateDebugTable(
         cppExpr,
         dims,
         dimIdx + 1,
-        elementTypeName,
+        elementType,
         flags,
         [...indices, i],
       );

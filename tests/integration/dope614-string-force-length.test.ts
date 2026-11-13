@@ -364,4 +364,30 @@ END_PROGRAM${CFG}`;
     );
     expect(out).toBe("ALL_OK");
   });
+  it("addresses each STRING(n) element of an array with its own capacity", () => {
+    const source = `TYPE Names : ARRAY[0..1] OF STRING(8); END_TYPE
+PROGRAM Main
+VAR arr : ARRAY[0..2] OF STRING(10) := ['a', 'b', 'c']; list : Names; after : DINT := 42; END_VAR
+END_PROGRAM${CFG}`;
+    const result = compile(source, { headerFileName: "generated.hpp" });
+    expect(result.debugTableCpp).toContain("TAG_STRING_REF");
+    expect(result.debugTableCpp).not.toMatch(/ARR\[0\], TAG_STRING,/);
+    const a0 = leafIndex(result, "INSTANCE0.ARR[0]");
+    const n1 = leafIndex(result, "INSTANCE0.LIST[1]");
+    const out = runDriver(
+      source,
+      `
+  unsigned char big[101] = { 100 };
+  for (int i = 1; i <= 100; ++i) big[i] = 'x';
+  expect_eq("write arr[0]", handle_write(${a0}, big, 101), STATUS_OK);
+  expect_eq("arr[0] capped", (int)g_config.INSTANCE0.ARR[0].get().length(), 10);
+  expect_str("arr[1] intact", g_config.INSTANCE0.ARR[1].get().c_str(), "b");
+  expect_eq("write list[1]", handle_write(${n1}, big, 101), STATUS_OK);
+  expect_eq("list[1] capped", (int)g_config.INSTANCE0.LIST[1].get().length(), 8);
+  expect_eq("after intact", (int)g_config.INSTANCE0.AFTER.get(), 42);
+`,
+      "string_array_capacity",
+    );
+    expect(out).toBe("ALL_OK");
+  });
 });

@@ -43,10 +43,18 @@ describe("namespace option", () => {
     );
   });
 
+  it("refuses C++ keywords and std as a namespace", () => {
+    for (const ns of ["int", "std", "namespace"]) {
+      expect(
+        compile("PROGRAM P END_PROGRAM", { namespace: ns }).errors.length,
+      ).toBe(1);
+    }
+  });
+
   it("refuses a namespace that is not a C++ identifier", () => {
     const result = compile("PROGRAM P END_PROGRAM", { namespace: "no-good" });
     expect(result.errors.map((e) => e.message)).toEqual([
-      "Namespace 'no-good' is not a C++ identifier.",
+      "Namespace 'no-good' is not a C++ identifier, or is reserved (a C++ keyword or 'std').",
     ]);
   });
 });
@@ -120,6 +128,35 @@ int main() {
     expect(() =>
       execSync(
         `g++ -std=${CXX_STD} -fsyntax-only -I"${RUNTIME_INCLUDE_PATH}" -I"${dir}" "${table}"`,
+        { encoding: "utf-8", env: cxxEnv },
+      ),
+    ).not.toThrow();
+  });
+  it("includes two unit headers with the same global constants in one translation unit", () => {
+    const constants = { STRING_LENGTH: 254, LIST_LENGTH: 254 };
+    const plc = compile(UNIT("Main", "x"), {
+      headerFileName: "plc.hpp",
+      globalConstants: constants,
+    });
+    const hmi = compile(UNIT("Screen", "lamp"), {
+      headerFileName: "hmi.hpp",
+      namespace: "hmi",
+      globalConstants: constants,
+    });
+    expect(plc.errors).toEqual([]);
+    expect(hmi.errors).toEqual([]);
+    const sub = path.join(dir, "constants");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "plc.hpp"), plc.headerCode);
+    fs.writeFileSync(path.join(sub, "hmi.hpp"), hmi.headerCode);
+    const both = path.join(sub, "both.cpp");
+    fs.writeFileSync(
+      both,
+      '#include "plc.hpp"\n#include "hmi.hpp"\nstatic_assert(STRING_LENGTH == 254, "");\n',
+    );
+    expect(() =>
+      execSync(
+        `g++ -std=${CXX_STD} -fsyntax-only -I"${RUNTIME_INCLUDE_PATH}" -I"${sub}" "${both}"`,
         { encoding: "utf-8", env: cxxEnv },
       ),
     ).not.toThrow();

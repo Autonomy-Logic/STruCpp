@@ -12,6 +12,8 @@ import type {
   StlibCompileResult,
   StlibArchive,
 } from "./library-manifest.js";
+import { transpileILSource } from "../il/il-transpiler.js";
+import { HEADER_NAME_RE } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
 import { functionBlockLookup } from "../semantic/fb-lineage.js";
@@ -745,6 +747,7 @@ export function compileLibrary(
   if (options.globalConstants) {
     compileOpts.globalConstants = options.globalConstants;
   }
+  compileOpts.fileName = primarySource.fileName;
   const result = compile(primarySource.source, compileOpts);
 
   if (!result.success) {
@@ -778,7 +781,17 @@ export function compileLibrary(
 
   // Extract manifest entries from the AST
   const ast = result.ast!;
-  const text = new SourceText(stSources, primarySource.source);
+  const parsedText = (src: { source: string; fileName: string }): string => {
+    const il = transpileILSource(src.source, src.fileName);
+    return il.hasIL ? il.stSource : src.source;
+  };
+  const text = new SourceText(
+    stSources.map((src) => ({
+      fileName: src.fileName,
+      source: parsedText(src),
+    })),
+    parsedText(primarySource),
+  );
 
   const headerFileName = `${options.name}.hpp`;
 
@@ -996,10 +1009,10 @@ export function compileStlib(
   },
 ): StlibCompileResult {
   for (const header of options.headers ?? []) {
-    if (!/^[\w./+-]+$/.test(header)) {
+    if (!HEADER_NAME_RE.test(header)) {
       throw new TypeError(
-        `headers entry ${JSON.stringify(header)} is not a valid include filename ` +
-          `(allowed characters: alphanumerics, '.', '/', '-', '_', '+').`,
+        `headers entry ${JSON.stringify(header)} is not a valid include filename: use a relative name without '.' ` +
+          `or '..' segments (allowed characters: alphanumerics, '.', '/', '-', '_', '+').`,
       );
     }
   }

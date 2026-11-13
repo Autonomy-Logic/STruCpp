@@ -12,6 +12,7 @@ import { execSync } from "child_process";
 import { compile } from "../../src/index.js";
 import { compileStlib } from "../../src/library/library-compiler.js";
 import type { StlibArchive } from "../../src/library/library-manifest.js";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import {
   hasGpp,
   RUNTIME_INCLUDE_PATH,
@@ -123,5 +124,49 @@ int main() { c.I.run(); std::printf("%lld\\n", (long long)c.I.R.get()); return 0
       { encoding: "utf-8", env: cxxEnv },
     );
     expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("120");
+  });
+  it("links with libraries that bring global constants (OSCAT)", () => {
+    const shipped = discoverStlibs(path.resolve(__dirname, "../../libs"));
+    const result = compile(
+      `PROGRAM P VAR t : TON; e : R_TRIG; x : REAL; b : BOOL; n : INT; END_VAR
+  t(IN := TRUE, PT := T#1s); e(CLK := t.Q);
+  x := HYPOT(3.0, 4.0); b := EVEN(4); n := REAL_TO_INT(x) + BOOL_TO_INT(b);
+END_PROGRAM
+${CONFIG}`,
+      {
+        libraries: shipped,
+        separateLibraryFiles: true,
+        globalConstants: { STRING_LENGTH: 254, LIST_LENGTH: 254 },
+      },
+    );
+    expect(result.errors).toEqual([]);
+    const sub = path.join(dir, "oscat");
+    fs.mkdirSync(sub, { recursive: true });
+    fs.writeFileSync(path.join(sub, "generated.hpp"), result.headerCode);
+    if (result.libraryHeader) {
+      fs.writeFileSync(
+        path.join(sub, result.libraryHeader.name),
+        result.libraryHeader.content,
+      );
+    }
+    for (const f of result.cppFiles) {
+      fs.writeFileSync(path.join(sub, f.name), f.content);
+    }
+    fs.writeFileSync(
+      path.join(sub, "main.cpp"),
+      `#include "generated.hpp"
+#include <cstdio>
+strucpp::Configuration_C c;
+int main() { c.I.run(); std::printf("%d\\n", (int)c.I.N.get()); return 0; }`,
+    );
+    const sources = ["main.cpp", ...result.cppFiles.map((f) => f.name)]
+      .map((f) => `"${path.join(sub, f)}"`)
+      .join(" ");
+    const bin = path.join(sub, "run");
+    execSync(
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE_PATH}" -I"${sub}" -o "${bin}" ${sources}`,
+      { encoding: "utf-8", env: cxxEnv },
+    );
+    expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe("6");
   });
 });
