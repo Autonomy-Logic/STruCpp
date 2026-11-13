@@ -17,6 +17,7 @@ import {
 import { parse as parseSource } from "./frontend/parser.js";
 import { suggestionForParseError } from "./frontend/parser-error-message-provider.js";
 import { buildAST } from "./frontend/ast-builder.js";
+import type { IToken } from "chevrotain";
 import { attachAttributes } from "./frontend/attributes.js";
 import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
@@ -262,6 +263,28 @@ interface DeclaredName {
   sourceSpan: SourceSpan;
 }
 
+/** A warning for each attribute pragma that is not `{attribute 'name' [:= 'value']}`, so a typo is not silent. */
+function warnUnreadablePragmas(
+  pragmas: readonly IToken[],
+  source: string,
+  file: string,
+  warnings: CompileError[],
+): void {
+  for (const p of pragmas) {
+    const text = source.slice(
+      p.startOffset,
+      (p.endOffset ?? p.startOffset) + 1,
+    );
+    warnings.push({
+      message: `Attribute pragma ${text.replace(/\s+/g, " ")} is ignored: write it as {attribute 'name'} or {attribute 'name' := 'value'}.`,
+      line: p.startLine ?? 0,
+      column: p.startColumn ?? 0,
+      severity: "warning",
+      file,
+    });
+  }
+}
+
 interface PipelineResult {
   ast: CompilationUnit | undefined;
   projectModel: import("./project-model.js").ProjectModel | undefined;
@@ -398,7 +421,12 @@ function runPipeline(
       mergedOptions.fileName ?? "main.st",
       globalConstants,
     );
-    attachAttributes(primaryAst, parseResult.pragmas, parseResult.tokens);
+    warnUnreadablePragmas(
+      attachAttributes(primaryAst, parseResult.pragmas, parseResult.tokens),
+      effectiveSource,
+      mergedOptions.fileName ?? "main.st",
+      warnings,
+    );
     const units: CompilationUnit[] = [primaryAst];
 
     // Parse additional source files. Each gets the same Phase 0
@@ -460,10 +488,15 @@ function runPipeline(
               addlSource.fileName,
               globalConstants,
             );
-            attachAttributes(
-              addlAst,
-              addlParseResult.pragmas,
-              addlParseResult.tokens,
+            warnUnreadablePragmas(
+              attachAttributes(
+                addlAst,
+                addlParseResult.pragmas,
+                addlParseResult.tokens,
+              ),
+              effectiveAddlSource,
+              addlSource.fileName,
+              warnings,
             );
             units.push(addlAst);
           } catch (e) {

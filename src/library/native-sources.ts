@@ -129,7 +129,8 @@ export interface NativeHeaderError {
  * which is what allows a Python body to sit in a library at all.
  *
  * Attribute pragmas and comments may precede the declaration; they stay in
- * the projected ST, so the pragmas attach to the block as in an ST source.
+ * the projected ST, so the pragmas attach to the block as in an ST source. The
+ * documentation comment is found after any leading pragmas.
  *
  * Returns an error rather than throwing when the header is missing or
  * malformed, so one bad file names itself in the build output instead of
@@ -142,10 +143,13 @@ export function projectNativeHeaderToSt(
   // declaration — the editor writes one there and reads it back the same way
   // (`extractDocumentation` in its POU text parser). Strip it first so the
   // declaration match stays anchored, and keep the text for the manifest.
-  const docMatch = /^\s*\(\*\s*([\s\S]*?)\s*\*\)\s*/.exec(source.source);
-  const documentation = docMatch ? docMatch[1]!.trim() : "";
+  const docMatch =
+    /^((?:\s|\{\s*attribute\b(?:[^}'"]|'[^']*'|"[^"]*")*\})*)\(\*\s*([\s\S]*?)\s*\*\)\s*/i.exec(
+      source.source,
+    );
+  const documentation = docMatch ? docMatch[2]!.trim() : "";
   const body = docMatch
-    ? source.source.slice(docMatch[0].length)
+    ? docMatch[1]! + source.source.slice(docMatch[0].length)
     : source.source;
 
   const declaration =

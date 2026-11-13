@@ -85,14 +85,18 @@ function firstTokenAfter(tokens: readonly IToken[], offset: number): number {
 
 /**
  * Attaches the pragma tokens (the lexer's `pragmas` group) to the declarations of `ast`, built from the parser
- * tokens `tokens` of the same source. A declaration is matched by its first token, so the cost is linear.
+ * tokens `tokens` of the same source. A declaration is matched by its first token, so the cost is linear. Returns
+ * the pragmas that are not `{attribute 'name' [:= 'value']}`, which attach to nothing.
  */
 export function attachAttributes(
   ast: CompilationUnit,
   pragmas: readonly IToken[],
   tokens: readonly IToken[],
-): void {
-  if (pragmas.length === 0 || tokens.length === 0) return;
+): IToken[] {
+  const unreadable = pragmas.filter(
+    (p) => parseAttributePragma(p.image) === undefined,
+  );
+  if (pragmas.length === 0 || tokens.length === 0) return unreadable;
   const tokenAt = new Map<string, number>();
   tokens.forEach((t, i) => {
     const key = `${t.startLine ?? 0}:${t.startColumn ?? 0}`;
@@ -122,4 +126,5 @@ export function attachAttributes(
     }
     if (target !== undefined) (target.attributes ??= []).push(attribute);
   }
+  return unreadable;
 }

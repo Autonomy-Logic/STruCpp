@@ -88,6 +88,31 @@ describe("attribute pragmas", () => {
     ]);
   });
 
+  it("warns about a pragma it cannot read, in every source", () => {
+    const result = compile("PROGRAM Main END_PROGRAM", {
+      additionalSources: [
+        {
+          fileName: "w.st",
+          source:
+            "{attribute hmi_main}\nFUNCTION_BLOCK X VAR_INPUT {attribute 'ok'} V : INT; END_VAR END_FUNCTION_BLOCK",
+        },
+      ],
+    });
+    expect(result.errors).toEqual([]);
+    expect(
+      result.warnings.map((w) => [w.file, w.line, w.message]),
+    ).toContainEqual([
+      "w.st",
+      1,
+      "Attribute pragma {attribute hmi_main} is ignored: write it as {attribute 'name'} or {attribute 'name' := 'value'}.",
+    ]);
+    const fb = result.ast?.functionBlocks.find((f) => f.name === "X");
+    expect(fb?.attributes).toBeUndefined();
+    expect(fb?.varBlocks[0]?.declarations[0]?.attributes).toEqual([
+      { name: "ok" },
+    ]);
+  });
+
   it("leaves a pragma followed by a statement unattached", () => {
     const { ast } = parse(SOURCE);
     const all = JSON.stringify(ast);
@@ -269,28 +294,28 @@ END_FUNCTION_BLOCK`,
     ).toThrow(/types\[\d+\]\.fields\[0\]\.attributes/);
   });
 
-  it("keeps the attributes of a native block's header", () => {
-    const lib = compileStlib(
-      [
-        {
-          fileName: "N.cpp",
-          source: `{attribute 'hmi_widget'}
-(* native widget *)
-FUNCTION_BLOCK N
+  it("keeps the attributes and documentation of a native block's header, in either order", () => {
+    const body = `FUNCTION_BLOCK N
 VAR_INPUT
   {attribute 'hmi_main'}
   RAW : INT;
 END_VAR
 void setup() {}
 void loop() {}
-END_FUNCTION_BLOCK`,
-        },
-      ],
-      { name: "n", version: "1.0.0", namespace: "n" },
-    );
-    expect(lib.errors).toEqual([]);
-    const fb = lib.archive.manifest.functionBlocks[0];
-    expect(fb?.attributes).toEqual([{ name: "hmi_widget" }]);
-    expect(fb?.inputs[0]?.attributes).toEqual([{ name: "hmi_main" }]);
+END_FUNCTION_BLOCK`;
+    for (const head of [
+      "{attribute 'hmi_widget'}\n(* native widget *)\n",
+      "(* native widget *)\n{attribute 'hmi_widget'}\n",
+    ]) {
+      const lib = compileStlib(
+        [{ fileName: "N.cpp", source: `${head}${body}` }],
+        { name: "n", version: "1.0.0", namespace: "n" },
+      );
+      expect(lib.errors).toEqual([]);
+      const fb = lib.archive.manifest.functionBlocks[0];
+      expect(fb?.attributes).toEqual([{ name: "hmi_widget" }]);
+      expect(fb?.documentation).toBe("native widget");
+      expect(fb?.inputs[0]?.attributes).toEqual([{ name: "hmi_main" }]);
+    }
   });
 });
