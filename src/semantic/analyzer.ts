@@ -61,10 +61,13 @@ import {
   type EnumMemberEntry,
 } from "./type-utils.js";
 import {
+  bareVariableNames,
   isEnArgument,
   isEnoArgument,
+  lineageMembers,
   stripEnEno,
   walkAST,
+  suppliedParameters,
 } from "../ast-utils.js";
 import {
   exactIntegerLiteralValue,
@@ -122,6 +125,16 @@ function parseAddress(address: string): ParsedAddress | null {
 
   return { area, size, byteIndex, bitIndex };
 }
+
+/** IEC operators CODESYS refuses as method names; type conversions are checked through the registry. */
+const OPERATOR_NAMES: ReadonlySet<string> = new Set([
+  ...["ADD", "SUB", "MUL", "DIV", "MOD", "EXPT", "MOVE"],
+  ...["SEL", "MAX", "MIN", "LIMIT", "MUX"],
+  ...["GT", "GE", "EQ", "LE", "LT", "NE", "AND", "OR", "XOR", "NOT"],
+  ...["SHL", "SHR", "ROL", "ROR", "ABS", "SQRT", "LN", "LOG", "EXP"],
+  ...["SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "TRUNC", "TRUNC_INT"],
+  ...["ADR", "BITADR", "SIZEOF", "INDEXOF", "LOWER_BOUND", "UPPER_BOUND"],
+]);
 
 /**
  * Variable-block kinds that may carry a physical location ("AT %...").
@@ -345,6 +358,8 @@ interface UndeclaredVarContext {
 
 export class SemanticAnalyzer {
   private symbolTables: SymbolTables;
+  /** Methods of the block whose bodies are being validated: an unqualified call to one is not a standard function. */
+  private ownMethodNames: ReadonlySet<string> = new Set();
   private typeChecker: TypeChecker;
   private stdRegistry = new StdFunctionRegistry();
   private enumMemberMap: Map<string, EnumMemberEntry> = new Map();
@@ -1933,9 +1948,59 @@ export class SemanticAnalyzer {
   }
 
   /**
+   * A method cannot take the name of an IEC operator (`ADD`, `MAX`, `SIN`, a type conversion...), as in CODESYS.
+   * Standard functions that are not operators (`LEN`, `ROUND`, `MEMCPY`...) remain valid method names.
+   */
+  private validateMethodName(method: MethodDeclaration, owner: string): void {
+    const upper = method.name.toUpperCase();
+    if (
+      !OPERATOR_NAMES.has(upper) &&
+      this.stdRegistry.lookup(upper)?.category !== "conversion" &&
+      this.stdRegistry.resolveConversion(upper) === undefined
+    )
+      return;
+    this.addError(
+      `Method '${method.name}' in '${owner}' is named like the operator ${upper}; rename it.`,
+      method.sourceSpan.startLine,
+      method.sourceSpan.startCol,
+      method.sourceSpan.file,
+    );
+  }
+
+  /** A method input default that reads a variable of its block is not constant: CODESYS warns, and callers must pass it. */
+  private validateMethodDefaults(
+    method: MethodDeclaration,
+    lineage: readonly FunctionBlockDeclaration[],
+  ): void {
+    const members = lineageMembers(lineage).variables;
+    for (const block of method.varBlocks) {
+      if (block.blockType !== "VAR_INPUT") continue;
+      for (const decl of block.declarations) {
+        if (decl.initialValue === undefined) continue;
+        const read = [...bareVariableNames(decl.initialValue)].filter((v) =>
+          members.has(v),
+        );
+        if (read.length === 0) continue;
+        this.addWarning(
+          `The default of '${decl.names.join(", ")}' in method '${method.name}' reads ${read.join(", ")}, which is not constant; callers must pass it.`,
+          decl.sourceSpan.startLine,
+          decl.sourceSpan.startCol,
+          decl.sourceSpan.file,
+        );
+      }
+    }
+  }
+
+  /**
    * Validate OOP modifier contradictions on function blocks and methods.
    */
   private validateOOPModifiers(ast: CompilationUnit): void {
+    for (const iface of ast.interfaces) {
+      if (iface.library !== undefined) continue;
+      for (const method of iface.methods) {
+        this.validateMethodName(method, iface.name);
+      }
+    }
     const lookup = functionBlockLookup(ast, this.symbolTables);
 
     // Build interface lookup map
@@ -1977,6 +2042,8 @@ export class SemanticAnalyzer {
 
       for (const method of fb.methods) {
         this.validateOverrideAccess(fb, method, parentMethods, lookup, ast);
+        this.validateMethodName(method, fb.name);
+        this.validateMethodDefaults(method, fbLineage(fb.name, lookup));
 
         // ABSTRACT method in non-abstract FB is an error
         if (method.isAbstract && !fb.isAbstract) {
@@ -2439,8 +2506,14 @@ export class SemanticAnalyzer {
       const varTypeMap = this.buildVarTypeMap(func.varBlocks);
       this.walkStatementsForExpressionValidation(func.body, varTypeMap, ast);
     }
+    const lookup = functionBlockLookup(ast, this.symbolTables);
     for (const fb of ast.functionBlocks) {
       const varTypeMap = this.buildVarTypeMap(fb.varBlocks);
+      this.ownMethodNames = new Set(
+        fbLineage(fb.name, lookup).flatMap((b) =>
+          b.methods.map((m) => m.name.toUpperCase()),
+        ),
+      );
       this.walkStatementsForExpressionValidation(fb.body, varTypeMap, ast);
       for (const method of fb.methods) {
         const methodVarTypeMap = this.buildVarTypeMap(method.varBlocks);
@@ -2454,6 +2527,7 @@ export class SemanticAnalyzer {
           ast,
         );
       }
+      this.ownMethodNames = new Set();
     }
   }
 
@@ -2553,7 +2627,8 @@ export class SemanticAnalyzer {
     // Validate standard function argument counts and ADR l-value requirement
     if (
       expr.kind === "FunctionCallExpression" &&
-      !expr.functionName.includes(".")
+      !expr.functionName.includes(".") &&
+      !this.ownMethodNames.has(expr.functionName.toUpperCase())
     ) {
       this.checkStdFunctionArgs(expr);
     }
@@ -2729,6 +2804,48 @@ export class SemanticAnalyzer {
     return params;
   }
 
+  /** Every VAR_IN_OUT of a function must be supplied (IEC 61131-3): there is no value to bind it to otherwise. */
+  private checkFunctionInOuts(
+    expr: FunctionCallExpression,
+    sym: FunctionSymbol,
+    userArgs: Argument[],
+  ): void {
+    const params: Array<{ name: string; inOut: boolean }> =
+      sym.parameters.length > 0
+        ? sym.parameters.map((p) => ({
+            name: p.name.toUpperCase(),
+            inOut: p.isInOut,
+          }))
+        : sym.declaration.varBlocks
+            .filter(
+              (b) =>
+                b.blockType === "VAR_INPUT" ||
+                b.blockType === "VAR_IN_OUT" ||
+                b.blockType === "VAR_OUTPUT",
+            )
+            .flatMap((b) =>
+              b.declarations.flatMap((d) =>
+                d.names.map((n) => ({
+                  name: n.toUpperCase(),
+                  inOut: b.blockType === "VAR_IN_OUT",
+                })),
+              ),
+            );
+    const supplied = suppliedParameters(
+      params.map((p) => p.name),
+      userArgs,
+    );
+    for (const p of params) {
+      if (!p.inOut || supplied.has(p.name)) continue;
+      this.addError(
+        `'${expr.functionName.toUpperCase()}' is missing its in-out argument '${p.name}'`,
+        expr.sourceSpan.startLine,
+        expr.sourceSpan.startCol,
+        expr.sourceSpan.file,
+      );
+    }
+  }
+
   /**
    * Option A: every input without an initial value is mandatory. Resolve the
    * call's named/positional arguments to parameter slots (mirroring the
@@ -2740,6 +2857,7 @@ export class SemanticAnalyzer {
     sym: FunctionSymbol,
     userArgs: Argument[],
   ): void {
+    this.checkFunctionInOuts(expr, sym, userArgs);
     const inputParams = this.functionInputParams(sym);
     const required = inputParams.filter((p) => !p.optional);
     if (required.length === 0) return;

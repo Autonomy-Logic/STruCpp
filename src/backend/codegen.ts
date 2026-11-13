@@ -37,7 +37,7 @@ import type {
   Visibility,
 } from "../frontend/ast.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
-import type { LineMapEntry } from "../types.js";
+import type { LineMapEntry, SourceSpan } from "../types.js";
 import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
 import type {
   ProjectModel,
@@ -63,6 +63,7 @@ import {
   functionBlockLookup,
   type FunctionBlockLookup,
 } from "../semantic/fb-lineage.js";
+import { lineageMembers } from "../ast-utils.js";
 import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
@@ -235,6 +236,13 @@ export interface CodeGenOptions {
   /** Whether this is a test build (adds mock infrastructure to FB classes) */
   isTestBuild: boolean;
 
+  /**
+   * Emit linked libraries' code apart from the unit's own: their declarations in a libraries header that the unit's
+   * header includes, and each library's implementation in its own translation unit that includes only that header.
+   * A library's object then stays valid while the unit's own code changes.
+   */
+  separateLibraryFiles?: boolean;
+
   /** Global constants injected as constexpr into the header preamble (before namespace) */
   globalConstants: Record<string, number>;
 
@@ -368,6 +376,9 @@ export interface CodeGenResult {
   /** Generated C++ header code */
   headerCode: string;
 
+  /** The libraries header, written next to the unit's header, when `separateLibraryFiles` is set. */
+  libraryHeader?: { name: string; content: string };
+
   /** Line mapping from ST to C++ implementation lines */
   lineMap: Map<number, LineMapEntry>;
 
@@ -407,6 +418,14 @@ export class CodeGenerator {
   private currentLine = 1; // line counter within currently-active file
 
   private headerOutput: string[] = [];
+  /** Output temporaries declared while generating a condition that places them itself; see generateCapturingTemps. */
+  private capturedTemps: string[] | undefined;
+  /** The callee's constants while a method default is generated, which resolves in the callee; see calleeConstant. */
+  private calleeConstants:
+    | { values: ReadonlyMap<string, VarDeclaration>; active: Set<string> }
+    | undefined;
+  /** The libraries header, when `separateLibraryFiles` moved the libraries out of the unit's header. */
+  private libraryHeader: { name: string; content: string } | undefined;
   private lineMap: Map<number, LineMapEntry> = new Map();
   private headerLineMap: Map<number, LineMapEntry> = new Map();
   private currentHeaderLine = 1;
@@ -1048,6 +1067,7 @@ export class CodeGenerator {
     this.outputFiles = new Map();
     this.output = [];
     this.headerOutput = [];
+    this.libraryHeader = undefined;
     this.lineMap = new Map();
     this.headerLineMap = new Map();
     this.currentLine = 1;
@@ -1172,10 +1192,80 @@ export class CodeGenerator {
       // public compile() wrapper exposes this verbatim.
       cppCode: cppFiles.map((f) => f.content).join(eol),
       headerCode: this.headerOutput.join(eol),
+      ...(this.libraryHeader !== undefined
+        ? { libraryHeader: this.libraryHeader }
+        : {}),
       lineMap: this.lineMap,
       headerLineMap: this.headerLineMap,
       warnings: this.codegenWarnings,
     };
+  }
+
+  /**
+   * The global constants as `constexpr` definitions before the namespace, so they work as template parameters.
+   * Guarded by a macro keyed on their names and values: two units built with the same constants (a PLC program and
+   * an HMI unit) can be included in one translation unit, while different values still conflict.
+   */
+  private globalConstantLines(): string[] {
+    const entries = Object.entries(this.options.globalConstants);
+    if (entries.length === 0) return [];
+    let hash = 0x811c9dc5;
+    for (const ch of entries.map(([n, v]) => `${n}=${v};`).join("")) {
+      hash = Math.imul(hash ^ ch.charCodeAt(0), 0x01000193) >>> 0;
+    }
+    const guard = `STRUCPP_GLOBAL_CONSTANTS_${hash.toString(16).toUpperCase()}`;
+    return [
+      "",
+      "// Global constants",
+      `#ifndef ${guard}`,
+      `#define ${guard}`,
+      ...entries.map(([name, value]) => `constexpr size_t ${name} = ${value};`),
+      "#endif",
+    ];
+  }
+
+  /** Reachable chunks of each linked library that have a `header` or a `cpp` slice, in emission order. */
+  private reachableLibraryChunks(
+    part: "header" | "cpp",
+  ): Array<{ archive: StlibArchive; chunks: LibraryChunk[] }> {
+    const out: Array<{ archive: StlibArchive; chunks: LibraryChunk[] }> = [];
+    for (const { archive, reachable } of this.libraryEmissions) {
+      const chunks = (archive.chunks ?? []).filter(
+        (c) => c[part].length > 0 && reachable.has(c.name),
+      );
+      if (chunks.length > 0) out.push({ archive, chunks });
+    }
+    return out;
+  }
+
+  private hasLibraryChunks(part: "header" | "cpp"): boolean {
+    return this.reachableLibraryChunks(part).length > 0;
+  }
+
+  /** Name of the libraries header: the unit's header name with `_libraries` before the extension. */
+  private libraryHeaderName(): string {
+    const header = this.options.headerFileName;
+    const dot = header.lastIndexOf(".");
+    return dot > 0
+      ? `${header.slice(0, dot)}_libraries${header.slice(dot)}`
+      : `${header}_libraries`;
+  }
+
+  /**
+   * Header side of the reachable library chunks: per library, forward declarations of its function blocks (their
+   * classes may refer to each other) and then each chunk's declarations, in the order the library emitted them.
+   */
+  private libraryHeaderChunkLines(): string[] {
+    const lines: string[] = [];
+    for (const { archive, chunks } of this.reachableLibraryChunks("header")) {
+      lines.push(`// Library: ${archive.manifest.name}`);
+      for (const chunk of chunks) {
+        if (chunk.kind === "functionBlock") lines.push(`class ${chunk.name};`);
+      }
+      for (const chunk of chunks) lines.push(...chunk.header.split("\n"));
+      lines.push("");
+    }
+    return lines;
   }
 
   /**
@@ -1260,17 +1350,35 @@ export class CodeGenerator {
     this.emitHeader("");
     this.emitHeader("#undef OVERFLOW");
 
-    // Emit global constants (before namespace, so they work as template parameters)
-    const globalConsts = Object.entries(this.options.globalConstants);
-    if (globalConsts.length > 0) {
-      this.emitHeader("");
-      this.emitHeader("// Global constants");
-      for (const [name, value] of globalConsts) {
-        this.emitHeader(`constexpr size_t ${name} = ${value};`);
-      }
+    const constants = this.globalConstantLines();
+    const separate =
+      this.options.separateLibraryFiles === true &&
+      this.hasLibraryChunks("header");
+    if (!separate) {
+      for (const line of constants) this.emitHeader(line);
     }
 
     this.emitHeader("");
+
+    if (separate) {
+      const name = this.libraryHeaderName();
+      this.libraryHeader = {
+        name,
+        content: [
+          ...this.headerOutput,
+          ...constants,
+          "",
+          `namespace ${ns} {`,
+          ...(ns !== "strucpp" ? ["using namespace strucpp;"] : []),
+          "",
+          ...this.libraryHeaderChunkLines(),
+          `}  // namespace ${ns}`,
+          "",
+        ].join(this.options.lineEnding),
+      };
+      this.emitHeader(`#include "${name}"`);
+      this.emitHeader("");
+    }
 
     // Open namespace
     this.emitHeader(`namespace ${ns} {`);
@@ -1353,29 +1461,8 @@ export class CodeGenerator {
     // chunk-array order; types come first, FBs next, functions last
     // because that's the order the library compiler emitted them
     // before slicing.
-    for (const { archive, reachable } of this.libraryEmissions) {
-      const reachableChunks: LibraryChunk[] = [];
-      for (const chunk of archive.chunks ?? []) {
-        if (chunk.header.length === 0) continue;
-        if (reachable.has(chunk.name)) reachableChunks.push(chunk);
-      }
-      if (reachableChunks.length === 0) continue;
-
-      this.emitHeader(`// Library: ${archive.manifest.name}`);
-
-      for (const chunk of reachableChunks) {
-        if (chunk.kind === "functionBlock") {
-          this.emitHeader(`class ${chunk.name};`);
-        }
-      }
-
-      for (const chunk of reachableChunks) {
-        for (const line of chunk.header.split("\n")) {
-          this.emitHeader(line);
-        }
-      }
-
-      this.emitHeader("");
+    if (this.options.separateLibraryFiles !== true) {
+      for (const line of this.libraryHeaderChunkLines()) this.emitHeader(line);
     }
 
     // Generate forward declarations
@@ -1486,21 +1573,14 @@ export class CodeGenerator {
     // iteration order as the header side; only chunks whose `cpp`
     // slice is non-empty get emitted (types and inline globals are
     // header-only).
-    for (const { archive, reachable } of this.libraryEmissions) {
-      const reachableChunks: LibraryChunk[] = [];
-      for (const chunk of archive.chunks ?? []) {
-        if (chunk.cpp.length === 0) continue;
-        if (reachable.has(chunk.name)) reachableChunks.push(chunk);
-      }
-      if (reachableChunks.length === 0) continue;
-
-      this.emit(`// Library: ${archive.manifest.name}`);
-      for (const chunk of reachableChunks) {
-        for (const line of chunk.cpp.split("\n")) {
-          this.emit(line);
+    if (this.options.separateLibraryFiles !== true) {
+      for (const { archive, chunks } of this.reachableLibraryChunks("cpp")) {
+        this.emit(`// Library: ${archive.manifest.name}`);
+        for (const chunk of chunks) {
+          for (const line of chunk.cpp.split("\n")) this.emit(line);
         }
+        this.emit("");
       }
-      this.emit("");
     }
 
     this.generateLocatedVarsDefinition();
@@ -1516,6 +1596,38 @@ export class CodeGenerator {
     }
 
     this.endTranslationUnit();
+
+    if (
+      this.options.separateLibraryFiles === true &&
+      this.libraryHeader !== undefined
+    ) {
+      const ns = this.projectModel
+        ? getProjectNamespace(this.projectModel)
+        : "strucpp";
+      const fileNames = new Set<string>();
+      for (const { archive, chunks } of this.reachableLibraryChunks("cpp")) {
+        const base = `lib_${archive.manifest.name.replace(/[^A-Za-z0-9_]/g, "_")}`;
+        let fileName = `${base}.cpp`;
+        for (let n = 2; fileNames.has(fileName); n++) {
+          fileName = `${base}_${n}.cpp`;
+        }
+        fileNames.add(fileName);
+        this.setOutputFile(fileName);
+        this.emit(
+          "// Generated by STruC++ - IEC 61131-3 Structured Text to C++ Compiler",
+        );
+        this.emit(`// Library: ${archive.manifest.name}`);
+        this.emit(`#include "${this.libraryHeader.name}"`);
+        this.emit("");
+        this.emit(`namespace ${ns} {`);
+        this.emit("");
+        for (const chunk of chunks) {
+          for (const line of chunk.cpp.split("\n")) this.emit(line);
+        }
+        this.emit("");
+        this.emit(`}  // namespace ${ns}`);
+      }
+    }
 
     // 2. One TU per program.
     if (this.projectModel) {
@@ -3422,15 +3534,27 @@ export class CodeGenerator {
     this.recordLineMapping(stmt.sourceSpan.startLine, ifLine);
     this.generateStatements(stmt.thenStatements, indent + this.options.indent);
 
+    let nested = 0;
     for (const elsif of stmt.elsifClauses) {
+      const inner = indent + this.options.indent.repeat(nested);
       this.emitLineDirective(elsif.sourceSpan.startLine);
+      const condition = this.generateCapturingTemps(elsif.condition);
       const elsifLine = this.currentLine;
-      this.emit(
-        `${indent}} else if (${this.generateExpression(elsif.condition)}) {`,
-      );
-      this.recordLineMapping(elsif.sourceSpan.startLine, elsifLine);
-      this.generateStatements(elsif.statements, indent + this.options.indent);
+      if (condition.temps.length > 0) {
+        this.emit(`${inner}} else {`);
+        nested++;
+        const body = indent + this.options.indent.repeat(nested);
+        for (const t of condition.temps) this.emit(`${body}${t}`);
+        this.emit(`${body}if (${condition.code}) {`);
+        this.recordLineMapping(elsif.sourceSpan.startLine, elsifLine);
+        this.generateStatements(elsif.statements, body + this.options.indent);
+      } else {
+        this.emit(`${inner}} else if (${condition.code}) {`);
+        this.recordLineMapping(elsif.sourceSpan.startLine, elsifLine);
+        this.generateStatements(elsif.statements, inner + this.options.indent);
+      }
     }
+    const tail = indent + this.options.indent.repeat(nested);
 
     if (stmt.elseStatements.length > 0) {
       // Map ELSE to the `} else {` line. Use endLine-1 as an approximation
@@ -3450,20 +3574,20 @@ export class CodeGenerator {
         this.emitLineDirective(elseStLine);
       }
       const elseLine = this.currentLine;
-      this.emit(`${indent}} else {`);
+      this.emit(`${tail}} else {`);
       if (elseStLine !== undefined) {
         this.recordLineMapping(elseStLine, elseLine);
       }
-      this.generateStatements(
-        stmt.elseStatements,
-        indent + this.options.indent,
-      );
+      this.generateStatements(stmt.elseStatements, tail + this.options.indent);
     }
 
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const closingLine = this.currentLine;
-    this.emit(`${indent}}`);
+    this.emit(`${tail}}`);
     this.recordLineMapping(stmt.sourceSpan.endLine, closingLine);
+    for (let n = nested; n > 0; n--) {
+      this.emit(`${indent}${this.options.indent.repeat(n - 1)}}`);
+    }
   }
 
   /**
@@ -3597,6 +3721,8 @@ export class CodeGenerator {
    * ST: REPEAT ... UNTIL condition → C++: do { ... } while (!(condition))
    */
   private generateRepeatStatement(stmt: RepeatStatement, indent: string): void {
+    const condition = this.generateCapturingTemps(stmt.condition);
+    for (const t of condition.temps) this.emit(`${indent}${t}`);
     const doLine = this.currentLine;
     this.emit(`${indent}do {`);
     this.recordLineMapping(stmt.sourceSpan.startLine, doLine);
@@ -3609,9 +3735,7 @@ export class CodeGenerator {
     this.loopExitLabelStack.pop();
     this.emitLineDirective(stmt.sourceSpan.endLine);
     const untilLine = this.currentLine;
-    this.emit(
-      `${indent}} while (!(${this.generateExpression(stmt.condition)}));`,
-    );
+    this.emit(`${indent}} while (!(${condition.code}));`);
     if (exitLabel.used) this.emit(`${indent}${exitLabel.name}: ;`);
     this.recordLineMapping(stmt.sourceSpan.endLine, untilLine);
   }
@@ -3684,6 +3808,32 @@ export class CodeGenerator {
         return this.generateSequencedExpression(expr, calls);
     }
     return this.generateExpressionNode(expr);
+  }
+
+  /**
+   * A plain name that is one of the callee's constants while a method default is generated: the constant's own
+   * initializer (or its type's default), resolved in the callee in turn. Undefined for any other expression.
+   */
+  private calleeConstant(expr: VariableExpression): string | undefined {
+    const scope = this.calleeConstants;
+    if (
+      scope === undefined ||
+      expr.subscripts.length > 0 ||
+      expr.fieldAccess.length > 0 ||
+      expr.isDereference
+    )
+      return undefined;
+    const name = expr.name.toUpperCase();
+    const decl = scope.values.get(name);
+    if (decl === undefined || scope.active.has(name)) return undefined;
+    if (decl.initialValue === undefined)
+      return this.getTypeDefaultValue(decl.type.name);
+    scope.active.add(name);
+    try {
+      return `(${this.generateExpression(decl.initialValue)})`;
+    } finally {
+      scope.active.delete(name);
+    }
   }
 
   /** `[&]() { auto __seqN = call; ...; return expr; }()` with the calls in the given order. */
@@ -3770,7 +3920,9 @@ export class CodeGenerator {
       case "LiteralExpression":
         return this.generateLiteralExpression(expr);
       case "VariableExpression":
-        return this.generateVariableExpression(expr);
+        return (
+          this.calleeConstant(expr) ?? this.generateVariableExpression(expr)
+        );
       case "BinaryExpression":
         return this.generateBinaryExpression(expr);
       case "UnaryExpression":
@@ -4366,15 +4518,68 @@ export class CodeGenerator {
    */
   private generateMethodCallExpression(expr: MethodCallExpression): string {
     const obj = this.generateExpression(expr.object);
-    const args = expr.arguments
-      .map((a) => this.generateExpression(a.value))
-      .join(", ");
     const objType = this.methodCallObjectType(expr.object);
+    const args = this.methodCallArguments(
+      objType,
+      expr.methodName,
+      expr.arguments,
+      expr.sourceSpan,
+    ).join(", ");
     const method =
       objType !== undefined
         ? this.resolveMethodName(objType, expr.methodName)
         : this.resolveMethodNameGlobal(expr.methodName);
     return `${obj}${this.memberAccessSeparator(objType)}${method}(${args})`;
+  }
+
+  /** Declaration of a method of a function block's lineage, or of an interface and the interfaces it extends. */
+  private findMethodDecl(
+    typeName: string | undefined,
+    methodName: string,
+  ): MethodDeclaration | undefined {
+    if (typeName === undefined) return undefined;
+    const upper = methodName.toUpperCase();
+    const named = (m: MethodDeclaration): boolean =>
+      m.name.toUpperCase() === upper;
+    for (const fb of fbLineage(typeName, this.fbLookup)) {
+      const method = fb.methods.find(named);
+      if (method) return method;
+    }
+    const pending = [typeName.toUpperCase()];
+    const seen = new Set<string>();
+    while (pending.length > 0) {
+      const name = pending.pop() ?? "";
+      if (seen.has(name)) continue;
+      seen.add(name);
+      const iface = this.ast?.interfaces.find(
+        (i) => i.name.toUpperCase() === name,
+      );
+      if (!iface) continue;
+      const method = iface.methods.find(named);
+      if (method) return method;
+      pending.push(...(iface.extends ?? []).map((e) => e.toUpperCase()));
+    }
+    return undefined;
+  }
+
+  /** C++ arguments of a method call, ordered and completed from the method's declaration when it is known. */
+  private methodCallArguments(
+    typeName: string | undefined,
+    methodName: string,
+    callArgs: readonly Argument[],
+    callSpan: SourceSpan,
+  ): string[] {
+    const method = this.findMethodDecl(typeName, methodName);
+    if (method === undefined) {
+      return callArgs.map((a) => this.generateExpression(a.value));
+    }
+    return this.orderCallArguments(
+      method.varBlocks,
+      callArgs,
+      `method '${method.name}'`,
+      callSpan,
+      lineageMembers(fbLineage(typeName ?? "", this.fbLookup)).constants,
+    );
   }
 
   /** Type a method is called on: from semantic analysis, else a variable's declared type. */
@@ -4843,12 +5048,21 @@ export class CodeGenerator {
       const dotIdx = expr.functionName.indexOf(".");
       const prefix = expr.functionName.substring(0, dotIdx);
       const methodName = expr.functionName.substring(dotIdx + 1);
-      const args = expr.arguments.map((arg) =>
-        this.generateExpression(arg.value),
-      );
 
       // Resolve method name case from declaration
-      const varType = this.variableTypeName(prefix);
+      const prefixUpper = prefix.toUpperCase();
+      const varType =
+        prefixUpper === "THIS"
+          ? this.currentFBName
+          : prefixUpper === "SUPER"
+            ? this.currentFBExtends
+            : this.variableTypeName(prefix);
+      const args = this.methodCallArguments(
+        varType,
+        methodName,
+        expr.arguments,
+        expr.sourceSpan,
+      );
       const resolvedMethod = varType
         ? this.resolveMethodName(varType, methodName)
         : this.resolveMethodNameGlobal(methodName);
@@ -4870,6 +5084,20 @@ export class CodeGenerator {
         this.generateExpression(arg.value),
       );
       return `${this.currentFBExtends}::operator()(${args.join(", ")})`;
+    }
+
+    const ownMethod =
+      this.currentFBName !== undefined
+        ? this.findMethodDecl(this.currentFBName, expr.functionName)
+        : undefined;
+    if (ownMethod) {
+      const ordered = this.orderCallArguments(
+        ownMethod.varBlocks,
+        expr.arguments,
+        `method '${ownMethod.name}'`,
+        expr.sourceSpan,
+      );
+      return `${this.calleeName(expr)}(${ordered.join(", ")})`;
     }
 
     // 0. ADR(x) → &(x) (CODESYS address-of operator)
@@ -5051,27 +5279,43 @@ export class CodeGenerator {
 
   /**
    * Reorder named arguments to match function declaration parameter order.
-   * Positional args are placed first (in declaration order, skipping named slots),
-   * then named args fill their declared slots. Unfilled parameters get default values.
    * Returns null if function not found in AST.
    */
   private reorderNamedArguments(expr: FunctionCallExpression): string[] | null {
     if (!this.ast) return null;
-
-    // Find the function declaration in the AST
     const funcDecl = this.ast.functions.find(
       (f) => f.name.toUpperCase() === expr.functionName.toUpperCase(),
     );
     if (!funcDecl) return null;
+    return this.orderCallArguments(
+      funcDecl.varBlocks,
+      expr.arguments,
+      `function '${expr.functionName}'`,
+      expr.sourceSpan,
+    );
+  }
 
+  /**
+   * C++ arguments of a call to a function or method with the given parameter blocks: positional arguments fill the
+   * parameters in declaration order (skipping those named), named arguments fill their own, and the rest get the
+   * declared default (else the type default) or, for VAR_OUTPUT and VAR_IN_OUT, a temporary.
+   */
+  private orderCallArguments(
+    varBlocks: readonly VarBlock[],
+    callArgs: readonly Argument[],
+    calleeLabel: string,
+    callSpan: SourceSpan,
+    constants?: ReadonlyMap<string, VarDeclaration>,
+  ): string[] {
     // Build parameter info from VAR_INPUT, VAR_IN_OUT, VAR_OUTPUT blocks
     const params: Array<{
       name: string;
       typeName: string;
+      typeRef: TypeReference;
       blockType: string;
       defaultExpr?: string;
     }> = [];
-    for (const block of funcDecl.varBlocks) {
+    for (const block of varBlocks) {
       if (
         block.blockType === "VAR_INPUT" ||
         block.blockType === "VAR_IN_OUT" ||
@@ -5082,19 +5326,31 @@ export class CodeGenerator {
             const entry: {
               name: string;
               typeName: string;
+              typeRef: TypeReference;
               blockType: string;
               defaultExpr?: string;
             } = {
               name: name.toUpperCase(),
               typeName: decl.type.name,
+              typeRef: decl.type,
               blockType: block.blockType,
             };
             if (decl.initialValue) {
-              entry.defaultExpr = this.generateInitializer(
-                decl.initialValue,
-                this.mapTypeRefToCpp(decl.type),
-                decl.type.name,
-              );
+              const initialValue = decl.initialValue;
+              const outer = this.calleeConstants;
+              this.calleeConstants =
+                constants === undefined
+                  ? outer
+                  : { values: constants, active: new Set() };
+              try {
+                entry.defaultExpr = this.generateInitializer(
+                  initialValue,
+                  this.mapTypeRefToCpp(decl.type),
+                  decl.type.name,
+                );
+              } finally {
+                this.calleeConstants = outer;
+              }
             }
             params.push(entry);
           }
@@ -5106,7 +5362,7 @@ export class CodeGenerator {
     // (skip implicit EN/ENO — handled separately by EN/ENO codegen logic)
     const namedArgs = new Map<string, { expr: string; isOutput: boolean }>();
     const claimedSlots = new Set<string>();
-    for (const arg of expr.arguments) {
+    for (const arg of callArgs) {
       if (arg.name !== undefined) {
         const upperName = arg.name.toUpperCase();
         if (upperName === "EN" || upperName === "ENO") continue;
@@ -5134,15 +5390,15 @@ export class CodeGenerator {
     for (const [argName, argInfo] of namedArgs) {
       const param = paramLookup.get(argName);
       if (!param) {
-        const span = expr.sourceSpan;
+        const span = callSpan;
         this.codegenWarnings.push({
-          message: `Named argument '${argName}' does not match any parameter of function '${expr.functionName}'`,
+          message: `Named argument '${argName}' does not match any parameter of ${calleeLabel}`,
           line: span.startLine,
           column: span.startCol,
           file: span.file,
         });
       } else if (argInfo.isOutput && param.blockType === "VAR_INPUT") {
-        const span = expr.sourceSpan;
+        const span = callSpan;
         this.codegenWarnings.push({
           message: `Output argument '=>' used for input parameter '${param.name.toLowerCase()}' — did you mean ':='?`,
           line: span.startLine,
@@ -5154,7 +5410,7 @@ export class CodeGenerator {
 
     // Collect positional args (preserving source order)
     const positionalArgs: string[] = [];
-    for (const arg of expr.arguments) {
+    for (const arg of callArgs) {
       if (arg.name === undefined) {
         positionalArgs.push(this.generateExpression(arg.value));
       }
@@ -5194,7 +5450,7 @@ export class CodeGenerator {
           param.blockType === "VAR_OUTPUT" ||
           param.blockType === "VAR_IN_OUT"
         ) {
-          result[i] = this.emitOutputTempVar(param.typeName);
+          result[i] = this.emitOutputTempVar(param.typeRef);
         } else {
           result[i] =
             param.defaultExpr ?? this.getTypeDefaultValue(param.typeName);
@@ -5202,17 +5458,7 @@ export class CodeGenerator {
       }
     }
 
-    return result.map((v, i) => {
-      if (v !== undefined) return v;
-      const param = params[i]!;
-      if (
-        param.blockType === "VAR_OUTPUT" ||
-        param.blockType === "VAR_IN_OUT"
-      ) {
-        return this.emitOutputTempVar(param.typeName);
-      }
-      return param.defaultExpr ?? this.getTypeDefaultValue(param.typeName);
-    });
+    return result.map((v) => v ?? "");
   }
 
   // ===========================================================================
@@ -5224,11 +5470,36 @@ export class CodeGenerator {
    * The temp is emitted before the current statement line (since generateExpression()
    * runs before the statement's emit() call). Returns the temp variable name.
    */
-  private emitOutputTempVar(typeName: string): string {
+  private emitOutputTempVar(type: string | TypeReference): string {
     const name = `__output_tmp_${this.tempVarCounter++}`;
-    const cppType = this.mapVarTypeToCpp(typeName);
-    this.emit(`${this.currentStatementIndent}${cppType} ${name};`);
+    const cppType =
+      typeof type === "string"
+        ? this.mapVarTypeToCpp(type)
+        : this.mapTypeRefToCpp(type);
+    if (this.capturedTemps !== undefined) {
+      this.capturedTemps.push(`${cppType} ${name};`);
+    } else {
+      this.emit(`${this.currentStatementIndent}${cppType} ${name};`);
+    }
     return name;
+  }
+
+  /**
+   * Generates an expression whose output temporaries must be declared somewhere other than just before the current
+   * statement (an ELSIF or UNTIL condition): returns the expression and the declarations it needs.
+   */
+  private generateCapturingTemps(expr: Expression): {
+    code: string;
+    temps: string[];
+  } {
+    const outer = this.capturedTemps;
+    this.capturedTemps = [];
+    try {
+      const code = this.generateExpression(expr);
+      return { code, temps: this.capturedTemps };
+    } finally {
+      this.capturedTemps = outer;
+    }
   }
 
   /**

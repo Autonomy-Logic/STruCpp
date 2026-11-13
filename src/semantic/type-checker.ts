@@ -55,7 +55,12 @@ import {
   type AccessLookup,
   type AccessType,
 } from "./type-utils.js";
-import { stripEnEno } from "../ast-utils.js";
+import {
+  bareVariableNames,
+  lineageMembers,
+  stripEnEno,
+  suppliedParameters,
+} from "../ast-utils.js";
 import {
   fbLineage,
   fbLineageNames,
@@ -690,6 +695,19 @@ export class TypeChecker {
       return dotted.returnType;
     }
 
+    const ownMethod =
+      this.currentFB !== undefined
+        ? this.findMethod(this.currentFB.name, expr.functionName)
+        : undefined;
+    if (ownMethod !== undefined && this.currentFB !== undefined) {
+      this.checkMethodArguments(this.currentFB.name, ownMethod, expr);
+      const returnType = ownMethod.returnType
+        ? this.resolveNamedType(ownMethod.returnType.name)
+        : undefined;
+      if (returnType) expr.resolvedType = returnType;
+      return returnType;
+    }
+
     // Check user-defined functions in symbol tables
     const funcSymbol = this.symbolTables.lookupFunction(expr.functionName);
     if (funcSymbol !== undefined) {
@@ -874,6 +892,7 @@ export class TypeChecker {
         .flatMap((b) => b.declarations)
         .flatMap((d) => d.names.map((name) => ({ name, type: d.type })));
       this.validateInterfaceArguments(at.arguments, inputs);
+      this.checkMethodArguments(typeName, method, at);
     }
     if (method === undefined) {
       if (this.declaredMembers(typeName)?.complete === true) {
@@ -888,6 +907,85 @@ export class TypeChecker {
     }
     if (!method.returnType) return undefined;
     return this.resolveNamedType(method.returnType.name);
+  }
+
+  /**
+   * Arguments a method call must supply: every VAR_IN_OUT (IEC 61131-3), and, for a method of a library block or
+   * interface, every input whose declaration in the library has no initial value. A local method's input without one
+   * takes its type's default. Arguments fill parameters as the code generator does: by name, then positionally.
+   */
+  private checkMethodArguments(
+    typeName: string,
+    method: MethodDeclaration,
+    at: Expression & { arguments: Argument[] },
+  ): void {
+    const members = lineageMembers(
+      fbLineage(typeName, this.fbLookup),
+    ).variables;
+    const params = method.varBlocks
+      .filter(
+        (b) =>
+          b.blockType === "VAR_INPUT" ||
+          b.blockType === "VAR_IN_OUT" ||
+          b.blockType === "VAR_OUTPUT",
+      )
+      .flatMap((b) =>
+        b.declarations.flatMap((d) =>
+          d.names.map((name) => ({
+            name: name.toUpperCase(),
+            kind: b.blockType,
+            hasDefault: d.initialValue !== undefined,
+            constantDefault:
+              d.initialValue === undefined ||
+              ![...bareVariableNames(d.initialValue)].some((v) =>
+                members.has(v),
+              ),
+          })),
+        ),
+      );
+    const supplied = suppliedParameters(
+      params.map((p) => p.name),
+      stripEnEno(at.arguments),
+    );
+    const fromLibrary = this.isLibraryMethod(typeName, method);
+    const missing = params.filter(
+      (p) =>
+        !supplied.has(p.name) &&
+        (p.kind === "VAR_IN_OUT" ||
+          (p.kind === "VAR_INPUT" && !p.constantDefault) ||
+          (fromLibrary && p.kind === "VAR_INPUT" && !p.hasDefault)),
+    );
+    for (const p of missing) {
+      const what =
+        p.kind === "VAR_IN_OUT"
+          ? `its in-out argument '${p.name}'`
+          : p.constantDefault
+            ? `input '${p.name}': the library declares no default for it`
+            : `input '${p.name}': its default is not constant`;
+      this.addError(
+        `'${method.name.toUpperCase()}' is missing ${what}`,
+        at.sourceSpan.startLine,
+        at.sourceSpan.startCol,
+        at.sourceSpan.file,
+      );
+    }
+  }
+
+  /** Whether a method found on `typeName` is declared by a linked library rather than by this unit. */
+  private isLibraryMethod(
+    typeName: string,
+    method: MethodDeclaration,
+  ): boolean {
+    const owner = fbLineage(typeName, this.fbLookup).find((fb) =>
+      fb.methods.includes(method),
+    );
+    if (owner !== undefined) {
+      return this.ast?.functionBlocks.includes(owner) !== true;
+    }
+    return (
+      this.ast?.interfaces.find((i) => i.methods.includes(method))?.library !==
+      undefined
+    );
   }
 
   /** A method of a function block's lineage, or of an interface and the interfaces it extends. */

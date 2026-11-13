@@ -190,11 +190,11 @@ END_INTERFACE
 
 FUNCTION_BLOCK Registry
   VAR items : ARRAY[0..7] OF IHittable; count : INT; END_VAR
-  METHOD Add : BOOL
+  METHOD Append : BOOL
     VAR_INPUT item : IHittable; END_VAR
     items[count] := item;
     count := count + 1;
-    Add := TRUE;
+    Append := TRUE;
   END_METHOD
   METHOD TotalArea : DINT
     VAR i : INT; s : IShape; END_VAR
@@ -216,7 +216,7 @@ FUNCTION_BLOCK Box IMPLEMENTS IHittable
   VAR_INPUT X, Y, W, H : DINT; Min : DINT; END_VAR
   METHOD Attach : BOOL
     VAR_IN_OUT reg : Registry; END_VAR
-    reg.Add(THIS^);
+    reg.Append(THIS^);
     Attach := TRUE;
   END_METHOD
   METHOD Area : DINT

@@ -96,7 +96,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Reference | `REF()` | Supported |
 | Parentheses | `( )` | Supported |
 | Function call | `name(args)` | Supported (positional + named) |
-| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)` | Supported |
+| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)`; named arguments bind by name and omitted inputs take the default of the method as declared for the static type at the call site (the interface's, a derived block's override, the pointer's base type), as CODESYS does, for local, interface and library methods. A default is evaluated in the callee: it may name the block's constants, and a default that reads one of the block's variables is not constant, so CODESYS and STruC++ warn and require the argument. Inside a block, an unqualified call to one of its own methods comes before a standard function of the same name (`Len()`, `Round()`), as in CODESYS. An omitted VAR_IN_OUT is an error, and so is an omitted input of a library method whose archive records no default for it | Supported |
 | Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
 | Typed literals | `INT#5`, `DINT#42`, `REAL#3.14` | Supported |
@@ -138,6 +138,8 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Unknown method | `x.m()` where the type of `x` has no method `m` (a function block member that is an FB instance, say) is an error |
 | Unknown FB argument | `fb(x := ...)` where `x` is not an input, output or in-out of the block is an error, for local and library blocks |
 | Members named like methods | A variable named like a method of its block's class hierarchy is a warning and is emitted under a mangled C++ name; so is a method named like a variable inherited from a block of the same unit. A method named like a variable inherited from a library block is an error, since the library's member names are fixed. A method-local variable hides a member of the same name, and the block's methods stay callable |
+| Omitted in-out argument | A function or method call that leaves out a VAR_IN_OUT is an error |
+| Methods named like operators | A method named like an IEC operator (`ADD`, `MOVE`, `MAX`, `SIN`, `ADR`, a type conversion...) is an error, as in CODESYS; standard functions that are not operators (`LEN`, `CONCAT`, `ROUND`, `MEMCPY`...) remain valid names |
 | Interface arguments | Passing a block that does not implement an interface to an interface-typed input of an FB, function or method is an error, as in assignments |
 | ADR of an unrelated block | `p := ADR(b)` with `p` a `POINTER TO A` (a function block or interface) and `b` a block that is neither `A`, derived from it nor implementing it is a warning: a method call through `p` is undefined |
 

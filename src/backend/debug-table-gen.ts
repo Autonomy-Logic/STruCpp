@@ -28,6 +28,7 @@ import type {
   VarDeclaration,
 } from "../frontend/ast.js";
 import type { ProjectModel } from "../project-model.js";
+import { getProjectNamespace } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import { isElementaryType } from "../semantic/type-registry.js";
 import { evalIntConst, MAX_TYPE_ALIAS_DEPTH } from "../semantic/type-utils.js";
@@ -35,7 +36,9 @@ import { formatArrayElementAccess } from "./codegen-utils.js";
 import { mangledMemberName, methodNamesByBlock } from "./member-mangling.js";
 
 // ---------------------------------------------------------------------------
-// Type tags — MUST match TypeTag enum in runtime/include/debug_dispatch.hpp.
+// Type tags — MUST match TypeTag enum in runtime/include/debug_table.hpp.
+// TAG_STRING_REF / TAG_WSTRING_REF are left out: they only mark a STRING(n) entry
+// in the C++ table, and the debug map reports those leaves as STRING / WSTRING.
 // ---------------------------------------------------------------------------
 export const TAG = {
   BOOL: 0,
@@ -202,12 +205,9 @@ const IEC_NAME_TO_TAG: Record<string, TagName> = {
 
 /** Byte size for each IEC elementary type — authoritative for debug. */
 /**
- * The string capacity the debug dispatch assumes.
- *
- * `debug_dispatch.hpp` casts every STRING/WSTRING leaf to
- * `IECStringVar<254>` / `IECWStringVar<254>`. A leaf declared with any other
- * length has its members at different offsets, so it cannot be registered —
- * see the check in `visit()`. Keep in step with those casts.
+ * Capacity of a plain STRING / WSTRING, which the TAG_STRING / TAG_WSTRING entries address directly. Any other
+ * capacity is registered through a StringLeaf (TAG_STRING_REF / TAG_WSTRING_REF). Keep in step with
+ * `debug_dispatch.hpp`.
  */
 const DISPATCH_STRING_CAPACITY = 254;
 
@@ -370,6 +370,8 @@ interface Entry {
   size: number;
   /** Bitwise OR of LEAF_FLAG_*, emitted into the entry's `flags` byte. */
   flags: number;
+  /** Capacity of a `STRING[n]` / `WSTRING[n]` leaf other than 254, registered through a StringLeaf. */
+  stringCapacity?: number;
 }
 
 export function generateDebugTable(
@@ -459,6 +461,7 @@ export function generateDebugTable(
     cppExpr: string,
     iecName: string,
     flags: number,
+    stringCapacity?: number,
   ) => {
     const tagName = IEC_NAME_TO_TAG[iecName.toUpperCase()];
     if (tagName === undefined) {
@@ -470,7 +473,15 @@ export function generateDebugTable(
     const bucket = tail();
     const arrIdx = arrays.length - 1;
     const elemIdx = bucket.length;
-    bucket.push({ cppExpr, tagName, path, type: tagName, size, flags });
+    bucket.push({
+      cppExpr,
+      tagName,
+      path,
+      type: tagName,
+      size,
+      flags,
+      ...(stringCapacity !== undefined ? { stringCapacity } : {}),
+    });
     leaves.push({
       arrayIdx: arrIdx,
       elemIdx,
@@ -545,7 +556,16 @@ export function generateDebugTable(
         cppExpr,
         typeRef.arrayDimensions,
         0,
-        typeRef.elementTypeName,
+        {
+          kind: "TypeReference",
+          sourceSpan: typeRef.sourceSpan,
+          name: typeRef.elementTypeName,
+          isReference: false,
+          referenceKind: "none",
+          ...(typeRef.elementMaxLength !== undefined
+            ? { maxLength: typeRef.elementMaxLength }
+            : {}),
+        },
         flags,
       );
       return;
@@ -560,40 +580,21 @@ export function generateDebugTable(
 
     // Named elementary type (or alias thereof).
     if (IEC_NAME_TO_TAG[name] !== undefined) {
-      // A parameterised STRING(n) / WSTRING(n) cannot be dispatched. Every
-      // string op in `debug_dispatch.hpp` casts the leaf to
-      // `IECStringVar<254>` / `IECWStringVar<254>`, but codegen emits the
-      // DECLARED size (`IECStringVar<n>`), and `length_` sits at a different
-      // offset for every `n` — so the cast reads out of bounds. Measured on
-      // `s20 : STRING(20) := 'hello'`: `sizeof` 50 vs 518, and the length came
-      // back from 468 bytes past the end of the object. It read 0 there, but
-      // the value is undefined: with non-zero neighbouring memory it reads as
-      // the cap, and the read path would then serve that many bytes of
-      // adjacent memory.
-      //
-      // The dispatch has one function per TAG and `Entry` has nowhere to carry
-      // a per-leaf size, so making this work needs a per-leaf width in the
-      // table — a real change to a structure that is deliberately 6 bytes on
-      // AVR. Until then the leaf is SKIPPED rather than registered wrong:
-      // `skipped` is already surfaced to the caller, so this is a visible
-      // build warning instead of an out-of-bounds read at runtime.
-      //
-      // Nothing authored in the editor reaches this: its type picker is a
-      // closed list from the IEC registry, which carries `STRING` with no
-      // length parameter. It is hand-written ST compiled through the CLI that
-      // can declare `STRING(n)`.
+      // A STRING(n) / WSTRING(n) other than 254 has its members at other offsets, so it is registered through a
+      // StringLeaf carrying its capacity's operations (runtime/include/debug_string_ops.hpp).
       if (
         (name === "STRING" || name === "WSTRING") &&
         typeRef.maxLength !== undefined &&
         typeRef.maxLength !== DISPATCH_STRING_CAPACITY
       ) {
-        skipped.push({
-          path,
-          reason:
-            `declared ${name}(${typeRef.maxLength}), but the debug dispatch ` +
-            `addresses strings as ${name}(${DISPATCH_STRING_CAPACITY}). ` +
-            `Declare it as a plain ${name} to expose it.`,
-        });
+        if (typeof typeRef.maxLength !== "number") {
+          skipped.push({
+            path,
+            reason: `declared ${name}(${typeRef.maxLength}): the debugger needs the length as a number`,
+          });
+          return;
+        }
+        addLeaf(path, cppExpr, name, flags, typeRef.maxLength);
         return;
       }
       addLeaf(path, cppExpr, name, flags);
@@ -635,7 +636,7 @@ export function generateDebugTable(
           cppExpr,
           dims as Array<{ start: number; end: number }>,
           0,
-          def.elementType.name,
+          def.elementType,
           flags,
         );
         return;
@@ -704,97 +705,104 @@ export function generateDebugTable(
     //     fall through to the AST walk and surface VAR alongside the
     //     interface blocks. VAR_TEMP / VAR_EXTERNAL are excluded —
     //     those are not persistent state.
-    const fbSym = symbolTables.lookupFunctionBlock(name);
-    if (fbSym) {
-      const interfaceVars = [
-        ...fbSym.inputs,
-        ...fbSym.outputs,
-        ...fbSym.inouts,
-      ];
-      // `name` is the FB type declaring these members, so it is the owner for
-      // both mangling collisions.
-      if (interfaceVars.length > 0) {
-        for (const v of interfaceVars) {
-          visitTypeRef(
-            `${path}.${v.name.toUpperCase()}`,
-            `${cppExpr}.${libraryMemberCppName(v, name)}`,
-            v.declaration.type,
-            flags,
-          );
-        }
-
-        // The block's own VAR members, from the manifest's `locals`.
-        //
-        // Only when the instance is RETAINed. The debugger keeps its
-        // black-box view of a library block everywhere else — the
-        // long-standing contract, and what stops a project instantiating a few
-        // hundred OSCAT blocks from paying for internals nobody addresses.
-        // Retain overrides it because a block restored from half its state
-        // comes back in a configuration it could never have run into: a TON
-        // with Q and ET but no STATE restarts its wait on the next scan.
-        // Two reasons to descend into a library block's own VAR members:
-        // the instance is RETAINed, or the library itself declared one of them
-        // `VAR RETAIN` — which retains it in every instance, exactly as it
-        // does for a user-defined block.
-        const instanceRetained = (flags & LEAF_FLAG_RETAIN) !== 0;
-        const localsToWalk = instanceRetained
-          ? fbSym.locals
-          : fbSym.locals.filter((v) => v.isRetain);
-        if (localsToWalk.length > 0 || instanceRetained) {
-          if (instanceRetained && fbSym.locals.length === 0) {
-            // An archive whose manifest does not export locals. Retain still
-            // covers the visible surface — refusing the build would strand
-            // anyone using a third-party .stlib they cannot rebuild — but it
-            // is a partial retain, so it is said out loud rather than left to
-            // be discovered after a power cycle.
-            incomplete.push({
-              path,
-              reason:
-                `RETAIN on ${typeRef.name}: this library does not export the ` +
-                `block's internal variables, so only its inputs and outputs ` +
-                `are retained. Rebuild the library with a current STruC++ to ` +
-                `retain the rest.`,
-            });
-          }
-          for (const v of localsToWalk) {
-            visitTypeRef(
-              `${path}.${v.name.toUpperCase()}`,
-              `${cppExpr}.${libraryMemberCppName(v, name)}`,
-              v.declaration.type,
-              v.isRetain ? flags | LEAF_FLAG_RETAIN : flags,
-            );
-          }
-        }
-      } else {
-        for (const block of fbSym.declaration.varBlocks) {
-          if (
-            block.blockType === "VAR" ||
-            block.blockType === "VAR_INPUT" ||
-            block.blockType === "VAR_OUTPUT" ||
-            block.blockType === "VAR_IN_OUT"
-          ) {
-            // A `VAR CONSTANT` inside a function block is read-only for every
-            // instance of it, and a `VAR RETAIN` member is retained in every
-            // instance, so the block's own qualifiers are folded in here rather
-            // than only at the program level.
-            const memberFlags = applyBlockFlags(flags, block);
-            for (const fieldDecl of block.declarations) {
-              for (const fieldName of fieldDecl.names) {
-                visitTypeRef(
-                  `${path}.${fieldName.toUpperCase()}`,
-                  `${cppExpr}.${memberCppName(fieldName, fieldDecl.type, name)}`,
-                  fieldDecl.type,
-                  memberFlags,
-                );
-              }
-            }
-          }
-        }
-      }
+    if (symbolTables.lookupFunctionBlock(name)) {
+      visitFunctionBlock(name, path, cppExpr, typeRef.name, flags, new Set());
       return;
     }
 
     skipped.push({ path, reason: `unresolved type name: ${typeRef.name}` });
+  };
+
+  /**
+   * The members of a function block instance: those it inherits through EXTENDS first, as C++ lays them out, then
+   * its own. `fbName` is the block declaring the members walked here, which decides their C++ names.
+   */
+  const visitFunctionBlock = (
+    fbName: string,
+    path: string,
+    cppExpr: string,
+    typeName: string,
+    flags: number,
+    seen: Set<string>,
+  ): void => {
+    const fbSym = symbolTables.lookupFunctionBlock(fbName);
+    if (!fbSym || seen.has(fbName)) return;
+    seen.add(fbName);
+    const base = fbSym.declaration.extends;
+    if (base !== undefined) {
+      visitFunctionBlock(
+        base.toUpperCase(),
+        path,
+        cppExpr,
+        typeName,
+        flags,
+        seen,
+      );
+    }
+
+    const interfaceVars = [...fbSym.inputs, ...fbSym.outputs, ...fbSym.inouts];
+    // `fbName` declares these members, so it owns both mangling collisions.
+    if (interfaceVars.length > 0) {
+      for (const v of interfaceVars) {
+        visitTypeRef(
+          `${path}.${v.name.toUpperCase()}`,
+          `${cppExpr}.${libraryMemberCppName(v, fbName)}`,
+          v.declaration.type,
+          flags,
+        );
+      }
+
+      // Library block locals (manifest `locals`) are walked only when the
+      // instance is RETAINed, or for members the library declared VAR RETAIN;
+      // otherwise the block stays a black box to the debugger.
+      const instanceRetained = (flags & LEAF_FLAG_RETAIN) !== 0;
+      const localsToWalk = instanceRetained
+        ? fbSym.locals
+        : fbSym.locals.filter((v) => v.isRetain);
+      if (localsToWalk.length > 0 || instanceRetained) {
+        if (instanceRetained && fbSym.locals.length === 0) {
+          // Archive without exported locals: retain covers inputs and outputs only.
+          incomplete.push({
+            path,
+            reason:
+              `RETAIN on ${typeName}: this library does not export the ` +
+              `block's internal variables, so only its inputs and outputs ` +
+              `are retained. Rebuild the library with a current STruC++ to ` +
+              `retain the rest.`,
+          });
+        }
+        for (const v of localsToWalk) {
+          visitTypeRef(
+            `${path}.${v.name.toUpperCase()}`,
+            `${cppExpr}.${libraryMemberCppName(v, fbName)}`,
+            v.declaration.type,
+            v.isRetain ? flags | LEAF_FLAG_RETAIN : flags,
+          );
+        }
+      }
+    } else {
+      for (const block of fbSym.declaration.varBlocks) {
+        if (
+          block.blockType === "VAR" ||
+          block.blockType === "VAR_INPUT" ||
+          block.blockType === "VAR_OUTPUT" ||
+          block.blockType === "VAR_IN_OUT"
+        ) {
+          // Fold the block's own CONSTANT / RETAIN qualifiers into every instance.
+          const memberFlags = applyBlockFlags(flags, block);
+          for (const fieldDecl of block.declarations) {
+            for (const fieldName of fieldDecl.names) {
+              visitTypeRef(
+                `${path}.${fieldName.toUpperCase()}`,
+                `${cppExpr}.${memberCppName(fieldName, fieldDecl.type, fbName)}`,
+                fieldDecl.type,
+                memberFlags,
+              );
+            }
+          }
+        }
+      }
+    }
   };
 
   const visitStructFields = (
@@ -837,22 +845,15 @@ export function generateDebugTable(
     cppExpr: string,
     dims: Array<{ start: number; end: number }>,
     dimIdx: number,
-    elementTypeName: string,
+    elementType: TypeReference,
     flags: number,
     indices: number[] = [],
   ): void => {
     if (dimIdx >= dims.length) {
-      // Innermost element — visit as a TypeReference with the element type
-      // name. Manufacture a minimal TypeReference for recursion.
       visitTypeRef(
         path,
         formatArrayElementAccess(cppExpr, indices),
-        {
-          kind: "TypeReference",
-          name: elementTypeName,
-          isReference: false,
-          referenceKind: "none",
-        } as TypeReference,
+        elementType,
         flags,
       );
       return;
@@ -864,7 +865,7 @@ export function generateDebugTable(
         cppExpr,
         dims,
         dimIdx + 1,
-        elementTypeName,
+        elementType,
         flags,
         [...indices, i],
       );
@@ -1022,6 +1023,7 @@ export function generateDebugTable(
   const debugTableCpp = renderCpp(
     arrays,
     configGlobal,
+    getProjectNamespace(projectModel),
     configName,
     retainVars,
     retainLayoutHash,
@@ -1063,6 +1065,7 @@ export function generateDebugTable(
 function renderCpp(
   arrays: Entry[][],
   configGlobal: string,
+  ns: string,
   configName: string,
   retainVars: Array<{ arrayIdx: number; elemIdx: number; path: string }>,
   retainLayoutHash: string,
@@ -1086,14 +1089,27 @@ function renderCpp(
   lines.push(
     `// The sketch/runtime must define this global with external linkage:`,
   );
-  lines.push(`//   strucpp::Configuration_${configName} ${configGlobal};`);
+  lines.push(`//   ${ns}::Configuration_${configName} ${configGlobal};`);
   lines.push(`// The debug table below reaches into it via compile-time`);
   lines.push(`// address-of expressions — so it must be a real object, not a`);
   lines.push(`// static-local or a pointer.`);
-  lines.push(`extern ::strucpp::Configuration_${configName} ${configGlobal};`);
+  lines.push(`extern ::${ns}::Configuration_${configName} ${configGlobal};`);
   lines.push("");
   lines.push("namespace strucpp { namespace debug {");
   lines.push("");
+
+  const stringLeafName = new Map<Entry, string>();
+  for (const e of arrays.flat()) {
+    if (e.stringCapacity === undefined) continue;
+    const leafName = `debug_string_leaf_${stringLeafName.size}`;
+    stringLeafName.set(e, leafName);
+    const ops =
+      e.tagName === "WSTRING" ? "wstring_leaf_ops" : "string_leaf_ops";
+    lines.push(
+      `static const StringLeaf ${leafName} = { (void*)&${e.cppExpr}, &${ops}<${e.stringCapacity}> };  // ${e.path}`,
+    );
+  }
+  if (stringLeafName.size > 0) lines.push("");
 
   for (let ai = 0; ai < arrays.length; ai++) {
     const bucket = arrays[ai]!;
@@ -1109,7 +1125,9 @@ function renderCpp(
           // declared `const`, and a C-style cast strips that silently where
           // `static_cast` would refuse. The flags byte is what carries the
           // qualifier through to the runtime so the write paths can honour it.
-          `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, ${flagsLiteral(e.flags)} },  // ${e.path}`,
+          stringLeafName.has(e)
+            ? `    { (void*)&${stringLeafName.get(e) ?? ""}, TAG_${e.tagName}_REF, ${flagsLiteral(e.flags)} },  // ${e.path}`
+            : `    { (void*)&${e.cppExpr}, TAG_${e.tagName}, ${flagsLiteral(e.flags)} },  // ${e.path}`,
         );
       }
     }

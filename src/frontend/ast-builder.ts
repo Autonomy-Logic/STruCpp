@@ -4208,12 +4208,17 @@ export function buildTestAST(
 }
 
 /**
- * Recursively set the file field on all sourceSpan objects in an AST.
+ * Recursively set the file field on every span in an AST: each node's sourceSpan and the bare spans some nodes keep,
+ * such as a declaration's nameSpans and addressSpan.
  */
 function setFileOnSpans(node: unknown, fileName: string): void {
   if (node === null || node === undefined || typeof node !== "object") return;
 
   const obj = node as Record<string, unknown>;
+  if ("startLine" in obj && "file" in obj) {
+    obj.file = fileName;
+    return;
+  }
   if (
     obj.sourceSpan &&
     typeof obj.sourceSpan === "object" &&

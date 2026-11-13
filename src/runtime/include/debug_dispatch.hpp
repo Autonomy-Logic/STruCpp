@@ -144,167 +144,8 @@ inline const void* ptr_impl(const void* p, uint16_t* len) noexcept {
     return static_cast<const IECVar<T>*>(p)->read_ptr();
 }
 
-// STRING / WSTRING live in `IECStringVar<254>` / `IECWStringVar<254>`,
-// the force-aware wrappers around `IECString<254>` / `IECWString<254>`.
-// Both wrappers carry their own length, capped at 254 bytes / 254 wide
-// code units of storage.
-//
-// Wire format (matches the editor decoder in
-// `src/frontend/utils/variable-sizes.ts` — `len8-utf8` / `len8-utf16le`):
-//
-//   STRING:  [ uint8 length ][ DEBUG_STRING_CAP bytes UTF-8 payload ]
-//            ^ 1 byte         ^ 126 bytes (always — content past the
-//                               declared length is unused but the
-//                               wire width is fixed)
-//
-//   WSTRING: [ uint8 length ][ DEBUG_STRING_CAP * 2 bytes UTF-16LE ]
-//            ^ 1 byte         ^ 252 bytes (126 little-endian code units)
-//
-// The length prefix is a uint8 because that's what the wire reserves
-// (`DEBUG_STRING_CAP = 126` in the editor); a string longer than 126
-// is truncated at the boundary on the way out.  The editor reads
-// exactly the prefix and uses it to decode `min(length, CAP)` content
-// units; the remaining bytes in the fixed window are ignored.
-//
-// We zero-fill the unused tail of the window on every read so stale
-// bus contents from a previous read can't leak into the editor — which
-// would otherwise show garbage after the legitimate content if a
-// reader misuses the cap.
-//
-// All four ops are force-aware (read sees the forced value when active;
-// write/set is a no-op on a forced variable per `IECStringVar::set`'s
-// own guard; force/unforce manipulate the force state directly).
-constexpr uint8_t DEBUG_STRING_CAP   = 126;            // chars / code units
-constexpr uint8_t DEBUG_STRING_WIDTH = 1 + DEBUG_STRING_CAP;          // 127 bytes on the wire
-constexpr uint8_t DEBUG_WSTRING_WIDTH = 1 + DEBUG_STRING_CAP * 2;     // 253 bytes on the wire
-
-// --- STRING (IECStringVar<254>) ---------------------------------------
-
-inline void read_string(const void* p, uint8_t* dest) noexcept {
-    const auto* var = static_cast<const IECStringVar<254>*>(p);
-    const std::size_t actual_len = var->length();
-    const uint8_t wire_len = static_cast<uint8_t>(
-        actual_len < DEBUG_STRING_CAP ? actual_len : DEBUG_STRING_CAP);
-    dest[0] = wire_len;
-    if (wire_len > 0) {
-        std::memcpy(dest + 1, var->c_str(), wire_len);
-    }
-    if (wire_len < DEBUG_STRING_CAP) {
-        std::memset(dest + 1 + wire_len, 0, DEBUG_STRING_CAP - wire_len);
-    }
-}
-
-inline void write_string(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECStringVar<254>*>(p);
-    const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
-    var->set(IECString<254>(reinterpret_cast<const char*>(bytes + 1), wire_len));
-}
-
-inline void force_string(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECStringVar<254>*>(p);
-    const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
-    var->force(IECString<254>(reinterpret_cast<const char*>(bytes + 1), wire_len));
-}
-
-inline void unforce_string(void* p) noexcept {
-    static_cast<IECStringVar<254>*>(p)->unforce();
-}
-
-// The payload only — NOT the [len][payload] wire form read_string() builds.
-// `len` is the character count, and c_str() already resolves the force.
-//
-// Deliberately NOT capped at DEBUG_STRING_CAP. That cap is the Modbus debug
-// FRAME budget: the wire form spends one byte on the length prefix and the
-// editor reads a fixed window, so read_string() has to truncate. A pointer
-// spends nothing and has no window — the caller (OPC-UA) carries its own
-// length — so clamping here would silently shorten a string for a transport
-// that never asked for it. `length()` is already bounded by the variable's own
-// capacity, which is the only real limit on this path.
-// `len` must be non-null; handle_ptr always passes a real address.
-inline const void* ptr_string(const void* p, uint16_t* len) noexcept {
-    const auto* var = static_cast<const IECStringVar<254>*>(p);
-    *len = static_cast<uint16_t>(var->length());
-    return var->c_str();
-}
-
-// --- WSTRING (IECWStringVar<254>) -------------------------------------
-
-inline void read_wstring(const void* p, uint8_t* dest) noexcept {
-    const auto* var = static_cast<const IECWStringVar<254>*>(p);
-    const std::size_t actual_len = var->length();
-    const uint8_t wire_len = static_cast<uint8_t>(
-        actual_len < DEBUG_STRING_CAP ? actual_len : DEBUG_STRING_CAP);
-    dest[0] = wire_len;
-    const char16_t* src = var->c_str();
-    for (uint8_t i = 0; i < wire_len; ++i) {
-        // Little-endian 16-bit code unit — explicit byte split so the
-        // wire format is host-endianness-independent (AVR is LE in
-        // practice but ARM-BE targets, however rare, would otherwise
-        // serialise the wrong way around).
-        dest[1 + i * 2]     = static_cast<uint8_t>(src[i] & 0xFF);
-        dest[1 + i * 2 + 1] = static_cast<uint8_t>((src[i] >> 8) & 0xFF);
-    }
-    const std::size_t used = 1 + static_cast<std::size_t>(wire_len) * 2;
-    if (used < DEBUG_WSTRING_WIDTH) {
-        std::memset(dest + used, 0, DEBUG_WSTRING_WIDTH - used);
-    }
-}
-
-inline void write_wstring(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECWStringVar<254>*>(p);
-    const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
-    char16_t buf[DEBUG_STRING_CAP];
-    for (uint8_t i = 0; i < wire_len; ++i) {
-        buf[i] = static_cast<char16_t>(bytes[1 + i * 2])
-               | static_cast<char16_t>(static_cast<char16_t>(bytes[1 + i * 2 + 1]) << 8);
-    }
-    var->set(IECWString<254>(buf, wire_len));
-}
-
-inline void force_wstring(void* p, const uint8_t* bytes) noexcept {
-    auto* var = static_cast<IECWStringVar<254>*>(p);
-    const uint8_t wire_len = bytes[0] < DEBUG_STRING_CAP ? bytes[0] : DEBUG_STRING_CAP;
-    char16_t buf[DEBUG_STRING_CAP];
-    for (uint8_t i = 0; i < wire_len; ++i) {
-        buf[i] = static_cast<char16_t>(bytes[1 + i * 2])
-               | static_cast<char16_t>(static_cast<char16_t>(bytes[1 + i * 2 + 1]) << 8);
-    }
-    var->force(IECWString<254>(buf, wire_len));
-}
-
-inline void unforce_wstring(void* p) noexcept {
-    static_cast<IECWStringVar<254>*>(p)->unforce();
-}
-
-// The code-unit buffer as it sits in memory, so `len` is BYTES (2 per code
-// unit), not characters. Like ptr_string, NOT capped at DEBUG_STRING_CAP —
-// see the note there; the cap belongs to the Modbus frame, not to a pointer.
-// `len` must be non-null; handle_ptr always passes a real address.
-//
-// read_wstring() splits each code unit explicitly to keep the WIRE format
-// little-endian on any host. A pointer cannot do that — what the caller gets is
-// host order — so this op is only correct on a little-endian target.
-//
-// The refusal is a RUNTIME one, not a static_assert. At namespace scope an
-// unconditional assert fires when the header is INCLUDED, so a big-endian (or
-// MSVC, which defines no __BYTE_ORDER__) build of firmware that only ever calls
-// handle_read/handle_write stopped compiling — an op nobody referenced taking
-// the whole translation unit down with it. Refusing here instead leaves every
-// other op available and routes the caller to the copying path, which is what
-// the old assertion text told them to do anyway.
-#if !defined(__BYTE_ORDER__) || !defined(__ORDER_LITTLE_ENDIAN__) || \
-    __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
-inline const void* ptr_wstring(const void*, uint16_t* len) noexcept {
-    *len = 0;
-    return nullptr;   // handle_ptr's contract for "no pointer available"
-}
-#else
-inline const void* ptr_wstring(const void* p, uint16_t* len) noexcept {
-    const auto* var = static_cast<const IECWStringVar<254>*>(p);
-    *len = static_cast<uint16_t>(var->length() * 2);
-    return var->c_str();
-}
-#endif
+// STRING / WSTRING operations, per capacity, live in debug_string_ops.hpp (included through debug_table.hpp).
+// A plain STRING / WSTRING is `IECStringVar<254>` / `IECWStringVar<254>`.
 
 // ---------------------------------------------------------------------------
 // Dispatch table entry. The `size` field is the byte width consumed/produced
@@ -363,8 +204,10 @@ constexpr TypeOps type_ops[TAG__COUNT] = {
     /*DATE    */ { &force_impl<DATE_t>,  &unforce_impl<DATE_t>,  &read_impl<DATE_t>,  &write_impl<DATE_t>,  sizeof(DATE_t)      },
     /*TOD     */ { &force_impl<TOD_t>,   &unforce_impl<TOD_t>,   &read_impl<TOD_t>,   &write_impl<TOD_t>,   sizeof(TOD_t)       },
     /*DT      */ { &force_impl<DT_t>,    &unforce_impl<DT_t>,    &read_impl<DT_t>,    &write_impl<DT_t>,    sizeof(DT_t)        },
-    /*STRING  */ { &force_string,        &unforce_string,        &read_string,        &write_string,        DEBUG_STRING_WIDTH  },
-    /*WSTRING */ { &force_wstring,       &unforce_wstring,       &read_wstring,       &write_wstring,       DEBUG_WSTRING_WIDTH },
+    /*STRING  */ { &StringOps<254>::force,  &StringOps<254>::unforce,  &StringOps<254>::read,  &StringOps<254>::write,  DEBUG_STRING_WIDTH  },
+    /*WSTRING */ { &WStringOps<254>::force, &WStringOps<254>::unforce, &WStringOps<254>::read, &WStringOps<254>::write, DEBUG_WSTRING_WIDTH },
+    /*STRING_REF  */ { &force_string_ref, &unforce_string_ref, &read_string_ref, &write_string_ref, DEBUG_STRING_WIDTH  },
+    /*WSTRING_REF */ { &force_string_ref, &unforce_string_ref, &read_string_ref, &write_string_ref, DEBUG_WSTRING_WIDTH },
 };
 
 // ---------------------------------------------------------------------------
@@ -407,8 +250,10 @@ constexpr PtrOps ptr_ops[TAG__COUNT] = {
     /*DATE    */ { &ptr_impl<DATE_t> },
     /*TOD     */ { &ptr_impl<TOD_t> },
     /*DT      */ { &ptr_impl<DT_t> },
-    /*STRING  */ { &ptr_string },
-    /*WSTRING */ { &ptr_wstring },
+    /*STRING  */ { &StringOps<254>::ptr },
+    /*WSTRING */ { &WStringOps<254>::ptr },
+    /*STRING_REF  */ { &ptr_string_ref },
+    /*WSTRING_REF */ { &ptr_string_ref },
 };
 
 // ---------------------------------------------------------------------------
@@ -521,11 +366,13 @@ inline uint8_t validate_payload(uint8_t tag, const uint8_t* bytes, uint16_t len)
     if (expected == 0) return STATUS_DATA_TOO_LARGE;
     if (!bytes) return STATUS_DATA_TOO_LARGE;
 
-    if (tag == TAG_STRING || tag == TAG_WSTRING) {
+    if (tag == TAG_STRING || tag == TAG_WSTRING || tag == TAG_STRING_REF ||
+        tag == TAG_WSTRING_REF) {
         const uint8_t count = bytes[0];
         if (count > DEBUG_STRING_CAP) return STATUS_DATA_TOO_LARGE;
+        const bool wide = tag == TAG_WSTRING || tag == TAG_WSTRING_REF;
         const uint16_t need = static_cast<uint16_t>(
-            1u + (tag == TAG_WSTRING ? static_cast<uint16_t>(count) * 2u
+            1u + (wide ? static_cast<uint16_t>(count) * 2u
                                      : static_cast<uint16_t>(count)));
         if (len < need) return STATUS_DATA_TOO_LARGE;
         return STATUS_OK;
@@ -604,7 +451,7 @@ inline uint16_t handle_size(uint8_t arr, uint16_t elem) noexcept {
  *
  *  Returns nullptr with *out_len = 0 when the leaf has no address to give:
  *  an unknown (arr, elem), a tag with no ptr op, or WSTRING on a big-endian
- *  target (see ptr_wstring). */
+ *  target (see WStringOps::ptr in debug_string_ops.hpp). */
 inline const void* handle_ptr(uint8_t arr, uint16_t elem, uint16_t* out_len) noexcept {
     Entry e = read_entry(arr, elem);
     if (!e.ptr || e.tag >= TAG__COUNT) {

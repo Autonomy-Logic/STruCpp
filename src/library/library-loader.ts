@@ -17,10 +17,12 @@ import type {
   LibraryVarType,
   StlibArchive,
 } from "./library-manifest.js";
+import { HEADER_NAME_RE } from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
+  Expression,
   FunctionBlockDeclaration,
   IECType,
   InterfaceDeclaration,
@@ -35,6 +37,8 @@ import type {
   VarDeclaration,
 } from "../frontend/ast.js";
 import { createDefaultSourceSpan } from "../frontend/ast.js";
+import { parse as parseSource } from "../frontend/parser.js";
+import { buildAST } from "../frontend/ast-builder.js";
 import { ELEMENTARY_TYPES } from "../semantic/type-utils.js";
 
 /**
@@ -126,30 +130,112 @@ function buildLibraryTypeDefinition(
   };
 }
 
+/**
+ * Parses default value texts as initial values, in one parse; undefined when any of them is not exactly one ST
+ * expression (a text that closes the generated declaration and adds its own is refused).
+ */
+function parseInitialValues(
+  texts: readonly string[],
+): Array<Expression | undefined> | undefined {
+  if (texts.length === 0) return [];
+  const lines = texts.map((t, i) => `  __D${i} : DINT := ${t};`);
+  const parsed = parseSource(
+    `PROGRAM __DEFAULTS\nVAR\n${lines.join("\n")}\nEND_VAR\nEND_PROGRAM\n`,
+  );
+  if (parsed.cst === null || parsed.errors.length > 0) return undefined;
+  const ast = buildAST(parsed.cst);
+  const others =
+    ast.functions.length +
+    ast.functionBlocks.length +
+    ast.interfaces.length +
+    ast.types.length +
+    ast.configurations.length +
+    ast.globalVarBlocks.length;
+  const program = ast.programs[0];
+  if (ast.programs.length !== 1 || others > 0 || program === undefined)
+    return undefined;
+  if (program.varBlocks.length !== 1 || program.body.length > 0)
+    return undefined;
+  const decls = program.varBlocks[0]?.declarations ?? [];
+  const exact =
+    decls.length === texts.length &&
+    decls.every(
+      (d, i) =>
+        d.names.length === 1 &&
+        d.names[0]?.toUpperCase() === `__D${i}` &&
+        d.initialValue !== undefined,
+    );
+  return exact ? decls.map((d) => d.initialValue) : undefined;
+}
+
+/** The parameters of `vars` whose default value text is not an ST expression. */
+function unparsableDefaults<V extends { name: string; initialValue?: string }>(
+  vars: readonly V[],
+): V[] {
+  const withDefault = vars.filter((v) => v.initialValue !== undefined);
+  if (parseInitialValues(withDefault.map((v) => v.initialValue ?? "")))
+    return [];
+  return withDefault.filter(
+    (v) => parseInitialValues([v.initialValue ?? ""]) === undefined,
+  );
+}
+
+/**
+ * The default values of `vars` parsed back into expressions, in one parse: a caller of a library method fills the
+ * inputs it omits with them. A default that is not an ST expression refuses the archive.
+ */
+function parseDefaults(
+  vars: readonly LibraryVarType[],
+): Map<LibraryVarType, Expression> {
+  const out = new Map<LibraryVarType, Expression>();
+  const withDefault = vars.filter((v) => v.initialValue !== undefined);
+  const values = parseInitialValues(
+    withDefault.map((v) => v.initialValue ?? ""),
+  );
+  if (values === undefined) {
+    const bad = unparsableDefaults(withDefault)[0];
+    throw new LibraryManifestError(
+      `Invalid library manifest: the default value '${bad?.initialValue ?? ""}' of parameter '${bad?.name ?? ""}' is not an ST expression`,
+    );
+  }
+  withDefault.forEach((v, i) => {
+    const value = values[i];
+    if (value !== undefined) out.set(v, value);
+  });
+  return out;
+}
+
 /** A var block of library variables, as a declaration holds them. */
 function makeVarBlock(
   blockType: VarBlockType,
   vars: LibraryVarType[],
+  defaults?: ReadonlyMap<LibraryVarType, Expression>,
+  isConstant = false,
 ): VarBlock {
   return {
     kind: "VarBlock",
     sourceSpan: createDefaultSourceSpan(),
     blockType,
-    isConstant: false,
+    isConstant,
     isRetain: false,
     isNonRetain: false,
-    declarations: vars.map((v) => ({
-      kind: "VarDeclaration" as const,
-      sourceSpan: createDefaultSourceSpan(),
-      names: [v.name],
-      type: makeTypeRef(v),
-      ...(v.attributes !== undefined ? { attributes: v.attributes } : {}),
-    })),
+    declarations: vars.map((v): VarDeclaration => {
+      const initialValue = defaults?.get(v);
+      return {
+        kind: "VarDeclaration",
+        sourceSpan: createDefaultSourceSpan(),
+        names: [v.name],
+        type: makeTypeRef(v),
+        ...(v.attributes !== undefined ? { attributes: v.attributes } : {}),
+        ...(initialValue !== undefined ? { initialValue } : {}),
+      };
+    }),
   };
 }
 
 /** A library method as a declaration without a body: enough to call, override and check access. */
 function makeMethod(m: LibraryMethodEntry): MethodDeclaration {
+  const defaults = parseDefaults([...m.inputs, ...m.inouts, ...m.outputs]);
   return {
     kind: "MethodDeclaration",
     sourceSpan: createDefaultSourceSpan(),
@@ -161,9 +247,9 @@ function makeMethod(m: LibraryMethodEntry): MethodDeclaration {
     isOverride: m.isOverride === true,
     ...(m.returnType ? { returnType: makeTypeRef(m.returnType) } : {}),
     varBlocks: [
-      makeVarBlock("VAR_INPUT", m.inputs),
-      makeVarBlock("VAR_OUTPUT", m.outputs),
-      makeVarBlock("VAR_IN_OUT", m.inouts),
+      makeVarBlock("VAR_INPUT", m.inputs, defaults),
+      makeVarBlock("VAR_OUTPUT", m.outputs, defaults),
+      makeVarBlock("VAR_IN_OUT", m.inouts, defaults),
     ].filter((b) => b.declarations.length > 0),
     body: [],
   };
@@ -190,6 +276,7 @@ function makeProperty(p: LibraryPropertyEntry): PropertyDeclaration {
 function makeFunctionBlockDeclaration(
   fb: LibraryManifest["functionBlocks"][0],
 ): FunctionBlockDeclaration {
+  const constants = (fb.locals ?? []).filter((v) => v.readOnly === true);
   return {
     kind: "FunctionBlockDeclaration",
     sourceSpan: createDefaultSourceSpan(),
@@ -203,7 +290,11 @@ function makeFunctionBlockDeclaration(
       makeVarBlock("VAR_INPUT", fb.inputs),
       makeVarBlock("VAR_OUTPUT", fb.outputs),
       makeVarBlock("VAR_IN_OUT", fb.inouts),
-      makeVarBlock("VAR", fb.locals ?? []),
+      makeVarBlock(
+        "VAR",
+        (fb.locals ?? []).filter((v) => v.readOnly !== true),
+      ),
+      makeVarBlock("VAR", constants, parseDefaults(constants), true),
     ].filter((b) => b.declarations.length > 0),
     methods: (fb.methods ?? []).map(makeMethod),
     properties: (fb.properties ?? []).map(makeProperty),
@@ -279,9 +370,41 @@ const VISIBILITIES: readonly string[] = [
   "INTERNAL",
 ];
 
-/** Refuses an `attributes` field that is not a list of named attribute pragmas. */
-function validateAttributes(owner: unknown, where: string): void {
-  if (!isRecord(owner) || owner.attributes === undefined) return;
+/**
+ * The manifest's `headers`, each emitted as `#include "<name>"` into every program using the library: refused unless
+ * every entry is a plain file name, so an archive cannot splice code into the consumer's build.
+ */
+function validateHeaders(headers: unknown): string[] {
+  if (headers === undefined) return [];
+  if (!Array.isArray(headers)) {
+    throw new LibraryManifestError(
+      "Invalid library manifest: headers must be an array",
+    );
+  }
+  return headers.map((h: unknown, i) => {
+    if (typeof h !== "string" || !HEADER_NAME_RE.test(h)) {
+      throw new LibraryManifestError(
+        `Invalid library manifest: headers[${i}] must be a relative file name without '.' or '..' segments (letters, digits, '.', '/', '-', '_', '+')`,
+      );
+    }
+    return h;
+  });
+}
+
+/**
+ * Refuses malformed descriptive fields of an entry: `attributes` must be a list of named attribute pragmas, and
+ * `displayName`, `initialValue` and `value` strings.
+ */
+function validateDescription(owner: unknown, where: string): void {
+  if (!isRecord(owner)) return;
+  for (const key of ["displayName", "initialValue", "value"] as const) {
+    if (owner[key] !== undefined && typeof owner[key] !== "string") {
+      throw new LibraryManifestError(
+        `Invalid library manifest: ${where}.${key} must be a string`,
+      );
+    }
+  }
+  if (owner.attributes === undefined) return;
   if (!Array.isArray(owner.attributes)) {
     throw new LibraryManifestError(
       `Invalid library manifest: ${where}.attributes must be an array`,
@@ -325,7 +448,7 @@ function validateMembers(
           `Invalid library manifest: ${at}.name must be a non-empty string`,
         );
       }
-      validateAttributes(m, at);
+      validateDescription(m, at);
       if (
         typeof m.visibility !== "string" ||
         !VISIBILITIES.includes(m.visibility)
@@ -348,8 +471,21 @@ function validateMembers(
                 `Invalid library manifest: ${at}.${params}[${k}].name must be a non-empty string`,
               );
             }
-            validateAttributes(v, `${at}.${params}[${k}]`);
+            validateDescription(v, `${at}.${params}[${k}]`);
           });
+          const bad = unparsableDefaults(
+            vars.filter(isRecord).map((v) => ({
+              name: String(v.name),
+              ...(typeof v.initialValue === "string"
+                ? { initialValue: v.initialValue }
+                : {}),
+            })),
+          )[0];
+          if (bad !== undefined) {
+            throw new LibraryManifestError(
+              `Invalid library manifest: ${at}.${params}: the default value '${bad.initialValue ?? ""}' of parameter '${bad.name}' is not an ST expression`,
+            );
+          }
         }
       } else if (typeof m.type !== "object" || m.type === null) {
         throw new LibraryManifestError(
@@ -416,9 +552,9 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: functions[${i}].parameters must be an array`,
         );
       }
-      validateAttributes(fn, `functions[${i}]`);
+      validateDescription(fn, `functions[${i}]`);
       fn.parameters.forEach((param: unknown, k) =>
-        validateAttributes(param, `functions[${i}].parameters[${k}]`),
+        validateDescription(param, `functions[${i}].parameters[${k}]`),
       );
       functions.push(fn as unknown as LibraryManifest["functions"][0]);
     }
@@ -450,12 +586,12 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
         );
       }
       validateMembers(fb, `functionBlocks[${i}]`, false);
-      validateAttributes(fb, `functionBlocks[${i}]`);
+      validateDescription(fb, `functionBlocks[${i}]`);
       for (const list of ["inputs", "outputs", "inouts", "locals"] as const) {
         const vars = fb[list];
         if (!Array.isArray(vars)) continue;
         vars.forEach((v: unknown, k) =>
-          validateAttributes(v, `functionBlocks[${i}].${list}[${k}]`),
+          validateDescription(v, `functionBlocks[${i}].${list}[${k}]`),
         );
       }
       functionBlocks.push(
@@ -487,11 +623,30 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: types[${i}].fields must be an array`,
         );
       }
-      validateAttributes(t, `types[${i}]`);
+      validateDescription(t, `types[${i}]`);
       if (Array.isArray(t.fields)) {
         t.fields.forEach((f: unknown, k) =>
-          validateAttributes(f, `types[${i}].fields[${k}]`),
+          validateDescription(f, `types[${i}].fields[${k}]`),
         );
+      }
+      if (t.members !== undefined) {
+        if (!Array.isArray(t.members)) {
+          throw new LibraryManifestError(
+            `Invalid library manifest: types[${i}].members must be an array`,
+          );
+        }
+        t.members.forEach((member: unknown, k) => {
+          if (
+            !isRecord(member) ||
+            typeof member.name !== "string" ||
+            member.name === ""
+          ) {
+            throw new LibraryManifestError(
+              `Invalid library manifest: types[${i}].members[${k}].name must be a non-empty string`,
+            );
+          }
+          validateDescription(member, `types[${i}].members[${k}]`);
+        });
       }
       types.push(t as unknown as LibraryManifest["types"][0]);
     }
@@ -513,7 +668,7 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: globals[${i}].type must be a non-empty string`,
         );
       }
-      validateAttributes(g, `globals[${i}]`);
+      validateDescription(g, `globals[${i}]`);
       globals.push(g as unknown as NonNullable<LibraryManifest["globals"]>[0]);
     }
   }
@@ -527,7 +682,7 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
         );
       }
       validateMembers(itf, `interfaces[${i}]`, true);
-      validateAttributes(itf, `interfaces[${i}]`);
+      validateDescription(itf, `interfaces[${i}]`);
       interfaces.push(itf as unknown as LibraryInterfaceEntry);
     });
   }
@@ -539,7 +694,7 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
     functions,
     functionBlocks,
     types,
-    headers: Array.isArray(obj.headers) ? (obj.headers as string[]) : [],
+    headers: validateHeaders(obj.headers),
     isBuiltin: Boolean(obj.isBuiltin),
   };
 
