@@ -61,8 +61,10 @@ import {
   type EnumMemberEntry,
 } from "./type-utils.js";
 import {
+  bareVariableNames,
   isEnArgument,
   isEnoArgument,
+  lineageMembers,
   stripEnEno,
   walkAST,
   suppliedParameters,
@@ -124,6 +126,16 @@ function parseAddress(address: string): ParsedAddress | null {
   return { area, size, byteIndex, bitIndex };
 }
 
+/** IEC operators CODESYS refuses as method names; type conversions are checked through the registry. */
+const OPERATOR_NAMES: ReadonlySet<string> = new Set([
+  ...["ADD", "SUB", "MUL", "DIV", "MOD", "EXPT", "MOVE"],
+  ...["SEL", "MAX", "MIN", "LIMIT", "MUX"],
+  ...["GT", "GE", "EQ", "LE", "LT", "NE", "AND", "OR", "XOR", "NOT"],
+  ...["SHL", "SHR", "ROL", "ROR", "ABS", "SQRT", "LN", "LOG", "EXP"],
+  ...["SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "TRUNC", "TRUNC_INT"],
+  ...["ADR", "BITADR", "SIZEOF", "INDEXOF", "LOWER_BOUND", "UPPER_BOUND"],
+]);
+
 /**
  * Variable-block kinds that may carry a physical location ("AT %...").
  *
@@ -137,16 +149,6 @@ function parseAddress(address: string): ParsedAddress | null {
  * variables from local declarations only, so an address written there is silently
  * dropped while also duplicating the address the global legitimately claims.
  */
-/** IEC operators CODESYS refuses as method names; type conversions are checked through the registry. */
-const OPERATOR_NAMES: ReadonlySet<string> = new Set([
-  ...["ADD", "SUB", "MUL", "DIV", "MOD", "EXPT", "MOVE"],
-  ...["SEL", "MAX", "MIN", "LIMIT", "MUX"],
-  ...["GT", "GE", "EQ", "LE", "LT", "NE", "AND", "OR", "XOR", "NOT"],
-  ...["SHL", "SHR", "ROL", "ROR", "ABS", "SQRT", "LN", "LOG", "EXP"],
-  ...["SIN", "COS", "TAN", "ASIN", "ACOS", "ATAN", "TRUNC", "TRUNC_INT"],
-  ...["ADR", "BITADR", "SIZEOF", "INDEXOF", "LOWER_BOUND", "UPPER_BOUND"],
-]);
-
 const LOCATABLE_BLOCK_TYPES: ReadonlySet<string> = new Set([
   "VAR",
   "VAR_GLOBAL",
@@ -356,6 +358,8 @@ interface UndeclaredVarContext {
 
 export class SemanticAnalyzer {
   private symbolTables: SymbolTables;
+  /** Methods of the block whose bodies are being validated: an unqualified call to one is not a standard function. */
+  private ownMethodNames: ReadonlySet<string> = new Set();
   private typeChecker: TypeChecker;
   private stdRegistry = new StdFunctionRegistry();
   private enumMemberMap: Map<string, EnumMemberEntry> = new Map();
@@ -1963,6 +1967,30 @@ export class SemanticAnalyzer {
     );
   }
 
+  /** A method input default that reads a variable of its block is not constant: CODESYS warns, and callers must pass it. */
+  private validateMethodDefaults(
+    method: MethodDeclaration,
+    lineage: readonly FunctionBlockDeclaration[],
+  ): void {
+    const members = lineageMembers(lineage).variables;
+    for (const block of method.varBlocks) {
+      if (block.blockType !== "VAR_INPUT") continue;
+      for (const decl of block.declarations) {
+        if (decl.initialValue === undefined) continue;
+        const read = [...bareVariableNames(decl.initialValue)].filter((v) =>
+          members.has(v),
+        );
+        if (read.length === 0) continue;
+        this.addWarning(
+          `The default of '${decl.names.join(", ")}' in method '${method.name}' reads ${read.join(", ")}, which is not constant; callers must pass it.`,
+          decl.sourceSpan.startLine,
+          decl.sourceSpan.startCol,
+          decl.sourceSpan.file,
+        );
+      }
+    }
+  }
+
   /**
    * Validate OOP modifier contradictions on function blocks and methods.
    */
@@ -2015,6 +2043,7 @@ export class SemanticAnalyzer {
       for (const method of fb.methods) {
         this.validateOverrideAccess(fb, method, parentMethods, lookup, ast);
         this.validateMethodName(method, fb.name);
+        this.validateMethodDefaults(method, fbLineage(fb.name, lookup));
 
         // ABSTRACT method in non-abstract FB is an error
         if (method.isAbstract && !fb.isAbstract) {
@@ -2477,8 +2506,14 @@ export class SemanticAnalyzer {
       const varTypeMap = this.buildVarTypeMap(func.varBlocks);
       this.walkStatementsForExpressionValidation(func.body, varTypeMap, ast);
     }
+    const lookup = functionBlockLookup(ast, this.symbolTables);
     for (const fb of ast.functionBlocks) {
       const varTypeMap = this.buildVarTypeMap(fb.varBlocks);
+      this.ownMethodNames = new Set(
+        fbLineage(fb.name, lookup).flatMap((b) =>
+          b.methods.map((m) => m.name.toUpperCase()),
+        ),
+      );
       this.walkStatementsForExpressionValidation(fb.body, varTypeMap, ast);
       for (const method of fb.methods) {
         const methodVarTypeMap = this.buildVarTypeMap(method.varBlocks);
@@ -2492,6 +2527,7 @@ export class SemanticAnalyzer {
           ast,
         );
       }
+      this.ownMethodNames = new Set();
     }
   }
 
@@ -2591,7 +2627,8 @@ export class SemanticAnalyzer {
     // Validate standard function argument counts and ADR l-value requirement
     if (
       expr.kind === "FunctionCallExpression" &&
-      !expr.functionName.includes(".")
+      !expr.functionName.includes(".") &&
+      !this.ownMethodNames.has(expr.functionName.toUpperCase())
     ) {
       this.checkStdFunctionArgs(expr);
     }

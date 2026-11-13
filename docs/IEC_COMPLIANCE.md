@@ -96,7 +96,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Reference | `REF()` | Supported |
 | Parentheses | `( )` | Supported |
 | Function call | `name(args)` | Supported (positional + named) |
-| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)`; named arguments bind by name and omitted inputs take the default of the method as declared for the static type at the call site (the interface's, a derived block's override, the pointer's base type), as CODESYS does, for local, interface and library methods. An omitted VAR_IN_OUT is an error, and so is an omitted input of a library method whose archive records no default for it | Supported |
+| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)`; named arguments bind by name and omitted inputs take the default of the method as declared for the static type at the call site (the interface's, a derived block's override, the pointer's base type), as CODESYS does, for local, interface and library methods. A default is evaluated in the callee: it may name the block's constants, and a default that reads one of the block's variables is not constant, so CODESYS and STruC++ warn and require the argument. Inside a block, an unqualified call to one of its own methods comes before a standard function of the same name (`Len()`, `Round()`), as in CODESYS. An omitted VAR_IN_OUT is an error, and so is an omitted input of a library method whose archive records no default for it | Supported |
 | Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
 | Typed literals | `INT#5`, `DINT#42`, `REAL#3.14` | Supported |

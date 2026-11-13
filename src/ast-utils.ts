@@ -118,6 +118,51 @@ export function suppliedParameters(
   return supplied;
 }
 
+function isVariableExpression(node: ASTNode): node is VariableExpression {
+  return node.kind === "VariableExpression";
+}
+
+/** Upper-cased names an expression reads as plain variables: no subscript, field access or dereference. */
+export function bareVariableNames(expr: Expression): Set<string> {
+  const names = new Set<string>();
+  walkAST(expr, (node) => {
+    if (
+      isVariableExpression(node) &&
+      node.subscripts.length === 0 &&
+      node.fieldAccess.length === 0 &&
+      !node.isDereference
+    ) {
+      names.add(node.name.toUpperCase());
+    }
+  });
+  return names;
+}
+
+/**
+ * The members of a function block lineage (derived block first), upper-cased: its constants with their declarations,
+ * and the names of its other variables. A name declared again further up the lineage keeps its first declaration.
+ */
+export function lineageMembers(lineage: readonly FunctionBlockDeclaration[]): {
+  constants: Map<string, VarDeclaration>;
+  variables: Set<string>;
+} {
+  const constants = new Map<string, VarDeclaration>();
+  const variables = new Set<string>();
+  for (const fb of lineage) {
+    for (const block of fb.varBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          const upper = name.toUpperCase();
+          if (constants.has(upper) || variables.has(upper)) continue;
+          if (block.isConstant) constants.set(upper, decl);
+          else variables.add(upper);
+        }
+      }
+    }
+  }
+  return { constants, variables };
+}
+
 /**
  * Recursively walk an AST subtree, calling visitor for each node.
  * If visitor returns false, children of that node are skipped.

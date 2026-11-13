@@ -92,6 +92,23 @@ describe("library manifest descriptions", () => {
     );
   });
 
+  it("refuses a method default that closes the generated declaration and adds its own", () => {
+    for (const tampered of [
+      "1; END_VAR END_PROGRAM PROGRAM Q VAR z : DINT := 2",
+      "1; END_VAR END_PROGRAM FUNCTION F : INT VAR_INPUT x : INT := 2",
+      "1; b : DINT := 2",
+    ]) {
+      const copy = JSON.parse(JSON.stringify(build())) as StlibArchive;
+      const step = copy.manifest.functionBlocks
+        .find((f) => f.name === "HMIGAUGE")
+        ?.methods?.find((m) => m.name === "BUMP")?.inputs[0];
+      if (step) step.initialValue = tampered;
+      expect(() => loadStlibFromString(JSON.stringify(copy), "w")).toThrow(
+        /is not an ST expression/,
+      );
+    }
+  });
+
   it("refuses malformed descriptions in an archive", () => {
     const archive = build();
     const load = (patch: (a: StlibArchive) => void): (() => void) => {

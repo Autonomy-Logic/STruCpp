@@ -55,7 +55,12 @@ import {
   type AccessLookup,
   type AccessType,
 } from "./type-utils.js";
-import { stripEnEno, suppliedParameters } from "../ast-utils.js";
+import {
+  bareVariableNames,
+  lineageMembers,
+  stripEnEno,
+  suppliedParameters,
+} from "../ast-utils.js";
 import {
   fbLineage,
   fbLineageNames,
@@ -696,6 +701,11 @@ export class TypeChecker {
         : undefined;
     if (ownMethod !== undefined && this.currentFB !== undefined) {
       this.checkMethodArguments(this.currentFB.name, ownMethod, expr);
+      const returnType = ownMethod.returnType
+        ? this.resolveNamedType(ownMethod.returnType.name)
+        : undefined;
+      if (returnType) expr.resolvedType = returnType;
+      return returnType;
     }
 
     // Check user-defined functions in symbol tables
@@ -909,6 +919,9 @@ export class TypeChecker {
     method: MethodDeclaration,
     at: Expression & { arguments: Argument[] },
   ): void {
+    const members = lineageMembers(
+      fbLineage(typeName, this.fbLookup),
+    ).variables;
     const params = method.varBlocks
       .filter(
         (b) =>
@@ -922,6 +935,11 @@ export class TypeChecker {
             name: name.toUpperCase(),
             kind: b.blockType,
             hasDefault: d.initialValue !== undefined,
+            constantDefault:
+              d.initialValue === undefined ||
+              ![...bareVariableNames(d.initialValue)].some((v) =>
+                members.has(v),
+              ),
           })),
         ),
       );
@@ -934,13 +952,18 @@ export class TypeChecker {
       (p) =>
         !supplied.has(p.name) &&
         (p.kind === "VAR_IN_OUT" ||
+          (p.kind === "VAR_INPUT" && !p.constantDefault) ||
           (fromLibrary && p.kind === "VAR_INPUT" && !p.hasDefault)),
     );
     for (const p of missing) {
-      this.addError(
+      const what =
         p.kind === "VAR_IN_OUT"
-          ? `'${method.name.toUpperCase()}' is missing its in-out argument '${p.name}'`
-          : `'${method.name.toUpperCase()}' is missing input '${p.name}': the library declares no default for it`,
+          ? `its in-out argument '${p.name}'`
+          : p.constantDefault
+            ? `input '${p.name}': the library declares no default for it`
+            : `input '${p.name}': its default is not constant`;
+      this.addError(
+        `'${method.name.toUpperCase()}' is missing ${what}`,
         at.sourceSpan.startLine,
         at.sourceSpan.startCol,
         at.sourceSpan.file,

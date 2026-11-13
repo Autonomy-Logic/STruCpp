@@ -63,6 +63,7 @@ import {
   functionBlockLookup,
   type FunctionBlockLookup,
 } from "../semantic/fb-lineage.js";
+import { lineageMembers } from "../ast-utils.js";
 import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
@@ -419,6 +420,10 @@ export class CodeGenerator {
   private headerOutput: string[] = [];
   /** Output temporaries declared while generating a condition that places them itself; see generateCapturingTemps. */
   private capturedTemps: string[] | undefined;
+  /** The callee's constants while a method default is generated, which resolves in the callee; see calleeConstant. */
+  private calleeConstants:
+    | { values: ReadonlyMap<string, VarDeclaration>; active: Set<string> }
+    | undefined;
   /** The libraries header, when `separateLibraryFiles` moved the libraries out of the unit's header. */
   private libraryHeader: { name: string; content: string } | undefined;
   private lineMap: Map<number, LineMapEntry> = new Map();
@@ -3805,6 +3810,32 @@ export class CodeGenerator {
     return this.generateExpressionNode(expr);
   }
 
+  /**
+   * A plain name that is one of the callee's constants while a method default is generated: the constant's own
+   * initializer (or its type's default), resolved in the callee in turn. Undefined for any other expression.
+   */
+  private calleeConstant(expr: VariableExpression): string | undefined {
+    const scope = this.calleeConstants;
+    if (
+      scope === undefined ||
+      expr.subscripts.length > 0 ||
+      expr.fieldAccess.length > 0 ||
+      expr.isDereference
+    )
+      return undefined;
+    const name = expr.name.toUpperCase();
+    const decl = scope.values.get(name);
+    if (decl === undefined || scope.active.has(name)) return undefined;
+    if (decl.initialValue === undefined)
+      return this.getTypeDefaultValue(decl.type.name);
+    scope.active.add(name);
+    try {
+      return `(${this.generateExpression(decl.initialValue)})`;
+    } finally {
+      scope.active.delete(name);
+    }
+  }
+
   /** `[&]() { auto __seqN = call; ...; return expr; }()` with the calls in the given order. */
   private generateSequencedExpression(
     expr: Expression,
@@ -3889,7 +3920,9 @@ export class CodeGenerator {
       case "LiteralExpression":
         return this.generateLiteralExpression(expr);
       case "VariableExpression":
-        return this.generateVariableExpression(expr);
+        return (
+          this.calleeConstant(expr) ?? this.generateVariableExpression(expr)
+        );
       case "BinaryExpression":
         return this.generateBinaryExpression(expr);
       case "UnaryExpression":
@@ -4545,6 +4578,7 @@ export class CodeGenerator {
       callArgs,
       `method '${method.name}'`,
       callSpan,
+      lineageMembers(fbLineage(typeName ?? "", this.fbLookup)).constants,
     );
   }
 
@@ -5052,6 +5086,20 @@ export class CodeGenerator {
       return `${this.currentFBExtends}::operator()(${args.join(", ")})`;
     }
 
+    const ownMethod =
+      this.currentFBName !== undefined
+        ? this.findMethodDecl(this.currentFBName, expr.functionName)
+        : undefined;
+    if (ownMethod) {
+      const ordered = this.orderCallArguments(
+        ownMethod.varBlocks,
+        expr.arguments,
+        `method '${ownMethod.name}'`,
+        expr.sourceSpan,
+      );
+      return `${this.calleeName(expr)}(${ordered.join(", ")})`;
+    }
+
     // 0. ADR(x) → &(x) (CODESYS address-of operator)
     if (nameUpper === "ADR") {
       const args = expr.arguments.map((arg) =>
@@ -5144,20 +5192,6 @@ export class CodeGenerator {
       });
       this.harmonizeStdFuncArgs(args, expr.arguments, stdFunc);
       return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
-    }
-
-    const ownMethod =
-      this.currentFBName !== undefined
-        ? this.findMethodDecl(this.currentFBName, expr.functionName)
-        : undefined;
-    if (ownMethod) {
-      const ordered = this.orderCallArguments(
-        ownMethod.varBlocks,
-        expr.arguments,
-        `method '${ownMethod.name}'`,
-        expr.sourceSpan,
-      );
-      return `${this.calleeName(expr)}(${ordered.join(", ")})`;
     }
 
     // 3. Check for named arguments that may need reordering
@@ -5271,6 +5305,7 @@ export class CodeGenerator {
     callArgs: readonly Argument[],
     calleeLabel: string,
     callSpan: SourceSpan,
+    constants?: ReadonlyMap<string, VarDeclaration>,
   ): string[] {
     // Build parameter info from VAR_INPUT, VAR_IN_OUT, VAR_OUTPUT blocks
     const params: Array<{
@@ -5301,11 +5336,21 @@ export class CodeGenerator {
               blockType: block.blockType,
             };
             if (decl.initialValue) {
-              entry.defaultExpr = this.generateInitializer(
-                decl.initialValue,
-                this.mapTypeRefToCpp(decl.type),
-                decl.type.name,
-              );
+              const initialValue = decl.initialValue;
+              const outer = this.calleeConstants;
+              this.calleeConstants =
+                constants === undefined
+                  ? outer
+                  : { values: constants, active: new Set() };
+              try {
+                entry.defaultExpr = this.generateInitializer(
+                  initialValue,
+                  this.mapTypeRefToCpp(decl.type),
+                  decl.type.name,
+                );
+              } finally {
+                this.calleeConstants = outer;
+              }
             }
             params.push(entry);
           }

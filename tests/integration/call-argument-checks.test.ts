@@ -13,7 +13,15 @@ import { compile } from "../../src/index.js";
 import { compileStlib } from "../../src/library/library-compiler.js";
 import { loadStlibFromString } from "../../src/library/library-loader.js";
 import type { StlibArchive } from "../../src/library/library-manifest.js";
-import { hasGpp, createPCH, compileAndRunStandalone } from "./test-helpers.js";
+import { execSync } from "child_process";
+import {
+  hasGpp,
+  createPCH,
+  compileAndRunStandalone,
+  RUNTIME_INCLUDE_PATH,
+  CXX_STD,
+  cxxEnv,
+} from "./test-helpers.js";
 
 const STATIC_DEFAULTS = `INTERFACE IVal METHOD Fetch : DINT VAR_INPUT V : DINT := 1; END_VAR END_METHOD END_INTERFACE
 FUNCTION_BLOCK Base IMPLEMENTS IVal
@@ -245,5 +253,128 @@ int main() {
 }`,
     });
     expect(out.trim()).toBe("2 3");
+  });
+});
+
+const CALLEE_SCOPE = `FUNCTION_BLOCK Fb
+  VAR CONSTANT Lim : DINT := 7; Twice : DINT := Lim * 2; END_VAR
+  VAR k : DINT := 3; END_VAR
+  METHOD M : DINT VAR_INPUT a : DINT := Lim; END_VAR M := a; END_METHOD
+  METHOD N : DINT VAR_INPUT a : DINT := Twice + 1; END_VAR N := a; END_METHOD
+  METHOD Kd : DINT VAR_INPUT a : DINT := k; END_VAR Kd := a; END_METHOD
+  METHOD Len : DINT Len := 42; END_METHOD
+  METHOD Round : DINT Round := 1; END_METHOD
+  METHOD UseOwn : DINT UseOwn := Len() + Round(); END_METHOD
+END_FUNCTION_BLOCK`;
+
+const CALLER = `PROGRAM P
+  VAR f : Fb; r : DINT; END_VAR
+  r := f.M() * 10000 + f.N() * 100 + f.UseOwn() + f.Kd(a := 0);
+END_PROGRAM
+CONFIGURATION C RESOURCE R ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1);
+  PROGRAM I WITH T : P; END_RESOURCE END_CONFIGURATION`;
+
+describe("method defaults resolve in the callee", () => {
+  it("reads the callee's constants, locally and through a library", () => {
+    const local = compile(`${CALLEE_SCOPE}\n${CALLER}`);
+    expect(local.errors).toEqual([]);
+    expect(local.cppCode).toContain("F.M((7))");
+    const linked = compile(CALLER, { libraries: [library(CALLEE_SCOPE)] });
+    expect(linked.errors).toEqual([]);
+    expect(linked.cppCode).toContain("F.M((7))");
+  });
+
+  it("warns about a default that reads a variable of the block, and requires the argument", () => {
+    const local = compile(
+      `${CALLEE_SCOPE}\nPROGRAM Q VAR f : Fb; r : DINT; END_VAR r := f.Kd(); END_PROGRAM`,
+    );
+    expect(compile(CALLEE_SCOPE).warnings.map((w) => w.message)).toContain(
+      "The default of 'A' in method 'KD' reads K, which is not constant; callers must pass it.",
+    );
+    expect(local.errors.map((e) => e.message)).toContain(
+      "'KD' is missing input 'A': its default is not constant",
+    );
+    expect(
+      messages(
+        "PROGRAM Q VAR f : Fb; r : DINT; END_VAR r := f.Kd(); END_PROGRAM",
+        [library(CALLEE_SCOPE)],
+      ),
+    ).toContain("'KD' is missing input 'A': its default is not constant");
+  });
+
+  it("types a call to the block's own method by the method, not the standard function", () => {
+    expect(
+      messages(`FUNCTION_BLOCK Q
+  VAR n : INT; END_VAR
+  METHOD Concat : BOOL Concat := TRUE; END_METHOD
+  METHOD Step : INT IF Concat() THEN n := n + 1; END_IF; Step := n; END_METHOD
+END_FUNCTION_BLOCK`),
+    ).toEqual([]);
+  });
+
+  it("calls the block's own method before a standard function of the same name", () => {
+    const result = compile(`${CALLEE_SCOPE}\n${CALLER}`);
+    expect(result.errors).toEqual([]);
+    expect(result.cppCode).toMatch(/LEN\(\) \+ (this->)?ROUND\(\)/);
+  });
+});
+
+describeIfGpp("method defaults compiled and run with g++", () => {
+  let dir: string;
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-calleescope-"));
+  });
+
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const run = (name: string, result: ReturnType<typeof compile>): string => {
+    const sub = path.join(dir, name);
+    fs.mkdirSync(sub, { recursive: true });
+    const files: Array<{ name: string; content: string }> = [
+      { name: "generated.hpp", content: result.headerCode },
+      ...(result.libraryHeader ? [result.libraryHeader] : []),
+      ...(result.cppFiles.length > 0
+        ? result.cppFiles
+        : [{ name: "generated.cpp", content: result.cppCode }]),
+      {
+        name: "main.cpp",
+        content: `#include "generated.hpp"
+#include <cstdio>
+strucpp::Configuration_C c;
+int main() { c.I.run(); std::printf("%lld\\n", (long long)c.I.R.get()); return 0; }`,
+      },
+    ];
+    for (const f of files) fs.writeFileSync(path.join(sub, f.name), f.content);
+    const sources = files
+      .filter((f) => f.name.endsWith(".cpp"))
+      .map((f) => `"${path.join(sub, f.name)}"`)
+      .join(" ");
+    const bin = path.join(sub, "run");
+    execSync(
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE_PATH}" -I"${sub}" -o "${bin}" ${sources}`,
+      { encoding: "utf-8", env: cxxEnv },
+    );
+    return execSync(`"${bin}"`, { encoding: "utf-8" }).trim();
+  };
+
+  it("runs a local block's defaults and own methods", () => {
+    const result = compile(`${CALLEE_SCOPE}\n${CALLER}`, {
+      headerFileName: "generated.hpp",
+    });
+    expect(result.errors).toEqual([]);
+    expect(run("local", result)).toBe("71543");
+  });
+
+  it("runs a library block's defaults and own methods", () => {
+    const result = compile(CALLER, {
+      headerFileName: "generated.hpp",
+      libraries: [library(CALLEE_SCOPE)],
+      separateLibraryFiles: true,
+    });
+    expect(result.errors).toEqual([]);
+    expect(run("library", result)).toBe("71543");
   });
 });

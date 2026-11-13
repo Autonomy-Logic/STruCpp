@@ -130,7 +130,10 @@ function buildLibraryTypeDefinition(
   };
 }
 
-/** Parses default value texts as initial values, in one parse; undefined when any of them is not an ST expression. */
+/**
+ * Parses default value texts as initial values, in one parse; undefined when any of them is not exactly one ST
+ * expression (a text that closes the generated declaration and adds its own is refused).
+ */
 function parseInitialValues(
   texts: readonly string[],
 ): Array<Expression | undefined> | undefined {
@@ -140,10 +143,29 @@ function parseInitialValues(
     `PROGRAM __DEFAULTS\nVAR\n${lines.join("\n")}\nEND_VAR\nEND_PROGRAM\n`,
   );
   if (parsed.cst === null || parsed.errors.length > 0) return undefined;
-  const decls =
-    buildAST(parsed.cst).programs[0]?.varBlocks[0]?.declarations ?? [];
-  if (decls.length !== texts.length) return undefined;
-  return decls.map((d) => d.initialValue);
+  const ast = buildAST(parsed.cst);
+  const others =
+    ast.functions.length +
+    ast.functionBlocks.length +
+    ast.interfaces.length +
+    ast.types.length +
+    ast.configurations.length +
+    ast.globalVarBlocks.length;
+  const program = ast.programs[0];
+  if (ast.programs.length !== 1 || others > 0 || program === undefined)
+    return undefined;
+  if (program.varBlocks.length !== 1 || program.body.length > 0)
+    return undefined;
+  const decls = program.varBlocks[0]?.declarations ?? [];
+  const exact =
+    decls.length === texts.length &&
+    decls.every(
+      (d, i) =>
+        d.names.length === 1 &&
+        d.names[0]?.toUpperCase() === `__D${i}` &&
+        d.initialValue !== undefined,
+    );
+  return exact ? decls.map((d) => d.initialValue) : undefined;
 }
 
 /** The parameters of `vars` whose default value text is not an ST expression. */
@@ -188,12 +210,13 @@ function makeVarBlock(
   blockType: VarBlockType,
   vars: LibraryVarType[],
   defaults?: ReadonlyMap<LibraryVarType, Expression>,
+  isConstant = false,
 ): VarBlock {
   return {
     kind: "VarBlock",
     sourceSpan: createDefaultSourceSpan(),
     blockType,
-    isConstant: false,
+    isConstant,
     isRetain: false,
     isNonRetain: false,
     declarations: vars.map((v): VarDeclaration => {
@@ -253,6 +276,7 @@ function makeProperty(p: LibraryPropertyEntry): PropertyDeclaration {
 function makeFunctionBlockDeclaration(
   fb: LibraryManifest["functionBlocks"][0],
 ): FunctionBlockDeclaration {
+  const constants = (fb.locals ?? []).filter((v) => v.readOnly === true);
   return {
     kind: "FunctionBlockDeclaration",
     sourceSpan: createDefaultSourceSpan(),
@@ -266,7 +290,11 @@ function makeFunctionBlockDeclaration(
       makeVarBlock("VAR_INPUT", fb.inputs),
       makeVarBlock("VAR_OUTPUT", fb.outputs),
       makeVarBlock("VAR_IN_OUT", fb.inouts),
-      makeVarBlock("VAR", fb.locals ?? []),
+      makeVarBlock(
+        "VAR",
+        (fb.locals ?? []).filter((v) => v.readOnly !== true),
+      ),
+      makeVarBlock("VAR", constants, parseDefaults(constants), true),
     ].filter((b) => b.declarations.length > 0),
     methods: (fb.methods ?? []).map(makeMethod),
     properties: (fb.properties ?? []).map(makeProperty),
