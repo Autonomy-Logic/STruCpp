@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2026 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2026 Autonomy®
 /**
  * Native (non-ST) library sources — C/C++ and Python function blocks.
  *
@@ -128,6 +128,10 @@ export interface NativeHeaderError {
  * interface. The native body is dropped here and never reaches the parser,
  * which is what allows a Python body to sit in a library at all.
  *
+ * Attribute pragmas and comments may precede the declaration; they stay in
+ * the projected ST, so the pragmas attach to the block as in an ST source. The
+ * documentation comment is found after any leading pragmas.
+ *
  * Returns an error rather than throwing when the header is missing or
  * malformed, so one bad file names itself in the build output instead of
  * failing the whole library anonymously.
@@ -139,14 +143,19 @@ export function projectNativeHeaderToSt(
   // declaration — the editor writes one there and reads it back the same way
   // (`extractDocumentation` in its POU text parser). Strip it first so the
   // declaration match stays anchored, and keep the text for the manifest.
-  const docMatch = /^\s*\(\*\s*([\s\S]*?)\s*\*\)\s*/.exec(source.source);
-  const documentation = docMatch ? docMatch[1]!.trim() : "";
+  const docMatch =
+    /^((?:\s|\{\s*attribute\b(?:[^}'"]|'[^']*'|"[^"]*")*\})*)\(\*\s*([\s\S]*?)\s*\*\)\s*/i.exec(
+      source.source,
+    );
+  const documentation = docMatch ? docMatch[2]!.trim() : "";
   const body = docMatch
-    ? source.source.slice(docMatch[0].length)
+    ? docMatch[1]! + source.source.slice(docMatch[0].length)
     : source.source;
 
   const declaration =
-    /^\s*(FUNCTION_BLOCK|FUNCTION|PROGRAM)\s+([A-Za-z_]\w*)/i.exec(body);
+    /^(?:\s|\{\s*attribute\b(?:[^}'"]|'[^']*'|"[^"]*")*\}|\(\*[\s\S]*?\*\))*(FUNCTION_BLOCK|FUNCTION|PROGRAM)\s+([A-Za-z_]\w*)/i.exec(
+      body,
+    );
   if (!declaration) {
     return {
       fileName: source.fileName,

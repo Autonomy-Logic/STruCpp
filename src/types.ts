@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * STruC++ Type Definitions
  *
@@ -42,6 +42,21 @@ export interface CompileOptions {
    *  `<name>_setup` / `<name>_loop` extern functions resolve. Empty by
    *  default; harmless when unset. */
   pouIncludes?: string[];
+
+  /**
+   * Emit linked libraries apart from the unit's own code: their declarations in a libraries header and each one's
+   * implementation in its own translation unit that does not include the unit's header, so a build can keep a
+   * library's object while the unit's code changes.
+   */
+  separateLibraryFiles?: boolean;
+
+  /**
+   * C++ namespace of everything the unit declares (default `strucpp`). Two units linked into one binary, such as a
+   * PLC program and an HMI unit, each get their own. A custom namespace sees the runtime types through
+   * `using namespace strucpp`. The debug table's own arrays stay in `strucpp::debug`, so only one unit of a binary
+   * links its debug table.
+   */
+  namespace?: string;
 
   /** Primary source file name for error reporting (default: "main.st") */
   fileName?: string;
@@ -221,6 +236,12 @@ export interface CompileResult {
 
   /** Generated C++ header code */
   headerCode: string;
+
+  /**
+   * The linked libraries' declarations, written next to the header under `name`, when `separateLibraryFiles` is set.
+   * Each library's implementation is then its own entry in `cppFiles` (`lib_<library>.cpp`).
+   */
+  libraryHeader?: { name: string; content: string };
 
   /** Line mapping from ST line numbers to C++ implementation line ranges */
   lineMap: Map<number, LineMapEntry>;

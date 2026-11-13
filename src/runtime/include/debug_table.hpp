@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later WITH STruCpp-runtime-exception
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only WITH STruCpp-runtime-exception
+// Copyright (c) 2025 Autonomy®
 // This file is part of the STruC++ Runtime Library and is covered by the
 // STruC++ Runtime Library Exception. See COPYING.RUNTIME for details.
 /**
@@ -41,6 +41,8 @@
 #pragma once
 
 #include <cstdint>
+
+#include "debug_string_ops.hpp"
 
 // ---------------------------------------------------------------------------
 // Flash-placement attribute for per-project pointer tables.
@@ -86,6 +88,8 @@ enum TypeTag : uint8_t {
     TAG_DT      = 18,
     TAG_STRING  = 19,
     TAG_WSTRING = 20,
+    TAG_STRING_REF  = 21,  // a StringLeaf for STRING[n] (debug_string_ops.hpp)
+    TAG_WSTRING_REF = 22,  // a StringLeaf for WSTRING[n]
     TAG__COUNT
 };
 

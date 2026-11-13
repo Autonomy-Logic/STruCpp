@@ -45,7 +45,7 @@ describe("library global-variable export", () => {
       },
     ]);
     expect(archive.manifest.globals).toEqual([
-      { name: "COUNTER", type: "INT" },
+      { name: "COUNTER", type: "INT", initialValue: "7" },
       { name: "ENABLED", type: "BOOL" },
     ]);
     // Storage is emitted as inlineGlobal chunks.

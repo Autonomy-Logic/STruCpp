@@ -82,7 +82,7 @@ describe("Additional Function Blocks Library", () => {
       // when the prose is revised — drift is the bug we want to catch.
       const rtc = stlibArchive.manifest.functionBlocks.find((fb) => fb.name === "RTC");
       expect(rtc?.documentation).toBe(
-        "The real time clock has many uses including time stamping, setting dates and times of day in batch reports, in alarm messages and so on.",
+        "Real time clock. CDT starts from the system date and time; on targets without one, it starts from DT#1970-01-01-00:00:00. While SET is TRUE, CDT equals PDT. When SET is FALSE, CDT keeps counting from the last value set. Q is a copy of SET.",
       );
     });
   });
@@ -97,14 +97,14 @@ describe("Additional Function Blocks Library", () => {
       return entry;
     }
 
-    it("RTC declares the IN/PDT inputs and Q/CDT outputs", () => {
+    it("RTC declares the SET/PDT inputs and Q/CDT outputs", () => {
       const rtc = fb("RTC");
-      expect(rtc.inputs.map((i) => i.name)).toEqual(["IN", "PDT"]);
+      expect(rtc.inputs.map((i) => i.name)).toEqual(["SET", "PDT"]);
       expect(rtc.outputs.map((o) => o.name)).toEqual(["Q", "CDT"]);
       const inputTypes = Object.fromEntries(
         rtc.inputs.map((i) => [i.name, i.type]),
       );
-      expect(inputTypes.IN).toBe("BOOL");
+      expect(inputTypes.SET).toBe("BOOL");
       expect(inputTypes.PDT).toBe("DT");
     });
 
@@ -255,23 +255,18 @@ describe("Additional Function Blocks Library", () => {
       expect(result.success).toBe(true);
     });
 
-    it("a user program can drive RTC across the rising-edge anchor", () => {
-      // RTC is hardware-agnostic — body uses only TIME() (monotonic
-      // scan-cycle time) and the IEC date arithmetic rules added for
-      // this library. This test invokes the FB twice across the rising
-      // edge of IN to make sure the anchoring path type-checks AND the
-      // generated code holds together when the FB is exercised in a
-      // realistic two-step sequence rather than a single snapshot call.
+    it("a user program can set RTC and release it", () => {
+      // RTC uses only TIME() and the IEC date arithmetic rules. Calls the
+      // FB across a set and a release so both paths type-check and compile.
       const userProgram = `
         PROGRAM main
           VAR
             clock  : RTC ;
             preset : DT := DT#2026-01-01-00:00:00 ;
           END_VAR
-          (* Pre-anchor scan: CDT counts from DT zero. *)
-          clock(IN := FALSE, PDT := preset) ;
-          (* Rising edge: latches preset as the new anchor. *)
-          clock(IN := TRUE,  PDT := preset) ;
+          clock(SET := FALSE, PDT := preset) ;
+          clock(SET := TRUE,  PDT := preset) ;
+          clock(SET := FALSE, PDT := preset) ;
         END_PROGRAM
       `;
 
@@ -283,20 +278,10 @@ describe("Additional Function Blocks Library", () => {
       expect(result.success).toBe(true);
     });
 
-    it("RTC does NOT pull in CURRENT_DT() — runs on hardware-agnostic targets", () => {
-      // Regression guard for the Arduino constraint: RTC must be self-
-      // contained on TIME(). If a future change re-introduces a
-      // CURRENT_DT() call inside the FB body, that call would surface
-      // in the embedded ST source and this assertion would catch it
-      // before it broke targets that don't ship std::chrono.
-      //
-      // Strip comments before scanning — the file's header comment
-      // intentionally explains the design choice and mentions the
-      // function name in prose; the call we want to forbid is in
-      // executable code only.
+    it("RTC starts from CURRENT_DT() on its first scan", () => {
       const rtcSource = getSource("rtc.st");
       const stripComments = (s: string) => s.replace(/\(\*[\s\S]*?\*\)/g, "");
-      expect(stripComments(rtcSource)).not.toMatch(/CURRENT_DT\s*\(/);
+      expect(stripComments(rtcSource)).toMatch(/preset\s*:=\s*CURRENT_DT\s*\(\s*\)/);
     });
   });
 });

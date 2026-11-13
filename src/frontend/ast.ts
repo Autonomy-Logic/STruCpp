@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * STruC++ Abstract Syntax Tree Definitions
  *
@@ -107,6 +107,14 @@ export interface FunctionBlockType extends IECType {
 // =============================================================================
 
 /**
+ * A CODESYS attribute pragma, `{attribute 'name'}` or `{attribute 'name' := 'value'}`, as written.
+ */
+export interface Attribute {
+  name: string;
+  value?: string;
+}
+
+/**
  * Root node representing a complete compilation unit.
  */
 export interface CompilationUnit extends ASTNode {
@@ -129,6 +137,8 @@ export interface CompilationUnit extends ASTNode {
  */
 export interface ProgramDeclaration extends ASTNode {
   kind: "ProgramDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   varBlocks: VarBlock[];
   body: Statement[];
@@ -139,6 +149,8 @@ export interface ProgramDeclaration extends ASTNode {
  */
 export interface FunctionDeclaration extends ASTNode {
   kind: "FunctionDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   returnType: TypeReference;
   varBlocks: VarBlock[];
@@ -150,6 +162,8 @@ export interface FunctionDeclaration extends ASTNode {
  */
 export interface FunctionBlockDeclaration extends ASTNode {
   kind: "FunctionBlockDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   isAbstract: boolean;
   isFinal: boolean;
@@ -164,13 +178,15 @@ export interface FunctionBlockDeclaration extends ASTNode {
 /**
  * Visibility modifier for OOP members
  */
-export type Visibility = "PUBLIC" | "PRIVATE" | "PROTECTED";
+export type Visibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
 
 /**
  * METHOD declaration within a Function Block
  */
 export interface MethodDeclaration extends ASTNode {
   kind: "MethodDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   visibility: Visibility;
   isAbstract: boolean;
@@ -186,16 +202,24 @@ export interface MethodDeclaration extends ASTNode {
  */
 export interface InterfaceDeclaration extends ASTNode {
   kind: "InterfaceDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   extends?: string[];
   methods: MethodDeclaration[];
+  /** Property signatures: the accessors present (empty bodies) are the ones implementations must provide. */
+  properties: PropertyDeclaration[];
+  /** Set on an interface a linked library declares: checked like the unit's own, emitted by the library. */
+  library?: string;
 }
 
 /**
- * PROPERTY declaration within a Function Block
+ * PROPERTY declaration within a Function Block, or a property signature within an INTERFACE
  */
 export interface PropertyDeclaration extends ASTNode {
   kind: "PropertyDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   type: TypeReference;
   visibility: Visibility;
@@ -225,6 +249,8 @@ export type VarBlockType =
  */
 export interface VarBlock extends ASTNode {
   kind: "VarBlock";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   blockType: VarBlockType;
   isConstant: boolean;
   /**
@@ -255,6 +281,8 @@ export interface VarBlock extends ASTNode {
  */
 export interface VarDeclaration extends ASTNode {
   kind: "VarDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   names: string[];
   type: TypeReference;
   initialValue?: Expression;
@@ -296,6 +324,8 @@ export interface VarDeclaration extends ASTNode {
  */
 export interface TypeDeclaration extends ASTNode {
   kind: "TypeDeclaration";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   definition: TypeDefinition;
   /**
@@ -308,6 +338,18 @@ export interface TypeDeclaration extends ASTNode {
    * `applyTypeDefaults` in the AST builder.
    */
   defaultValue?: Expression;
+  /** Set on a TYPE hoisted from an inline enumeration or subrange. */
+  inline?: InlineTypeOrigin;
+}
+
+/** Where a hoisted inline type was written. */
+export interface InlineTypeOrigin {
+  /** First variable of the declaration. */
+  variable: string;
+  /** POU, type or TEST that holds the declaration. */
+  container: string;
+  /** POU whose bodies see the members; absent for global, CONFIGURATION and STRUCT fields. */
+  owner?: string;
 }
 
 /**
@@ -333,6 +375,8 @@ export interface StructDefinition extends ASTNode {
  */
 export interface EnumMember extends ASTNode {
   kind: "EnumMember";
+  /** CODESYS attribute pragmas written right before the declaration. */
+  attributes?: Attribute[];
   name: string;
   value?: Expression;
 }
@@ -394,9 +438,31 @@ export interface TypeReference extends ASTNode {
   name: string;
   isReference: boolean; // true for REF_TO (for backwards compat)
   referenceKind: ReferenceKind; // more specific: "none", "ref_to", or "reference_to"
+  /**
+   * Every reference level, outermost first, when there is more than one:
+   * `POINTER TO REF_TO INT` is `["pointer_to", "ref_to"]` with `name` "INT".
+   * `referenceKind` is always the first entry. Absent for zero or one level,
+   * so single-level types are unchanged.
+   */
+  referenceChain?: ReferenceKind[];
+  /**
+   * An anonymous type written inside a declaration: `a : (Idle, Running);`
+   * or `a : INT(0..100);`. The AST keeps it where it was written; compile
+   * lowers it to a TYPE declaration (see `lowerInlineTypes`) and points
+   * `name` at that, so it behaves exactly like the declared equivalent.
+   */
+  inlineDefinition?: EnumDefinition | SubrangeDefinition;
   maxLength?: number | string; // For STRING(n) / WSTRING(n) parameterized length; string for constant names
   arrayDimensions?: Array<{ start: number; end: number }>; // For __INLINE_ARRAY_* types
   elementTypeName?: string; // Element type for inline arrays (e.g. "BYTE" for ARRAY[0..7] OF BYTE)
+  elementMaxLength?: number | string; // Element length of ARRAY OF STRING[n] / STRING(n) / WSTRING
+
+  /**
+   * The element's reference levels, outermost first, for an inline array of
+   * pointers or references: `ARRAY[0..3] OF POINTER TO INT` is
+   * `["pointer_to"]` with `elementTypeName` "INT". Absent for plain elements.
+   */
+  elementReferenceChain?: ReferenceKind[];
 }
 
 // =============================================================================
@@ -730,6 +796,8 @@ export interface VariableExpression extends TypedNode {
   isDereference: boolean;
   /** Ordered access chain preserving interleaving of fields, subscripts, deref */
   accessChain?: AccessStep[];
+  /** Written as a typed enumeration value (`E_State#Idle`). */
+  typedLiteral?: true;
 }
 
 /**
@@ -837,6 +905,8 @@ export interface TestFile {
   setup?: SetupBlock;
   teardown?: TeardownBlock;
   testCases: TestCase[];
+  /** TYPEs hoisted from inline enumerations and subranges in its VAR blocks. */
+  inlineTypes?: TypeDeclaration[];
 }
 
 /**

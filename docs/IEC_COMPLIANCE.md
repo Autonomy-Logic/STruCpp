@@ -10,14 +10,14 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | BYTE, WORD, DWORD, LWORD | Supported | |
 | SINT, INT, DINT, LINT | Supported | |
 | USINT, UINT, UDINT, ULINT | Supported | |
-| REAL, LREAL | Supported | |
+| REAL, LREAL | Supported | REAL arithmetic and REAL functions (SQRT, SIN, COS, ...) compute in single precision; an untyped real literal (`1.5`) takes the type of its context, so it is a float next to a REAL and a double next to an LREAL |
 | TIME | Supported | Nanosecond precision, int64_t storage |
 | DATE | Supported | |
 | TIME_OF_DAY | Supported | |
 | DATE_AND_TIME | Supported | |
 | LTIME, LDATE, LTOD, LDT | Supported | 64-bit time types with nanosecond precision |
-| STRING | Supported | Parameterized length: STRING(N), default 254 |
-| WSTRING | Supported | Parameterized length: WSTRING(N) |
+| STRING | Supported | Parameterized length: STRING(N) (CODESYS) or STRING[N] (IEC 61131-3 Ed. 3), default 254; array elements keep their declared length |
+| WSTRING | Supported | Parameterized length: WSTRING(N) or WSTRING[N] |
 | CHAR, WCHAR | Supported | |
 
 ### Derived Types
@@ -26,12 +26,12 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 |------|--------|-------|
 | TYPE ... END_TYPE | Supported | Type aliases |
 | STRUCT ... END_STRUCT | Supported | With nested structs |
-| Enumerations | Supported | With optional base type |
+| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value. A user or library FUNCTION with one of these names is called instead |
 | Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
 | ARRAY (3D) | Supported | ARRAY[1..3, 1..4, 1..5] OF INT |
-| ARRAY OF function block | Supported | Declaration, member access, and element invocation (`units[i](step := 1.0)`). A *method* call on an element (`units[0].M()`) is not yet parsed |
+| ARRAY OF function block | Supported | Declaration, member access, element invocation (`units[i](step := 1.0)`) and method calls on elements (`units[0].M()`) |
 | ARRAY[*] (VLA) | Supported | Variable-length array parameters |
 | Subranges | Supported | Runtime validation |
 | REF_TO | Supported | IEC reference type (explicit dereference) |
@@ -51,7 +51,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | PROGRAM | Supported | With CONFIGURATION/RESOURCE/TASK structure |
 | FUNCTION | Supported | With return type, all parameter modes |
 | FUNCTION_BLOCK | Supported | Instantiation, invocation, member access |
-| INTERFACE | Supported | Method and property signatures |
+| INTERFACE | Supported | Method and property signatures; a property lists GET, SET or both without bodies, and an implementing block must provide it with the same type and those accessors. Methods and properties implementing an interface member must be PUBLIC. Interface-typed variables, arrays and structure fields hold a reference to an implementing instance (`itf := fb`, `itf.M()`, `itf = 0`); a method returning an interface returns such a reference, which may be 0. Interfaces of a linked library are used like the unit's own: as variable types, in `IMPLEMENTS`, and for calls and properties |
 
 ## Variable Declarations
 
@@ -85,7 +85,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 
 | Category | Operators | Status |
 |----------|-----------|--------|
-| Arithmetic | `+`, `-`, `*`, `/`, `MOD`, `**` | Supported |
+| Arithmetic | `+`, `-`, `*`, `/`, `MOD`, `**` | Supported; REAL `**` computes like `EXPT`, in single precision |
 | Comparison | `=`, `<>`, `<`, `>`, `<=`, `>=` | Supported |
 | Logical | `AND`, `OR`, `XOR`, `NOT` | Supported |
 | Bitwise | `AND`, `OR`, `XOR`, `NOT` (on bit types) | Supported |
@@ -96,7 +96,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Reference | `REF()` | Supported |
 | Parentheses | `( )` | Supported |
 | Function call | `name(args)` | Supported (positional + named) |
-| Method call | `obj.method(args)` | Supported |
+| Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)`; named arguments bind by name and omitted inputs take the default of the method as declared for the static type at the call site (the interface's, a derived block's override, the pointer's base type), as CODESYS does, for local, interface and library methods. A default is evaluated in the callee: it may name the block's constants, and a default that reads one of the block's variables is not constant, so CODESYS and STruC++ warn and require the argument. Inside a block, an unqualified call to one of its own methods comes before a standard function of the same name (`Len()`, `Round()`), as in CODESYS. An omitted VAR_IN_OUT is an error, and so is an omitted input of a library method whose archive records no default for it | Supported |
 | Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
 | Typed literals | `INT#5`, `DINT#42`, `REAL#3.14` | Supported |
@@ -121,14 +121,27 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Methods | Supported | On FUNCTION_BLOCK, with return types |
-| Properties (GET/SET) | Supported | Virtual getter/setter methods in C++ |
+| Properties (GET/SET) | Supported | Virtual getter/setter methods in C++; a GET may call methods. Inside its block a property is reached as `THIS^.P` (a bare `P` is not resolved) |
 | Inheritance (EXTENDS) | Supported | Single inheritance |
 | Interfaces (IMPLEMENTS) | Supported | Multiple interfaces, generates C++ abstract classes |
-| ABSTRACT | Supported | Abstract FB (no instantiation) and abstract methods (pure virtual) |
+| ABSTRACT | Supported | Abstract FB (no instantiation, including a linked library's; a `POINTER TO` or `REFERENCE TO` one is allowed) and abstract methods (pure virtual) |
 | FINAL | Supported | Sealed FB and methods |
-| OVERRIDE | Supported | Method override with C++ override specifier |
-| PUBLIC/PRIVATE/PROTECTED | Supported | Access modifiers |
-| THIS | Supported | Self-reference in methods |
+| OVERRIDE | Supported | Method override with C++ override specifier. A method named like a PRIVATE method of a base block, or an INTERNAL method of a linked library's base block, is an error, with or without OVERRIDE. Any other override keeps the base method's access modifier (none is PUBLIC), as CODESYS requires |
+| PUBLIC/PRIVATE/PROTECTED/INTERNAL | Supported | Enforced on methods and on property reads and writes: PRIVATE only from the declaring FB; PROTECTED from the declaring FB or a derived one, through `THIS^`/`SUPER^`/an unqualified call or an instance of the caller's own lineage; INTERNAL only within the compilation unit (library) that declares it. The same rules apply to members of a linked library's blocks, which a consumer may extend and `OVERRIDE` like its own; a block extending a library block uses the variables it inherits. An interface named like one of a linked library is an error. INTERNAL remains usable as a variable, type, enumeration member, method or property name |
+| THIS | Supported | Self-reference in methods: `THIS^`, and `THIS^.path` with any variable path (members, subscripts, dereferences), optionally called: `THIS^.s.v`, `THIS^.s.M()`, `THIS^.arr[1].M()`, `THIS^.fbs[0](x := 1)` (also `THIS.path`) |
+
+## Diagnostics beyond the standard
+
+| Check | Notes |
+|-------|-------|
+| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error; `ENO` is a member of every function block. A library archive built before members were exported lists only a block's variables, so calls and properties on its blocks are not checked |
+| Unknown method | `x.m()` where the type of `x` has no method `m` (a function block member that is an FB instance, say) is an error |
+| Unknown FB argument | `fb(x := ...)` where `x` is not an input, output or in-out of the block is an error, for local and library blocks |
+| Members named like methods | A variable named like a method of its block's class hierarchy is a warning and is emitted under a mangled C++ name; so is a method named like a variable inherited from a block of the same unit. A method named like a variable inherited from a library block is an error, since the library's member names are fixed. A method-local variable hides a member of the same name, and the block's methods stay callable |
+| Omitted in-out argument | A function or method call that leaves out a VAR_IN_OUT is an error |
+| Methods named like operators | A method named like an IEC operator (`ADD`, `MOVE`, `MAX`, `SIN`, `ADR`, a type conversion...) is an error, as in CODESYS; standard functions that are not operators (`LEN`, `CONCAT`, `ROUND`, `MEMCPY`...) remain valid names |
+| Interface arguments | Passing a block that does not implement an interface to an interface-typed input of an FB, function or method is an error, as in assignments |
+| ADR of an unrelated block | `p := ADR(b)` with `p` a `POINTER TO A` (a function block or interface) and `b` a block that is neither `A`, derived from it nor implementing it is a warning: a method call through `p` is undefined |
 
 ## Standard Functions
 
@@ -193,12 +206,12 @@ edges on `CU` and `CD` leave `CV` unchanged. CODESYS does not document that case
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Nested comments `(* (* *) *)` | Supported | Arbitrary nesting depth |
-| Pragmas `{...}` | Supported | Including `{external}` for inline C++ |
+| Pragmas `{...}` | Supported | Including `{external}` for inline C++; CODESYS `{attribute 'name' [:= 'value']}` pragmas attach to the declaration that follows them (POU, method, property, interface, type, variable block, variable, structure field or enumeration value; only whitespace, comments and other pragmas in between). Library manifests keep them on every exported declaration except variable blocks and enumeration values, which manifests do not record. They do not change the generated code |
 | Inline C++ | Supported | Via `{external ...}` pragma blocks |
 | Inline function calls | Supported | Via `{call ...}` pragma |
 | Global constants (`-D`) | Supported | CLI `-D NAME=VALUE`, emits `constexpr` |
 | Dynamic memory | Supported | `__NEW(type)`, `__DELETE(ptr)` |
-| POINTER TO | Supported | Full pointer type with dereference |
+| POINTER TO | Supported | Full pointer type with dereference; `POINTER TO <FB>` from `ADR()` dispatches methods virtually |
 | Typed literals | Supported | `INT#5`, `DINT#42`, `REAL#3.14` |
 
 ## Not Yet Implemented

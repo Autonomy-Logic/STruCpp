@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later WITH STruCpp-runtime-exception
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only WITH STruCpp-runtime-exception
+// Copyright (c) 2025 Autonomy®
 // This file is part of the STruC++ Runtime Library and is covered by the
 // STruC++ Runtime Library Exception. See COPYING.RUNTIME for details.
 /**
@@ -273,5 +273,22 @@ inline std::ostream& operator<<(std::ostream& os, const IEC_ENUM_Var<EnumType>& 
  *   using Status_Value = IEC_ENUM_Value<Status>;
  *   using Status_Var = IEC_ENUM_Var<Status>;
  */
+
+/** Integer value of an enumeration, so the generic `TO_<type>` conversions accept enums. */
+template<typename EnumType>
+constexpr typename std::underlying_type<EnumType>::type iec_unwrap(const IEC_ENUM_Value<EnumType>& v) noexcept {
+    return static_cast<typename std::underlying_type<EnumType>::type>(v.get());
+}
+
+template<typename EnumType>
+inline typename std::underlying_type<EnumType>::type iec_unwrap(const IEC_ENUM_Var<EnumType>& v) noexcept {
+    return static_cast<typename std::underlying_type<EnumType>::type>(v.get().get());
+}
+
+/** `TO_<enum>(x)`: the enumeration member whose integer value is `x`. */
+template<typename EnumType, typename T>
+inline IEC_ENUM_Value<EnumType> TO_ENUM(const T& v) noexcept {
+    return IEC_ENUM_Value<EnumType>(static_cast<EnumType>(iec_unwrap(v)));
+}
 
 }  // namespace strucpp

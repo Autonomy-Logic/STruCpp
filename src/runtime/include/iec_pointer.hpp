@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later WITH STruCpp-runtime-exception
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only WITH STruCpp-runtime-exception
+// Copyright (c) 2025 Autonomy®
 // This file is part of the STruC++ Runtime Library and is covered by the
 // STruC++ Runtime Library Exception. See COPYING.RUNTIME for details.
 /**
@@ -91,6 +91,22 @@ constexpr std::nullptr_t IEC_NULL = nullptr;
 // REF_TO Type (Explicit Dereference)
 // =============================================================================
 
+template<typename T> class IEC_REF_TO;
+template<typename T> class IEC_REFERENCE_TO;
+template<typename T> class IEC_Ptr;
+
+namespace detail {
+/**
+ * The object a REF_TO T points at. A value lives in an IECVar<T>; a reference
+ * or pointer variable is the IEC_REF_TO / IEC_REFERENCE_TO / IEC_Ptr object
+ * itself, so REF_TO REF_TO INT points at an IEC_REF_TO<INT_t>.
+ */
+template<typename T> struct ref_target { using type = IECVar<T>; };
+template<typename U> struct ref_target<IEC_REF_TO<U>> { using type = IEC_REF_TO<U>; };
+template<typename U> struct ref_target<IEC_REFERENCE_TO<U>> { using type = IEC_REFERENCE_TO<U>; };
+template<typename U> struct ref_target<IEC_Ptr<U>> { using type = IEC_Ptr<U>; };
+}  // namespace detail
+
 /**
  * REF_TO pointer type for IEC 61131-3.
  * Wraps a pointer to an IECVar<T> with null checking.
@@ -104,7 +120,9 @@ template<typename T>
 class IEC_REF_TO {
 public:
     using value_type = T;
-    using pointer_type = IECVar<T>*;
+    /** What the reference points at: IECVar<T>, or T itself for a reference or pointer. */
+    using target_type = typename detail::ref_target<T>::type;
+    using pointer_type = target_type*;
 
 private:
     pointer_type ptr_;
@@ -158,7 +176,7 @@ public:
      * Dereference - throws NullReferenceException if NULL
      * Used by generated code for ^ operator and DREF() function
      */
-    IECVar<T>& deref() {
+    target_type& deref() {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
@@ -169,7 +187,7 @@ public:
         return *ptr_;
     }
 
-    const IECVar<T>& deref() const {
+    const target_type& deref() const {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException();
@@ -183,7 +201,7 @@ public:
     /**
      * Dereference with context for better error messages
      */
-    IECVar<T>& deref(const char* context) {
+    target_type& deref(const char* context) {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException(context);
@@ -194,7 +212,7 @@ public:
         return *ptr_;
     }
 
-    const IECVar<T>& deref(const char* context) const {
+    const target_type& deref(const char* context) const {
         if (ptr_ == nullptr) {
 #if STRUCPP_HAS_EXCEPTIONS
             throw NullReferenceException(context);
@@ -238,11 +256,11 @@ public:
     /**
      * Dereference operator (*) - same as deref()
      */
-    IECVar<T>& operator*() {
+    target_type& operator*() {
         return deref();
     }
 
-    const IECVar<T>& operator*() const {
+    const target_type& operator*() const {
         return deref();
     }
 
@@ -445,6 +463,14 @@ inline IEC_REF_TO<IEC_REF_TO<T>> REF(IEC_REF_TO<T>& ref) noexcept {
     return IEC_REF_TO<IEC_REF_TO<T>>(&ref);
 }
 
+/**
+ * REF() for a pointer variable: REF_TO POINTER TO T.
+ */
+template<typename T>
+inline IEC_REF_TO<IEC_Ptr<T>> REF(IEC_Ptr<T>& ptr) noexcept {
+    return IEC_REF_TO<IEC_Ptr<T>>(&ptr);
+}
+
 // Note: REF() for array elements and struct fields works automatically
 // because they return IECVar<T>& from operator[] and member access.
 
@@ -537,5 +563,114 @@ using REFERENCE_TO = IEC_REFERENCE_TO<T>;
  *   elem_ref = REF(arr[5]);  // arr[5] returns IECVar<INT_t>&
  *   elem_ref.deref().set(100);
  */
+
+/**
+ * A variable of an interface type: a reference to an instance of a function
+ * block that implements the interface, or 0 (unassigned). Assigning an FB
+ * instance stores a reference to it; calling a method dispatches virtually.
+ * Comparison with 0 tells whether it is assigned. Calling through an
+ * unassigned interface faults like a NULL reference.
+ */
+template<typename I>
+class IEC_INTERFACE {
+    I* ptr_ = nullptr;
+
+    void fault_if_null() const {
+        if (!ptr_) {
+#if STRUCPP_HAS_EXCEPTIONS
+            throw std::runtime_error("Interface reference is 0");
+#else
+            iec_runtime_fault(IecFault::NullReference);
+#endif
+        }
+    }
+
+public:
+    using interface_type = I;
+
+    IEC_INTERFACE() noexcept = default;
+    IEC_INTERFACE(std::nullptr_t) noexcept {}
+    IEC_INTERFACE(I& target) noexcept : ptr_(&target) {}
+    IEC_INTERFACE(const IEC_INTERFACE&) = default;
+    IEC_INTERFACE& operator=(const IEC_INTERFACE&) = default;
+
+    /** An interface variable of a derived interface converts to its base. */
+    template<typename J, std::enable_if_t<std::is_base_of<I, J>::value && !std::is_same<I, J>::value, int> = 0>
+    IEC_INTERFACE(const IEC_INTERFACE<J>& other) noexcept : ptr_(other.get()) {}
+
+    IEC_INTERFACE& operator=(I& target) noexcept {
+        ptr_ = &target;
+        return *this;
+    }
+    template<typename J, std::enable_if_t<std::is_base_of<I, J>::value && !std::is_same<I, J>::value, int> = 0>
+    IEC_INTERFACE& operator=(const IEC_INTERFACE<J>& other) noexcept {
+        ptr_ = other.get();
+        return *this;
+    }
+    IEC_INTERFACE& operator=(std::nullptr_t) noexcept {
+        ptr_ = nullptr;
+        return *this;
+    }
+    /** `itf := 0` */
+    template<typename N, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+    IEC_INTERFACE& operator=(N value) noexcept {
+        if (value == 0) ptr_ = nullptr;
+        return *this;
+    }
+
+    I* operator->() const {
+        fault_if_null();
+        return ptr_;
+    }
+    I& operator*() const {
+        fault_if_null();
+        return *ptr_;
+    }
+    I* get() const noexcept { return ptr_; }
+
+    template<typename N, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+    bool operator==(N value) const noexcept {
+        return value == 0 ? ptr_ == nullptr : false;
+    }
+    template<typename N, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+    bool operator!=(N value) const noexcept {
+        return !(*this == value);
+    }
+    bool operator==(std::nullptr_t) const noexcept { return ptr_ == nullptr; }
+    bool operator!=(std::nullptr_t) const noexcept { return ptr_ != nullptr; }
+};
+
+/** Interfaces that are the same or where one extends the other. */
+template<typename A, typename B>
+struct iec_interfaces_related
+    : std::integral_constant<bool, std::is_base_of<A, B>::value || std::is_base_of<B, A>::value> {};
+
+/** Identity of two interface references, in either operand order. */
+template<typename A, typename B, std::enable_if_t<iec_interfaces_related<A, B>::value, int> = 0>
+bool operator==(const IEC_INTERFACE<A>& a, const IEC_INTERFACE<B>& b) noexcept {
+    return a.get() == b.get();
+}
+template<typename A, typename B, std::enable_if_t<iec_interfaces_related<A, B>::value, int> = 0>
+bool operator!=(const IEC_INTERFACE<A>& a, const IEC_INTERFACE<B>& b) noexcept {
+    return !(a == b);
+}
+
+/** `0 = itf` and `0 <> itf`: the comparison with 0 in reversed operand order. */
+template<typename N, typename I, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+bool operator==(N value, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf == value;
+}
+template<typename N, typename I, std::enable_if_t<std::is_integral<N>::value, int> = 0>
+bool operator!=(N value, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf != value;
+}
+template<typename I>
+bool operator==(std::nullptr_t, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf == nullptr;
+}
+template<typename I>
+bool operator!=(std::nullptr_t, const IEC_INTERFACE<I>& itf) noexcept {
+    return itf != nullptr;
+}
 
 }  // namespace strucpp

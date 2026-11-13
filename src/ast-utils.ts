@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * AST Traversal Utilities
  *
@@ -93,6 +93,74 @@ export function isEnEnoArgument(arg: Argument): boolean {
  */
 export function stripEnEno(args: Argument[]): Argument[] {
   return args.filter((a) => !isEnEnoArgument(a));
+}
+
+/**
+ * The parameters (upper-cased names, in declaration order) a call's arguments fill, as the code generator binds
+ * them: each named argument its own parameter, then the positional ones the remaining parameters in order.
+ */
+export function suppliedParameters(
+  params: readonly string[],
+  args: readonly Argument[],
+): Set<string> {
+  const supplied = new Set<string>();
+  let positional = 0;
+  for (const arg of args) {
+    if (arg.name !== undefined) supplied.add(arg.name.toUpperCase());
+    else positional++;
+  }
+  for (const p of params) {
+    if (positional === 0) break;
+    if (supplied.has(p)) continue;
+    supplied.add(p);
+    positional--;
+  }
+  return supplied;
+}
+
+function isVariableExpression(node: ASTNode): node is VariableExpression {
+  return node.kind === "VariableExpression";
+}
+
+/** Upper-cased names an expression reads as plain variables: no subscript, field access or dereference. */
+export function bareVariableNames(expr: Expression): Set<string> {
+  const names = new Set<string>();
+  walkAST(expr, (node) => {
+    if (
+      isVariableExpression(node) &&
+      node.subscripts.length === 0 &&
+      node.fieldAccess.length === 0 &&
+      !node.isDereference
+    ) {
+      names.add(node.name.toUpperCase());
+    }
+  });
+  return names;
+}
+
+/**
+ * The members of a function block lineage (derived block first), upper-cased: its constants with their declarations,
+ * and the names of its other variables. A name declared again further up the lineage keeps its first declaration.
+ */
+export function lineageMembers(lineage: readonly FunctionBlockDeclaration[]): {
+  constants: Map<string, VarDeclaration>;
+  variables: Set<string>;
+} {
+  const constants = new Map<string, VarDeclaration>();
+  const variables = new Set<string>();
+  for (const fb of lineage) {
+    for (const block of fb.varBlocks) {
+      for (const decl of block.declarations) {
+        for (const name of decl.names) {
+          const upper = name.toUpperCase();
+          if (constants.has(upper) || variables.has(upper)) continue;
+          if (block.isConstant) constants.set(upper, decl);
+          else variables.add(upper);
+        }
+      }
+    }
+  }
+  return { constants, variables };
 }
 
 /**

@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * Semantic Tokens Provider (Phase 4.3)
  *
@@ -358,6 +358,7 @@ function buildVarBlockMap(
     for (const method of fb.methods) indexBlocks(method.varBlocks);
   }
   for (const iface of ast.interfaces ?? []) {
+    if (iface.library !== undefined) continue;
     for (const method of iface.methods) indexBlocks(method.varBlocks);
   }
   if (ast.globalVarBlocks) indexBlocks(ast.globalVarBlocks);

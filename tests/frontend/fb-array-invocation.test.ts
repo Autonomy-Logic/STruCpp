@@ -183,12 +183,9 @@ describe("function block array element invocation — no effect on other stateme
     expect(call.instance).toBeUndefined();
   });
 
-  it("leaves a method call on an array element unparsed (pre-existing gap)", () => {
-    // `cs[0].Bump()` is a *method* call on an element, which the expression
-    // grammar still doesn't accept — `isMethodCallAhead` wants `ident . ident (`
-    // and this is `ident [ … ] . ident (`. Unchanged by the element-invocation
-    // rule, whose gate only fires when `(` follows `]` directly. Recorded here
-    // so the day it starts parsing is a deliberate change, not a surprise.
+  it("parses a method call on an array element", () => {
+    // `cs[0].Bump()` is a method call on an element: the member-method-call
+    // rule (`ident [ … ] . ident (`) accepts it in expressions and statements.
     const { errors } = parse(
       uppercaseSource(`
       FUNCTION_BLOCK Counter
@@ -204,6 +201,6 @@ describe("function block array element invocation — no effect on other stateme
       END_PROGRAM
     `),
     );
-    expect(errors.length).toBeGreaterThan(0);
+    expect(errors).toEqual([]);
   });
 });

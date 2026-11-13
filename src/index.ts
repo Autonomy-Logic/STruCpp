@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * STruC++ - IEC 61131-3 Structured Text to C++ Compiler
  *
@@ -12,10 +12,13 @@ import {
   CompileResult,
   CompileError,
   AnalysisResult,
+  SourceSpan,
 } from "./types.js";
 import { parse as parseSource } from "./frontend/parser.js";
 import { suggestionForParseError } from "./frontend/parser-error-message-provider.js";
 import { buildAST } from "./frontend/ast-builder.js";
+import type { IToken } from "chevrotain";
+import { attachAttributes } from "./frontend/attributes.js";
 import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
@@ -35,8 +38,12 @@ import type {
   ASTNode,
 } from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
+import { lowerInlineTypes } from "./frontend/lower-inline-types.js";
 import { walkAST } from "./ast-utils.js";
-import { registerLibrarySymbols } from "./library/library-loader.js";
+import {
+  libraryInterfaceDeclarations,
+  registerLibrarySymbols,
+} from "./library/library-loader.js";
 import type { StlibArchive } from "./library/library-manifest.js";
 import { annotateErrorsWithPouContext } from "./diagnostic-pou-context.js";
 
@@ -134,7 +141,9 @@ function collectUsedSymbols(
 
   // Seed the reachable set from names the user AST references.
   const referencedNames = new Set<string>();
-  walkAST(ast, (node: ASTNode): void => {
+  const ownInterfaces = ast.interfaces.filter((i) => i.library === undefined);
+  const ownUnit: CompilationUnit = { ...ast, interfaces: ownInterfaces };
+  walkAST(ownUnit, (node: ASTNode): void => {
     switch (node.kind) {
       case "FunctionCallExpression": {
         const fc = node as FunctionCallExpression;
@@ -245,6 +254,49 @@ function collectUsedSymbols(
 // ---------------------------------------------------------------------------
 // Shared pipeline
 // ---------------------------------------------------------------------------
+
+/** Names a unit's namespace cannot take: C++ keywords and alternative tokens, and `std`. */
+const RESERVED_NAMESPACES = new Set(
+  (
+    "alignas alignof and and_eq asm auto bitand bitor bool break case catch char char8_t char16_t char32_t class " +
+    "compl concept const consteval constexpr constinit const_cast continue co_await co_return co_yield decltype " +
+    "default delete do double dynamic_cast else enum explicit export extern false float for friend goto if inline " +
+    "int long mutable namespace new noexcept not not_eq nullptr operator or or_eq private protected public register " +
+    "reinterpret_cast requires return short signed sizeof static static_assert static_cast struct switch template " +
+    "this thread_local throw true try typedef typeid typename union unsigned using virtual void volatile wchar_t " +
+    "while xor xor_eq std"
+  ).split(" "),
+);
+
+/** A unit-level name a library INTERFACE must not reuse. */
+interface DeclaredName {
+  kind: "TYPE" | "FUNCTION_BLOCK" | "INTERFACE";
+  name: string;
+  library?: string;
+  sourceSpan: SourceSpan;
+}
+
+/** A warning for each attribute pragma that is not `{attribute 'name' [:= 'value']}`, so a typo is not silent. */
+function warnUnreadablePragmas(
+  pragmas: readonly IToken[],
+  source: string,
+  file: string,
+  warnings: CompileError[],
+): void {
+  for (const p of pragmas) {
+    const text = source.slice(
+      p.startOffset,
+      (p.endOffset ?? p.startOffset) + 1,
+    );
+    warnings.push({
+      message: `Attribute pragma ${text.replace(/\s+/g, " ")} is ignored: write it as {attribute 'name'} or {attribute 'name' := 'value'}.`,
+      line: p.startLine ?? 0,
+      column: p.startColumn ?? 0,
+      severity: "warning",
+      file,
+    });
+  }
+}
 
 interface PipelineResult {
   ast: CompilationUnit | undefined;
@@ -382,6 +434,12 @@ function runPipeline(
       mergedOptions.fileName ?? "main.st",
       globalConstants,
     );
+    warnUnreadablePragmas(
+      attachAttributes(primaryAst, parseResult.pragmas, parseResult.tokens),
+      effectiveSource,
+      mergedOptions.fileName ?? "main.st",
+      warnings,
+    );
     const units: CompilationUnit[] = [primaryAst];
 
     // Parse additional source files. Each gets the same Phase 0
@@ -438,13 +496,22 @@ function runPipeline(
         }
         if (addlParseResult.cst) {
           try {
-            units.push(
-              buildAST(
-                addlParseResult.cst,
-                addlSource.fileName,
-                globalConstants,
-              ),
+            const addlAst = buildAST(
+              addlParseResult.cst,
+              addlSource.fileName,
+              globalConstants,
             );
+            warnUnreadablePragmas(
+              attachAttributes(
+                addlAst,
+                addlParseResult.pragmas,
+                addlParseResult.tokens,
+              ),
+              effectiveAddlSource,
+              addlSource.fileName,
+              warnings,
+            );
+            units.push(addlAst);
           } catch (e) {
             errors.push({
               message: `AST build failed for ${addlSource.fileName}: ${e instanceof Error ? e.message : String(e)}`,
@@ -471,6 +538,19 @@ function runPipeline(
     }
 
     ast = mergeCompilationUnits(units);
+    const loweringErrors = lowerInlineTypes(ast);
+    errors.push(...loweringErrors);
+    if (!continueOnError && loweringErrors.length > 0) {
+      return {
+        ast,
+        projectModel,
+        symbolTables,
+        errors,
+        warnings,
+        allArchives,
+        mergedOptions,
+      };
+    }
   } catch (e) {
     errors.push({
       message: `AST building failed: ${e instanceof Error ? e.message : String(e)}`,
@@ -509,6 +589,19 @@ function runPipeline(
   try {
     const projectModelResult = buildProjectModel(ast);
     projectModel = projectModelResult.model;
+    const ns = mergedOptions.namespace;
+    if (ns !== undefined) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(ns) && !RESERVED_NAMESPACES.has(ns)) {
+        projectModel.config = { name: ns, namespace: ns, libraries: [] };
+      } else {
+        errors.push({
+          message: `Namespace '${ns}' is not a C++ identifier, or is reserved (a C++ keyword or 'std').`,
+          line: 0,
+          column: 0,
+          severity: "error",
+        });
+      }
+    }
     for (const err of projectModelResult.errors) {
       errors.push({
         message: err.message,
@@ -597,6 +690,46 @@ function runPipeline(
     semanticSymbolTables = new SymbolTables();
     for (const archive of allArchives) {
       registerLibrarySymbols(archive.manifest, semanticSymbolTables);
+    }
+    const declared = new Map<string, DeclaredName>();
+    const declare = (entry: DeclaredName): void => {
+      declared.set(entry.name.toUpperCase(), entry);
+    };
+    for (const t of ast.types)
+      declare({ kind: "TYPE", name: t.name, sourceSpan: t.sourceSpan });
+    for (const fb of ast.functionBlocks)
+      declare({
+        kind: "FUNCTION_BLOCK",
+        name: fb.name,
+        sourceSpan: fb.sourceSpan,
+      });
+    for (const i of ast.interfaces)
+      declare({ kind: "INTERFACE", name: i.name, sourceSpan: i.sourceSpan });
+    for (const archive of allArchives) {
+      for (const iface of libraryInterfaceDeclarations(archive.manifest)) {
+        const clash = declared.get(iface.name.toUpperCase());
+        if (clash === undefined) {
+          declare({
+            kind: "INTERFACE",
+            name: iface.name,
+            library: archive.manifest.name,
+            sourceSpan: iface.sourceSpan,
+          });
+          ast.interfaces.push(iface);
+          continue;
+        }
+        const other =
+          clash.library === undefined
+            ? "this program"
+            : `library '${clash.library}'`;
+        errors.push({
+          message: `INTERFACE '${iface.name}' of library '${archive.manifest.name}' clashes with ${clash.kind} '${clash.name}' of ${other}; rename one of them.`,
+          line: clash.sourceSpan.startLine,
+          column: clash.sourceSpan.startCol,
+          severity: "error",
+          file: clash.sourceSpan.file,
+        });
+      }
     }
   }
 
@@ -726,9 +859,26 @@ export function compile(
   }
 
   // Phase 6: Generate C++ code
-  // Collect library headers for #include directives
+  // Function-level tree-shake: figure out which library chunks the
+  // user's AST actually reaches (transitively through chunk dep
+  // edges), then hand the reachable subset of each archive to the
+  // codegen for emission. Test builds bypass the shake — the test
+  // harness may reference symbols not present in the source AST.
+  const isTestBuild = pipeline.mergedOptions.isTestBuild ?? false;
+  const reachableByArchive = collectUsedSymbols(
+    pipeline.ast,
+    pipeline.allArchives,
+    isTestBuild,
+  );
+
+  // Collect library headers for #include directives: those of a library whose code the unit uses, and those of a
+  // library without chunks, whose code is in the headers themselves.
   const libraryHeaders: string[] = [];
   for (const archive of pipeline.allArchives) {
+    const used =
+      (archive.chunks ?? []).length === 0 ||
+      (reachableByArchive.get(archive.manifest.name)?.size ?? 0) > 0;
+    if (!used) continue;
     for (const header of archive.manifest.headers) {
       if (!libraryHeaders.includes(header)) {
         libraryHeaders.push(header);
@@ -749,6 +899,9 @@ export function compile(
     pouIncludes: pipeline.mergedOptions.pouIncludes ?? [],
     isTestBuild: pipeline.mergedOptions.isTestBuild ?? false,
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
+    ...(pipeline.mergedOptions.separateLibraryFiles === true
+      ? { separateLibraryFiles: true }
+      : {}),
     ...(pipeline.mergedOptions.emitChunkMarkers
       ? { emitChunkMarkers: true }
       : {}),
@@ -757,18 +910,6 @@ export function compile(
 
   // Register all library metadata (FB types, field mappings, enum/struct types)
   codegen.registerLibraryArchives(pipeline.allArchives);
-
-  // Function-level tree-shake: figure out which library chunks the
-  // user's AST actually reaches (transitively through chunk dep
-  // edges), then hand the reachable subset of each archive to the
-  // codegen for emission. Test builds bypass the shake — the test
-  // harness may reference symbols not present in the source AST.
-  const isTestBuild = pipeline.mergedOptions.isTestBuild ?? false;
-  const reachableByArchive = collectUsedSymbols(
-    pipeline.ast,
-    pipeline.allArchives,
-    isTestBuild,
-  );
 
   for (const archive of pipeline.allArchives) {
     const reachable = reachableByArchive.get(archive.manifest.name);
@@ -844,6 +985,9 @@ export function compile(
     cppFiles: codeResult.cppFiles,
     cppCode: codeResult.cppCode,
     headerCode: codeResult.headerCode,
+    ...(codeResult.libraryHeader !== undefined
+      ? { libraryHeader: codeResult.libraryHeader }
+      : {}),
     lineMap: codeResult.lineMap,
     headerLineMap: codeResult.headerLineMap,
     errors: pipeline.errors,
@@ -888,10 +1032,18 @@ export function analyze(
  * Parse ST source code and return the AST without code generation.
  * Useful for syntax checking and IDE integration.
  *
+ * With `recover`, source with syntax errors still yields the AST the parser recovered, together with the errors, so
+ * an editor can keep working on the declarations around the code being typed. Without it, any syntax error means no
+ * AST.
+ *
  * @param source - The ST source code to parse
- * @returns The parsed AST or parse errors
+ * @param options - `recover`: return a partial AST alongside syntax errors
+ * @returns The parsed AST and/or the errors
  */
-export function parse(source: string): {
+export function parse(
+  source: string,
+  options: { recover?: boolean } = {},
+): {
   ast?: CompilationUnit;
   errors: CompileError[];
 } {
@@ -913,7 +1065,7 @@ export function parse(source: string): {
         severity: "error",
       });
     }
-    return { errors };
+    if (options.recover !== true) return { errors };
   }
 
   // Build AST from CST
@@ -928,6 +1080,7 @@ export function parse(source: string): {
   }
   try {
     const ast = buildAST(parseResult.cst);
+    attachAttributes(ast, parseResult.pragmas, parseResult.tokens);
     return { ast, errors };
   } catch (e) {
     errors.push({

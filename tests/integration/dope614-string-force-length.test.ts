@@ -26,7 +26,12 @@ import * as path from "path";
 import * as os from "os";
 import { execSync } from "child_process";
 import { compile } from "../../src/index.js";
-import { hasGpp, RUNTIME_INCLUDE_PATH, cxxEnv, CXX_STD } from "./test-helpers.js";
+import {
+  hasGpp,
+  RUNTIME_INCLUDE_PATH,
+  cxxEnv,
+  CXX_STD,
+} from "./test-helpers.js";
 
 const describeIfGpp = hasGpp ? describe : describe.skip;
 
@@ -309,6 +314,79 @@ END_PROGRAM${CFG}`;
   expect_str("write lands", g_config.INSTANCE0.S.get().c_str(), "QQ");
 `,
       "string_unforce",
+    );
+    expect(out).toBe("ALL_OK");
+  });
+  it("reads, writes, forces and points at a STRING(n) and a WSTRING(n) other than 254", () => {
+    const source = `PROGRAM Main
+VAR s20 : STRING(20) := 'hello'; w10 : WSTRING(10) := "hi"; after : DINT := 42; END_VAR
+END_PROGRAM${CFG}`;
+    const result = compile(source, { headerFileName: "generated.hpp" });
+    expect(result.warnings.map((w) => w.message).join("\n")).not.toContain(
+      "addresses strings",
+    );
+    const s = leafIndex(result, "INSTANCE0.S20");
+    const w = leafIndex(result, "INSTANCE0.W10");
+    const out = runDriver(
+      source,
+      `
+  unsigned char buf[DEBUG_WSTRING_WIDTH] = {0};
+  expect_eq("read width", (int)handle_read(${s}, buf), (int)DEBUG_STRING_WIDTH);
+  expect_eq("read length", buf[0], 5);
+  expect_eq("read char", buf[1], 'h');
+
+  unsigned char text[4] = { 3, 'a', 'b', 'c' };
+  expect_eq("write", handle_write(${s}, text, 4), STATUS_OK);
+  expect_str("written", g_config.INSTANCE0.S20.get().c_str(), "abc");
+
+  unsigned char forced[3] = { 2, 'F', 'X' };
+  expect_eq("force", handle_set(${s}, true, forced, 3), STATUS_OK);
+  expect_str("forced", g_config.INSTANCE0.S20.get().c_str(), "FX");
+  expect_eq("unforce", handle_set(${s}, false, nullptr, 0), STATUS_OK);
+
+  uint16_t len = 0;
+  const char* p = static_cast<const char*>(handle_ptr(${s}, &len));
+  expect_eq("ptr len", len, 3);
+  expect_eq("ptr char", p ? p[0] : 0, 'a');
+
+  expect_eq("wread width", (int)handle_read(${w}, buf), (int)DEBUG_WSTRING_WIDTH);
+  expect_eq("wread length", buf[0], 2);
+  expect_eq("wread unit", buf[1], 'h');
+  unsigned char wide[5] = { 2, 'O', 0, 'K', 0 };
+  expect_eq("wforce", handle_set(${w}, true, wide, 5), STATUS_OK);
+  expect_eq("wforced length", (int)g_config.INSTANCE0.W10.get().length(), 2);
+
+  unsigned char too_long[200] = { 200 };
+  expect_eq("over cap", handle_set(${s}, true, too_long, 200), STATUS_DATA_TOO_LARGE);
+  expect_eq("neighbour untouched", (int)g_config.INSTANCE0.AFTER.get(), 42);
+`,
+      "string_capacity",
+    );
+    expect(out).toBe("ALL_OK");
+  });
+  it("addresses each STRING(n) element of an array with its own capacity", () => {
+    const source = `TYPE Names : ARRAY[0..1] OF STRING(8); END_TYPE
+PROGRAM Main
+VAR arr : ARRAY[0..2] OF STRING(10) := ['a', 'b', 'c']; list : Names; after : DINT := 42; END_VAR
+END_PROGRAM${CFG}`;
+    const result = compile(source, { headerFileName: "generated.hpp" });
+    expect(result.debugTableCpp).toContain("TAG_STRING_REF");
+    expect(result.debugTableCpp).not.toMatch(/ARR\[0\], TAG_STRING,/);
+    const a0 = leafIndex(result, "INSTANCE0.ARR[0]");
+    const n1 = leafIndex(result, "INSTANCE0.LIST[1]");
+    const out = runDriver(
+      source,
+      `
+  unsigned char big[101] = { 100 };
+  for (int i = 1; i <= 100; ++i) big[i] = 'x';
+  expect_eq("write arr[0]", handle_write(${a0}, big, 101), STATUS_OK);
+  expect_eq("arr[0] capped", (int)g_config.INSTANCE0.ARR[0].get().length(), 10);
+  expect_str("arr[1] intact", g_config.INSTANCE0.ARR[1].get().c_str(), "b");
+  expect_eq("write list[1]", handle_write(${n1}, big, 101), STATUS_OK);
+  expect_eq("list[1] capped", (int)g_config.INSTANCE0.LIST[1].get().length(), 8);
+  expect_eq("after intact", (int)g_config.INSTANCE0.AFTER.get(), 42);
+`,
+      "string_array_capacity",
     );
     expect(out).toBe("ALL_OK");
   });

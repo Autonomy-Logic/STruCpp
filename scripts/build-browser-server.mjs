@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * Build the browser-target language server bundle and copy it into
  * `dist/browser-server.js` so it ships in the strucpp npm tarball.

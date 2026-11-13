@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * STruC++ Lexer
  *
@@ -7,7 +7,7 @@
  * This module defines all tokens used by the ST grammar.
  */
 
-import { createToken, Lexer } from "chevrotain";
+import { createToken, Lexer, type TokenType } from "chevrotain";
 
 // =============================================================================
 // Token Categories
@@ -138,6 +138,53 @@ export const ExternalPragma = createToken({
   name: "ExternalPragma",
   pattern: matchExternalPragma,
   line_breaks: true, // Content can span multiple lines
+});
+
+/**
+ * Custom pattern matcher for CODESYS attribute pragmas: {attribute 'name'} and
+ * {attribute 'name' := 'value'}. Quoted text may contain braces.
+ */
+function matchAttributePragma(
+  text: string,
+  startOffset: number,
+): RegExpExecArray | null {
+  if (text.charAt(startOffset) !== "{") return null;
+  let i = startOffset + 1;
+  while (i < text.length && /\s/.test(text.charAt(i))) i++;
+  const keyword = "attribute";
+  if (text.substring(i, i + keyword.length).toLowerCase() !== keyword) {
+    return null;
+  }
+  i += keyword.length;
+  const after = text.charAt(i);
+  if (after !== "" && !/[\s']/.test(after)) return null;
+  while (i < text.length) {
+    const ch = text.charAt(i);
+    if (ch === "'" || ch === '"') {
+      i++;
+      while (i < text.length && text.charAt(i) !== ch) i++;
+      i++;
+      continue;
+    }
+    if (ch === "}") {
+      return createMatchResult(text.substring(startOffset, i + 1), startOffset);
+    }
+    if (ch === "{") return null;
+    i++;
+  }
+  return null;
+}
+
+/**
+ * CODESYS attribute pragma token: {attribute 'name' [:= 'value']}.
+ * Kept out of the parser's token stream (group "pragmas"); callers that need
+ * the attributes read them from the lexer result's `groups.pragmas`.
+ */
+export const AttributePragma = createToken({
+  name: "AttributePragma",
+  pattern: matchAttributePragma,
+  line_breaks: true,
+  group: "pragmas",
 });
 
 // =============================================================================
@@ -493,6 +540,11 @@ export const PROTECTED = createToken({
   name: "PROTECTED",
   pattern: /PROTECTED/i,
 });
+/** CODESYS access specifier; contextual, so it stays usable as an identifier. */
+export const INTERNAL = createToken({
+  name: "INTERNAL",
+  pattern: /INTERNAL/i,
+});
 export const VAR_INST = createToken({
   name: "VAR_INST",
   pattern: /VAR_INST/i,
@@ -537,6 +589,15 @@ export const TypedLiteral = createToken({
   name: "TypedLiteral",
   pattern:
     /(?:BYTE|WORD|DWORD|LWORD|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BOOL|REAL|LREAL)#(?:16#[0-9A-Fa-f_]+|8#[0-7_]+|2#[01_]+|[0-9][0-9_]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/i,
+});
+
+// Typed enumeration literal: E_State#Idle (IEC 61131-3 type-qualified enum
+// value). After TypedLiteral, so BYTE#255 and the other numeric forms keep
+// their token; also takes BOOL#TRUE / BOOL#FALSE, which the builder reads as
+// boolean literals.
+export const EnumLiteral = createToken({
+  name: "EnumLiteral",
+  pattern: /[A-Za-z_][A-Za-z0-9_]*#[A-Za-z_][A-Za-z0-9_]*/,
 });
 
 // Real number literal: 3.14, 1.0e-10
@@ -743,7 +804,28 @@ const keywordTokens = [
   PUBLIC,
   PRIVATE,
   PROTECTED,
+  INTERNAL,
   VAR_INST,
+];
+
+/**
+ * Keywords that are also valid identifiers (variable, member and function
+ * names). The parser's identifierOrKeyword rule and the AST builder both
+ * derive from this list.
+ */
+export const contextualKeywordTokens: TokenType[] = [
+  SET,
+  GET,
+  ON,
+  OVERRIDE,
+  ABSTRACT,
+  FINAL,
+  INTERNAL,
+  AND,
+  OR,
+  XOR,
+  NOT,
+  MOD,
 ];
 
 // Set longer_alt for all keywords
@@ -766,6 +848,7 @@ export const allTokens = [
 
   // External code pragma
   ExternalPragma,
+  AttributePragma,
 
   // Multi-character operators (before single-character)
   DoubleDot,
@@ -783,6 +866,7 @@ export const allTokens = [
   DateLiteral,
   TimeOfDayLiteral,
   TypedLiteral,
+  EnumLiteral,
 
   // Keywords (before Identifier)
   END_PROGRAM,
@@ -872,6 +956,7 @@ export const allTokens = [
   PUBLIC,
   PRIVATE,
   PROTECTED,
+  INTERNAL,
 
   // Literals
   RealLiteral,

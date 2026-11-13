@@ -75,7 +75,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
     it("should generate interface as abstract class with pure virtual methods", () => {
       const result = compileAndCheck(`
         INTERFACE IMovable
-          METHOD Move
+          METHOD Drive
             VAR_INPUT distance : REAL; END_VAR
           END_METHOD
           METHOD Stop
@@ -88,7 +88,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       expect(result.headerCode).toContain("class IMOVABLE {");
       expect(result.headerCode).toContain("virtual ~IMOVABLE() = default;");
       expect(result.headerCode).toContain(
-        "virtual void MOVE(IEC_REAL DISTANCE) = 0;",
+        "virtual void DRIVE(IEC_REAL DISTANCE) = 0;",
       );
       expect(result.headerCode).toContain("virtual void STOP() = 0;");
     });
@@ -242,13 +242,13 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
     it("should generate inheritance with base class first, then interfaces", () => {
       const result = compileAndCheck(`
         INTERFACE IMovable
-          METHOD Move END_METHOD
+          METHOD Drive END_METHOD
         END_INTERFACE
         FUNCTION_BLOCK Base
           VAR x : INT; END_VAR
         END_FUNCTION_BLOCK
         FUNCTION_BLOCK SmartMotor EXTENDS Base IMPLEMENTS IMovable
-          METHOD PUBLIC Move
+          METHOD PUBLIC Drive
           END_METHOD
         END_FUNCTION_BLOCK
         PROGRAM Main END_PROGRAM
@@ -427,13 +427,13 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
       `);
 
       // Header: getter and setter declarations
-      expect(result.headerCode).toContain("virtual IEC_INT get_SPEED() const;");
+      expect(result.headerCode).toContain("virtual IEC_INT get_SPEED();");
       expect(result.headerCode).toContain(
         "virtual void set_SPEED(IEC_INT SPEED);",
       );
 
       // Implementation: getter body
-      expect(result.cppCode).toContain("IEC_INT MOTOR::get_SPEED() const {");
+      expect(result.cppCode).toContain("IEC_INT MOTOR::get_SPEED() {");
       expect(result.cppCode).toContain("SPEED_result = _SPEED;");
       expect(result.cppCode).toContain("return SPEED_result;");
 
@@ -457,7 +457,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
         PROGRAM Main END_PROGRAM
       `);
 
-      expect(result.headerCode).toContain("virtual IEC_INT get_COUNT() const;");
+      expect(result.headerCode).toContain("virtual IEC_INT get_COUNT();");
       // No setter should be generated
       expect(result.headerCode).not.toContain("set_COUNT");
     });
@@ -862,9 +862,9 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
     it("should generate method call with arguments in assignment", () => {
       const result = compileAndCheck(`
         FUNCTION_BLOCK Calculator
-          METHOD PUBLIC Add : INT
+          METHOD PUBLIC Sum : INT
             VAR_INPUT a, b : INT; END_VAR
-            Add := a + b;
+            Sum := a + b;
           END_METHOD
         END_FUNCTION_BLOCK
         PROGRAM Main
@@ -872,11 +872,11 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
             calc : Calculator;
             result : INT;
           END_VAR
-          result := calc.Add(3, 7);
+          result := calc.Sum(3, 7);
         END_PROGRAM
       `);
 
-      expect(result.cppCode).toContain("CALC.ADD(3, 7)");
+      expect(result.cppCode).toContain("CALC.SUM(3, 7)");
     });
 
     it("should generate method call on instance within method body", () => {
@@ -972,7 +972,7 @@ describe("Codegen - OOP Features (Phase 5.2)", () => {
 
       // Property
       expect(result.headerCode).toContain(
-        "virtual IEC_REAL get_VALUE() const;",
+        "virtual IEC_REAL get_VALUE();",
       );
 
       // VAR_INST mangled

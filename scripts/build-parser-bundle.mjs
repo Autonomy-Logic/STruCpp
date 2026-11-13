@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * Bundle the compiler front end into a single self-contained CommonJS file at
  * `dist/parser-bundle.cjs`, so it ships in the strucpp npm tarball.

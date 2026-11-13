@@ -1,53 +1,34 @@
-(* Additional Function Blocks: RTC                                       *)
-(* Source ported verbatim from MatIEC's lib/rtc.txt with one substitution: *)
-(* the MatIEC pragma `{__SET_VAR(data__->,CURRENT_TIME,,__CURRENT_TIME)}`  *)
-(* read MatIEC's `__CURRENT_TIME` global, which serves the same purpose as *)
-(* STruC++'s TIME() — monotonic scan-cycle time, hardware agnostic. We     *)
-(* substitute TO_DT(TIME()) so the same int64 tick value lands in a DT-    *)
-(* typed local. STruC++ requires an explicit conversion where MatIEC's     *)
-(* pragma did a raw bit-copy; behaviour is otherwise identical.            *)
-(*                                                                        *)
-(* Original MatIEC documentation:                                          *)
-(*                                                                        *)
-(*   RTC - Real-time clock                                                *)
-(*                                                                        *)
-(*   Q is a copy of IN.                                                    *)
-(*                                                                        *)
-(*   When IN = FALSE, CDT is the current "tick" time exposed by the       *)
-(*   runtime as a DT.                                                      *)
-(*                                                                        *)
-(*   When IN changes from FALSE to TRUE, PDT is stored. As long as IN is   *)
-(*   TRUE, CDT is equal to PDT + the amount of time since PDT was loaded. *)
+(* SPDX-License-Identifier: GPL-3.0-only WITH STruCpp-runtime-exception *)
+(* Copyright (c) 2026 Autonomy® *)
+(* Additional Function Blocks: RTC (real time clock)                      *)
+(* First scan: CDT starts from CURRENT_DT() (1970 + uptime on targets     *)
+(* without a system date). SET = TRUE: CDT = PDT. SET = FALSE: CDT counts *)
+(* on from the last start value. Q copies SET.                            *)
 
 FUNCTION_BLOCK RTC
   VAR_INPUT
-    IN  : BOOL ;                  (* 0 - current time, 1 - load time from PDT *)
-    PDT : DT ;                    (* Preset datetime *)
+    SET : BOOL ;
+    PDT : DT ;
   END_VAR
   VAR_OUTPUT
-    Q   : BOOL := FALSE ;         (* Copy of IN *)
-    CDT : DT ;                    (* Datetime, current or relative to PDT *)
+    Q   : BOOL := FALSE ;
+    CDT : DT ;
   END_VAR
-
   VAR
-    PREV_IN      : BOOL := FALSE ;
-    OFFSET       : TIME ;
-    CURRENT_TIME : DT ;
+    started  : BOOL := FALSE ;
+    preset   : DT ;
+    set_time : TIME ;
   END_VAR
 
-  CURRENT_TIME := TO_DT(TIME()) ;
-
-  IF IN THEN
-    IF NOT PREV_IN THEN
-      OFFSET := PDT - CURRENT_TIME ;
-    END_IF ;
-
-    (* PDT + time since PDT was loaded *)
-    CDT := CURRENT_TIME + OFFSET ;
-  ELSE
-    CDT := CURRENT_TIME ;
+  IF SET THEN
+    preset := PDT ;
+    set_time := TIME() ;
+    started := TRUE ;
+  ELSIF NOT started THEN
+    preset := CURRENT_DT() ;
+    set_time := TIME() ;
+    started := TRUE ;
   END_IF ;
-
-  Q := IN ;
-  PREV_IN := IN ;
+  CDT := preset + (TIME() - set_time) ;
+  Q := SET ;
 END_FUNCTION_BLOCK

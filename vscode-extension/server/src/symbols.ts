@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * Document Symbols Provider
  *
@@ -58,6 +58,7 @@ export function getDocumentSymbols(
     if (inFile(fb.sourceSpan)) symbols.push(buildFBSymbol(fb));
   }
   for (const iface of ast.interfaces) {
+    if (iface.library !== undefined) continue;
     if (inFile(iface.sourceSpan)) symbols.push(buildInterfaceSymbol(iface));
   }
   for (const type of ast.types) {

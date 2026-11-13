@@ -1,11 +1,13 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * STruC++ Library Manifest Types
  *
  * Defines the JSON manifest format for external libraries.
  * Libraries can be either built-in C++ libraries or compiled ST libraries.
  */
+
+import type { ReferenceKind } from "../frontend/ast.js";
 
 /**
  * Library function entry in a manifest.
@@ -23,6 +25,10 @@
 export interface LibraryFunctionEntry {
   /** Function name */
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Return type name (concrete IEC type or generic — see above) */
   returnType: string;
   /** Parameter list */
@@ -39,6 +45,10 @@ export interface LibraryFunctionEntry {
      *  initial values in the source ST — including ST produced by the CODESYS
      *  v2/v3 importers, which preserve declarations verbatim. */
     initialValue?: string;
+    /** CODESYS attribute pragmas written before the parameter. */
+    attributes?: LibraryAttribute[];
+    /** The name as written, when it differs from `name`. */
+    displayName?: string;
   }>;
   /** Variadic call shape. When set, `parameters` describes the leading
    *  required parameters and the function accepts any number of
@@ -76,18 +86,25 @@ export interface LibraryVarType {
   arrayDimensions?: Array<{ start: number; end: number }>;
   /** Element type name for inline array types */
   elementTypeName?: string;
-  /** Reference/pointer qualifier ("pointer_to" | "reference_to") */
-  referenceKind?: string;
+  /** Element length of an inline ARRAY OF STRING[n] / WSTRING[n] */
+  elementMaxLength?: number | string;
+  /** Length of a STRING[n] / WSTRING[n] (a number, or the name of a constant) */
+  maxLength?: number | string;
+  /** Element reference levels for an inline array of pointers or references */
+  elementReferenceChain?: ReferenceKind[];
+  /** Reference/pointer qualifier ("pointer_to" | "ref_to" | "reference_to") */
+  referenceKind?: ReferenceKind;
+  /** Every reference level, outermost first, when there is more than one */
+  referenceChain?: ReferenceKind[];
   /**
    * The C++ member name, when it differs from `name`.
    *
    * Emitted only when the library's own codegen mangled it — a member whose
    * name matches its own user-defined type's name, or one colliding with a
-   * method of an interface the block implements (see member-mangling.ts).
-   * Both are decided against the DECLARING unit, so a consumer cannot always
-   * re-derive them; carrying the answer costs one optional string in the rare
-   * case and nothing in the common one. Across the five bundled archives —
-   * 224 function blocks, 7,639 leaves — it is currently emitted zero times.
+   * method of the block's class hierarchy (see member-mangling.ts). Both are
+   * decided against the DECLARING unit, so a consumer cannot always re-derive
+   * them; carrying the answer costs one optional string in the rare case and
+   * nothing in the common one.
    */
   cppName?: string;
   /** The declaring block was `VAR CONSTANT`: read-only in every instance. */
@@ -95,6 +112,79 @@ export interface LibraryVarType {
   /** The declaring block was `VAR RETAIN`: retained in every instance, whether
    *  or not the instance itself was declared RETAIN. */
   retain?: true;
+  /** CODESYS attribute pragmas written before the variable's declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
+  /** Initial value as written in the declaration (ST text). */
+  initialValue?: string;
+}
+
+/** A CODESYS attribute pragma, `{attribute 'name' [:= 'value']}`. */
+export interface LibraryAttribute {
+  name: string;
+  value?: string;
+}
+
+/** A type as the manifest records it: a {@link LibraryVarType} without the member-only fields. */
+export type LibraryTypeRef = Omit<
+  LibraryVarType,
+  | "name"
+  | "cppName"
+  | "readOnly"
+  | "retain"
+  | "attributes"
+  | "displayName"
+  | "initialValue"
+>;
+
+export type LibraryVisibility = "PUBLIC" | "PRIVATE" | "PROTECTED" | "INTERNAL";
+
+/**
+ * A method of an exported function block or interface: what a consumer needs to call it, override it and check
+ * access to it. Interface methods are PUBLIC and abstract.
+ */
+export interface LibraryMethodEntry {
+  name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
+  visibility: LibraryVisibility;
+  returnType?: LibraryTypeRef;
+  isAbstract?: true;
+  isFinal?: true;
+  isOverride?: true;
+  inputs: LibraryVarType[];
+  outputs: LibraryVarType[];
+  inouts: LibraryVarType[];
+}
+
+/** A property of an exported function block or interface, with the accessors it has. */
+export interface LibraryPropertyEntry {
+  name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
+  type: LibraryTypeRef;
+  visibility: LibraryVisibility;
+  getter?: true;
+  setter?: true;
+}
+
+/** An exported interface. */
+export interface LibraryInterfaceEntry {
+  name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
+  extends?: string[];
+  methods: LibraryMethodEntry[];
+  properties: LibraryPropertyEntry[];
+  /** Folder path within the library — see `LibraryFunctionEntry.category`. */
+  category?: string;
 }
 
 /**
@@ -123,6 +213,10 @@ export interface LibraryFBEntry {
    * case-insensitive guess would be wrong on a case-sensitive filesystem.
    */
   sourceFile?: string;
+  /** CODESYS attribute pragmas written before the block's declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Input variables */
   inputs: LibraryVarType[];
   /** Output variables */
@@ -150,6 +244,19 @@ export interface LibraryFBEntry {
    * nobody is told about is the thing this field exists to prevent.
    */
   locals?: LibraryVarType[];
+  /** Base block (`EXTENDS`). */
+  extends?: string;
+  /** Interfaces the block declares it implements (`IMPLEMENTS`). */
+  implements?: string[];
+  isAbstract?: true;
+  isFinal?: true;
+  /**
+   * The block's own methods and properties, every visibility, so a consumer can call, override and check access
+   * to them. Absent in archives built before members were exported: a consumer then treats the block's members as
+   * unknown rather than missing.
+   */
+  methods?: LibraryMethodEntry[];
+  properties?: LibraryPropertyEntry[];
   /** Block-level help text shown in editor hover dialogs. Authored in
    *  the library's `library.json` and merged into the manifest at build
    *  time (see scripts/generate-*.mjs). Optional so existing archives
@@ -165,6 +272,10 @@ export interface LibraryFBEntry {
 export interface LibraryTypeEntry {
   /** Type name */
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Type kind (struct, enum, alias) */
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
@@ -172,7 +283,19 @@ export interface LibraryTypeEntry {
   /** Struct member fields (name + declared type), so a consuming compilation
    *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
    *  for `kind: "struct"`; optional for backward compatibility. */
-  fields?: Array<{ name: string; type: string }>;
+  fields?: Array<{
+    name: string;
+    type: string;
+    attributes?: LibraryAttribute[];
+    displayName?: string;
+  }>;
+  /** Members of an enumeration, in declaration order, with their explicit values as written. */
+  members?: Array<{
+    name: string;
+    displayName?: string;
+    value?: string;
+    attributes?: LibraryAttribute[];
+  }>;
   /** Type-level help text — same lifecycle as `LibraryFBEntry.documentation`,
    *  populated automatically from the structured doc-block slot in CODESYS
    *  imports (typically the type's revision-history comment for OSCAT) and
@@ -195,12 +318,18 @@ export interface LibraryTypeEntry {
 export interface LibraryGlobalEntry {
   /** Global variable name (as declared). */
   name: string;
+  /** CODESYS attribute pragmas written before the declaration. */
+  attributes?: LibraryAttribute[];
+  /** The name as written, when it differs from `name` (the compiler upper-cases identifiers). */
+  displayName?: string;
   /** Declared type name (elementary or a library type, e.g. CONSTANTS_MATH). */
   type: string;
   /** True for `VAR_GLOBAL CONSTANT` entries. */
   constant?: boolean;
   /** Folder path within the library — see `LibraryFunctionEntry.category`. */
   category?: string;
+  /** Initial value as written in the declaration (ST text). */
+  initialValue?: string;
 }
 
 /**
@@ -231,6 +360,8 @@ export interface LibraryManifest {
    *  Optional for backward compatibility with archives compiled before
    *  globals were exported — consumers treat a missing field as empty. */
   globals?: LibraryGlobalEntry[];
+  /** Exported interfaces. Optional for archives built before interfaces were exported. */
+  interfaces?: LibraryInterfaceEntry[];
   /** C++ headers to include */
   headers: string[];
   /** Whether this is a built-in C++ runtime library */
@@ -376,3 +507,10 @@ export interface StlibCompileResult {
   /** Compilation errors */
   errors: Array<{ message: string; file?: string; line?: number }>;
 }
+
+/**
+ * An `#include "..."` file name: relative, no `.` or `..` segment, and only letters, digits, '.', '-', '_', '+' and
+ * '/' between segments, so no quote, backslash or line break can end the directive.
+ */
+export const HEADER_NAME_RE =
+  /^(?!\.{1,2}(?:\/|$))[\w.+-]+(?:\/(?!\.{1,2}(?:\/|$))[\w.+-]+)*$/;

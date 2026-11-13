@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
-// Copyright (C) 2025 Autonomy / OpenPLC Project
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (c) 2025 Autonomy®
 /**
  * TestCodeGenerator — subclass of CodeGenerator for test main generation.
  *
@@ -58,18 +58,12 @@ export class TestCodeGenerator extends CodeGenerator {
     // Interfaces first — needed for FB interface method name resolution
     for (const iface of ast.interfaces) {
       this.knownInterfaceTypes.add(iface.name.toUpperCase());
-      const ifaceMethods = new Set<string>();
       for (const method of iface.methods) {
         this.methodNameMap.set(
           `${iface.name.toUpperCase()}.${method.name.toUpperCase()}`,
           method.name,
         );
-        ifaceMethods.add(method.name.toUpperCase());
       }
-      this.interfaceMethodsByInterface.set(
-        iface.name.toUpperCase(),
-        ifaceMethods,
-      );
     }
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
@@ -85,12 +79,8 @@ export class TestCodeGenerator extends CodeGenerator {
           prop.name,
         );
       }
-      // Precompute interface method names for field access mangling
-      const ifaceMethods = this.getInterfaceMethodNames(fb);
-      if (ifaceMethods.size > 0) {
-        this.fbInterfaceMethodNames.set(fb.name.toUpperCase(), ifaceMethods);
-      }
     }
+    this.initMemberNaming(ast);
     const enumDescriptors: Array<{ name: string; members: string[] }> = [];
     for (const td of ast.types) {
       this.knownStructTypes.add(td.name.toUpperCase());
@@ -98,7 +88,9 @@ export class TestCodeGenerator extends CodeGenerator {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
-        enumDescriptors.push({ name: td.name, members: memberNames });
+        if (td.inline?.owner === undefined) {
+          enumDescriptors.push({ name: td.name, members: memberNames });
+        }
       }
     }
     this.enumMemberToType = buildEnumMemberMap(enumDescriptors);

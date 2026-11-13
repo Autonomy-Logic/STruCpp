@@ -1,8 +1,5 @@
 (* Additional Function Blocks: PID                                       *)
-(* Source carried verbatim from MatIEC's lib/pid_st.txt.                 *)
-(* Original header preserved for traceability:                           *)
-(*   "Following taken directly from the IEC 61131.3 draft standard"      *)
-(*   "FINAL DRAFT - IEC 61131-3, 2nd Ed. (2001-12-10)"                   *)
+(* Source: example function block of IEC 61131-3, 2nd Ed.                *)
 (*                                                                        *)
 (* Depends on INTEGRAL and DERIVATIVE FBs declared elsewhere in this lib. *)
 
