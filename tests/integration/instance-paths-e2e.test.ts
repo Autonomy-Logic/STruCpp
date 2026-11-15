@@ -180,6 +180,55 @@ int main() {
     expect(build("default", files)).toBe("6 1 screen 1.5 7 8 100 12 42\n3 plc");
   });
 
+  it("default mode: configuration globals go through their lock, in the threaded build too", () => {
+    const source = `
+TYPE Pt : STRUCT x : INT; y : INT; END_STRUCT; END_TYPE
+FUNCTION Twice : INT VAR_IN_OUT v : INT; END_VAR v := v * 2; Twice := v; END_FUNCTION
+FUNCTION_BLOCK Fb VAR_INPUT i : BOOL; END_VAR VAR_OUTPUT q : BOOL; END_VAR VAR_IN_OUT io : INT; END_VAR q := i; io := io + 1; END_FUNCTION_BLOCK
+PROGRAM Main VAR x : INT; END_VAR x := x + 1; END_PROGRAM
+{attribute 'instance_paths'}
+FUNCTION_BLOCK Screen
+VAR n : INT; f : Fb; pt : Pt; END_VAR
+VAR_OUTPUT bit3 : BOOL; tw : INT; y : INT; END_VAR
+gCount := gCount + 1;
+bit3 := gW.3; gW.4 := TRUE;
+pt := gP; pt.y := 9; gP := pt; gP.x := 5; y := gP.y;
+f(i := TRUE, q => gB, io := gCount);
+tw := Twice(gCount);
+END_FUNCTION_BLOCK
+CONFIGURATION Config0
+VAR_GLOBAL gCount : INT := 4; gB : BOOL; gP : Pt; gW : WORD := 8; END_VAR
+RESOURCE Res0 ON PLC TASK t(INTERVAL := T#20ms, PRIORITY := 1); PROGRAM instance0 WITH t : Main; END_RESOURCE
+END_CONFIGURATION
+`;
+    const result = compile(source);
+    expect(result.errors).toEqual([]);
+    const files: Record<string, string> = {
+      "generated.hpp": result.headerCode,
+    };
+    for (const f of result.cppFiles) files[f.name] = f.content;
+    files["main.cpp"] = `#include "generated.hpp"
+#include <cstdio>
+strucpp::Configuration_CONFIG0 g_config;
+int main() {
+  strucpp::SCREEN screen;
+  screen();
+  std::printf("%d %d %d %d %d %d %d %d\\n", (int)strucpp::GCOUNT.value.get(), (int)screen.BIT3.get(),
+    (int)strucpp::GW.value.get(), (int)strucpp::GP.value.X.get(), (int)screen.Y.get(),
+    (int)strucpp::GB.value.get(), (int)screen.TW.get(), 0);
+  return 0;
+}`;
+    const expected = "12 1 24 5 9 1 12 0";
+    expect(build("locked-globals", files)).toBe(expected);
+    const threaded = Object.fromEntries(
+      Object.entries(files).map(([name, text]) => [
+        name,
+        name.endsWith(".cpp") ? `#define STRUCPP_THREADED 1\n${text}` : text,
+      ]),
+    );
+    expect(build("locked-globals-threaded", threaded)).toBe(expected);
+  });
+
   it("external mode: a separate unit reaches the PLC through host functions", () => {
     const plc = compile(DECLARATIONS + PROGRAM_DECL + CONFIG, {
       headerFileName: "plc.hpp",

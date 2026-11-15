@@ -417,6 +417,14 @@ export interface CodeGenResult {
 /**
  * C++ code generator for IEC 61131-3 programs.
  */
+/**
+ * True when a global of this declared type is accessed whole through `read()` / `write()`; struct, array and
+ * function-block globals go through `with_lock`, as for VAR_EXTERNAL.
+ */
+function isScalarGlobal(type: TypeReference): boolean {
+  return type.arrayDimensions === undefined && isElementaryType(type.name);
+}
+
 export class CodeGenerator {
   private options: CodeGenOptions;
 
@@ -526,10 +534,6 @@ export class CodeGenerator {
 
   /** Extended type metadata for library FB fields (array dims, reference kind) */
   private libraryFBFieldTypeRefs: Map<string, LibraryFieldShape> = new Map();
-
-  /** Enumerations of the linked libraries whose members may be written unqualified. */
-  private libraryEnumDescriptors: Array<{ name: string; members: string[] }> =
-    [];
 
   /** Parameters of the linked libraries' functions with a concrete signature, by upper-case name. */
   private libraryFunctionBlocks: Map<string, readonly VarBlock[]> = new Map();
@@ -960,9 +964,6 @@ export class CodeGenerator {
             new Set(members.map((m) => m.toUpperCase())),
           );
         }
-        if (!isQualifiedOnly(t.attributes)) {
-          this.libraryEnumDescriptors.push({ name: t.name, members });
-        }
       }
       this.knownStructTypes.add(nameUpper);
     }
@@ -1018,14 +1019,14 @@ export class CodeGenerator {
   /**
    * Emits the GVL globals that hold function block instances (`fbInstances`), or all the others. An instance needs its
    * class defined, library classes included, so it goes after them; the others go before the classes, whose
-   * constructors bind VAR_EXTERNAL pointers to them.
+   * constructors bind VAR_EXTERNAL pointers to them. With external instance paths only the CONSTANT host-owned blocks
+   * are emitted; the others live in the host.
    */
   private emitGvlGlobals(ast: CompilationUnit, fbInstances: boolean): void {
     const holdsInstance = (decl: VarDeclaration): boolean =>
       this.isFBType(decl.type.name) ||
       (decl.type.elementTypeName !== undefined &&
         this.isFBType(decl.type.elementTypeName));
-    // With external instance paths only the CONSTANT host-owned ones are emitted; the rest live in the host.
     const blocks = ast.globalVarBlocks
       .filter((block) => block.isConstant || !this.isHostOwned(block))
       .map((block) => ({
@@ -1283,10 +1284,7 @@ export class CodeGenerator {
         }
       }
     }
-    this.enumMemberToType = buildEnumMemberMap([
-      ...enumDescriptors,
-      ...this.libraryEnumDescriptors,
-    ]);
+    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
     for (const prog of ast.programs) {
@@ -1411,7 +1409,8 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate the C++ header file.
+   * Generate the C++ header file. When instance paths reach program instances in the default mode, it ends with an
+   * `extern` declaration of the configuration object the runtime defines (the one the debug table names).
    */
   private generateHeader(ast: CompilationUnit): void {
     // Determine the namespace for this project
@@ -1565,7 +1564,6 @@ export class CodeGenerator {
       }
     }
 
-    // Top-level global variables (GVL files); those holding FB instances follow the FB classes
     this.emitGvlGlobals(ast, false);
 
     // Inject reachable library chunks (header side).
@@ -1668,8 +1666,6 @@ export class CodeGenerator {
 
     this.emitHeader(`}  // namespace ${ns}`);
 
-    // Instance paths reach program instances through the configuration object
-    // the runtime defines (the same one the debug table names).
     const config = this.projectModel?.configurations[0];
     if (
       this.usesInstancePaths.configuration &&
@@ -3445,6 +3441,16 @@ export class CodeGenerator {
       this.emitInstancePathWrite(stmt.target.instancePath, stmt.value, indent);
       return;
     }
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      stmt.target.instancePath?.globalScope === "configuration" &&
+      this.emitConfigurationGlobalStore(
+        stmt.target,
+        this.generateRealOperand(stmt.value, this.inferExprType(stmt.target)),
+        indent,
+      )
+    )
+      return;
 
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
@@ -4400,12 +4406,18 @@ export class CodeGenerator {
   /**
    * Read of an instance path or of a global reached from an `instance_paths` POU: a host call in external mode, the
    * program instance's member through the configuration object or the configuration global's canonical value
-   * otherwise. Undefined for a top-level global in the default mode, which compiles as any other variable.
+   * otherwise. Undefined for a top-level global in the default mode, which compiles as any other variable. Throws in
+   * external mode for an access the analyzer gave no id, which has no storage in this unit.
    */
   private generateInstancePathRead(
     expr: VariableExpression,
     ref: InstancePathRef,
   ): string | undefined {
+    if (ref.id < 0 && this.externalInstancePaths) {
+      throw new Error(
+        `Internal error: '${ref.path}' has no external id with externalInstancePaths.`,
+      );
+    }
     if (ref.id >= 0) {
       const read = `strucpp::external_read<${this.instancePathLeafCpp(ref)}>(${ref.id})`;
       return ref.bit === undefined
@@ -4426,14 +4438,67 @@ export class CodeGenerator {
       return this.generateAccessChain(base, tail, ref.variable, rootTypeName);
     }
     if (ref.globalScope === "configuration") {
-      return this.generateAccessChain(
-        `${ref.variable}.value`,
+      if (ref.byReference === true)
+        return this.generateAccessChain(
+          `${ref.variable}.value`,
+          tail,
+          ref.variable,
+          rootTypeName,
+        );
+      if (tail.length === 0 && isScalarGlobal(ref.rootType))
+        return `${ref.variable}.read()`;
+      const inner = this.generateAccessChain(
+        "(*__glk)",
         tail,
         ref.variable,
         rootTypeName,
       );
+      return `${ref.variable}.with_lock([&](auto* __glk){ return ${inner}; })`;
     }
     return undefined;
+  }
+
+  /**
+   * Stores `source` (rendered C++) in a configuration global reached from an `instance_paths` POU in the default
+   * mode, under the global's lock as VAR_EXTERNAL does: `write()` for a whole scalar, `with_lock` otherwise, with the
+   * value computed before the lock is taken. False for any other target.
+   */
+  private emitConfigurationGlobalStore(
+    target: Expression,
+    source: string,
+    indent: string,
+  ): boolean {
+    if (target.kind !== "VariableExpression") return false;
+    const ref = target.instancePath;
+    if (ref === undefined || ref.id >= 0) return false;
+    if (ref.globalScope !== "configuration") return false;
+    const tail = (target.accessChain ?? []).slice(ref.consumed);
+    const name = ref.variable;
+    const typeName = ref.rootType.name;
+    if (tail.length === 0 && isScalarGlobal(ref.rootType)) {
+      this.emit(`${indent}${name}.write(${source});`);
+      return true;
+    }
+    const tmp = `__gwv_${this.tempVarCounter++}`;
+    this.emit(`${indent}auto ${tmp} = ${source};`);
+    const last = tail[tail.length - 1];
+    if (last?.kind === "field" && /^\d+$/.test(last.name)) {
+      const lv = this.generateAccessChain(
+        "(*__glk)",
+        tail.slice(0, -1),
+        name,
+        typeName,
+      );
+      this.emit(
+        `${indent}${name}.with_lock([&](auto* __glk){ ${lv} = (${lv} & ~(1ULL << ${last.name})) | ((${tmp} ? 1ULL : 0ULL) << ${last.name}); });`,
+      );
+      return true;
+    }
+    const lv = this.generateAccessChain("(*__glk)", tail, name, typeName);
+    this.emit(
+      `${indent}${name}.with_lock([&](auto* __glk){ ${lv} = ${tmp}; });`,
+    );
+    return true;
   }
 
   /** `strucpp::external_write` of an instance path or global; a bit write reads, merges and writes the whole value. */
@@ -5436,7 +5501,6 @@ export class CodeGenerator {
       return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
     }
 
-    // 3. A function the unit or a library declares: arguments bound by name and position, omitted ones defaulted
     const varBlocks = this.functionVarBlocks(nameUpper);
     if (varBlocks !== undefined) {
       const args = this.orderCallArguments(
@@ -5453,7 +5517,6 @@ export class CodeGenerator {
       return `${this.calleeName(expr)}(${args.join(", ")})`;
     }
 
-    // 4. Unknown callee: emit the arguments as written
     const args = expr.arguments.map((arg) => {
       if (arg.isOutput && arg.value.kind !== "VariableExpression") {
         this.codegenWarnings.push({
@@ -6372,6 +6435,7 @@ export class CodeGenerator {
     source: string,
     indent: string,
   ): void {
+    if (this.emitConfigurationGlobalStore(target, source, indent)) return;
     if (
       target.kind === "VariableExpression" &&
       !target.isDereference &&

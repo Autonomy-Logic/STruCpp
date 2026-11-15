@@ -6,12 +6,7 @@
  */
 
 import { describe, it, expect, beforeAll } from "vitest";
-import {
-  mkdirSync,
-  writeFileSync,
-  existsSync,
-  rmSync,
-} from "fs";
+import { mkdirSync, writeFileSync, existsSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { compileLibrary } from "../../src/library/library-compiler.js";
@@ -146,7 +141,12 @@ describe("Library System", () => {
             fileName: "f.st",
           },
         ],
-        { name: "src-lib", version: "1.0.0", namespace: "src", noSource: false },
+        {
+          name: "src-lib",
+          version: "1.0.0",
+          namespace: "src",
+          noSource: false,
+        },
       );
 
       expect(result.success).toBe(true);
@@ -168,7 +168,12 @@ describe("Library System", () => {
             fileName: "f.st",
           },
         ],
-        { name: "nosrc-lib", version: "1.0.0", namespace: "nosrc", noSource: true },
+        {
+          name: "nosrc-lib",
+          version: "1.0.0",
+          namespace: "nosrc",
+          noSource: true,
+        },
       );
 
       expect(result.success).toBe(true);
@@ -210,7 +215,9 @@ describe("Library System", () => {
       // Chunks own each symbol's emit slice. Concat them and verify
       // the resulting text is pure namespace-body content — no
       // wrapper, no #include — but does contain the function.
-      const concatHeader = result.archive.chunks.map((c) => c.header).join("\n");
+      const concatHeader = result.archive.chunks
+        .map((c) => c.header)
+        .join("\n");
       expect(concatHeader).not.toContain("#pragma once");
       expect(concatHeader).not.toContain("#include");
       expect(concatHeader).not.toMatch(/^namespace\s/m);
@@ -526,7 +533,7 @@ describe("Library System", () => {
       expect(typeSym!.kind).toBe("type");
     });
 
-    it("registers a library enumeration as an enumeration with its members as values", () => {
+    it("registers a library enumeration as an enumeration whose members stay out of the global scope", () => {
       const symbolTables = new SymbolTables();
       const manifest = loadLibraryManifest({
         name: "test",
@@ -568,10 +575,7 @@ describe("Library System", () => {
           ? definition.baseType?.name
           : undefined,
       ).toBe("DINT");
-      expect(symbolTables.globalScope.lookup("ON")).toMatchObject({
-        kind: "enumValue",
-        enumType: "MODE",
-      });
+      expect(symbolTables.globalScope.lookup("ON")).toBeUndefined();
       expect(symbolTables.globalScope.lookup("TOP")).toBeUndefined();
     });
 
@@ -1136,14 +1140,8 @@ describe("Library System", () => {
         headers: [],
         isBuiltin: false,
       };
-      writeFileSync(
-        join(dir, "lib-a.stlib.json"),
-        JSON.stringify(manifest1),
-      );
-      writeFileSync(
-        join(dir, "lib-b.stlib.json"),
-        JSON.stringify(manifest2),
-      );
+      writeFileSync(join(dir, "lib-a.stlib.json"), JSON.stringify(manifest1));
+      writeFileSync(join(dir, "lib-b.stlib.json"), JSON.stringify(manifest2));
       // Non-manifest file should be ignored
       writeFileSync(join(dir, "readme.txt"), "not a manifest");
 

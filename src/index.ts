@@ -23,7 +23,11 @@ import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
 import { SemanticAnalyzer } from "./semantic/analyzer.js";
-import type { InstancePathEntry } from "./semantic/instance-paths.js";
+import { isHostOwned } from "./semantic/instance-paths.js";
+import type {
+  InstancePathEntry,
+  InstancePathOptions,
+} from "./semantic/instance-paths.js";
 import { CodeGenerator } from "./backend/codegen.js";
 import {
   generateDebugTable,
@@ -104,12 +108,15 @@ function validateCompileOptions(options: CompileOptions): void {
  * declared reachable so the test harness sees the full symbol set
  * regardless of what the source AST happens to reference. Libraries named
  * in `wholeLibraries` are reachable whole, with what their chunks depend on.
+ * With `instancePaths` in external mode, the host-owned programs, configurations
+ * and non-CONSTANT top-level globals, which are not emitted, reach nothing.
  */
 function collectUsedSymbols(
   ast: CompilationUnit,
   archives: StlibArchive[],
   includeEverything: boolean,
   wholeLibraries: ReadonlySet<string> = new Set(),
+  instancePaths: InstancePathOptions = {},
 ): Map<string, Set<string>> {
   // When asked to include everything (test builds), short-circuit.
   if (includeEverything) {
@@ -145,7 +152,16 @@ function collectUsedSymbols(
   // Seed the reachable set from names the user AST references.
   const referencedNames = new Set<string>();
   const ownInterfaces = ast.interfaces.filter((i) => i.library === undefined);
-  const ownUnit: CompilationUnit = { ...ast, interfaces: ownInterfaces };
+  const emitted = (node: ASTNode): boolean => !isHostOwned(node, instancePaths);
+  const ownUnit: CompilationUnit = {
+    ...ast,
+    interfaces: ownInterfaces,
+    programs: ast.programs.filter(emitted),
+    configurations: ast.configurations.filter(emitted),
+    globalVarBlocks: ast.globalVarBlocks.filter(
+      (block) => block.isConstant || emitted(block),
+    ),
+  };
   walkAST(ownUnit, (node: ASTNode): void => {
     switch (node.kind) {
       case "FunctionCallExpression": {
@@ -898,6 +914,12 @@ export function compile(
     pipeline.allArchives,
     isTestBuild,
     new Set(pipeline.mergedOptions.wholeLibraries ?? []),
+    {
+      external: pipeline.mergedOptions.externalInstancePaths === true,
+      ...(pipeline.mergedOptions.externalSources !== undefined
+        ? { externalSources: pipeline.mergedOptions.externalSources }
+        : {}),
+    },
   );
 
   // Collect library headers for #include directives: those of a library whose code the unit uses, and those of a
@@ -975,8 +997,6 @@ export function compile(
   // return the primary compile output; the debug artifacts are just omitted.
   let debugTableCpp: string | undefined;
   let debugMap: DebugMapV2 | undefined;
-  // With external instance paths the programs and the configuration live in
-  // the host, so the unit has no debug table of its own.
   if (
     pipeline.projectModel &&
     pipeline.symbolTables &&

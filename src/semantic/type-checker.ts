@@ -464,7 +464,8 @@ export class TypeChecker {
   }
 
   /**
-   * Infer type of a variable expression, including access chain resolution.
+   * Infer type of a variable expression, including access chain resolution. An instance path or a global of an
+   * `instance_paths` POU starts at its root variable's declared type.
    */
   private inferVariableType(
     expr: VariableExpression,
@@ -475,7 +476,6 @@ export class TypeChecker {
     let steps = expr.accessChain;
     const path = expr.instancePath;
     if (path !== undefined) {
-      // An instance path or a global: start at the root variable's declared type.
       currentTypeName = path.rootType.name;
       currentType = this.resolveNamedType(path.rootType.name);
       steps = (expr.accessChain ?? []).slice(path.consumed);

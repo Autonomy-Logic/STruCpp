@@ -17,6 +17,7 @@ import { HEADER_NAME_RE } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
 import { functionBlockLookup } from "../semantic/fb-lineage.js";
+import { evalIntConst } from "../semantic/type-utils.js";
 import type { MemberManglingContext } from "../backend/member-mangling.js";
 import {
   mangledMemberName,
@@ -48,6 +49,7 @@ import type {
   InterfaceDeclaration,
   MethodDeclaration,
   PropertyDeclaration,
+  TypeDefinition,
   TypeReference,
   VarBlock,
   VarDeclaration,
@@ -122,6 +124,38 @@ function serializeTypeRef(typeRef: TypeReference): LibraryTypeRef {
     entry.referenceChain = typeRef.referenceChain;
   }
   return entry;
+}
+
+/** What an alias type names, in the manifest format; undefined for a structure, enumeration or subrange. */
+function serializeAliasOf(
+  definition: TypeDefinition,
+): LibraryTypeRef | undefined {
+  if (definition.kind === "TypeReference") return serializeTypeRef(definition);
+  if (definition.kind !== "ArrayDefinition") return undefined;
+  const dimensions: Array<{ start: number; end: number }> = [];
+  for (const d of definition.dimensions) {
+    const start = evalIntConst(d.start);
+    const end = evalIntConst(d.end);
+    if (d.isVariableLength || start === undefined || end === undefined)
+      return undefined;
+    dimensions.push({ start, end });
+  }
+  const element = definition.elementType;
+  return {
+    type: `__INLINE_ARRAY_${element.name}`,
+    arrayDimensions: dimensions,
+    elementTypeName: element.name,
+    ...(element.maxLength !== undefined
+      ? { elementMaxLength: element.maxLength }
+      : {}),
+    ...(element.referenceKind !== "none"
+      ? {
+          elementReferenceChain: element.referenceChain ?? [
+            element.referenceKind,
+          ],
+        }
+      : {}),
+  };
 }
 
 /** Serialize a variable's type reference into the manifest format. */
@@ -203,6 +237,15 @@ function describeVar(
       : undefined;
   if (initial !== undefined) entry.initialValue = initial.trim();
   return entry;
+}
+
+/** A function's parameter blocks: VAR_INPUT, VAR_OUTPUT and VAR_IN_OUT, never its locals or constants. */
+function isParameterBlock(block: VarBlock): boolean {
+  return (
+    block.blockType === "VAR_INPUT" ||
+    block.blockType === "VAR_OUTPUT" ||
+    block.blockType === "VAR_IN_OUT"
+  );
 }
 
 /** Variables of the given block kind, in declaration order. */
@@ -832,7 +875,7 @@ export function compileLibrary(
             ...text.spelling(fn.sourceSpan, fn.name),
             ...attributesOf(fn),
             returnType: fn.returnType.name,
-            parameters: fn.varBlocks.flatMap((block) =>
+            parameters: fn.varBlocks.filter(isParameterBlock).flatMap((block) =>
               block.declarations.flatMap((decl) => {
                 const initialValue =
                   decl.initialValue !== undefined
@@ -898,11 +941,13 @@ export function compileLibrary(
             ...(decl.nameSpans?.[i] !== undefined
               ? text.spelling(decl.nameSpans[i], name)
               : {}),
-            type: decl.type.name,
+            ...serializeTypeRef(decl.type),
             ...attributesOf(decl),
           })),
         );
       }
+      const aliasOf = serializeAliasOf(t.definition);
+      if (aliasOf !== undefined) entry.aliasOf = aliasOf;
       if (t.definition.kind === "EnumDefinition") {
         if (t.definition.baseType !== undefined) {
           entry.baseType = t.definition.baseType.name;

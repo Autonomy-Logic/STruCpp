@@ -40,7 +40,6 @@ import type {
   VarDeclaration,
 } from "../frontend/ast.js";
 import { createDefaultSourceSpan } from "../frontend/ast.js";
-import { isQualifiedOnly } from "../frontend/attributes.js";
 import { parse as parseSource } from "../frontend/parser.js";
 import { buildAST } from "../frontend/ast-builder.js";
 import { ELEMENTARY_TYPES } from "../semantic/type-utils.js";
@@ -140,16 +139,12 @@ function buildLibraryTypeDefinition(
         sourceSpan: createDefaultSourceSpan(),
         names: [f.name],
         ...(f.attributes !== undefined ? { attributes: f.attributes } : {}),
-        type: {
-          kind: "TypeReference" as const,
-          sourceSpan: createDefaultSourceSpan(),
-          name: f.type,
-          isReference: false,
-          referenceKind: "none" as const,
-        },
+        type: makeTypeRef(f),
       })),
     };
   }
+  if (t.kind === "alias" && t.aliasOf !== undefined)
+    return makeTypeRef(t.aliasOf);
   return {
     kind: "TypeReference",
     sourceSpan: createDefaultSourceSpan(),
@@ -683,6 +678,14 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: types[${i}].kind must be "struct", "enum", or "alias"`,
         );
       }
+      if (
+        t.aliasOf !== undefined &&
+        (!isRecord(t.aliasOf) || typeof t.aliasOf.type !== "string")
+      ) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: types[${i}].aliasOf must be a type reference`,
+        );
+      }
       if (t.fields !== undefined && !Array.isArray(t.fields)) {
         throw new LibraryManifestError(
           `Invalid library manifest: types[${i}].fields must be an array`,
@@ -780,10 +783,9 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
 }
 
 /**
- * Register a library's symbols into the compiler's symbol tables.
- * This makes library functions, FBs, and types available for semantic analysis.
+ * The type of a library enumeration, so CASE, comparisons and typed literals treat it as a local one. Its members
+ * are reached only qualified (`E#M`), never bare.
  */
-/** The type of a library enumeration, so CASE, comparisons and typed literals treat it as a local one. */
 function libraryEnumType(
   name: string,
   members: readonly { name: string }[],
@@ -791,23 +793,10 @@ function libraryEnumType(
   return { typeKind: "enum", name, values: members.map((m) => m.name) };
 }
 
-/** Defines each member of a library enumeration as a value of the global scope, unless a symbol already has its name. */
-function defineEnumValues(
-  symbolTables: SymbolTables,
-  enumType: string,
-  members: readonly { name: string }[],
-): void {
-  members.forEach((member, index) => {
-    if (symbolTables.globalScope.hasLocal(member.name)) return;
-    symbolTables.globalScope.define({
-      name: member.name,
-      kind: "enumValue",
-      enumType,
-      value: index,
-    });
-  });
-}
-
+/**
+ * Register a library's symbols into the compiler's symbol tables.
+ * This makes library functions, FBs, and types available for semantic analysis.
+ */
 export function registerLibrarySymbols(
   manifest: LibraryManifest,
   symbolTables: SymbolTables,
@@ -899,6 +888,7 @@ export function registerLibrarySymbols(
           kind: "TypeDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           name: t.name,
+          library: manifest.name,
           ...(t.attributes !== undefined ? { attributes: t.attributes } : {}),
           // A struct with exported fields gets a REAL StructDefinition, not the
           // self-referential alias the other kinds fall back to.
@@ -916,9 +906,6 @@ export function registerLibrarySymbols(
       });
     } catch (e) {
       if (!(e instanceof DuplicateSymbolError)) throw e;
-    }
-    if (enumMembers !== undefined && !isQualifiedOnly(t.attributes)) {
-      defineEnumValues(symbolTables, t.name, enumMembers);
     }
   }
 

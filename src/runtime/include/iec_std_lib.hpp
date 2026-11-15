@@ -186,9 +186,8 @@ struct ConfigurationInstance {
 };
 
 // =============================================================================
-// BOOL AND / OR / XOR: both operands evaluated (no short-circuit, as IEC
-// requires; AND_THEN / OR_ELSE short-circuit), without the bitwise-on-bool
-// warning `a & b` raises on bool operands.
+// BOOL AND / OR / XOR over two evaluated operands (no short-circuit), without
+// the bitwise-on-bool warning `a & b` raises on bool operands.
 // =============================================================================
 
 inline constexpr bool iec_bool_and(bool a, bool b) noexcept { return a && b; }

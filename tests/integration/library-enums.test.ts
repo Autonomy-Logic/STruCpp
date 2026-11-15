@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright (c) 2025 Autonomy®
 /**
- * Enumerations declared in a library, used by a consumer as it uses its own: typed literals, unqualified members
- * (unless the type is `qualified_only`), comparisons, CASE labels, arguments and instance initializers.
+ * Enumerations declared in a library, used by a consumer as it uses its own: typed literals, comparisons, CASE
+ * labels, arguments and instance initializers. Their members are reached only qualified (`E#M`), so they never clash
+ * with the consumer's own names.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "fs";
@@ -10,6 +11,7 @@ import * as os from "os";
 import * as path from "path";
 import { execSync } from "child_process";
 import { compile } from "../../src/index.js";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import { compileStlib } from "../../src/library/library-compiler.js";
 import { loadStlibFromString } from "../../src/library/library-loader.js";
 import type { StlibArchive } from "../../src/library/library-manifest.js";
@@ -65,17 +67,17 @@ const CONSUMER = `PROGRAM Main
   named := Align_Code(Align := Hmi_Align#Right);
   CASE a OF
     Hmi_Align#Left: casePick := 1;
-    Right: casePick := 3;
+    Hmi_Align#Right: casePick := 3;
   ELSE
     casePick := 9;
   END_CASE;
-  a := Center;
+  a := Hmi_Align#Center;
   unq := TO_DINT(a);
   p := Hmi_Port#Bottom;
   port := TO_DINT(p);
   c := COLOR.Accent;
   l();
-  r(Align := Left);
+  r(Align := Hmi_Align#Left);
   code := l.Code * 100 + r.Code;
 END_PROGRAM
 CONFIGURATION C RESOURCE R0 ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1);
@@ -99,17 +101,21 @@ CONFIGURATION C RESOURCE R0 ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1);
     expect(types["I.W"]).toBe("DINT");
   });
 
-  it("accepts typed literals, unqualified members, CASE labels, arguments and initializers", () => {
+  it("accepts typed literals, CASE labels, arguments and initializers", () => {
     const result = compile(CONSUMER, { libraries: [library()] });
     expect(result.errors).toEqual([]);
   });
 
-  it("refuses an unqualified member of a qualified_only library enumeration", () => {
-    const result = compile(
+  it("refuses an unqualified member of a library enumeration", () => {
+    for (const source of [
       `PROGRAM Main VAR p : Hmi_Port; END_VAR p := Bottom; END_PROGRAM`,
-      { libraries: [library()] },
-    );
-    expect(result.errors.map((e) => e.message).join("\n")).toMatch(/BOTTOM/i);
+      `PROGRAM Main VAR a : Hmi_Align; END_VAR a := Center; END_PROGRAM`,
+    ]) {
+      const result = compile(source, { libraries: [library()] });
+      expect(result.errors.map((e) => e.message)).toEqual([
+        expect.stringMatching(/Undeclared variable '(BOTTOM|CENTER)'/i),
+      ]);
+    }
   });
 
   it("refuses a member the library enumeration does not have", () => {
@@ -118,6 +124,42 @@ CONFIGURATION C RESOURCE R0 ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1);
       { libraries: [library()] },
     );
     expect(result.errors.length).toBeGreaterThan(0);
+  });
+});
+
+describe("bundled library enumerations next to the consumer's own names", () => {
+  const libs = discoverStlibs(path.resolve(__dirname, "../../libs"));
+
+  it("lets a global take the name of a library enumeration member", () => {
+    const result = compile(
+      `VAR_GLOBAL STANDSTILL : BOOL; END_VAR
+PROGRAM P VAR x : BOOL; END_VAR x := STANDSTILL; END_PROGRAM`,
+      { libraries: libs },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.cppCode).toContain("X = STANDSTILL;");
+  });
+
+  it("resolves an unqualified member to the consumer's enumeration, not a library's", () => {
+    const result = compile(
+      `TYPE MyState : (IDLE, HOMING, STOPPING); END_TYPE
+PROGRAM P VAR s : MyState; END_VAR s := HOMING; END_PROGRAM`,
+      { libraries: libs },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.cppCode).toContain("S = MYSTATE::HOMING;");
+  });
+
+  it("reaches a library enumeration member written qualified", () => {
+    const result = compile(
+      `TYPE MyState : (IDLE, HOMING, STOPPING); END_TYPE
+PROGRAM P VAR s : SMC_AXIS_STATE; m : MyState; same : BOOL; END_VAR
+s := SMC_AXIS_STATE#HOMING; m := HOMING; same := s = SMC_AXIS_STATE#HOMING;
+END_PROGRAM`,
+      { libraries: libs },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.cppCode).toContain("S = SMC_AXIS_STATE::HOMING;");
   });
 });
 

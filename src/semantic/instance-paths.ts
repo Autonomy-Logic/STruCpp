@@ -37,7 +37,11 @@ import type {
 import type { CompileError } from "../types.js";
 import { walkAST } from "../ast-utils.js";
 import type { Scope, SymbolTables } from "./symbol-table.js";
-import { ELEMENTARY_TYPES, evalIntConst } from "./type-utils.js";
+import {
+  ELEMENTARY_TYPES,
+  evalIntConst,
+  getBitAccessWidth,
+} from "./type-utils.js";
 
 /** Name of the attribute pragma that enables instance paths in a POU. */
 export const INSTANCE_PATHS_ATTRIBUTE = "instance_paths";
@@ -221,8 +225,8 @@ export class InstancePathIndex {
   }
 }
 
-/** Where an access sits, which decides what it compiles to. */
-type AccessContext = "read" | "write" | "address" | "output";
+/** Where an access sits, which decides what it compiles to; `inout` is a function block's VAR_IN_OUT, copied in and out. */
+type AccessContext = "read" | "write" | "address" | "inout" | "output";
 
 /** Code inside one POU, method or property, with the scope it resolves names in. */
 interface CodeUnit {
@@ -256,6 +260,7 @@ export function resolveInstancePaths(
 }
 
 class InstancePathResolver {
+  /** What paths and globals resolve into: in external mode, only what the host owns. */
   private readonly index: InstancePathIndex;
   private readonly external: boolean;
   private readonly options: InstancePathOptions;
@@ -271,7 +276,6 @@ class InstancePathResolver {
   ) {
     this.options = options;
     this.external = options.external === true;
-    // In external mode, paths and globals resolve only into what the host owns.
     this.index = new InstancePathIndex(
       ast,
       (node) => !this.external || isHostOwned(node, options),
@@ -423,14 +427,90 @@ class InstancePathResolver {
 
   private resolveUnit(unit: CodeUnit): void {
     const contexts = new Map<VariableExpression, AccessContext>();
+    const reported = new Set<VariableExpression>();
     for (const stmt of unit.statements) {
       walkAST(stmt, (node: ASTNode) => {
         this.noteContexts(node, unit, contexts);
+        if (node.kind === "FunctionCallExpression") {
+          this.checkGlobalCall(
+            node as Extract<Expression, { kind: "FunctionCallExpression" }>,
+            unit,
+          );
+          return;
+        }
+        if (node.kind === "MethodCallExpression") {
+          const object = (
+            node as Extract<Expression, { kind: "MethodCallExpression" }>
+          ).object;
+          if (
+            object.kind === "VariableExpression" &&
+            this.isPathHead(object.name, unit)
+          ) {
+            reported.add(object);
+            const method = (
+              node as Extract<Expression, { kind: "MethodCallExpression" }>
+            ).methodName;
+            this.error(
+              `Calls through an instance path are not supported: '${this.describe(object)}.${method.toUpperCase()}'.`,
+              node,
+            );
+          }
+          return;
+        }
         if (node.kind !== "VariableExpression") return;
         const expr = node as VariableExpression;
+        if (reported.has(expr)) return;
         this.resolveExpression(expr, unit, contexts.get(expr) ?? "read");
       });
     }
+  }
+
+  /** True when `name` starts an instance path in `unit`: an instance or configuration name it does not shadow. */
+  private isPathHead(name: string, unit: CodeUnit): boolean {
+    const upper = name.toUpperCase();
+    return (
+      !this.isLocalName(upper, unit) &&
+      (this.index.instances.has(upper) || this.index.configurations.has(upper))
+    );
+  }
+
+  /**
+   * Refuses a call of a function block instance that is a configuration global, or in external mode one the host
+   * owns, and a call through an instance path.
+   */
+  private checkGlobalCall(
+    call: Extract<Expression, { kind: "FunctionCallExpression" }>,
+    unit: CodeUnit,
+  ): void {
+    const name = call.functionName;
+    if (this.symbolTables.lookupFunction(name) !== undefined) return;
+    const [head = name, ...rest] = name.split(".");
+    if (this.isLocalName(head, unit)) return;
+    const upper = head.toUpperCase();
+    const configuration = this.index.configurations.get(upper);
+    const global =
+      rest.length === 0
+        ? this.index.configurationGlobals.has(upper) ||
+          (this.external && this.index.unitGlobals.has(upper))
+        : configuration !== undefined &&
+          rest.length === 1 &&
+          this.index.configurationGlobal(configuration, rest[0] ?? "") !==
+            undefined;
+    if (global) {
+      this.error(this.globalCallMessage(name), call);
+      return;
+    }
+    if (rest.length > 0 && this.isPathHead(head, unit))
+      this.error(
+        `Calls through an instance path are not supported: '${name.toUpperCase()}'.`,
+        call,
+      );
+  }
+
+  private globalCallMessage(name: string): string {
+    return this.external
+      ? `Calling '${name.toUpperCase()}' is not supported with externalInstancePaths: it is a function block instance of the PLC, which the host owns.`
+      : `Calling '${name.toUpperCase()}' is not supported: it is a function block instance declared as a configuration global.`;
   }
 
   /** Records the access context of the variable expressions directly under `node`. */
@@ -511,7 +591,8 @@ class InstancePathResolver {
       arg.name !== undefined
         ? params.find((p) => sameName(p.name, arg.name ?? ""))
         : params.filter((p) => !p.output)[position];
-    if (param?.byReference === true) mark(arg.value, "address");
+    if (param?.byReference === true)
+      mark(arg.value, param.copied === true ? "inout" : "address");
   }
 
   /** Parameters of a function, or of the block an FB instance call invokes. */
@@ -529,30 +610,61 @@ class InstancePathResolver {
         byReference:
           p.isInOut || p.declaration?.type?.referenceKind === "reference_to",
       }));
-    const head = name.split(".")[0] ?? name;
+    const [head = name, ...members] = name.split(".");
     const sym = unit.scope.lookup(head);
-    if (sym?.kind !== "variable" || name.includes(".")) return undefined;
-    const fb = this.symbolTables.lookupFunctionBlock(
-      sym.declaration?.type?.name ?? "",
-    );
-    if (fb === undefined) return undefined;
-    return [
-      ...fb.inputs.map((p) => ({
-        name: p.name,
-        output: false,
-        byReference: p.declaration?.type?.referenceKind === "reference_to",
-      })),
-      ...fb.inouts.map((p) => ({
-        name: p.name,
-        output: false,
-        byReference: true,
-      })),
-      ...fb.outputs.map((p) => ({
-        name: p.name,
-        output: true,
-        byReference: false,
-      })),
-    ];
+    if (sym?.kind !== "variable" || sym.declaration?.type === undefined)
+      return undefined;
+    let type: TypeShape | undefined = sym.declaration.type;
+    for (const member of members)
+      type = type === undefined ? undefined : this.memberOf(type, member);
+    return type === undefined
+      ? undefined
+      : this.blockParameters(this.unalias(type).name);
+  }
+
+  /**
+   * Parameters of a function block, inherited ones first: a block of this unit is read from its own variable blocks,
+   * a library block from its symbol.
+   */
+  private blockParameters(typeName: string): ParameterShape[] | undefined {
+    const lineage: ParameterShape[][] = [];
+    const seen = new Set<string>();
+    let current: string | undefined = typeName;
+    while (current !== undefined && !seen.has(current.toUpperCase())) {
+      seen.add(current.toUpperCase());
+      const local = this.fbByName.get(current.toUpperCase());
+      if (local !== undefined) {
+        lineage.unshift(
+          parametersOf(local.varBlocks).map((p) =>
+            p.inOut === true ? { ...p, copied: true } : p,
+          ),
+        );
+        current = local.extends;
+        continue;
+      }
+      const lib = this.symbolTables.lookupFunctionBlock(current);
+      if (lib === undefined) break;
+      lineage.unshift([
+        ...lib.inputs.map((p) => ({
+          name: p.name,
+          output: false,
+          byReference: p.declaration?.type?.referenceKind === "reference_to",
+        })),
+        ...lib.inouts.map((p) => ({
+          name: p.name,
+          output: false,
+          byReference: true,
+          copied: true,
+        })),
+        ...lib.outputs.map((p) => ({
+          name: p.name,
+          output: true,
+          byReference: false,
+        })),
+      ]);
+      current = lib.declaration.extends;
+    }
+    return lineage.length === 0 ? undefined : lineage.flat();
   }
 
   /** Parameters of a method of this unit's own blocks, called on a local instance, THIS or SUPER. */
@@ -633,6 +745,14 @@ class InstancePathResolver {
           `No program instance named '${expr.name}' is declared in a configuration.`,
           expr,
         );
+      return;
+    }
+    if (globals !== undefined && globals.length > 1) {
+      const where = globals.map((g) => g.configuration.name).join("', '");
+      this.error(
+        `Global '${expr.name}' is declared in more than one configuration ('${where}'); use the long form '<configuration>.${this.describe(expr)}'.`,
+        expr,
+      );
       return;
     }
     this.finish(
@@ -863,24 +983,26 @@ class InstancePathResolver {
     let path = root.prefix;
     let bit: number | undefined;
     let problem: string | undefined;
-    let unresolved = false;
+    let unresolved: string | undefined;
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       if (step === undefined) break;
       if (step.kind === "dereference") {
         problem ??= "it dereferences a pointer";
         current = undefined;
-        unresolved = true;
+        unresolved ??= `'${path}' is dereferenced`;
         continue;
       }
       if (step.kind === "subscript") {
+        const array = path;
         const indices = step.indices.map((e) => evalIntConst(e));
         if (indices.some((n) => n === undefined)) {
           problem ??= "it uses a non-constant array index";
           path += "[?]";
         } else path += `[${indices.join(",")}]`;
         current = current === undefined ? undefined : this.elementOf(current);
-        if (current === undefined) unresolved = true;
+        if (current === undefined)
+          unresolved ??= `'${array}' is not an array of a known element type`;
         continue;
       }
       if (BIT_STEP.test(step.name)) {
@@ -890,10 +1012,12 @@ class InstancePathResolver {
         bit = Number(step.name);
         continue;
       }
+      const owner = path;
       path += `.${step.name.toUpperCase()}`;
       current =
         current === undefined ? undefined : this.memberOf(current, step.name);
-      if (current === undefined) unresolved = true;
+      if (current === undefined)
+        unresolved ??= `'${owner}' has no member '${step.name.toUpperCase()}' of a known type`;
     }
 
     const leaf = current === undefined ? undefined : this.leafOf(current);
@@ -916,6 +1040,7 @@ class InstancePathResolver {
     }
     if (leaf !== undefined && typeof leaf !== "string") ref.leaf = leaf;
     if (bit !== undefined) ref.bit = bit;
+    if (context === "address") ref.byReference = true;
     expr.instancePath = ref;
 
     const written = context === "write" || context === "output";
@@ -926,10 +1051,23 @@ class InstancePathResolver {
       );
       return;
     }
+    const leafType =
+      leaf !== undefined && typeof leaf !== "string" ? leaf.type : undefined;
+    const width =
+      bit !== undefined && leafType !== undefined
+        ? getBitAccessWidth(leafType)
+        : undefined;
+    if (bit !== undefined && width !== undefined && bit >= width) {
+      this.error(
+        `Bit index ${bit} is out of range for type ${leafType ?? ""} (0..${width - 1})`,
+        expr,
+      );
+      return;
+    }
     if (!this.external) return;
 
     const text = this.describe(expr);
-    if (context === "address") {
+    if (context === "address" || context === "inout") {
       this.error(
         `'${text}' cannot be used by address or reference (ADR, REF, REF=, VAR_IN_OUT, REFERENCE TO) with externalInstancePaths.`,
         expr,
@@ -950,7 +1088,13 @@ class InstancePathResolver {
       );
       return;
     }
-    if (unresolved) return;
+    if (unresolved !== undefined) {
+      this.error(
+        `'${text}' cannot be accessed with externalInstancePaths: ${unresolved}.`,
+        expr,
+      );
+      return;
+    }
     if (leaf === undefined || typeof leaf === "string") {
       this.error(
         `'${text}' ends at ${typeof leaf === "string" ? leaf : "a value that is not elementary"}; with externalInstancePaths a path must end at an elementary or STRING value.`,
@@ -987,9 +1131,15 @@ class InstancePathResolver {
   // Types along a path
   // -------------------------------------------------------------------------
 
+  /** A type of this unit, or of a linked library as its symbol declares it. */
   private typeDeclaration(name: string): TypeDeclaration | undefined {
     const upper = name.toUpperCase();
-    return this.ast.types.find((t) => t.name.toUpperCase() === upper);
+    const own = this.ast.types.find((t) => t.name.toUpperCase() === upper);
+    if (own !== undefined) return own;
+    const sym = this.symbolTables.globalScope.lookup(upper);
+    return sym?.kind === "type" && sym.declaration?.library !== undefined
+      ? sym.declaration
+      : undefined;
   }
 
   /** Follows plain aliases (`TYPE A : B; END_TYPE`) to the type they name. */
@@ -1128,6 +1278,20 @@ class InstancePathResolver {
     if (unit.hostProgram) return;
     for (const stmt of unit.statements) {
       walkAST(stmt, (node: ASTNode) => {
+        if (node.kind === "FunctionCallExpression") {
+          const call = node as Extract<
+            Expression,
+            { kind: "FunctionCallExpression" }
+          >;
+          const upper = call.functionName.toUpperCase();
+          if (
+            this.index.unitGlobals.get(upper)?.block.isConstant === false &&
+            this.symbolTables.lookupFunction(upper) === undefined &&
+            !this.isLocalName(upper, unit)
+          )
+            this.error(this.globalCallMessage(upper), call);
+          return;
+        }
         if (node.kind !== "VariableExpression") return;
         const expr = node as VariableExpression;
         const head = expr.name.toUpperCase();
@@ -1228,6 +1392,7 @@ function parametersOf(blocks: readonly VarBlock[]): ParameterShape[] {
           byReference:
             block.blockType === "VAR_IN_OUT" ||
             decl.type.referenceKind === "reference_to",
+          inOut: block.blockType === "VAR_IN_OUT",
         });
   }
   return out;
@@ -1238,6 +1403,10 @@ interface ParameterShape {
   name: string;
   output: boolean;
   byReference: boolean;
+  /** Declared in VAR_IN_OUT. */
+  inOut?: boolean;
+  /** A function block's VAR_IN_OUT, which a call copies in and back out rather than binding. */
+  copied?: boolean;
 }
 
 /** What a resolved path prefix leads to. */

@@ -905,8 +905,8 @@ export function isEnumType(type: IECType | undefined): type is EnumType {
 }
 
 /**
- * The enumerations of a scope whose members may be written unqualified: neither inline (owned by one POU) nor
- * declared under `{attribute 'qualified_only'}`. Covers the unit's own types and those registered from libraries.
+ * The enumerations of a scope whose members may be written unqualified: the unit's own, neither inline (owned by one
+ * POU) nor declared under `{attribute 'qualified_only'}`. A linked library's enumerations are reached only qualified.
  */
 export function unqualifiedEnumDescriptors(
   symbols: Iterable<AnySymbol>,
@@ -915,6 +915,7 @@ export function unqualifiedEnumDescriptors(
   for (const sym of symbols) {
     if (sym.kind !== "type" || !isEnumType(sym.resolvedType)) continue;
     if (sym.declaration.inline?.owner !== undefined) continue;
+    if (sym.declaration.library !== undefined) continue;
     if (isQualifiedOnly(sym.declaration.attributes)) continue;
     out.push({ name: sym.resolvedType.name, members: sym.resolvedType.values });
   }

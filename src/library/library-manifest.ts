@@ -280,15 +280,21 @@ export interface LibraryTypeEntry {
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
   baseType?: string;
-  /** Struct member fields (name + declared type), so a consuming compilation
-   *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
-   *  for `kind: "struct"`; optional for backward compatibility. */
-  fields?: Array<{
-    name: string;
-    type: string;
-    attributes?: LibraryAttribute[];
-    displayName?: string;
-  }>;
+  /** Struct member fields (name + declared type, with array dimensions and string lengths), so a consuming
+   *  compilation can type member access on a dependency struct (e.g. `MATH.PI`). Only set for `kind: "struct"`;
+   *  optional for backward compatibility. */
+  fields?: Array<
+    LibraryTypeRef & {
+      name: string;
+      attributes?: LibraryAttribute[];
+      displayName?: string;
+    }
+  >;
+  /**
+   * What an alias names, with string lengths and, for an array type of constant bounds, its dimensions and element
+   * type (`type` is then `__INLINE_ARRAY_<element>`). Absent for a subrange or an array of non-constant bounds.
+   */
+  aliasOf?: LibraryTypeRef;
   /** Members of an enumeration, in declaration order, with their explicit values as written. */
   members?: Array<{
     name: string;

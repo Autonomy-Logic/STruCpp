@@ -54,8 +54,8 @@ PROGRAM Main
   w := w AND 16#0F0F OR 16#1000;
   FOR i := 1 TO Steps DO Loc(Step := i); END_FOR;
   Rt(Align := Hmi_Align#Right);
-  a := Center;
-  CASE a OF Hmi_Align#Left: c := 1; Right: c := 3; ELSE c := 2; END_CASE;
+  a := Hmi_Align#Center;
+  CASE a OF Hmi_Align#Left: c := 1; Hmi_Align#Right: c := 3; ELSE c := 2; END_CASE;
   clipped := Clip(250) + Clip(V := -5, Hi := 10) + Clip(7, 5);
   total := Loc.Total * 1000 + Rt.Code * 100 + clipped;
 END_PROGRAM

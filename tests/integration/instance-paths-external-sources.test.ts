@@ -10,6 +10,7 @@ import * as os from "os";
 import * as path from "path";
 import { execSync } from "child_process";
 import { compile } from "../../src/index.js";
+import { discoverStlibs } from "../../src/node/library-loader.js";
 import type { CompileOptions, CompileResult } from "../../src/index.js";
 import {
   hasGpp,
@@ -159,6 +160,102 @@ describe("externalSources", () => {
   });
 });
 
+/** A PLC whose program holds a standard function block and library structures. */
+const LIB_PLC_DECLS = `
+PROGRAM Main
+VAR T1 : TON; f : FRACTION; c : COMPLEX; END_VAR
+;
+END_PROGRAM
+CONFIGURATION Config0
+RESOURCE Res0 ON PLC
+  TASK task0(INTERVAL := T#20ms, PRIORITY := 1);
+  PROGRAM instance0 WITH task0 : Main;
+END_RESOURCE
+END_CONFIGURATION
+`;
+
+const LIB_PLC = LIB_PLC_DECLS.replace(
+  ";\nEND_PROGRAM",
+  "f.NUMERATOR := 7; T1(IN := TRUE, PT := T#0s);\nEND_PROGRAM",
+);
+
+const LIB_SCREEN = `
+{attribute 'instance_paths'}
+PROGRAM HmiMain
+VAR q : BOOL; n : INT; END_VAR
+q := instance0.Main.T1.Q;
+n := instance0.Main.f.NUMERATOR;
+instance0.Main.c.RE := 2.5;
+END_PROGRAM
+${HMI_CONFIG}
+`;
+
+function bundledLibraries(): CompileOptions["libraries"] {
+  return discoverStlibs(path.resolve(__dirname, "../../libs"));
+}
+
+function compileLibHmi(
+  screen: string,
+  extra: Partial<CompileOptions> = {},
+): CompileResult {
+  return compile(screen, {
+    fileName: "screen.st",
+    additionalSources: [{ source: LIB_PLC_DECLS, fileName: "hmi_plc.st" }],
+    externalInstancePaths: true,
+    externalSources: ["hmi_plc.st"],
+    headerFileName: "hmi.hpp",
+    namespace: "hmi",
+    libraries: bundledLibraries(),
+    ...extra,
+  });
+}
+
+/** All the C++ a compilation produced. */
+function allCode(result: CompileResult): string {
+  return [
+    result.headerCode,
+    result.cppCode,
+    ...result.cppFiles.map((f) => f.content),
+    result.libraryHeader?.content ?? "",
+  ].join("\n");
+}
+
+describe("externalSources with libraries", () => {
+  for (const separateLibraryFiles of [false, true]) {
+    it(`emits no library code reached only from host-owned declarations (separateLibraryFiles: ${separateLibraryFiles})`, () => {
+      const hmi = compileLibHmi(LIB_SCREEN, { separateLibraryFiles });
+      expect(hmi.errors).toEqual([]);
+      const code = allCode(hmi);
+      expect(code).not.toMatch(/class TON\b/);
+      expect(code).not.toMatch(/\bFRACTION\b/);
+      expect(code).not.toMatch(/\bCOMPLEX\b/);
+      expect(hmi.cppFiles.map((f) => f.name)).toEqual([
+        "configuration.cpp",
+        "pou_HMIMAIN.cpp",
+      ]);
+      expect(hmi.instancePaths?.map((e) => [e.path, e.type])).toEqual([
+        ["CONFIG0.RES0.INSTANCE0.MAIN.T1.Q", "BOOL"],
+        ["CONFIG0.RES0.INSTANCE0.MAIN.F.NUMERATOR", "INT"],
+        ["CONFIG0.RES0.INSTANCE0.MAIN.C.RE", "REAL"],
+      ]);
+    });
+
+    it(`emits the library code the unit's own sources use (separateLibraryFiles: ${separateLibraryFiles})`, () => {
+      const hmi = compileLibHmi(
+        LIB_SCREEN.replace(
+          "VAR q : BOOL; n : INT; END_VAR",
+          "VAR q : BOOL; n : INT; own : TON; END_VAR own(IN := q, PT := T#1s);",
+        ),
+        { separateLibraryFiles },
+      );
+      expect(hmi.errors).toEqual([]);
+      const code = allCode(hmi);
+      expect(code).toMatch(/class TON\b/);
+      expect(code).not.toMatch(/\bFRACTION\b/);
+    });
+  }
+});
+
 const describeIfGpp = hasGpp ? describe : describe.skip;
 
 describeIfGpp("externalSources compiled and run with g++", () => {
@@ -238,3 +335,83 @@ int main() {
     );
   });
 });
+
+describeIfGpp(
+  "externalSources with libraries compiled and run with g++",
+  () => {
+    let dir: string;
+
+    beforeAll(() => {
+      dir = fs.mkdtempSync(path.join(os.tmpdir(), "strucpp-external-libs-"));
+    });
+
+    afterAll(() => {
+      fs.rmSync(dir, { recursive: true, force: true });
+    });
+
+    it("reads a library block's output and a library structure's field, and writes another, through the host", () => {
+      const plc = compile(LIB_PLC, {
+        headerFileName: "plc.hpp",
+        libraries: bundledLibraries(),
+      });
+      expect(plc.errors).toEqual([]);
+      const hmi = compileLibHmi(LIB_SCREEN);
+      expect(hmi.errors).toEqual([]);
+      const entries = hmi.instancePaths ?? [];
+      const cppOf = (p: string): string =>
+        `g_config.${p.split(".").slice(2, 3).concat(p.split(".").slice(4)).join(".")}`;
+      const host: string[] = ["namespace strucpp {"];
+      host.push("void* external_variable(uint32_t id) { switch (id) {");
+      for (const e of entries)
+        host.push(`case ${e.id}: return &${cppOf(e.path)};`);
+      host.push("} std::abort(); }");
+      host.push(
+        "void external_store(uint32_t id, const void* value) { switch (id) {",
+      );
+      for (const e of entries)
+        host.push(
+          `case ${e.id}: ${cppOf(e.path)} = *static_cast<const IEC_${e.type}*>(value); return;`,
+        );
+      host.push("} std::abort(); }");
+      host.push("}");
+      const files: Record<string, string> = {
+        "plc.hpp": plc.headerCode,
+        "plc.cpp": plc.cppCode,
+        "hmi.hpp": hmi.headerCode,
+        "hmi.cpp": hmi.cppCode,
+        "host.cpp": `#include "plc.hpp"
+#include "iec_external.hpp"
+#include <cstdlib>
+extern strucpp::Configuration_CONFIG0 g_config;
+${host.join("\n")}
+`,
+        "main.cpp": `#include "plc.hpp"
+#include "hmi.hpp"
+#include <cstdio>
+strucpp::Configuration_CONFIG0 g_config;
+hmi::Configuration_HMICONFIG h_config;
+int main() {
+  g_config.INSTANCE0.run();
+  g_config.INSTANCE0.run();
+  h_config.HMIINSTANCE.run();
+  auto& H = h_config.HMIINSTANCE;
+  std::printf("%d %d %.1f\\n", (int)H.Q.get(), (int)H.N.get(), (double)g_config.INSTANCE0.C.RE.get());
+  return 0;
+}`,
+      };
+      for (const [name, text] of Object.entries(files))
+        fs.writeFileSync(path.join(dir, name), text);
+      const bin = path.join(dir, "run");
+      execSync(
+        `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE_PATH}" -I"${dir}" -o "${bin}" ` +
+          ["plc.cpp", "hmi.cpp", "host.cpp", "main.cpp"]
+            .map((f) => `"${path.join(dir, f)}"`)
+            .join(" "),
+        { encoding: "utf-8", env: cxxEnv },
+      );
+      expect(execSync(`"${bin}"`, { encoding: "utf-8" }).trim()).toBe(
+        "1 7 2.5",
+      );
+    });
+  },
+);

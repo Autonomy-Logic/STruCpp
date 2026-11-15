@@ -5,8 +5,14 @@
  * `externalInstancePaths`.
  */
 import { describe, it, expect } from "vitest";
-import { compile } from "../../src/index.js";
-import type { CompileOptions, CompileResult } from "../../src/index.js";
+import { analyze, compile, walkAST } from "../../src/index.js";
+import type {
+  ASTNode,
+  CompileOptions,
+  CompileResult,
+  VariableExpression,
+} from "../../src/index.js";
+import { CodeGenerator } from "../../src/backend/codegen.js";
 
 const SOURCE = `
 TYPE GVL_T : STRUCT Output1 : INT; END_STRUCT; END_TYPE
@@ -81,8 +87,9 @@ describe("instance paths: default mode", () => {
     expect(header).not.toContain("iec_external.hpp");
   });
 
-  it("reaches the globals directly", () => {
-    expect(body).toContain("GCOUNT.value = GCOUNT.value + 1;");
+  it("reaches a configuration global under its lock and a top-level global directly", () => {
+    expect(body).toContain("GCOUNT.write(GCOUNT.read() + 1);");
+    expect(body).not.toContain("GCOUNT.value");
     expect(body).toContain("GVL.OUTPUT1 = X;");
   });
 
@@ -175,5 +182,81 @@ describe("external mode without any path", () => {
     expect(result.errors).toEqual([]);
     expect(result.headerCode).toContain('#include "iec_external.hpp"');
     expect(result.instancePaths).toEqual([]);
+  });
+});
+
+describe("external mode without an id", () => {
+  it("refuses to generate an instance path or a configuration global that has none", () => {
+    for (const target of ["instance", "global"] as const) {
+      const analyzed = analyze(SOURCE, { externalInstancePaths: true });
+      expect(analyzed.errors).toEqual([]);
+      const ast = analyzed.ast;
+      if (ast === undefined) throw new Error("no AST");
+      walkAST(ast as ASTNode, (node) => {
+        const ref = (node as VariableExpression).instancePath;
+        if (node.kind === "VariableExpression" && ref?.kind === target)
+          ref.id = -1;
+      });
+      const codegen = new CodeGenerator(analyzed.symbolTables, {
+        externalInstancePaths: true,
+      });
+      expect(() => codegen.generate(ast)).toThrow(
+        target === "instance"
+          ? "Internal error: 'CONFIG0.RES0.INSTANCE0.MAIN.SPEED' has no external id with externalInstancePaths."
+          : "Internal error: 'CONFIG0.GCOUNT' has no external id with externalInstancePaths.",
+      );
+    }
+  });
+});
+
+describe("configuration globals in the default mode", () => {
+  const LOCKED = `
+TYPE Pt : STRUCT x : INT; y : INT; END_STRUCT; END_TYPE
+FUNCTION Twice : INT VAR_IN_OUT v : INT; END_VAR v := v * 2; Twice := v; END_FUNCTION
+FUNCTION_BLOCK Fb VAR_INPUT i : BOOL; END_VAR VAR_OUTPUT q : BOOL; END_VAR VAR_IN_OUT io : INT; END_VAR q := i; io := io + 1; END_FUNCTION_BLOCK
+PROGRAM Main VAR x : INT; END_VAR x := x + 1; END_PROGRAM
+{attribute 'instance_paths'}
+FUNCTION_BLOCK Screen
+VAR n : INT; f : Fb; pt : Pt; b : BOOL; END_VAR
+n := gCount; gCount := n + 1; Config0.gCount := 3;
+b := gW.3; gW.4 := TRUE;
+pt := gP; gP := pt; gP.x := 5; n := gP.y;
+f(i := gB, q => gB, io := gCount);
+n := Twice(gCount);
+END_FUNCTION_BLOCK
+CONFIGURATION Config0
+VAR_GLOBAL gCount : INT; gB : BOOL; gP : Pt; gW : WORD; END_VAR
+RESOURCE Res0 ON PLC TASK t(INTERVAL := T#20ms, PRIORITY := 1); PROGRAM instance0 WITH t : Main; END_RESOURCE
+END_CONFIGURATION
+`;
+
+  it("reads and writes them as VAR_EXTERNAL does: read/write for scalars, with_lock for bits and composites", () => {
+    const result = compile(LOCKED);
+    expect(result.errors).toEqual([]);
+    const lines = screenBody(result)
+      .split("\n")
+      .map((l) => l.trim());
+    const start = lines.indexOf("N = GCOUNT.read();");
+    expect(lines.slice(start, start + 19)).toEqual([
+      "N = GCOUNT.read();",
+      "GCOUNT.write(N + 1);",
+      "GCOUNT.write(3);",
+      "B = GW.with_lock([&](auto* __glk){ return ((static_cast<uint64_t>((*__glk)) >> 3) & 1); });",
+      "auto __gwv_0 = true;",
+      "GW.with_lock([&](auto* __glk){ (*__glk) = ((*__glk) & ~(1ULL << 4)) | ((__gwv_0 ? 1ULL : 0ULL) << 4); });",
+      "PT_ = GP.with_lock([&](auto* __glk){ return (*__glk); });",
+      "auto __gwv_1 = PT_;",
+      "GP.with_lock([&](auto* __glk){ (*__glk) = __gwv_1; });",
+      "auto __gwv_2 = 5;",
+      "GP.with_lock([&](auto* __glk){ (*__glk).X = __gwv_2; });",
+      "N = GP.with_lock([&](auto* __glk){ return (*__glk).Y; });",
+      "F.I = GB.read();",
+      "F.IO = GCOUNT.read();",
+      "F();",
+      "F.ENO = true;",
+      "GCOUNT.write(F.IO);",
+      "GB.write(F.Q);",
+      "N = TWICE(GCOUNT.value);",
+    ]);
   });
 });

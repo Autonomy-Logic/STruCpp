@@ -4,7 +4,12 @@
  * Instance paths and globals in POUs marked `{attribute 'instance_paths'}`: resolution, types and every error.
  */
 import { describe, it, expect } from "vitest";
+import * as path from "path";
 import { analyze, compile, walkAST } from "../../src/index.js";
+import { compileStlib } from "../../src/library/library-compiler.js";
+import { loadStlibFromString } from "../../src/library/library-loader.js";
+import { discoverStlibs } from "../../src/node/library-loader.js";
+import type { StlibArchive } from "../../src/library/library-manifest.js";
 import type {
   CompileOptions,
   VariableExpression,
@@ -392,6 +397,27 @@ describe("instance paths: external mode rules", () => {
     expect(messages(source)).toEqual([]);
   });
 
+  it("refuses a path passed to a VAR_IN_OUT of a function block, inherited ones included", () => {
+    const blocks = `FUNCTION_BLOCK Adder VAR_INPUT a : INT; END_VAR VAR_IN_OUT acc : INT; END_VAR acc := acc + a; END_FUNCTION_BLOCK
+FUNCTION_BLOCK Adder2 EXTENDS Adder VAR_INPUT k : INT; END_VAR END_FUNCTION_BLOCK
+`;
+    const source =
+      DECLS +
+      blocks +
+      screen(
+        "ad(a := 2, acc := gCount); ad2(k := 1, acc := instance0.Main.Speed); ad(a := instance0.Main.Speed, acc := x);",
+        "x : INT; ad : Adder; ad2 : Adder2;",
+      ) +
+      CONFIG;
+    const msg = (p: string): string =>
+      `'${p}' cannot be used by address or reference (ADR, REF, REF=, VAR_IN_OUT, REFERENCE TO) with externalInstancePaths.`;
+    expect(messages(source, { externalInstancePaths: true })).toEqual([
+      msg("GCOUNT"),
+      msg("INSTANCE0.MAIN.SPEED"),
+    ]);
+    expect(messages(source)).toEqual([]);
+  });
+
   it("refuses binding an output to a path", () => {
     expect(
       external(
@@ -495,5 +521,193 @@ describe("instance paths: compile result", () => {
     );
     expect(result.errors).toEqual([]);
     expect(result.instancePaths).toBeUndefined();
+  });
+});
+
+describe("instance paths: bit indices", () => {
+  it("refuses a bit beyond the value's width, as for a local", () => {
+    const message = "Bit index 20 is out of range for type WORD (0..15)";
+    for (const options of [{}, { externalInstancePaths: true }]) {
+      expect(
+        messages(
+          DECLS + screen("instance0.Main.Flags.20 := TRUE;") + CONFIG,
+          options,
+        ),
+      ).toEqual([message]);
+      expect(
+        messages(
+          DECLS + screen("b := instance0.Main.Flags.16;") + CONFIG,
+          options,
+        ),
+      ).toEqual(["Bit index 16 is out of range for type WORD (0..15)"]);
+      expect(
+        messages(
+          DECLS + screen("b := instance0.Main.Flags.15;") + CONFIG,
+          options,
+        ),
+      ).toEqual([]);
+    }
+  });
+});
+
+/** A library with a structure holding a string, an array and an alias, an array type, and one whose bound is a constant. */
+function shapesLibrary(): StlibArchive {
+  const lib = compileStlib(
+    [
+      {
+        fileName: "shapes.st",
+        source: `TYPE Celsius : REAL; END_TYPE
+TYPE Samples : ARRAY[0..2] OF INT; END_TYPE
+VAR_GLOBAL CONSTANT SHAPES_N : INT := 3; END_VAR
+TYPE Buffer : ARRAY[0..SHAPES_N] OF INT; END_TYPE
+TYPE Reading : STRUCT label : STRING[12]; values : ARRAY[0..2] OF INT; temp : Celsius; END_STRUCT; END_TYPE`,
+      },
+    ],
+    { name: "shapes", version: "1.0.0", namespace: "shapes" },
+  );
+  expect(lib.errors).toEqual([]);
+  return loadStlibFromString(JSON.stringify(lib.archive), "shapes");
+}
+
+describe("instance paths: library types", () => {
+  const PLC = `PROGRAM Main VAR f : FRACTION; c : COMPLEX; r : Reading; s : Samples; b : Buffer; END_VAR END_PROGRAM
+CONFIGURATION Config0 RESOURCE Res0 ON PLC TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+PROGRAM instance0 WITH t : Main; END_RESOURCE END_CONFIGURATION`;
+  const libraries = (): StlibArchive[] => [
+    ...discoverStlibs(path.resolve(__dirname, "../../libs")),
+    shapesLibrary(),
+  ];
+  const external = (body: string): ReturnType<typeof compile> =>
+    compile(
+      `{attribute 'instance_paths'} PROGRAM H VAR n : INT; t : REAL; l : STRING[12]; END_VAR ${body} END_PROGRAM`,
+      {
+        fileName: "h.st",
+        additionalSources: [{ fileName: "plc.st", source: PLC }],
+        externalInstancePaths: true,
+        externalSources: ["plc.st"],
+        libraries: libraries(),
+      },
+    );
+
+  it("types the fields, strings, arrays and aliases of library structures", () => {
+    const result = external(
+      "n := instance0.Main.f.NUMERATOR; instance0.Main.c.RE := 1.0; l := instance0.Main.r.label; n := instance0.Main.r.values[2]; t := instance0.Main.r.temp; n := instance0.Main.s[1];",
+    );
+    expect(result.errors).toEqual([]);
+    expect(
+      result.instancePaths?.map((e) => ({
+        path: e.path,
+        type: e.type,
+        ...(e.maxLength !== undefined ? { maxLength: e.maxLength } : {}),
+      })),
+    ).toEqual([
+      { path: "CONFIG0.RES0.INSTANCE0.MAIN.F.NUMERATOR", type: "INT" },
+      { path: "CONFIG0.RES0.INSTANCE0.MAIN.C.RE", type: "REAL" },
+      {
+        path: "CONFIG0.RES0.INSTANCE0.MAIN.R.LABEL",
+        type: "STRING",
+        maxLength: 12,
+      },
+      { path: "CONFIG0.RES0.INSTANCE0.MAIN.R.VALUES[2]", type: "INT" },
+      { path: "CONFIG0.RES0.INSTANCE0.MAIN.R.TEMP", type: "REAL" },
+      { path: "CONFIG0.RES0.INSTANCE0.MAIN.S[1]", type: "INT" },
+    ]);
+    expect(result.cppCode).toContain("N = strucpp::external_read<IEC_INT>(0);");
+    expect(result.cppCode).toContain(
+      "strucpp::external_write<IEC_REAL>(1, 1.0f);",
+    );
+  });
+
+  it("refuses a path that cannot be resolved", () => {
+    expect(
+      external("n := instance0.Main.f.NOPE;").errors.map((e) => e.message),
+    ).toEqual([
+      "'INSTANCE0.MAIN.F.NOPE' cannot be accessed with externalInstancePaths: 'CONFIG0.RES0.INSTANCE0.MAIN.F' has no member 'NOPE' of a known type.",
+    ]);
+    expect(
+      external("n := instance0.Main.b[1];").errors.map((e) => e.message),
+    ).toEqual([
+      "'INSTANCE0.MAIN.B[1]' cannot be accessed with externalInstancePaths: 'CONFIG0.RES0.INSTANCE0.MAIN.B' is not an array of a known element type.",
+    ]);
+  });
+});
+
+describe("instance paths: calls", () => {
+  it("refuses a call through an instance path, in both modes", () => {
+    for (const options of [{}, { externalInstancePaths: true }]) {
+      expect(
+        messages(
+          DECLS + screen("instance0.Main.t(IN := TRUE);") + CONFIG,
+          options,
+        ),
+      ).toEqual([
+        "Calls through an instance path are not supported: 'INSTANCE0.MAIN.T'.",
+      ]);
+      expect(
+        messages(
+          DECLS + screen("Config0.Res0.instance0.Main.t(IN := TRUE);") + CONFIG,
+          options,
+        ),
+      ).toEqual([
+        "Calls through an instance path are not supported: 'CONFIG0.RES0.INSTANCE0.MAIN.T'.",
+      ]);
+    }
+  });
+
+  it("refuses a call of a configuration global function block instance", () => {
+    const config = CONFIG.replace(
+      "Setpoint : REAL;",
+      "Setpoint : REAL; gTim : MyTimer;",
+    );
+    for (const body of ["gTim(IN := TRUE);", "Config0.gTim(IN := TRUE);"])
+      expect(messages(DECLS + screen(body) + config)).toEqual([
+        `Calling '${body.startsWith("Config0") ? "CONFIG0.GTIM" : "GTIM"}' is not supported: it is a function block instance declared as a configuration global.`,
+      ]);
+  });
+
+  it("refuses a call of a host-owned function block global in external mode, in marked and unmarked POUs", () => {
+    const plc = `VAR_GLOBAL gTim : MyTimer; END_VAR
+PROGRAM Main VAR x : INT; END_VAR END_PROGRAM
+CONFIGURATION Config0 VAR_GLOBAL cTim : MyTimer; END_VAR
+RESOURCE Res0 ON PLC TASK t(INTERVAL := T#20ms, PRIORITY := 1); PROGRAM instance0 WITH t : Main; END_RESOURCE
+END_CONFIGURATION`;
+    const hmi = `FUNCTION_BLOCK MyTimer VAR_INPUT IN : BOOL; END_VAR VAR_OUTPUT Q : BOOL; END_VAR Q := IN; END_FUNCTION_BLOCK
+{attribute 'instance_paths'} PROGRAM Marked gTim(IN := TRUE); cTim(IN := TRUE); END_PROGRAM
+PROGRAM Plain VAR own : MyTimer; END_VAR gTim(IN := TRUE); own(IN := TRUE); END_PROGRAM`;
+    const message = (name: string): string =>
+      `Calling '${name}' is not supported with externalInstancePaths: it is a function block instance of the PLC, which the host owns.`;
+    expect(
+      messages(hmi, {
+        fileName: "hmi.st",
+        additionalSources: [{ fileName: "plc.st", source: plc }],
+        externalInstancePaths: true,
+        externalSources: ["plc.st"],
+      }),
+    ).toEqual([message("GTIM"), message("CTIM"), message("GTIM")]);
+  });
+});
+
+describe("instance paths: configuration globals", () => {
+  it("refuses a bare global declared in more than one configuration, and accepts the long form", () => {
+    const second = `
+CONFIGURATION Config1
+VAR_GLOBAL gCount : INT; END_VAR
+RESOURCE Res0 ON PLC
+  TASK t(INTERVAL := T#20ms, PRIORITY := 1);
+  PROGRAM other WITH t : Mixer;
+END_RESOURCE
+END_CONFIGURATION
+`;
+    expect(messages(DECLS + screen("x := gCount;") + CONFIG + second)).toEqual([
+      "Global 'GCOUNT' is declared in more than one configuration ('CONFIG0', 'CONFIG1'); use the long form '<configuration>.GCOUNT'.",
+    ]);
+    expect(
+      messages(
+        DECLS +
+          screen("x := Config1.gCount; x := Config0.gCount;") +
+          CONFIG +
+          second,
+      ),
+    ).toEqual([]);
   });
 });

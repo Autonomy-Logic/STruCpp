@@ -340,6 +340,8 @@ export interface TypeDeclaration extends ASTNode {
   defaultValue?: Expression;
   /** Set on a TYPE hoisted from an inline enumeration or subrange. */
   inline?: InlineTypeOrigin;
+  /** Set on a type a linked library declares; its enumeration members are reached only qualified. */
+  library?: string;
 }
 
 /** Where a hoisted inline type was written. */
@@ -829,6 +831,8 @@ export interface InstancePathRef {
   bit?: number;
   /** Dense id of `path` in external mode; -1 in the default mode. */
   id: number;
+  /** Passed by address or reference (ADR, REF, REF=, a function's or method's VAR_IN_OUT or REFERENCE TO parameter). */
+  byReference?: boolean;
 }
 
 /**
