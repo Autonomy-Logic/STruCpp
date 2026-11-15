@@ -184,23 +184,19 @@ describeIfGpp("externalSources compiled and run with g++", () => {
       if (parts[0] === "CONFIG0") return `strucpp::${parts[1]}.value`;
       return `strucpp::${parts.join(".")}`;
     };
-    const byType = new Map<string, typeof entries>();
-    for (const e of entries)
-      byType.set(`IEC_${e.type}`, [...(byType.get(`IEC_${e.type}`) ?? []), e]);
     const host: string[] = ["namespace strucpp {"];
-    for (const [t, list] of byType) {
+    host.push("void* external_variable(uint32_t id) { switch (id) {");
+    for (const e of entries)
+      host.push(`case ${e.id}: return &${cppOf(e.path)};`);
+    host.push("} std::abort(); }");
+    host.push(
+      "void external_store(uint32_t id, const void* value) { switch (id) {",
+    );
+    for (const e of entries)
       host.push(
-        `template <> ${t} external_read<${t}>(uint32_t id) { switch (id) {`,
+        `case ${e.id}: ${cppOf(e.path)} = *static_cast<const IEC_${e.type}*>(value); return;`,
       );
-      for (const e of list) host.push(`case ${e.id}: return ${cppOf(e.path)};`);
-      host.push("} std::abort(); }");
-      host.push(
-        `template <> void external_write<${t}>(uint32_t id, const ${t}& v) { switch (id) {`,
-      );
-      for (const e of list)
-        host.push(`case ${e.id}: ${cppOf(e.path)} = v; return;`);
-      host.push("} std::abort(); }");
-    }
+    host.push("} std::abort(); }");
     host.push("}");
     const files: Record<string, string> = {
       "plc.hpp": plc.headerCode,

@@ -101,30 +101,24 @@ function cppOf(entry: InstancePathEntry): string {
   return `strucpp::${parts[0]}${access(parts.slice(1))}`;
 }
 
-/** Host definitions of `external_read` / `external_write` for every type the HMI unit uses. */
+/** Host definitions of `external_variable` / `external_store` for the paths the HMI unit uses. */
 function hostSpecializations(entries: InstancePathEntry[]): string {
-  const byType = new Map<string, InstancePathEntry[]>();
-  for (const e of entries) {
-    const cpp =
-      e.type === "STRING"
-        ? `IECStringVar<${e.maxLength ?? 254}>`
-        : `IEC_${e.type}`;
-    byType.set(cpp, [...(byType.get(cpp) ?? []), e]);
-  }
+  const cppType = (e: InstancePathEntry): string =>
+    e.type === "STRING"
+      ? `IECStringVar<${e.maxLength ?? 254}>`
+      : `IEC_${e.type}`;
   const out: string[] = ["namespace strucpp {"];
-  for (const [cpp, list] of byType) {
-    out.push(`template <> ${cpp} external_read<${cpp}>(uint32_t id) {`);
-    out.push("  switch (id) {");
-    for (const e of list) out.push(`    case ${e.id}: return ${cppOf(e)};`);
-    out.push(`  }\n  std::abort();\n}`);
+  out.push("void* external_variable(uint32_t id) {");
+  out.push("  switch (id) {");
+  for (const e of entries) out.push(`    case ${e.id}: return &${cppOf(e)};`);
+  out.push("  }\n  std::abort();\n}");
+  out.push("void external_store(uint32_t id, const void* value) {");
+  out.push("  switch (id) {");
+  for (const e of entries)
     out.push(
-      `template <> void external_write<${cpp}>(uint32_t id, const ${cpp}& v) {`,
+      `    case ${e.id}: ${cppOf(e)} = *static_cast<const ${cppType(e)}*>(value); return;`,
     );
-    out.push("  switch (id) {");
-    for (const e of list)
-      out.push(`    case ${e.id}: ${cppOf(e)} = v; return;`);
-    out.push(`  }\n  std::abort();\n}`);
-  }
+  out.push("  }\n  std::abort();\n}");
   out.push("}  // namespace strucpp");
   return out.join("\n");
 }

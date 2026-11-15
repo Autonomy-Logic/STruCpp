@@ -240,7 +240,8 @@ declared in the compilation's CONFIGURATIONs, and the globals, without VAR_ACCES
   (the object the debug table names), so only the first configuration is reachable and the instance must be
   assigned to a task; a configuration global compiles to its canonical value (`GCOUNT.value`).
 - `externalInstancePaths` (compile option): every read becomes `strucpp::external_read<T>(id)` and every write
-  `strucpp::external_write<T>(id, value)` (`iec_external.hpp`, defined by the host); a bit write reads, merges and
+  `strucpp::external_write<T>(id, value)` (`iec_external.hpp`, over the host's `external_variable(id)` and
+  `external_store(id, value)`, since the unit and its host share an address space); a bit write reads, merges and
   writes the whole value. `id` is dense per distinct canonical path, listed in the compile result's
   `instancePaths` (`id`, `kind`, `path`, `type`, `maxLength`, `read`, `written`). The programs, the configuration and
   the non-CONSTANT globals are not emitted, and no debug table is generated. A path must end at an elementary,

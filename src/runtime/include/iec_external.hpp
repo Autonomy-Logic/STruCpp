@@ -22,14 +22,12 @@
  * `T` is the C++ type the variable is declared with: `IEC_<TYPE>` for an
  * elementary type, `IECStringVar<N>` / `IECWStringVar<N>` for a string.
  *
- * Only the primary templates are declared here. The host defines an explicit
- * specialization for each `T` the unit uses, for example:
+ * The unit and its host share an address space, so the host only locates and
+ * stores. It defines the two functions below once, for every type:
  *
  * @code
- * namespace strucpp {
- * template <> IEC_INT external_read<IEC_INT>(uint32_t id) { ... }
- * template <> void external_write<IEC_INT>(uint32_t id, const IEC_INT& value) { ... }
- * }
+ * void* strucpp::external_variable(uint32_t id);               // the variable object of path `id`
+ * void strucpp::external_store(uint32_t id, const void* value); // `value` points to a T holding the new value
  * @endcode
  */
 
@@ -40,13 +38,23 @@
 
 namespace strucpp {
 
-/** Value of the variable the path `id` names. Defined by the host per `T`. */
-template <typename T>
-T external_read(uint32_t id);
+/** The variable object the path `id` names, of the type the compile result lists. Defined by the host. */
+void* external_variable(uint32_t id);
 
-/** Stores `value` in the variable the path `id` names. Defined by the host per `T`. */
+/** Stores a new value in the variable the path `id` names; `value` points to an object of its type. Defined by the host. */
+void external_store(uint32_t id, const void* value);
+
+/** Value of the variable the path `id` names. */
 template <typename T>
-void external_write(uint32_t id, const T& value);
+T external_read(uint32_t id) {
+    return *static_cast<const T*>(external_variable(id));
+}
+
+/** Stores `value` in the variable the path `id` names. */
+template <typename T>
+void external_write(uint32_t id, const T& value) {
+    external_store(id, &value);
+}
 
 }  // namespace strucpp
 

@@ -67,8 +67,8 @@ export interface CompileOptions {
 
   /**
    * Compile instance paths (`inst.Prog.Var`) and globals used by POUs marked `{attribute 'instance_paths'}` as calls
-   * into host functions: `strucpp::external_read<T>(id)` and `strucpp::external_write<T>(id, value)`, declared in
-   * `iec_external.hpp`. The programs, the CONFIGURATION and the globals are then not emitted (their declarations
+   * to `strucpp::external_read<T>(id)` and `strucpp::external_write<T>(id, value)` (`iec_external.hpp`), which go
+   * through the host's `external_variable(id)` and `external_store(id, value)`. The programs, the CONFIGURATION and the globals are then not emitted (their declarations
    * only supply types), no debug table is generated, and `instancePaths` in the result maps each id to its path.
    */
   externalInstancePaths?: boolean;
