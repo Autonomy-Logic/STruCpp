@@ -165,3 +165,15 @@ describe("instance paths: external mode", () => {
     ]);
   });
 });
+
+describe("external mode without any path", () => {
+  it("includes the header all the same, so the unit's headers do not depend on its code", () => {
+    const result = compile(
+      "FUNCTION_BLOCK Plain VAR x : INT; END_VAR x := x + 1; END_FUNCTION_BLOCK",
+      { externalInstancePaths: true },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.headerCode).toContain('#include "iec_external.hpp"');
+    expect(result.instancePaths).toEqual([]);
+  });
+});

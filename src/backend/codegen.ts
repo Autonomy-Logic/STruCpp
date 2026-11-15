@@ -1438,7 +1438,7 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_pointer.hpp"');
     this.emitHeader('#include "iec_string.hpp"');
     this.emitHeader('#include "iec_wstring.hpp"');
-    if (this.usesInstancePaths.external) {
+    if (this.externalInstancePaths) {
       this.emitHeader('#include "iec_external.hpp"');
     }
     this.emitHeader("#include <array>");
