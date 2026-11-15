@@ -101,12 +101,14 @@ function validateCompileOptions(options: CompileOptions): void {
  *
  * Test builds bypass the shake: every chunk of every archive is
  * declared reachable so the test harness sees the full symbol set
- * regardless of what the source AST happens to reference.
+ * regardless of what the source AST happens to reference. Libraries named
+ * in `wholeLibraries` are reachable whole, with what their chunks depend on.
  */
 function collectUsedSymbols(
   ast: CompilationUnit,
   archives: StlibArchive[],
   includeEverything: boolean,
+  wholeLibraries: ReadonlySet<string> = new Set(),
 ): Map<string, Set<string>> {
   // When asked to include everything (test builds), short-circuit.
   if (includeEverything) {
@@ -191,14 +193,21 @@ function collectUsedSymbols(
   const reachable = new Set<string>(); // keys: "<library>:<chunk>"
   const queue: Array<{ library: string; chunk: string }> = [];
 
+  const seed = (entry: { library: string; chunk: string }): void => {
+    const key = `${entry.library}:${entry.chunk}`;
+    if (!reachable.has(key)) {
+      reachable.add(key);
+      queue.push(entry);
+    }
+  };
   for (const name of referencedNames) {
     const entry = symbolIndex.get(name);
-    if (entry) {
-      const key = `${entry.library}:${entry.chunk}`;
-      if (!reachable.has(key)) {
-        reachable.add(key);
-        queue.push(entry);
-      }
+    if (entry) seed(entry);
+  }
+  for (const archive of archives) {
+    if (!wholeLibraries.has(archive.manifest.name)) continue;
+    for (const chunk of archive.chunks ?? []) {
+      seed({ library: archive.manifest.name, chunk: chunk.name });
     }
   }
 
@@ -869,6 +878,7 @@ export function compile(
     pipeline.ast,
     pipeline.allArchives,
     isTestBuild,
+    new Set(pipeline.mergedOptions.wholeLibraries ?? []),
   );
 
   // Collect library headers for #include directives: those of a library whose code the unit uses, and those of a

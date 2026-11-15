@@ -51,6 +51,13 @@ export interface CompileOptions {
   separateLibraryFiles?: boolean;
 
   /**
+   * Linked libraries, by name, emitted whole: every chunk whether or not the unit reaches it, so the library's code
+   * (and, with separateLibraryFiles, its compiled object) does not change with the unit. Other libraries keep only
+   * what the unit reaches.
+   */
+  wholeLibraries?: string[];
+
+  /**
    * C++ namespace of everything the unit declares (default `strucpp`). Two units linked into one binary, such as a
    * PLC program and an HMI unit, each get their own. A custom namespace sees the runtime types through
    * `using namespace strucpp`. The debug table's own arrays stay in `strucpp::debug`, so only one unit of a binary

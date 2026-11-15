@@ -47,6 +47,7 @@ import type {
 } from "../project-model.js";
 import type {
   LibraryChunk,
+  LibraryTypeEntry,
   StlibArchive,
 } from "../library/library-manifest.js";
 import {
@@ -64,6 +65,8 @@ import {
   type FunctionBlockLookup,
 } from "../semantic/fb-lineage.js";
 import { lineageMembers } from "../ast-utils.js";
+import { libraryFunctionVarBlocks } from "../library/library-loader.js";
+import { isQualifiedOnly } from "../frontend/attributes.js";
 import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
@@ -502,14 +505,21 @@ export class CodeGenerator {
   /** Lazily built hooks for structure-initializer lowering (see getStructInitEmitter). */
   private structInitEmitter?: StructInitEmitter;
 
-  /** Lazily built set of file-level VAR_GLOBAL names (see fileScopeGlobalNames). */
-  private fileScopeGlobalNameCache?: Set<string>;
+  /** Lazily built type names of the file-level VAR_GLOBALs, by upper-case name (see fileScopeGlobalTypes). */
+  private fileScopeGlobalTypeCache?: Map<string, string>;
 
   /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
   private libraryFBFieldTypes: Map<string, string> = new Map();
 
   /** Extended type metadata for library FB fields (array dims, reference kind) */
   private libraryFBFieldTypeRefs: Map<string, LibraryFieldShape> = new Map();
+
+  /** Enumerations of the linked libraries whose members may be written unqualified. */
+  private libraryEnumDescriptors: Array<{ name: string; members: string[] }> =
+    [];
+
+  /** Parameters of the linked libraries' functions with a concrete signature, by upper-case name. */
+  private libraryFunctionBlocks: Map<string, readonly VarBlock[]> = new Map();
 
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
@@ -902,16 +912,19 @@ export class CodeGenerator {
    * Register type info from library manifests (enum types for :: emission,
    * struct types for known-type detection). Private — use registerLibraryArchives().
    */
-  private registerLibraryTypes(
-    types: Array<{ name: string; kind: string }>,
-  ): void {
+  private registerLibraryTypes(types: readonly LibraryTypeEntry[]): void {
     for (const t of types) {
       const nameUpper = t.name.toUpperCase();
       if (t.kind === "enum") {
-        // Members are not available in the manifest, but we only need to
-        // know the type IS an enum for :: emission in generateVariableExpression
+        const members = (t.members ?? []).map((m) => m.name);
         if (!this.enumTypeMembers.has(nameUpper)) {
-          this.enumTypeMembers.set(nameUpper, new Set());
+          this.enumTypeMembers.set(
+            nameUpper,
+            new Set(members.map((m) => m.toUpperCase())),
+          );
+        }
+        if (!isQualifiedOnly(t.attributes)) {
+          this.libraryEnumDescriptors.push({ name: t.name, members });
         }
       }
       this.knownStructTypes.add(nameUpper);
@@ -950,7 +963,74 @@ export class CodeGenerator {
       if (archive.manifest.types) {
         this.registerLibraryTypes(archive.manifest.types);
       }
+      if (!archive.manifest.isBuiltin) {
+        for (const fn of archive.manifest.functions) {
+          const generic = fn.parameters.some((p) =>
+            p.type.toUpperCase().startsWith("ANY"),
+          );
+          if (fn.variadic !== undefined || generic) continue;
+          const key = fn.name.toUpperCase();
+          if (!this.libraryFunctionBlocks.has(key)) {
+            this.libraryFunctionBlocks.set(key, libraryFunctionVarBlocks(fn));
+          }
+        }
+      }
     }
+  }
+
+  /**
+   * Emits the GVL globals that hold function block instances (`fbInstances`), or all the others. An instance needs its
+   * class defined, library classes included, so it goes after them; the others go before the classes, whose
+   * constructors bind VAR_EXTERNAL pointers to them.
+   */
+  private emitGvlGlobals(ast: CompilationUnit, fbInstances: boolean): void {
+    const holdsInstance = (decl: VarDeclaration): boolean =>
+      this.isFBType(decl.type.name) ||
+      (decl.type.elementTypeName !== undefined &&
+        this.isFBType(decl.type.elementTypeName));
+    const blocks = ast.globalVarBlocks
+      .map((block) => ({
+        block,
+        decls: block.declarations.filter(
+          (decl) => holdsInstance(decl) === fbInstances,
+        ),
+      }))
+      .filter((b) => b.decls.length > 0);
+    if (blocks.length === 0) return;
+    this.emitHeader("// Global variables");
+    for (const { block, decls } of blocks) {
+      const constQualifier = block.isConstant ? "const " : "";
+      for (const decl of decls) {
+        const cppType = this.mapTypeRefToCpp(decl.type);
+        for (const name of decl.names) {
+          this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
+          if (decl.initialValue) {
+            const initExpr = this.generateInitializer(
+              decl.initialValue,
+              cppType,
+              decl.type.name,
+            );
+            this.emitHeader(
+              `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
+            );
+          } else {
+            this.emitHeader(`inline ${cppType} ${name}{};`);
+          }
+          this.emitHeaderChunkMarker("end", "inlineGlobal", name);
+        }
+      }
+    }
+    this.emitHeader("");
+  }
+
+  /** Parameter blocks of a function the unit declares, else of a linked library's function with a concrete signature. */
+  private functionVarBlocks(
+    nameUpper: string,
+  ): readonly VarBlock[] | undefined {
+    const own = this.ast?.functions.find(
+      (f) => f.name.toUpperCase() === nameUpper,
+    );
+    return own?.varBlocks ?? this.libraryFunctionBlocks.get(nameUpper);
   }
 
   /**
@@ -1159,12 +1239,15 @@ export class CodeGenerator {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
-        if (td.inline?.owner === undefined) {
+        if (td.inline?.owner === undefined && !isQualifiedOnly(td.attributes)) {
           enumDescriptors.push({ name: td.name, members: memberNames });
         }
       }
     }
-    this.enumMemberToType = buildEnumMemberMap(enumDescriptors);
+    this.enumMemberToType = buildEnumMemberMap([
+      ...enumDescriptors,
+      ...this.libraryEnumDescriptors,
+    ]);
 
     // Register program names as types (CODESYS allows instantiating PROGRAMs like FBs)
     for (const prog of ast.programs) {
@@ -1420,35 +1503,8 @@ export class CodeGenerator {
       }
     }
 
-    // Generate top-level global variables (GVL files)
-    if (ast.globalVarBlocks.length > 0) {
-      this.emitHeader("// Global variables");
-      for (const block of ast.globalVarBlocks) {
-        const constQualifier = block.isConstant ? "const " : "";
-        for (const decl of block.declarations) {
-          const cppType = this.mapTypeRefToCpp(decl.type);
-          for (const name of decl.names) {
-            // `inline`, not a static-local behind a reference: the debug table takes
-            // their address into PROGMEM, which needs a constant.
-            this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
-            if (decl.initialValue) {
-              const initExpr = this.generateInitializer(
-                decl.initialValue,
-                cppType,
-                decl.type.name,
-              );
-              this.emitHeader(
-                `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
-              );
-            } else {
-              this.emitHeader(`inline ${cppType} ${name}{};`);
-            }
-            this.emitHeaderChunkMarker("end", "inlineGlobal", name);
-          }
-        }
-      }
-      this.emitHeader("");
-    }
+    // Top-level global variables (GVL files); those holding FB instances follow the FB classes
+    this.emitGvlGlobals(ast, false);
 
     // Inject reachable library chunks (header side).
     //
@@ -1487,6 +1543,8 @@ export class CodeGenerator {
       this.generateFBHeaderDeclaration(fb);
       this.emitHeaderChunkMarker("end", "functionBlock", fb.name);
     }
+
+    this.emitGvlGlobals(ast, true);
 
     // Generate program class declarations
     if (this.projectModel) {
@@ -1711,12 +1769,22 @@ export class CodeGenerator {
 
   /** Upper-case names of the compilation unit's file-level VAR_GLOBALs. */
   private fileScopeGlobalNames(): Set<string> {
-    if (!this.fileScopeGlobalNameCache) {
-      this.fileScopeGlobalNameCache = this.ast
-        ? new Set(collectFileScopeGlobals(this.ast).keys())
-        : new Set<string>();
+    return new Set(this.fileScopeGlobalTypes().keys());
+  }
+
+  /** Type names of the compilation unit's file-level VAR_GLOBALs, by upper-case name. */
+  private fileScopeGlobalTypes(): Map<string, string> {
+    if (!this.fileScopeGlobalTypeCache) {
+      this.fileScopeGlobalTypeCache = new Map(
+        this.ast
+          ? [...collectFileScopeGlobals(this.ast)].map(([name, decl]) => [
+              name,
+              decl.typeName,
+            ])
+          : [],
+      );
     }
-    return this.fileScopeGlobalNameCache;
+    return this.fileScopeGlobalTypeCache;
   }
 
   /**
@@ -4439,6 +4507,11 @@ export class CodeGenerator {
       expr.operator === "OR" ||
       expr.operator === "XOR"
     ) {
+      const isBool = (e: Expression): boolean =>
+        this.inferExprType(e)?.toUpperCase() === "BOOL";
+      if (isBool(expr.left) && isBool(expr.right)) {
+        return `iec_bool_${expr.operator.toLowerCase()}(${left}, ${right})`;
+      }
       return `(${left}) ${cppOp} (${right})`;
     }
 
@@ -4746,14 +4819,10 @@ export class CodeGenerator {
    * Returns undefined if function not found.
    */
   private getParamTypes(funcName: string): string[] | undefined {
-    if (!this.ast) return undefined;
-    const nameUpper = funcName.toUpperCase();
-    const funcDecl = this.ast.functions.find(
-      (f) => f.name.toUpperCase() === nameUpper,
-    );
-    if (!funcDecl) return undefined;
+    const varBlocks = this.functionVarBlocks(funcName.toUpperCase());
+    if (!varBlocks) return undefined;
     const types: string[] = [];
-    for (const block of funcDecl.varBlocks) {
+    for (const block of varBlocks) {
       if (
         block.blockType === "VAR_INPUT" ||
         block.blockType === "VAR_IN_OUT" ||
@@ -5194,18 +5263,25 @@ export class CodeGenerator {
       return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
     }
 
-    // 3. Check for named arguments that may need reordering
-    const hasNamedArgs = expr.arguments.some((arg) => arg.name !== undefined);
-    if (hasNamedArgs && this.ast) {
-      const reordered = this.reorderNamedArguments(expr);
-      if (reordered) {
-        return `${this.calleeName(expr)}(${reordered.join(", ")})`;
+    // 3. A function the unit or a library declares: arguments bound by name and position, omitted ones defaulted
+    const varBlocks = this.functionVarBlocks(nameUpper);
+    if (varBlocks !== undefined) {
+      const args = this.orderCallArguments(
+        varBlocks,
+        expr.arguments,
+        `function '${expr.functionName}'`,
+        expr.sourceSpan,
+      );
+      const hasNamedArgs = expr.arguments.some((arg) => arg.name !== undefined);
+      const paramTypes = this.getParamTypes(nameUpper);
+      if (paramTypes && !hasNamedArgs) {
+        this.coerceUserFuncArgs(args, expr.arguments, paramTypes);
       }
+      return `${this.calleeName(expr)}(${args.join(", ")})`;
     }
 
-    // 4. Default: emit as-is (with output argument validation)
+    // 4. Unknown callee: emit the arguments as written
     const args = expr.arguments.map((arg) => {
-      const generated = this.generateExpression(arg.value);
       if (arg.isOutput && arg.value.kind !== "VariableExpression") {
         this.codegenWarnings.push({
           message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
@@ -5214,52 +5290,8 @@ export class CodeGenerator {
           file: arg.sourceSpan.file,
         });
       }
-      return generated;
+      return this.generateExpression(arg.value);
     });
-
-    // Pad missing trailing VAR_OUTPUT/VAR_IN_OUT params with temp variables
-    if (this.ast) {
-      const funcDecl = this.ast.functions.find(
-        (f) => f.name.toUpperCase() === nameUpper,
-      );
-      if (funcDecl) {
-        const paramInfo: Array<{ blockType: string; typeName: string }> = [];
-        for (const block of funcDecl.varBlocks) {
-          if (
-            block.blockType === "VAR_INPUT" ||
-            block.blockType === "VAR_IN_OUT" ||
-            block.blockType === "VAR_OUTPUT"
-          ) {
-            for (const decl of block.declarations) {
-              for (let ni = 0; ni < decl.names.length; ni++) {
-                paramInfo.push({
-                  blockType: block.blockType,
-                  typeName: decl.type.name,
-                });
-              }
-            }
-          }
-        }
-        while (args.length < paramInfo.length) {
-          const param = paramInfo[args.length]!;
-          if (
-            param.blockType === "VAR_OUTPUT" ||
-            param.blockType === "VAR_IN_OUT"
-          ) {
-            args.push(this.emitOutputTempVar(param.typeName));
-          } else {
-            args.push(this.getTypeDefaultValue(param.typeName));
-          }
-        }
-      }
-    }
-
-    // Apply implicit widening casts for user-defined function args
-    const paramTypes = this.getParamTypes(nameUpper);
-    if (paramTypes) {
-      this.coerceUserFuncArgs(args, expr.arguments, paramTypes);
-    }
-
     return `${this.calleeName(expr)}(${args.join(", ")})`;
   }
 
@@ -5275,24 +5307,6 @@ export class CodeGenerator {
       (fb) => fb.methods.some((m) => m.name.toUpperCase() === upper),
     );
     return isOwnMethod ? `this->${expr.functionName}` : expr.functionName;
-  }
-
-  /**
-   * Reorder named arguments to match function declaration parameter order.
-   * Returns null if function not found in AST.
-   */
-  private reorderNamedArguments(expr: FunctionCallExpression): string[] | null {
-    if (!this.ast) return null;
-    const funcDecl = this.ast.functions.find(
-      (f) => f.name.toUpperCase() === expr.functionName.toUpperCase(),
-    );
-    if (!funcDecl) return null;
-    return this.orderCallArguments(
-      funcDecl.varBlocks,
-      expr.arguments,
-      `function '${expr.functionName}'`,
-      expr.sourceSpan,
-    );
   }
 
   /**
@@ -5952,9 +5966,9 @@ export class CodeGenerator {
     functionName: string,
     isElementCall = false,
   ): string | undefined {
-    const declaredType = this.currentScopeVarTypes.get(
-      functionName.toUpperCase(),
-    );
+    const declaredType =
+      this.currentScopeVarTypes.get(functionName.toUpperCase()) ??
+      this.fileScopeGlobalTypes().get(functionName.toUpperCase());
     if (!declaredType) return undefined;
     const varType = isElementCall
       ? this.ast

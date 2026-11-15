@@ -8,6 +8,7 @@
  */
 
 import type {
+  LibraryFunctionEntry,
   LibraryInterfaceEntry,
   LibraryManifest,
   LibraryMethodEntry,
@@ -22,6 +23,8 @@ import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
+  EnumDefinition,
+  EnumType,
   Expression,
   FunctionBlockDeclaration,
   IECType,
@@ -37,6 +40,7 @@ import type {
   VarDeclaration,
 } from "../frontend/ast.js";
 import { createDefaultSourceSpan } from "../frontend/ast.js";
+import { isQualifiedOnly } from "../frontend/attributes.js";
 import { parse as parseSource } from "../frontend/parser.js";
 import { buildAST } from "../frontend/ast-builder.js";
 import { ELEMENTARY_TYPES } from "../semantic/type-utils.js";
@@ -95,13 +99,38 @@ function isReferenceKind(
  *
  * A struct that exported its fields gets a real `StructDefinition`, so anything
  * walking the type — the debug table above all — can descend into its members.
+ * An enumeration that exported its members gets an `EnumDefinition` (names and
+ * base type; values stay in the library's C++), so it is debugged like a local one.
  * Everything else keeps the historical self-referential `TypeReference`, which
  * the walk reads as "opaque library type": an alias points at its base, and a
  * struct without exported fields genuinely has nothing to descend into.
  */
 function buildLibraryTypeDefinition(
   t: LibraryTypeEntry,
-): StructDefinition | TypeReference {
+): StructDefinition | EnumDefinition | TypeReference {
+  if (t.kind === "enum" && t.members !== undefined) {
+    return {
+      kind: "EnumDefinition",
+      sourceSpan: createDefaultSourceSpan(),
+      ...(t.baseType !== undefined
+        ? {
+            baseType: {
+              kind: "TypeReference" as const,
+              sourceSpan: createDefaultSourceSpan(),
+              name: t.baseType,
+              isReference: false,
+              referenceKind: "none" as const,
+            },
+          }
+        : {}),
+      members: t.members.map((m) => ({
+        kind: "EnumMember" as const,
+        sourceSpan: createDefaultSourceSpan(),
+        name: m.name,
+        ...(m.attributes !== undefined ? { attributes: m.attributes } : {}),
+      })),
+    };
+  }
   if (t.kind === "struct" && t.fields && t.fields.length > 0) {
     return {
       kind: "StructDefinition",
@@ -231,6 +260,42 @@ function makeVarBlock(
       };
     }),
   };
+}
+
+/** The direction of a library function parameter as the block that declares it. */
+const PARAMETER_BLOCKS: Readonly<
+  Record<LibraryFunctionEntry["parameters"][number]["direction"], VarBlockType>
+> = { input: "VAR_INPUT", output: "VAR_OUTPUT", inout: "VAR_IN_OUT" };
+
+/**
+ * The parameters of a library function as var blocks, one per run of the same direction so the declaration order
+ * (the C++ signature's order) is kept, with the defaults parsed back: a caller binds named arguments and fills the
+ * inputs it omits from them. A default that is not an ST expression refuses the archive.
+ */
+export function libraryFunctionVarBlocks(fn: LibraryFunctionEntry): VarBlock[] {
+  const vars: LibraryVarType[] = fn.parameters.map((p) => ({
+    name: p.name,
+    type: p.type,
+    ...(p.attributes !== undefined ? { attributes: p.attributes } : {}),
+    ...(p.initialValue !== undefined ? { initialValue: p.initialValue } : {}),
+  }));
+  const defaults = parseDefaults(vars);
+  const blocks: VarBlock[] = [];
+  let run: LibraryVarType[] = [];
+  let runType: VarBlockType | undefined;
+  fn.parameters.forEach((p, i) => {
+    const blockType = PARAMETER_BLOCKS[p.direction];
+    const v = vars[i];
+    if (v === undefined) return;
+    if (blockType !== runType && runType !== undefined) {
+      blocks.push(makeVarBlock(runType, run, defaults));
+      run = [];
+    }
+    runType = blockType;
+    run.push(v);
+  });
+  if (runType !== undefined) blocks.push(makeVarBlock(runType, run, defaults));
+  return blocks;
 }
 
 /** A library method as a declaration without a body: enough to call, override and check access. */
@@ -718,6 +783,31 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
  * Register a library's symbols into the compiler's symbol tables.
  * This makes library functions, FBs, and types available for semantic analysis.
  */
+/** The type of a library enumeration, so CASE, comparisons and typed literals treat it as a local one. */
+function libraryEnumType(
+  name: string,
+  members: readonly { name: string }[],
+): EnumType {
+  return { typeKind: "enum", name, values: members.map((m) => m.name) };
+}
+
+/** Defines each member of a library enumeration as a value of the global scope, unless a symbol already has its name. */
+function defineEnumValues(
+  symbolTables: SymbolTables,
+  enumType: string,
+  members: readonly { name: string }[],
+): void {
+  members.forEach((member, index) => {
+    if (symbolTables.globalScope.hasLocal(member.name)) return;
+    symbolTables.globalScope.define({
+      name: member.name,
+      kind: "enumValue",
+      enumType,
+      value: index,
+    });
+  });
+}
+
 export function registerLibrarySymbols(
   manifest: LibraryManifest,
   symbolTables: SymbolTables,
@@ -774,29 +864,32 @@ export function registerLibrarySymbols(
     // For a struct with exported fields, register a real StructType carrying its
     // member types, so member access on a dependency struct (e.g. `MATH.PI`)
     // resolves to the field's type rather than staying untyped.
+    const enumMembers = t.kind === "enum" ? (t.members ?? []) : undefined;
     const resolvedType: IECType =
-      t.kind === "struct" && t.fields
-        ? ({
-            typeKind: "struct",
-            name: t.name,
-            fields: new Map<string, IECType>(
-              t.fields.map((f) => [
-                f.name,
-                ELEMENTARY_TYPES[f.type.toUpperCase()] ??
-                  ({
-                    typeKind: "elementary",
-                    name: f.type,
-                    sizeBits: 0,
-                  } as ElementaryType),
-              ]),
-            ),
-          } as StructType)
-        : (ELEMENTARY_TYPES[t.name.toUpperCase()] ??
-          ({
-            typeKind: "elementary",
-            name: t.name,
-            sizeBits: 0,
-          } as ElementaryType));
+      enumMembers !== undefined
+        ? libraryEnumType(t.name, enumMembers)
+        : t.kind === "struct" && t.fields
+          ? ({
+              typeKind: "struct",
+              name: t.name,
+              fields: new Map<string, IECType>(
+                t.fields.map((f) => [
+                  f.name,
+                  ELEMENTARY_TYPES[f.type.toUpperCase()] ??
+                    ({
+                      typeKind: "elementary",
+                      name: f.type,
+                      sizeBits: 0,
+                    } as ElementaryType),
+                ]),
+              ),
+            } as StructType)
+          : (ELEMENTARY_TYPES[t.name.toUpperCase()] ??
+            ({
+              typeKind: "elementary",
+              name: t.name,
+              sizeBits: 0,
+            } as ElementaryType));
 
     try {
       symbolTables.globalScope.define({
@@ -823,6 +916,9 @@ export function registerLibrarySymbols(
       });
     } catch (e) {
       if (!(e instanceof DuplicateSymbolError)) throw e;
+    }
+    if (enumMembers !== undefined && !isQualifiedOnly(t.attributes)) {
+      defineEnumValues(symbolTables, t.name, enumMembers);
     }
   }
 

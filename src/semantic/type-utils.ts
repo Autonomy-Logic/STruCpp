@@ -28,6 +28,8 @@ import type {
   VariableExpression,
 } from "../frontend/ast.js";
 import type { TypeConstraint } from "./std-function-registry.js";
+import type { AnySymbol } from "./symbol-table.js";
+import { isQualifiedOnly } from "../frontend/attributes.js";
 import { IEC_BASE_TYPES, lookupBaseType } from "./iec-types-data.js";
 
 /**
@@ -895,6 +897,28 @@ export function typeName(type: IECType): string {
 export interface EnumMemberEntry {
   typeName: string | null;
   conflictingTypes: string[];
+}
+
+/** Narrows a type to an enumeration. */
+export function isEnumType(type: IECType | undefined): type is EnumType {
+  return type?.typeKind === "enum";
+}
+
+/**
+ * The enumerations of a scope whose members may be written unqualified: neither inline (owned by one POU) nor
+ * declared under `{attribute 'qualified_only'}`. Covers the unit's own types and those registered from libraries.
+ */
+export function unqualifiedEnumDescriptors(
+  symbols: Iterable<AnySymbol>,
+): Array<{ name: string; members: string[] }> {
+  const out: Array<{ name: string; members: string[] }> = [];
+  for (const sym of symbols) {
+    if (sym.kind !== "type" || !isEnumType(sym.resolvedType)) continue;
+    if (sym.declaration.inline?.owner !== undefined) continue;
+    if (isQualifiedOnly(sym.declaration.attributes)) continue;
+    out.push({ name: sym.resolvedType.name, members: sym.resolvedType.values });
+  }
+  return out;
 }
 
 /**

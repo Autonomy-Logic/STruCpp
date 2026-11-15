@@ -836,7 +836,8 @@ export function compileLibrary(
               block.declarations.flatMap((decl) => {
                 const initialValue =
                   decl.initialValue !== undefined
-                    ? serializeInitialValue(decl.initialValue)
+                    ? (text.slice(decl.initialValue.sourceSpan)?.trim() ??
+                      serializeInitialValue(decl.initialValue))
                     : undefined;
                 return decl.names.map((name, i) => ({
                   name,
@@ -903,6 +904,9 @@ export function compileLibrary(
         );
       }
       if (t.definition.kind === "EnumDefinition") {
+        if (t.definition.baseType !== undefined) {
+          entry.baseType = t.definition.baseType.name;
+        }
         entry.members = t.definition.members.map((m) => {
           const value =
             m.value !== undefined ? text.slice(m.value.sourceSpan) : undefined;

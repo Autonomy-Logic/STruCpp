@@ -526,6 +526,55 @@ describe("Library System", () => {
       expect(typeSym!.kind).toBe("type");
     });
 
+    it("registers a library enumeration as an enumeration with its members as values", () => {
+      const symbolTables = new SymbolTables();
+      const manifest = loadLibraryManifest({
+        name: "test",
+        version: "1.0.0",
+        namespace: "test",
+        functions: [],
+        functionBlocks: [],
+        types: [
+          {
+            name: "MODE",
+            kind: "enum",
+            baseType: "DINT",
+            members: [{ name: "OFF", value: "0" }, { name: "ON" }],
+          },
+          {
+            name: "PORT",
+            kind: "enum",
+            attributes: [{ name: "qualified_only" }],
+            members: [{ name: "TOP" }],
+          },
+        ],
+        headers: [],
+        isBuiltin: false,
+      });
+
+      registerLibrarySymbols(manifest, symbolTables);
+
+      const mode = symbolTables.globalScope.lookup("MODE");
+      expect(mode?.kind === "type" ? mode.resolvedType : undefined).toEqual({
+        typeKind: "enum",
+        name: "MODE",
+        values: ["OFF", "ON"],
+      });
+      const definition =
+        mode?.kind === "type" ? mode.declaration.definition : undefined;
+      expect(definition?.kind).toBe("EnumDefinition");
+      expect(
+        definition?.kind === "EnumDefinition"
+          ? definition.baseType?.name
+          : undefined,
+      ).toBe("DINT");
+      expect(symbolTables.globalScope.lookup("ON")).toMatchObject({
+        kind: "enumValue",
+        enumType: "MODE",
+      });
+      expect(symbolTables.globalScope.lookup("TOP")).toBeUndefined();
+    });
+
     it("should register function block symbols", () => {
       const symbolTables = new SymbolTables();
       const manifest = loadLibraryManifest({

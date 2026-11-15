@@ -26,7 +26,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 |------|--------|-------|
 | TYPE ... END_TYPE | Supported | Type aliases |
 | STRUCT ... END_STRUCT | Supported | With nested structs |
-| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value. A user or library FUNCTION with one of these names is called instead |
+| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value. A user or library FUNCTION with one of these names is called instead. An enumeration from a library is used as a local one: typed literals (`E#M`), unqualified members, CASE labels, comparisons and debugging. Under `{attribute 'qualified_only'}`, members must be written `E#M`, as in CODESYS |
 | Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
@@ -88,14 +88,14 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Arithmetic | `+`, `-`, `*`, `/`, `MOD`, `**` | Supported; REAL `**` computes like `EXPT`, in single precision |
 | Comparison | `=`, `<>`, `<`, `>`, `<=`, `>=` | Supported |
 | Logical | `AND`, `OR`, `XOR`, `NOT` | Supported |
-| Bitwise | `AND`, `OR`, `XOR`, `NOT` (on bit types) | Supported |
+| Bitwise | `AND`, `OR`, `XOR`, `NOT` (on bit types) | Supported; on BOOL both operands are evaluated (no short-circuit). `AND_THEN` / `OR_ELSE` are not supported |
 | Bit shift | `SHL`, `SHR`, `ROL`, `ROR` | Supported |
 | Assignment | `:=` | Supported |
 | Reference assign | `REF=` | Supported |
 | Dereference | `^`, `DREF()` | Supported |
 | Reference | `REF()` | Supported |
 | Parentheses | `( )` | Supported |
-| Function call | `name(args)` | Supported (positional + named) |
+| Function call | `name(args)` | Supported (positional + named); for local and library functions, named arguments bind by name and omitted inputs take the function's declared default (a library function's default is recorded in its archive) |
 | Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)`; named arguments bind by name and omitted inputs take the default of the method as declared for the static type at the call site (the interface's, a derived block's override, the pointer's base type), as CODESYS does, for local, interface and library methods. A default is evaluated in the callee: it may name the block's constants, and a default that reads one of the block's variables is not constant, so CODESYS and STruC++ warn and require the argument. Inside a block, an unqualified call to one of its own methods comes before a standard function of the same name (`Len()`, `Round()`), as in CODESYS. An omitted VAR_IN_OUT is an error, and so is an omitted input of a library method whose archive records no default for it | Supported |
 | Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
@@ -156,7 +156,7 @@ All IEC 61131-3 standard functions are implemented in the C++ runtime:
 | Bitwise | AND, OR, XOR, NOT, MOVE |
 | Bit Shift | SHL, SHR, ROL, ROR |
 | Type Conversion | *_TO_* (INT_TO_REAL, DINT_TO_STRING, etc.) |
-| String | LEN, LEFT, RIGHT, MID, CONCAT, FIND, REPLACE, INSERT, DELETE, UPPER, LOWER, TRIM |
+| String | LEN, LEFT, RIGHT, MID, CONCAT, FIND, REPLACE, INSERT, DELETE, UPPER, LOWER, TRIM (LEN and FIND return a signed INT) |
 | System | ADR, SIZEOF |
 
 ## Standard Function Blocks

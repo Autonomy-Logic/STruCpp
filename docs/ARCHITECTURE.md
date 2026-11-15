@@ -193,7 +193,7 @@ Libraries use a single-file `.stlib` archive format (JSON):
 
 `compileStlib()` compiles ST sources into a `.stlib` archive: parse -> codegen -> extract manifest from AST -> bundle C++ output + optional sources. Dependencies are flattened (transitive closure) and their C++ preambles are stripped to avoid duplication when consumers load them separately.
 
-The manifest describes every exported declaration for tools such as a widget catalogue: names as written (`displayName` when the spelling differs from the upper-cased `name`), default values as ST text (`initialValue`), enumeration members, attribute pragmas, and FB methods, properties and interfaces. A library whose `{external}` code calls a C API passes `headers` to `compileStlib()`; they are recorded in the manifest, and a consumer's generated header includes those of every library it uses. A header name is a relative path without `.` or `..` segments; `compileStlib()` and the loader refuse any other.
+The manifest describes every exported declaration for tools such as a widget catalogue: names as written (`displayName` when the spelling differs from the upper-cased `name`), default values as ST text (`initialValue`, function parameters included), enumeration members and base type, attribute pragmas, and FB methods, properties and interfaces. A library whose `{external}` code calls a C API passes `headers` to `compileStlib()`; they are recorded in the manifest, and a consumer's generated header includes those of every library it uses. A header name is a relative path without `.` or `..` segments; `compileStlib()` and the loader refuse any other.
 
 ### Embedding several units
 
