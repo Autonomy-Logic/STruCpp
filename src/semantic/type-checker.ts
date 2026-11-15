@@ -470,29 +470,39 @@ export class TypeChecker {
     expr: VariableExpression,
     scope: Scope,
   ): IECType | undefined {
-    const symbol = scope.lookup(expr.name);
-    if (symbol === undefined) {
-      // Don't report error here — Pass 3 undeclared-variable check handles this
-      return undefined;
-    }
-
-    if (symbol.kind !== "variable" && symbol.kind !== "constant") {
-      return undefined;
-    }
-
-    let currentType: IECType | undefined = symbol.type;
+    let currentType: IECType | undefined;
     let currentTypeName: string | undefined;
+    let steps = expr.accessChain;
+    const path = expr.instancePath;
+    if (path !== undefined) {
+      // An instance path or a global: start at the root variable's declared type.
+      currentTypeName = path.rootType.name;
+      currentType = this.resolveNamedType(path.rootType.name);
+      steps = (expr.accessChain ?? []).slice(path.consumed);
+    } else {
+      const symbol = scope.lookup(expr.name);
+      if (symbol === undefined) {
+        // Don't report error here — Pass 3 undeclared-variable check handles this
+        return undefined;
+      }
 
-    if (currentType?.typeKind === "elementary") {
-      currentTypeName = (currentType as ElementaryType).name;
-    } else if (currentType) {
-      // For non-elementary types, use the declaration type name
-      currentTypeName = symbol.declaration?.type?.name;
+      if (symbol.kind !== "variable" && symbol.kind !== "constant") {
+        return undefined;
+      }
+
+      currentType = symbol.type;
+
+      if (currentType?.typeKind === "elementary") {
+        currentTypeName = (currentType as ElementaryType).name;
+      } else if (currentType) {
+        // For non-elementary types, use the declaration type name
+        currentTypeName = symbol.declaration?.type?.name;
+      }
     }
 
     // Resolve access chain (accessChain is the preferred path)
-    if (expr.accessChain && expr.accessChain.length > 0 && this.ast) {
-      for (const step of expr.accessChain) {
+    if (steps && (steps.length > 0 || path !== undefined) && this.ast) {
+      for (const step of steps) {
         if (!currentTypeName) break;
 
         if (step.kind === "field") {

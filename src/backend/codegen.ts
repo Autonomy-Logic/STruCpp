@@ -26,6 +26,8 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  InstancePathRef,
+  ASTNode,
   ReferenceKind,
   TypeReference,
   AccessStep,
@@ -64,9 +66,10 @@ import {
   functionBlockLookup,
   type FunctionBlockLookup,
 } from "../semantic/fb-lineage.js";
-import { lineageMembers } from "../ast-utils.js";
+import { lineageMembers, walkAST } from "../ast-utils.js";
 import { libraryFunctionVarBlocks } from "../library/library-loader.js";
 import { isQualifiedOnly } from "../frontend/attributes.js";
+import { isHostOwned } from "../semantic/instance-paths.js";
 import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
@@ -74,6 +77,7 @@ import {
   formatIntegerLiteral,
   iecBaseToCppLiteral,
   translateIECString,
+  CONFIG_GLOBAL_NAME,
 } from "./codegen-utils.js";
 import {
   mangledMemberName,
@@ -245,6 +249,15 @@ export interface CodeGenOptions {
    * A library's object then stays valid while the unit's own code changes.
    */
   separateLibraryFiles?: boolean;
+
+  /**
+   * Compile instance paths and globals of `instance_paths` POUs as `strucpp::external_read` / `external_write`
+   * calls, and emit neither the programs, the configurations nor the globals.
+   */
+  externalInstancePaths?: boolean;
+
+  /** With `externalInstancePaths`: the source files whose programs, configurations and globals the host owns. */
+  externalSources?: readonly string[];
 
   /** Global constants injected as constexpr into the header preamble (before namespace) */
   globalConstants: Record<string, number>;
@@ -605,6 +618,30 @@ export class CodeGenerator {
 
   /** TypeCodeGenerator instance for type mapping */
   private typeCodeGen = new TypeCodeGenerator();
+
+  /** Whether instance paths and `instance_paths` globals compile to host calls. */
+  private get externalInstancePaths(): boolean {
+    return this.options.externalInstancePaths === true;
+  }
+
+  /** Upper-case names of the programs the host owns under external instance paths, which are not emitted. */
+  private hostPrograms = new Set<string>();
+
+  /** Upper-case names of the configurations the host owns under external instance paths, which are not emitted. */
+  private hostConfigurations = new Set<string>();
+
+  /** A PROGRAM, CONFIGURATION or top-level VAR_GLOBAL block the host owns. */
+  private isHostOwned(node: ASTNode): boolean {
+    return isHostOwned(node, {
+      external: this.externalInstancePaths,
+      ...(this.options.externalSources !== undefined
+        ? { externalSources: this.options.externalSources }
+        : {}),
+    });
+  }
+
+  /** The unit has an instance path (`external`: or a global) compiled through an `InstancePathRef`. */
+  private usesInstancePaths = { external: false, configuration: false };
 
   /** Get symbol tables (for future use in Phase 3+) */
   get symbolTables(): SymbolTables {
@@ -988,7 +1025,9 @@ export class CodeGenerator {
       this.isFBType(decl.type.name) ||
       (decl.type.elementTypeName !== undefined &&
         this.isFBType(decl.type.elementTypeName));
+    // With external instance paths only the CONSTANT host-owned ones are emitted; the rest live in the host.
     const blocks = ast.globalVarBlocks
+      .filter((block) => block.isConstant || !this.isHostOwned(block))
       .map((block) => ({
         block,
         decls: block.declarations.filter(
@@ -1257,6 +1296,26 @@ export class CodeGenerator {
     // Topologically sort FBs once (used in both header and implementation)
     this.sortedFBs = this.topologicalSortFBs(ast.functionBlocks);
 
+    this.hostPrograms = new Set(
+      ast.programs
+        .filter((p) => this.isHostOwned(p))
+        .map((p) => p.name.toUpperCase()),
+    );
+    this.hostConfigurations = new Set(
+      ast.configurations
+        .filter((c) => this.isHostOwned(c))
+        .map((c) => c.name.toUpperCase()),
+    );
+    this.usesInstancePaths = { external: false, configuration: false };
+    walkAST(ast, (node) => {
+      if (node.kind !== "VariableExpression") return;
+      const ref = (node as VariableExpression).instancePath;
+      if (ref === undefined) return;
+      if (ref.id >= 0) this.usesInstancePaths.external = true;
+      else if (ref.kind === "instance")
+        this.usesInstancePaths.configuration = true;
+    });
+
     // Generate header
     this.generateHeader(ast);
 
@@ -1379,6 +1438,9 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_pointer.hpp"');
     this.emitHeader('#include "iec_string.hpp"');
     this.emitHeader('#include "iec_wstring.hpp"');
+    if (this.usesInstancePaths.external) {
+      this.emitHeader('#include "iec_external.hpp"');
+    }
     this.emitHeader("#include <array>");
     this.emitHeader("#include <cstddef>");
     this.emitHeader("#include <string>");
@@ -1550,6 +1612,7 @@ export class CodeGenerator {
     if (this.projectModel) {
       // Use project model for enhanced generation with VAR_EXTERNAL support
       for (const prog of this.projectModel.programs.values()) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.emitHeaderChunkMarker(
           "begin",
           "functionBlock",
@@ -1565,6 +1628,7 @@ export class CodeGenerator {
     } else {
       // Fallback to AST-based generation
       for (const prog of ast.programs) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.emitHeaderChunkMarker(
           "begin",
           "functionBlock",
@@ -1589,10 +1653,12 @@ export class CodeGenerator {
     // Generate configuration class declarations
     if (this.projectModel) {
       for (const config of this.projectModel.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationHeaderFromModel(config);
       }
     } else {
       for (const config of ast.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationHeaderDeclaration(config);
       }
     }
@@ -1601,6 +1667,20 @@ export class CodeGenerator {
     this.generateLocatedVarsDeclaration();
 
     this.emitHeader(`}  // namespace ${ns}`);
+
+    // Instance paths reach program instances through the configuration object
+    // the runtime defines (the same one the debug table names).
+    const config = this.projectModel?.configurations[0];
+    if (
+      this.usesInstancePaths.configuration &&
+      !this.externalInstancePaths &&
+      config !== undefined
+    ) {
+      this.emitHeader("");
+      this.emitHeader(
+        `extern ::${ns}::Configuration_${config.name} ${CONFIG_GLOBAL_NAME};`,
+      );
+    }
   }
 
   /**
@@ -1645,10 +1725,12 @@ export class CodeGenerator {
 
     if (this.projectModel) {
       for (const config of this.projectModel.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationImplementationFromModel(config);
       }
     } else {
       for (const config of ast.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationImplementation(config);
       }
     }
@@ -1690,6 +1772,7 @@ export class CodeGenerator {
     // 2. One TU per program.
     if (this.projectModel) {
       for (const prog of this.projectModel.programs.values()) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.startTranslationUnit(this.pouFileName(prog.name));
         this.emitCppChunkMarker(
           "begin",
@@ -1702,6 +1785,7 @@ export class CodeGenerator {
       }
     } else {
       for (const prog of ast.programs) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.startTranslationUnit(this.pouFileName(prog.name));
         this.emitCppChunkMarker(
           "begin",
@@ -2935,6 +3019,7 @@ export class CodeGenerator {
     const seen = new Set<string>();
     let emittedAny = false;
     for (const config of this.projectModel.configurations) {
+      if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
       for (const gvar of config.globalVars) {
         const key = gvar.name.toUpperCase();
         // Same name across configurations = one canonical global (strucpp
@@ -3352,6 +3437,15 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      stmt.target.instancePath !== undefined &&
+      stmt.target.instancePath.id >= 0
+    ) {
+      this.emitInstancePathWrite(stmt.target.instancePath, stmt.value, indent);
+      return;
+    }
+
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
     if (propWrite) {
@@ -4110,6 +4204,11 @@ export class CodeGenerator {
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
+    if (expr.instancePath !== undefined) {
+      const access = this.generateInstancePathRead(expr, expr.instancePath);
+      if (access !== undefined) return access;
+    }
+
     // Composite shared global (struct / array / function-block) accessed in a
     // body: reach its canonical value directly through the GlobalVar pointer
     // (`g->value` / `g->value.field` / `g->value.field.N`). The per-global mutex
@@ -4287,6 +4386,79 @@ export class CodeGenerator {
     return this.renderAccessTail(result, expr, nameUpper);
   }
 
+  /** C++ value type of an external instance path's leaf, as passed to `external_read` / `external_write`. */
+  private instancePathLeafCpp(ref: InstancePathRef): string {
+    const leaf = ref.leaf;
+    if (leaf === undefined) {
+      throw new Error(
+        `Internal error: instance path '${ref.path}' has no leaf type.`,
+      );
+    }
+    return this.mapVarTypeToCpp(leaf.type, leaf.maxLength);
+  }
+
+  /**
+   * Read of an instance path or of a global reached from an `instance_paths` POU: a host call in external mode, the
+   * program instance's member through the configuration object or the configuration global's canonical value
+   * otherwise. Undefined for a top-level global in the default mode, which compiles as any other variable.
+   */
+  private generateInstancePathRead(
+    expr: VariableExpression,
+    ref: InstancePathRef,
+  ): string | undefined {
+    if (ref.id >= 0) {
+      const read = `strucpp::external_read<${this.instancePathLeafCpp(ref)}>(${ref.id})`;
+      return ref.bit === undefined
+        ? read
+        : `((static_cast<uint64_t>(${read}) >> ${ref.bit}) & 1)`;
+    }
+    const tail = (expr.accessChain ?? []).slice(ref.consumed);
+    const rootTypeName = ref.rootType.name;
+    if (ref.kind === "instance" && ref.instance !== undefined) {
+      const member = this.needsFieldMangling(
+        ref.variable,
+        rootTypeName,
+        ref.programType,
+      )
+        ? `${ref.variable}_`
+        : ref.variable;
+      const base = `::${CONFIG_GLOBAL_NAME}.${ref.instance}.${member}`;
+      return this.generateAccessChain(base, tail, ref.variable, rootTypeName);
+    }
+    if (ref.globalScope === "configuration") {
+      return this.generateAccessChain(
+        `${ref.variable}.value`,
+        tail,
+        ref.variable,
+        rootTypeName,
+      );
+    }
+    return undefined;
+  }
+
+  /** `strucpp::external_write` of an instance path or global; a bit write reads, merges and writes the whole value. */
+  private emitInstancePathWrite(
+    ref: InstancePathRef,
+    valueExpr: Expression,
+    indent: string,
+  ): void {
+    const cppType = this.instancePathLeafCpp(ref);
+    const leafType = ref.leaf?.type ?? "";
+    if (ref.bit === undefined) {
+      const value = this.generateRealOperand(valueExpr, leafType);
+      this.emit(
+        `${indent}strucpp::external_write<${cppType}>(${ref.id}, ${value});`,
+      );
+      return;
+    }
+    const value = this.generateExpression(valueExpr);
+    const raw = this.typeCodeGen.mapTypeToCpp(leafType);
+    const current = `static_cast<uint64_t>(strucpp::external_read<${cppType}>(${ref.id}))`;
+    this.emit(
+      `${indent}strucpp::external_write<${cppType}>(${ref.id}, static_cast<${raw}>((${current} & ~(1ULL << ${ref.bit})) | ((${value} ? 1ULL : 0ULL) << ${ref.bit})));`,
+    );
+  }
+
   /**
    * Render an expression's access chain (subscripts / field access / bit access /
    * dereference) onto a given base string. Factored out of
@@ -4379,9 +4551,10 @@ export class CodeGenerator {
     base: string,
     chain: AccessStep[],
     baseNameUpper: string,
+    baseType?: string,
   ): string {
     let result = base;
-    let currentType = this.currentScopeVarTypes.get(baseNameUpper);
+    let currentType = baseType ?? this.currentScopeVarTypes.get(baseNameUpper);
 
     for (let i = 0; i < chain.length; i++) {
       const step = chain[i]!;

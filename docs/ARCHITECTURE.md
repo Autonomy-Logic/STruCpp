@@ -55,6 +55,7 @@ src/
     symbol-table.ts          Scoped symbol tables (global -> POU -> local)
     type-registry.ts         User-defined type registration and validation
     type-checker.ts          Type inference (resolvedType on expressions) + validation
+    instance-paths.ts        Instance paths and globals in `instance_paths` POUs
     type-utils.ts            IEC type definitions, compatibility rules, category matching
     std-function-registry.ts Standard function signatures (ABS, SQRT, *_TO_*, etc.)
 
@@ -118,6 +119,8 @@ The top-level `CompilationUnit` contains arrays of programs, functions, function
 Three-pass analysis orchestrated by `SemanticAnalyzer`:
 
 **Pass A: Symbol Table Building** -- Walks all POUs, registers variables/functions/FBs/types into scoped symbol tables. Case-insensitive lookup (IEC convention). Detects duplicate declarations.
+
+Between A and B, `resolveInstancePaths` annotates the instance paths and globals of POUs marked `{attribute 'instance_paths'}` (`VariableExpression.instancePath`), which the type checker and the code generator read.
 
 **Pass B: Type Resolution** -- Walks all expressions and sets `resolvedType` on each AST node. Infers types from literals (including typed literals like `DINT#42`), variable declarations, operator rules, function return types, and struct/array access chains.
 
@@ -199,6 +202,7 @@ The manifest describes every exported declaration for tools such as a widget cat
 
 - `namespace` (compile option) puts everything a unit declares in its own C++ namespace, so two units, such as a PLC program and an HMI unit, link into one binary. Only one unit of a binary links its debug table, whose arrays live in `strucpp::debug`.
 - `separateLibraryFiles` (compile option) emits linked libraries apart from the unit's own code: `<header>_libraries.hpp` for their declarations and `lib_<library>.cpp` per library, which includes only that header. File names are unique per library (`lib_<library>_2.cpp` on a collision). A build can keep a library's object while the unit's code changes; the library files change when the unit starts or stops using a library symbol, or when the namespace, the global constants or the header name change. With this option the global constants are declared only in the libraries header, guarded so that two unit headers can be included in one translation unit.
+- `externalInstancePaths` (compile option) compiles the instance paths and globals of POUs marked `{attribute 'instance_paths'}` as calls to host functions declared in `iec_external.hpp`, for a unit (an HMI, say) that runs in the PLC's process but is compiled apart from it. The programs, the configuration and the non-CONSTANT globals then only supply types and are not emitted; `instancePaths` in the result maps each id to its canonical path. See `docs/IEC_COMPLIANCE.md` (Instance paths) and `src/semantic/instance-paths.ts`.
 - `parse(source, { recover: true })` returns the AST the parser recovered alongside syntax errors, for editors working on code mid-edit.
 
 ### CODESYS Import

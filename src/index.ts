@@ -23,6 +23,7 @@ import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
 import { SemanticAnalyzer } from "./semantic/analyzer.js";
+import type { InstancePathEntry } from "./semantic/instance-paths.js";
 import { CodeGenerator } from "./backend/codegen.js";
 import {
   generateDebugTable,
@@ -315,6 +316,8 @@ interface PipelineResult {
   warnings: CompileError[];
   allArchives: StlibArchive[];
   mergedOptions: CompileOptions;
+  /** Paths reached from `instance_paths` POUs, set once semantic analysis ran. */
+  instancePaths?: InstancePathEntry[];
 }
 
 /**
@@ -337,6 +340,7 @@ function runPipeline(
   let ast: CompilationUnit | undefined;
   let projectModel: import("./project-model.js").ProjectModel | undefined;
   let symbolTables: SymbolTables | undefined;
+  let instancePaths: InstancePathEntry[] | undefined;
   const allArchives: StlibArchive[] = [];
 
   // Phase 0: IL→ST transpilation (if source contains IL bodies)
@@ -768,8 +772,14 @@ function runPipeline(
 
   try {
     const analyzer = new SemanticAnalyzer();
-    const semanticResult = analyzer.analyze(ast, semanticSymbolTables);
+    const semanticResult = analyzer.analyze(ast, semanticSymbolTables, {
+      externalInstancePaths: mergedOptions.externalInstancePaths === true,
+      ...(mergedOptions.externalSources !== undefined
+        ? { externalSources: mergedOptions.externalSources }
+        : {}),
+    });
     symbolTables = semanticResult.symbolTables;
+    instancePaths = semanticResult.instancePaths;
     for (const err of semanticResult.errors) {
       errors.push({
         message: err.message,
@@ -818,6 +828,7 @@ function runPipeline(
     warnings,
     allArchives,
     mergedOptions,
+    ...(instancePaths !== undefined ? { instancePaths } : {}),
   };
 }
 
@@ -896,6 +907,9 @@ export function compile(
     }
   }
 
+  const externalInstancePaths =
+    pipeline.mergedOptions.externalInstancePaths === true;
+
   // Pass semantic symbol tables to codegen so it can use type info from semantic analysis
   const codegen = new CodeGenerator(pipeline.symbolTables, {
     sourceComments: pipeline.mergedOptions.debug,
@@ -911,6 +925,11 @@ export function compile(
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
     ...(pipeline.mergedOptions.separateLibraryFiles === true
       ? { separateLibraryFiles: true }
+      : {}),
+    ...(externalInstancePaths ? { externalInstancePaths: true } : {}),
+    ...(externalInstancePaths &&
+    pipeline.mergedOptions.externalSources !== undefined
+      ? { externalSources: pipeline.mergedOptions.externalSources }
       : {}),
     ...(pipeline.mergedOptions.emitChunkMarkers
       ? { emitChunkMarkers: true }
@@ -948,7 +967,13 @@ export function compile(
   // return the primary compile output; the debug artifacts are just omitted.
   let debugTableCpp: string | undefined;
   let debugMap: DebugMapV2 | undefined;
-  if (pipeline.projectModel && pipeline.symbolTables) {
+  // With external instance paths the programs and the configuration live in
+  // the host, so the unit has no debug table of its own.
+  if (
+    pipeline.projectModel &&
+    pipeline.symbolTables &&
+    !externalInstancePaths
+  ) {
     const dbg = generateDebugTable(
       pipeline.ast,
       pipeline.projectModel,
@@ -1009,6 +1034,9 @@ export function compile(
       ? { resolvedLibraries: pipeline.allArchives }
       : {}),
     ...(debugTableCpp !== undefined ? { debugTableCpp } : {}),
+    ...(externalInstancePaths && pipeline.instancePaths !== undefined
+      ? { instancePaths: pipeline.instancePaths }
+      : {}),
     ...(debugMap !== undefined ? { debugMap } : {}),
   };
 }
@@ -1167,6 +1195,7 @@ export type {
   Statement,
   Expression,
   VariableExpression,
+  InstancePathRef,
   FunctionCallExpression,
   MethodCallExpression,
   LiteralExpression,
@@ -1235,6 +1264,18 @@ export type {
 
 // Re-export project model
 export type { ProjectModel } from "./project-model.js";
+
+// Re-export instance paths
+export {
+  INSTANCE_PATHS_ATTRIBUTE,
+  InstancePathIndex,
+  hasInstancePathsAttribute,
+} from "./semantic/instance-paths.js";
+export type {
+  InstancePathEntry,
+  InstanceLocation,
+  DeclaredVariable,
+} from "./semantic/instance-paths.js";
 
 // Re-export AST utilities
 export {

@@ -42,6 +42,10 @@ import { Scope, SymbolTables } from "./symbol-table.js";
 import type { FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 import {
+  resolveInstancePaths,
+  type InstancePathEntry,
+} from "./instance-paths.js";
+import {
   fbLineage,
   fbLineageNames,
   functionBlockLookup,
@@ -293,6 +297,17 @@ export interface SemanticAnalysisResult {
 
   /** Warnings found during analysis */
   warnings: CompileError[];
+
+  /** Distinct instance paths and globals reached from `instance_paths` POUs; filled with `externalInstancePaths`. */
+  instancePaths: InstancePathEntry[];
+}
+
+/** Options of {@link SemanticAnalyzer.analyze}. */
+export interface SemanticAnalysisOptions {
+  /** Compile instance paths and globals of `instance_paths` POUs as host calls. */
+  externalInstancePaths?: boolean;
+  /** Source files whose programs, configurations and top-level globals the host owns (all when undefined). */
+  externalSources?: readonly string[];
 }
 
 // =============================================================================
@@ -387,6 +402,7 @@ export class SemanticAnalyzer {
   analyze(
     ast: CompilationUnit,
     existingSymbolTables?: SymbolTables,
+    options: SemanticAnalysisOptions = {},
   ): SemanticAnalysisResult {
     this.errors = [];
     this.warnings = [];
@@ -407,6 +423,14 @@ export class SemanticAnalyzer {
     this.validateTypeReferences(ast);
     const typeReferenceErrors = this.errors.length - errorsBeforeTypeReferences;
 
+    const paths = resolveInstancePaths(ast, this.symbolTables, {
+      external: options.externalInstancePaths === true,
+      ...(options.externalSources !== undefined
+        ? { externalSources: options.externalSources }
+        : {}),
+    });
+    this.errors.push(...paths.errors);
+
     // Pass 2: Type checking
     if (this.errors.length - typeReferenceErrors === 0) {
       const typeResult = this.typeChecker.check(ast);
@@ -424,6 +448,7 @@ export class SemanticAnalyzer {
       symbolTables: this.symbolTables,
       errors: this.errors,
       warnings: this.warnings,
+      instancePaths: paths.entries,
     };
   }
 
@@ -3538,6 +3563,14 @@ export class SemanticAnalyzer {
   ): void {
     switch (expr.kind) {
       case "VariableExpression":
+        if (expr.instancePath !== undefined) {
+          for (const step of expr.accessChain ?? []) {
+            if (step.kind !== "subscript") continue;
+            for (const idx of step.indices)
+              this.checkExpressionForUndeclaredVars(idx, scope, ctx);
+          }
+          break;
+        }
         this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan);
         // Reject member access on a type-level symbol (FB / program / type).
         // Resolves the bug where `RED_YELLOW_GREEN.GREENTIME := …` is

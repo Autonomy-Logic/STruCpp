@@ -23,7 +23,14 @@ import type {
   Scope,
   CompilationUnit,
 } from "strucpp";
-import { ELEMENTARY_TYPES, resolveArrayElementType, typeName } from "strucpp";
+import {
+  ELEMENTARY_TYPES,
+  InstancePathIndex,
+  hasInstancePathsAttribute,
+  resolveArrayElementType,
+  typeName,
+} from "strucpp";
+import type { DeclaredVariable } from "strucpp";
 import { getCursorContext } from "./cursor-context.js";
 import { getScopeForContext } from "./resolve-symbol.js";
 import { isTestFile, extractTestVarDeclarations } from "../../shared/test-utils.js";
@@ -223,6 +230,9 @@ function getDotAccessCompletions(
   const resolvedType = resolveChainType(segments, scope, symbolTables, analysis.ast);
   if (resolvedType) return getMembersForType(resolvedType, symbolTables);
 
+  const pathItems = getInstancePathCompletions(analysis, segments, pouScope, scope);
+  if (pathItems) return pathItems;
+
   // For test files, try resolving via locally declared variable types
   if (testSource) {
     const testVars = extractTestVarDeclarations(stripCommentsAndStrings(testSource));
@@ -246,6 +256,128 @@ function getDotAccessCompletions(
   if (typeInfo) return getMembersForType(typeInfo, symbolTables);
 
   return [];
+}
+
+/** True when the POU (or the method's block) at the cursor carries `{attribute 'instance_paths'}`. */
+function isInstancePathScope(ast: CompilationUnit, pouScope: EnclosingScope): boolean {
+  const same = (a: string, b: string | undefined): boolean => a.toUpperCase() === b?.toUpperCase();
+  switch (pouScope.kind) {
+    case "program":
+      return ast.programs.some((p) => same(p.name, pouScope.name) && hasInstancePathsAttribute(p));
+    case "function":
+      return ast.functions.some((f) => same(f.name, pouScope.name) && hasInstancePathsAttribute(f));
+    case "functionBlock":
+      return ast.functionBlocks.some((fb) => same(fb.name, pouScope.name) && hasInstancePathsAttribute(fb));
+    case "method": {
+      const fb = ast.functionBlocks.find((b) => same(b.name, pouScope.parentName));
+      if (!fb) return false;
+      const method = fb.methods.find((m) => same(m.name, pouScope.name));
+      return hasInstancePathsAttribute(fb) || (method !== undefined && hasInstancePathsAttribute(method));
+    }
+    case "global":
+      return false;
+  }
+}
+
+function declaredVariableCompletion(v: DeclaredVariable): CompletionItem {
+  return { label: v.name, kind: CompletionItemKind.Variable, detail: v.declaration.type.name, sortText: "1" };
+}
+
+/**
+ * Completions inside an instance path or a configuration global, in a POU marked `{attribute 'instance_paths'}`:
+ * resources and globals after `Config.`, instances after `Config.Res.`, the program type after `inst.`, the
+ * program's variables after `inst.Prog.`, and the members of whatever the path reaches after that.
+ */
+function getInstancePathCompletions(
+  analysis: AnalysisResult,
+  segments: ChainSegment[],
+  pouScope: EnclosingScope,
+  scope: Scope,
+): CompletionItem[] | undefined {
+  const { ast, symbolTables } = analysis;
+  if (!ast || !symbolTables || !isInstancePathScope(ast, pouScope)) return undefined;
+  const head = segments[0];
+  if (!head || scope.lookup(head.name)?.kind === "variable") return undefined;
+  const index = new InstancePathIndex(ast);
+  const names = segments.map((s) => s.name.toUpperCase());
+
+  const typeChain = (typeName: string, from: number, subscripts: number): CompletionItem[] => {
+    let current = unwrapSubscripts(typeName, subscripts, ast);
+    for (let i = from; i < segments.length && current !== undefined; i++) {
+      const next = resolveMemberType(current, segments[i].name, symbolTables);
+      current = next === undefined ? undefined : unwrapSubscripts(next, segments[i].subscripts, ast);
+    }
+    if (current === undefined) return [];
+    const info = resolveTypeName(current, symbolTables);
+    return info ? getMembersForType(info, symbolTables) : [];
+  };
+  /** True when the segments before `count` carry no subscript. */
+  const plain = (count: number): boolean => segments.slice(0, count).every((s) => s.subscripts === 0);
+
+  const program = (programType: string, from: number): CompletionItem[] => {
+    if (segments.length === from) {
+      return index.reachableVariables(programType).map(declaredVariableCompletion);
+    }
+    if (!plain(from)) return [];
+    const variable = index.reachableVariables(programType).find((v) => v.name === names[from]);
+    return variable ? typeChain(variable.declaration.type.name, from + 1, segments[from].subscripts) : [];
+  };
+
+  const configuration = index.configurations.get(names[0]);
+  if (configuration) {
+    if (segments.length === 1) {
+      const globals = configuration.varBlocks
+        .filter((b) => b.blockType === "VAR_GLOBAL")
+        .flatMap((b) => b.declarations.flatMap((d) => d.names.map((name) => ({ name, d }))));
+      return [
+        ...configuration.resources.map((r) => ({
+          label: r.name,
+          kind: CompletionItemKind.Module,
+          detail: `RESOURCE ON ${r.onType}`,
+          sortText: "1",
+        })),
+        ...globals.map(({ name, d }) => ({
+          label: name,
+          kind: CompletionItemKind.Variable,
+          detail: d.type.name,
+          sortText: "2",
+        })),
+      ];
+    }
+    const global = index.configurationGlobal(configuration, names[1]);
+    if (global) return typeChain(global.declaration.type.name, 2, segments[1].subscripts);
+    const resource = index.resource(configuration, names[1]);
+    if (!resource || !plain(2)) return [];
+    if (segments.length === 2) {
+      return resource.programInstances.map((p) => ({
+        label: p.instanceName,
+        kind: CompletionItemKind.Module,
+        detail: p.programType,
+        sortText: "1",
+      }));
+    }
+    const instance = resource.programInstances.find((p) => p.instanceName.toUpperCase() === names[2]);
+    if (!instance || !plain(3)) return [];
+    if (segments.length === 3) {
+      return [{ label: instance.programType, kind: CompletionItemKind.Class, detail: "PROGRAM", sortText: "1" }];
+    }
+    if (instance.programType.toUpperCase() !== names[3]) return [];
+    return program(instance.programType, 4);
+  }
+
+  const instance = index.instances.get(names[0])?.[0]?.instance;
+  if (instance) {
+    if (!plain(1)) return [];
+    if (segments.length === 1) {
+      return [{ label: instance.programType, kind: CompletionItemKind.Class, detail: "PROGRAM", sortText: "1" }];
+    }
+    if (instance.programType.toUpperCase() !== names[1]) return [];
+    return program(instance.programType, 2);
+  }
+
+  const global = index.configurationGlobals.get(names[0])?.[0];
+  if (global) return typeChain(global.declaration.type.name, 1, head.subscripts);
+  return undefined;
 }
 
 interface ResolvedTypeInfo {

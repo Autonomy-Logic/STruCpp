@@ -65,6 +65,21 @@ export interface CompileOptions {
    */
   namespace?: string;
 
+  /**
+   * Compile instance paths (`inst.Prog.Var`) and globals used by POUs marked `{attribute 'instance_paths'}` as calls
+   * into host functions: `strucpp::external_read<T>(id)` and `strucpp::external_write<T>(id, value)`, declared in
+   * `iec_external.hpp`. The programs, the CONFIGURATION and the globals are then not emitted (their declarations
+   * only supply types), no debug table is generated, and `instancePaths` in the result maps each id to its path.
+   */
+  externalInstancePaths?: boolean;
+
+  /**
+   * With `externalInstancePaths`: the source files (`fileName` / `additionalSources[].fileName`) whose PROGRAMs,
+   * CONFIGURATIONs and top-level VAR_GLOBAL blocks the host owns. Only those are left out of the output and reached
+   * through the host functions; everything declared in other files compiles normally. Undefined means all of them.
+   */
+  externalSources?: string[];
+
   /** Primary source file name for error reporting (default: "main.st") */
   fileName?: string;
 
@@ -276,6 +291,11 @@ export interface CompileResult {
 
   /** Resolved library archives (stdlib + user) used during compilation */
   resolvedLibraries?: import("./library/library-manifest.js").StlibArchive[];
+
+  /**
+   * With `externalInstancePaths`: every distinct instance path or global reached from an `instance_paths` POU, by id.
+   */
+  instancePaths?: import("./semantic/instance-paths.js").InstancePathEntry[];
 
   /**
    * Per-project debugger pointer-table C++ source. Write to

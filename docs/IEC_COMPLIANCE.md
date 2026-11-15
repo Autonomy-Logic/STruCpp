@@ -213,6 +213,40 @@ edges on `CU` and `CD` leave `CV` unchanged. CODESYS does not document that case
 | Dynamic memory | Supported | `__NEW(type)`, `__DELETE(ptr)` |
 | POINTER TO | Supported | Full pointer type with dereference; `POINTER TO <FB>` from `ADR()` dispatches methods virtually |
 | Typed literals | Supported | `INT#5`, `DINT#42`, `REAL#3.14` |
+| Instance paths | Supported | Vendor extension, not IEC 61131-3 (which has VAR_ACCESS, not implemented). See below |
+
+### Instance paths (vendor extension)
+
+A POU (or a method) marked `{attribute 'instance_paths'}` may read and write the variables of the program instances
+declared in the compilation's CONFIGURATIONs, and the globals, without VAR_ACCESS or VAR_EXTERNAL:
+
+| Form | Example |
+|------|---------|
+| Short | `instance0.Main.Run`, `instance0.Main.Pos.y`, `instance0.Main.Levels[2]` |
+| Long | `Config0.Res0.instance0.Main.Run` |
+| Configuration global | `gCount` or `Config0.gCount` |
+| Top-level global | `GVL.Output1` (as in any POU) |
+
+- Names are case-insensitive. A local variable, a member (own or inherited) or a result variable of the same name
+  takes precedence over an instance or a configuration name.
+- An instance path reaches the program's VAR, VAR_INPUT and VAR_OUTPUT variables. Program types come from the
+  PROGRAM declarations; a PROGRAM with variable blocks and no body is enough.
+- Errors: an unknown instance, resource or configuration global; a program type that is not the instance's
+  (`INSTANCE0 is an instance of 'MIXER', not 'MAIN'.`); a short form whose instance is declared in more than one
+  resource (use the long form); an unknown variable or field; a variable in another block type; a write to a CONSTANT.
+- In a POU without the attribute, nothing changes: `inst.Prog.Var` is an undeclared variable and `Prog.Var` reports
+  that program members cannot be accessed directly.
+- Default mode: a path compiles to the program instance's member of the runtime's configuration object `g_config`
+  (the object the debug table names), so only the first configuration is reachable and the instance must be
+  assigned to a task; a configuration global compiles to its canonical value (`GCOUNT.value`).
+- `externalInstancePaths` (compile option): every read becomes `strucpp::external_read<T>(id)` and every write
+  `strucpp::external_write<T>(id, value)` (`iec_external.hpp`, defined by the host); a bit write reads, merges and
+  writes the whole value. `id` is dense per distinct canonical path, listed in the compile result's
+  `instancePaths` (`id`, `kind`, `path`, `type`, `maxLength`, `read`, `written`). The programs, the configuration and
+  the non-CONSTANT globals are not emitted, and no debug table is generated. A path must end at an elementary,
+  STRING or WSTRING value, with constant indices only, and may not be used by address or reference (ADR, REF, REF=,
+  VAR_IN_OUT, REFERENCE TO) or bound to an output (`=>`). Unmarked POUs may not use the non-CONSTANT top-level
+  globals, and only programs may declare VAR_EXTERNAL.
 
 ## Not Yet Implemented
 
