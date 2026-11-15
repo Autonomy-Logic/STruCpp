@@ -1769,11 +1769,13 @@ export class SemanticAnalyzer {
     line: number,
     column: number,
     file?: string,
+    endColumn?: number,
   ): void {
     this.errors.push({
       message,
       line,
       column,
+      ...(endColumn !== undefined ? { endLine: line, endColumn } : {}),
       severity: "error",
       ...(file ? { file } : {}),
     });
@@ -3511,6 +3513,7 @@ export class SemanticAnalyzer {
             scope,
             ctx,
             stmt.sourceSpan,
+            false,
           );
           this.checkExpressionForUndeclaredVars(stmt.start, scope, ctx);
           this.checkExpressionForUndeclaredVars(stmt.end, scope, ctx);
@@ -3728,12 +3731,14 @@ export class SemanticAnalyzer {
 
   /**
    * Check whether a name is declared in the current scope chain or context.
+   * When `nameAtStart`, the name begins at the span's start and an error covers it.
    */
   private checkNameDeclared(
     name: string,
     scope: Scope,
     ctx: UndeclaredVarContext,
     sourceSpan: { startLine: number; startCol: number; file?: string },
+    nameAtStart = true,
   ): void {
     const upper = name.toUpperCase();
 
@@ -3808,6 +3813,7 @@ export class SemanticAnalyzer {
       sourceSpan.startLine,
       sourceSpan.startCol,
       sourceSpan.file,
+      nameAtStart ? sourceSpan.startCol + name.length : undefined,
     );
   }
 

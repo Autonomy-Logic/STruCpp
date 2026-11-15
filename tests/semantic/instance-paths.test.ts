@@ -208,6 +208,23 @@ describe("instance paths: errors", () => {
     ).toEqual(["Program 'MAIN' has no variable 'NOPE'."]);
   });
 
+  it("reports the error over the whole path, its end one past the last character", () => {
+    const source = DECLS + screen("x := instance0.Main.Nope;") + CONFIG;
+    const lines = source.split("\n");
+    const line = lines.findIndex((l) => l.includes("instance0.Main.Nope")) + 1;
+    const column = lines[line - 1].indexOf("instance0") + 1;
+    for (const result of [analyze(source), compile(source)]) {
+      expect(result.errors).toMatchObject([
+        {
+          line,
+          column,
+          endLine: line,
+          endColumn: column + "instance0.Main.Nope".length,
+        },
+      ]);
+    }
+  });
+
   it("reports an unknown field along the path", () => {
     expect(
       messages(DECLS + screen("x := instance0.Main.Pos.z;") + CONFIG),

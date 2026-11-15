@@ -620,6 +620,8 @@ function runPipeline(
         message: err.message,
         line: err.line ?? 0,
         column: err.column ?? 0,
+        ...(err.endLine ? { endLine: err.endLine } : {}),
+        ...(err.endColumn ? { endColumn: err.endColumn } : {}),
         severity: "error",
         ...(err.file ? { file: err.file } : {}),
       });
@@ -629,6 +631,8 @@ function runPipeline(
         message: warn.message,
         line: warn.line ?? 0,
         column: warn.column ?? 0,
+        ...(warn.endLine ? { endLine: warn.endLine } : {}),
+        ...(warn.endColumn ? { endColumn: warn.endColumn } : {}),
         severity: "warning",
         ...(warn.file ? { file: warn.file } : {}),
       });
@@ -785,6 +789,8 @@ function runPipeline(
         message: err.message,
         line: err.line ?? 0,
         column: err.column ?? 0,
+        ...(err.endLine ? { endLine: err.endLine } : {}),
+        ...(err.endColumn ? { endColumn: err.endColumn } : {}),
         severity: "error",
         ...(err.file ? { file: err.file } : {}),
       });
@@ -794,6 +800,8 @@ function runPipeline(
         message: warn.message,
         line: warn.line ?? 0,
         column: warn.column ?? 0,
+        ...(warn.endLine ? { endLine: warn.endLine } : {}),
+        ...(warn.endColumn ? { endColumn: warn.endColumn } : {}),
         severity: "warning",
         ...(warn.file ? { file: warn.file } : {}),
       });

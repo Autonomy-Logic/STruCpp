@@ -1196,13 +1196,14 @@ class InstancePathResolver {
     return text;
   }
 
+  /** Reports `message` over the whole of `at`; the end column is the one past its last character. */
   private error(message: string, at: ASTNode): void {
     this.errors.push({
       message,
       line: at.sourceSpan.startLine,
       column: at.sourceSpan.startCol,
       endLine: at.sourceSpan.endLine,
-      endColumn: at.sourceSpan.endCol,
+      endColumn: at.sourceSpan.endCol + 1,
       severity: "error",
       file: at.sourceSpan.file,
     });
