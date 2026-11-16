@@ -2276,6 +2276,18 @@ export class CodeGenerator {
    * VAR_INPUT, VAR_OUTPUT (by ref), VAR_IN_OUT (by ref) become C++ params.
    */
   private generateMethodParamList(method: MethodDeclaration): string {
+    return this.generateMethodParams(method).join(", ");
+  }
+
+  /**
+   * Parameters of a function or method definition: a body need not read every input, so each is
+   * `[[maybe_unused]]` and C++ compilers stay silent under -Wextra.
+   */
+  private definitionParams(params: string[]): string {
+    return params.map((param) => `[[maybe_unused]] ${param}`).join(", ");
+  }
+
+  private generateMethodParams(method: MethodDeclaration): string[] {
     const params: string[] = [];
     for (const block of method.varBlocks) {
       if (block.blockType === "VAR_INPUT") {
@@ -2306,7 +2318,7 @@ export class CodeGenerator {
         }
       }
     }
-    return params.join(", ");
+    return params;
   }
 
   /**
@@ -2341,7 +2353,7 @@ export class CodeGenerator {
     className: string,
   ): void {
     const returnType = this.methodReturnCpp(method);
-    const params = this.generateMethodParamList(method);
+    const params = this.definitionParams(this.generateMethodParams(method));
 
     this.emitLineDirective(method.sourceSpan.startLine);
     const implLine = this.currentLine;
@@ -2645,7 +2657,9 @@ export class CodeGenerator {
       // 1. _real implementation (original body with renamed function)
       this.emitLineDirective(func.sourceSpan.startLine);
       const realLine = this.currentLine;
-      this.emit(`${retType} ${func.name}_real(${params.join(", ")}) {`);
+      this.emit(
+        `${retType} ${func.name}_real(${this.definitionParams(params)}) {`,
+      );
       emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");
@@ -2667,7 +2681,7 @@ export class CodeGenerator {
       // Production build: normal function
       this.emitLineDirective(func.sourceSpan.startLine);
       const funcImplLine = this.currentLine;
-      this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
+      this.emit(`${retType} ${func.name}(${this.definitionParams(params)}) {`);
       emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");

@@ -3,7 +3,8 @@
 /**
  * A representative program, linked with a library, compiles with -Wall -Wextra -Werror and computes IEC results:
  * BOOL AND / OR / XOR on comparisons, LEN and FIND as signed INT, global FB instances (local and library type)
- * invoked with arguments, library enumerations, and functions called with named and omitted arguments.
+ * invoked with arguments, library enumerations, functions called with named and omitted arguments, and a function and
+ * methods (in the program and in the library) whose bodies do not read their inputs.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "fs";
@@ -20,6 +21,10 @@ const LIBRARY = `TYPE Hmi_Align : (Left := 0, Center := 1, Right := 2); END_TYPE
 FUNCTION_BLOCK Label
   VAR_INPUT Align : Hmi_Align := Hmi_Align#Left; END_VAR
   VAR_OUTPUT Code : DINT; END_VAR
+  METHOD PUBLIC Weight : DINT
+    VAR_INPUT Horizontal : BOOL; END_VAR
+    Weight := 1;
+  END_METHOD
   Code := TO_DINT(Align);
 END_FUNCTION_BLOCK`;
 
@@ -27,8 +32,16 @@ const PROGRAM = `VAR_GLOBAL Rt : Label; Loc : Counter; Steps : INT := 3; END_VAR
 FUNCTION_BLOCK Counter
   VAR_INPUT Step : DINT := 1; END_VAR
   VAR_OUTPUT Total : DINT; END_VAR
+  METHOD PUBLIC Accept : BOOL
+    VAR_INPUT Child : DINT; END_VAR
+    Accept := FALSE;
+  END_METHOD
   Total := Total + Step;
 END_FUNCTION_BLOCK
+FUNCTION Always : BOOL
+  VAR_INPUT Ignored : DINT; END_VAR
+  Always := TRUE;
+END_FUNCTION
 FUNCTION Clip : DINT
   VAR_INPUT V : DINT; Lo : DINT := 0; Hi : DINT := 100; END_VAR
   Clip := LIMIT(Lo, V, Hi);
@@ -60,6 +73,7 @@ PROGRAM Main
   CASE a OF Hmi_Align#Left: c := 1; Hmi_Align#Right: c := 3; ELSE c := 2; END_CASE;
   clipped := Clip(250) + Clip(V := -5, Hi := 10) + Clip(7, 5);
   total := Loc.Total * 1000 + Rt.Code * 100 + clipped;
+  IF NOT Always(1) OR Loc.Accept(2) OR Rt.Weight(TRUE) <> 1 THEN total := -1; END_IF;
 END_PROGRAM
 CONFIGURATION C RESOURCE R0 ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1);
   PROGRAM I WITH T : Main; END_RESOURCE END_CONFIGURATION`;
