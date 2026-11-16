@@ -43,8 +43,10 @@ PROGRAM Main
     total, clipped : DINT;
     w : WORD := 16#00FF;
     i : INT;
+    ri : REF_TO INT;
   END_VAR
-  n := LEN(s);
+  ri := REF(i);
+  n := LEN(s) + ri^ - i;
   p := FIND(s, 'll');
   neg := LEN(t) - 10 < 0;
   both := n > 2 AND p = 3;
