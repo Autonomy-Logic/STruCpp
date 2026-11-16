@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    globalSetup: ["./scripts/rebuild-libs.mjs"],
+    globalSetup: ["./vitest.global-setup.ts"],
     globals: true,
     environment: "node",
     include: ["tests/**/*.test.ts", "tests/**/*.spec.ts"],
