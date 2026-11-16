@@ -96,3 +96,6 @@ temp/
 
 # Generated test output headers
 tests/**/*.hpp
+
+# transient SBOM build output (canonical copy lives in security/<YYYY-MM>/sbom/)
+/sbom/
