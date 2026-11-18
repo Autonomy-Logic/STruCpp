@@ -209,3 +209,4 @@ strucpp --decompile-lib libs/oscat.stlib -o oscat-src/
 # Compile with global constants and debug
 strucpp program.st -o out.cpp -D STRING_LENGTH=100 -D MAX_ITEMS=50 --debug
 ```
+
