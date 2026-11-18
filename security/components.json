@@ -1,0 +1,70 @@
+{
+  "_note": "Third-party code that ships with STruC++ but has no package-manager lockfile entry, so cdxgen cannot see it. scripts/merge-vendored.mjs adds these to the CycloneDX SBOM. Every path must exist. Use an SPDX licence id, or NOASSERTION when the licence has not been confirmed from the vendored sources. Leave version empty when upstream has no release tag for the vendored copy.",
+  "components": [
+    {
+      "name": "isocline",
+      "version": "1.0.4",
+      "type": "library",
+      "license": "MIT",
+      "supplier": "Daan Leijen",
+      "url": "https://github.com/daanx/isocline",
+      "paths": ["src/runtime/repl"],
+      "description": "C line editor compiled into the REPL binary. Version from IC_VERSION in isocline.h; licence from the vendored file headers."
+    },
+    {
+      "name": "OpenSML",
+      "version": "",
+      "type": "library",
+      "license": "GPL-3.0-only",
+      "supplier": "feecat",
+      "url": "https://github.com/feecat/OpenSML",
+      "paths": [
+        "libs/sources/plcopen-softmotion/opensml_axis.st",
+        "libs/sources/plcopen-softmotion/opensml_axis_controller.st",
+        "libs/sources/plcopen-softmotion/opensml_control.st",
+        "libs/sources/plcopen-softmotion/opensml_home.st",
+        "libs/sources/plcopen-softmotion/opensml_power.st",
+        "libs/sources/plcopen-softmotion/opensml_profile_position.st",
+        "libs/sources/plcopen-softmotion/opensml_profile_velocity.st",
+        "libs/sources/plcopen-softmotion/opensml_stop.st",
+        "libs/sources/plcopen-softmotion/opensml_sync_position.st",
+        "libs/sources/plcopen-softmotion/opensml_sync_velocity.st"
+      ],
+      "description": "Structured Text motion engine vendored into the plcopen-softmotion library. Licence from the vendored file headers and library.json; upstream publishes no release tag for the vendored copy."
+    },
+    {
+      "name": "S7RTT",
+      "version": "",
+      "type": "library",
+      "license": "Apache-2.0",
+      "supplier": "feecat",
+      "url": "https://github.com/feecat/S7RTT",
+      "paths": [
+        "libs/sources/plcopen-softmotion/s7rtt_blocks.st",
+        "libs/sources/plcopen-softmotion/s7rtt_functions.st",
+        "libs/sources/plcopen-softmotion/s7rtt_types.st"
+      ],
+      "description": "S-curve trajectory generator converted from PLCopen XML into the plcopen-softmotion library. Licence from the vendored file headers and library.json."
+    },
+    {
+      "name": "OSCAT BASIC",
+      "version": "3.35",
+      "type": "library",
+      "license": "NOASSERTION",
+      "supplier": "OSCAT",
+      "url": "http://www.oscat.de",
+      "paths": ["libs/sources/oscat-basic/oscat_basic_335.library"],
+      "description": "CODESYS library archive imported at build time into the oscat-basic .stlib. No licence text is vendored with the archive."
+    },
+    {
+      "name": "Node.js runtime",
+      "version": "22",
+      "type": "platform",
+      "license": "MIT",
+      "supplier": "OpenJS Foundation",
+      "url": "https://nodejs.org",
+      "paths": [".github/workflows/release.yml"],
+      "description": "Node.js 22 runtime embedded by @yao-pkg/pkg in the standalone release binaries. The patch release is chosen by pkg at build time and is not pinned in this repository."
+    }
+  ]
+}

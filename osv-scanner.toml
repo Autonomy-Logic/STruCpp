@@ -1,0 +1,12 @@
+# osv-scanner suppression baseline for STruCpp (CISA VEX decisions).
+# Scanned input: package-lock.json and vscode-extension/package-lock.json.
+# No suppressions recorded yet.
+#
+# Entry format (reason carries the VEX status, parsed by build-report.mjs):
+# [[IgnoredVulns]]
+# id = "GHSA-xxxx-xxxx-xxxx"
+# ignoreUntil = "YYYY-MM-DDT00:00:00Z"
+# reason = "VEX not_affected [<cisa_justification>]: <basis> [<package>]"
+#
+# Suppressions written by the automated monthly triage carry
+# "AI-TRIAGED [unreviewed]" in their reason until a human clears the marker.
