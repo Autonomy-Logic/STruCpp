@@ -77,7 +77,8 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "chevrotain": "^11.0.0"
+    "chevrotain": "^11.0.0",
+    "minimist": "^1.2.5"
   },
   "lint-staged": {
     "src/**/*.{ts,tsx,js,jsx}": [
