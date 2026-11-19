@@ -404,6 +404,9 @@ class ArrayView1D {
     int64_t upper_;
 
 public:
+    // Unbound view (an FB VAR_IN_OUT member before its first call): empty bounds, so every subscript faults.
+    ArrayView1D() noexcept : data_(nullptr), lower_(0), upper_(-1) {}
+
     // Construct from any IEC_ARRAY_1D with matching element type
     template<typename Bounds>
     ArrayView1D(IEC_ARRAY_1D<T, Bounds>& arr)
@@ -457,6 +460,10 @@ class ArrayView2D {
     int64_t dim2_;
 
 public:
+    // Unbound view (an FB VAR_IN_OUT member before its first call): empty bounds, so every subscript faults.
+    ArrayView2D() noexcept
+        : data_(nullptr), lower1_(0), upper1_(-1), lower2_(0), upper2_(-1), dim2_(0) {}
+
     template<typename Bounds1, typename Bounds2>
     ArrayView2D(IEC_ARRAY_2D<T, Bounds1, Bounds2>& arr)
         : data_(arr.data())

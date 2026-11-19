@@ -607,7 +607,8 @@ export class CodeGenerator {
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
    *  FB inout params are stored as by-value members with copy-in at the call
    *  site; this set drives the matching copy-back after the call so a callee's
-   *  mutations propagate to the caller's variable (true inout semantics). */
+   *  mutations propagate to the caller's variable (true inout semantics).
+   *  ARRAY[*] params are left out: their ArrayView member aliases the caller's array. */
   private fbInoutParams: Map<string, Set<string>> = new Map();
 
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
@@ -989,7 +990,10 @@ export class CodeGenerator {
           return {
             name: fb.name,
             inputNames: fb.inputs.map((i) => i.name),
-            inoutNames: fb.inouts.map((i) => i.name),
+            // An ARRAY[*] in-out member is a view of the caller's array: no copy-back.
+            inoutNames: fb.inouts
+              .filter((i) => !VLA_TYPE_NAME.test(i.type))
+              .map((i) => i.name),
             fields: [
               ...fb.inputs.map(mapVar),
               ...fb.outputs.map(mapVar),
@@ -1213,6 +1217,9 @@ export class CodeGenerator {
           }
         } else if (block.blockType === "VAR_IN_OUT") {
           for (const decl of block.declarations) {
+            // An ARRAY[*] member is an ArrayView bound to the caller's array
+            // by the copy-in, so writes already reach it and there is no copy-back.
+            if (VLA_TYPE_NAME.test(decl.type.name)) continue;
             for (const name of decl.names) {
               inoutNames.push(name.toUpperCase());
             }
@@ -1534,6 +1541,24 @@ export class CodeGenerator {
       this.emitHeader("");
     }
 
+    // Inject reachable library chunks (header side) ahead of everything the
+    // unit declares: a library never names the unit's declarations, while the
+    // unit's types, globals and POUs may name library types and classes.
+    //
+    // Per archive: emit `// Library: <name>` header, then `class X;`
+    // forward decls for every reachable functionBlock chunk
+    // (libraries' FB classes are sometimes mutually-referential and
+    // the bodies are emitted in declaration order — the forward
+    // decls ahead of any body keep the layout linkable in every
+    // ordering). Then emit each reachable chunk's `header` slice in
+    // chunk-array order; types come first, FBs next, functions last
+    // because that's the order the library compiler emitted them
+    // before slicing. With separate library files the same lines are in
+    // the libraries header, included above.
+    if (this.options.separateLibraryFiles !== true) {
+      for (const line of this.libraryHeaderChunkLines()) this.emitHeader(line);
+    }
+
     // Forward-declare the POU classes before the user-defined types.
     //
     // A TYPE may name a function block — `AccumGrid : ARRAY[0..1,0..1] OF Accum`
@@ -1565,21 +1590,6 @@ export class CodeGenerator {
     }
 
     this.emitGvlGlobals(ast, false);
-
-    // Inject reachable library chunks (header side).
-    //
-    // Per archive: emit `// Library: <name>` header, then `class X;`
-    // forward decls for every reachable functionBlock chunk
-    // (libraries' FB classes are sometimes mutually-referential and
-    // the bodies are emitted in declaration order — the forward
-    // decls ahead of any body keep the layout linkable in every
-    // ordering). Then emit each reachable chunk's `header` slice in
-    // chunk-array order; types come first, FBs next, functions last
-    // because that's the order the library compiler emitted them
-    // before slicing.
-    if (this.options.separateLibraryFiles !== true) {
-      for (const line of this.libraryHeaderChunkLines()) this.emitHeader(line);
-    }
 
     // Generate forward declarations
     this.emitPouForwardDeclarations(ast);

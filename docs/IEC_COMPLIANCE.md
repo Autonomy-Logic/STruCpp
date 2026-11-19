@@ -32,7 +32,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
 | ARRAY (3D) | Supported | ARRAY[1..3, 1..4, 1..5] OF INT |
 | ARRAY OF function block | Supported | Declaration, member access, element invocation (`units[i](step := 1.0)`) and method calls on elements (`units[0].M()`) |
-| ARRAY[*] (VLA) | Supported | Variable-length array parameters |
+| ARRAY[*] (VLA) | Supported | Variable-length VAR_IN_OUT arrays (1D and 2D) of functions and function blocks; a function block's view is bound to the caller's array on each call |
 | Subranges | Supported | Runtime validation |
 | REF_TO | Supported | IEC reference type (explicit dereference) |
 | REFERENCE_TO | Supported | CODESYS reference type (implicit dereference) |
