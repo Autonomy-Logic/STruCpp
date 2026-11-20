@@ -100,6 +100,16 @@ export interface CompileOptions {
    */
   libraries?: import("./library/library-manifest.js").StlibArchive[];
 
+  /**
+   * Headers the build environment provides beyond the runtime's own, with their API version when they have one
+   * (for example `[{ name: "hmi_core.h", version: "1" }]` for a build that links the HMI core). When set, every
+   * library POU the unit uses is checked before code generation: each header it needs, transitively, must be
+   * provided at the version it was compiled against, or the compile fails naming the POU. POUs the unit does not use
+   * are never checked, and never emitted when the build lacks what they need. Undefined: the environment is not
+   * stated and headers are not checked. Library requirements are checked against `libraries` either way.
+   */
+  providedHeaders?: import("./library/library-manifest.js").HeaderRequirement[];
+
   /** Skip source inclusion when compiling libraries (closed-source) */
   noSource?: boolean;
 

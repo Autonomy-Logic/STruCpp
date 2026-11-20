@@ -158,7 +158,7 @@ describe("methods named like IEC operators", () => {
 });
 
 describe("library headers", () => {
-  const EXTERNAL = `FUNCTION Lamp : BOOL Lamp := TRUE; END_FUNCTION`;
+  const EXTERNAL = `FUNCTION Lamp : BOOL {external lamp_on(); } Lamp := TRUE; END_FUNCTION`;
 
   it("refuses absolute paths and . or .. segments", () => {
     for (const header of [

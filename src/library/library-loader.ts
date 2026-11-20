@@ -19,6 +19,7 @@ import type {
   StlibArchive,
 } from "./library-manifest.js";
 import { HEADER_NAME_RE } from "./library-manifest.js";
+import type { LibraryRequirement } from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
@@ -766,6 +767,24 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
     isBuiltin: Boolean(obj.isBuiltin),
   };
 
+  if (obj.headerVersions !== undefined) {
+    if (!isRecord(obj.headerVersions)) {
+      throw new LibraryManifestError(
+        "Invalid library manifest: headerVersions must be an object",
+      );
+    }
+    const headerVersions: Record<string, string> = {};
+    for (const [name, version] of Object.entries(obj.headerVersions)) {
+      if (typeof version !== "string" || !result.headers.includes(name)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: headerVersions["${name}"] must be the string version of a listed header`,
+        );
+      }
+      headerVersions[name] = version;
+    }
+    result.headerVersions = headerVersions;
+  }
+
   if (Array.isArray(obj.globals)) {
     result.globals = globals;
   }
@@ -973,6 +992,61 @@ export function registerLibrarySymbols(
   }
 }
 
+/** A `{name, version}` pair, or a LibraryManifestError naming `where`. */
+function validateRequirement(
+  value: unknown,
+  where: string,
+): LibraryRequirement {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where} must be an object`,
+    );
+  }
+  const v = value as Record<string, unknown>;
+  if (typeof v.name !== "string" || v.name === "") {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where}.name must be a non-empty string`,
+    );
+  }
+  if (typeof v.version !== "string") {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where}.version must be a string`,
+    );
+  }
+  return { name: v.name, version: v.version };
+}
+
+/** A chunk's optional `headers` list must hold `{name, version?}` entries naming valid include files. */
+function validateChunkHeaders(chunk: unknown, index: number): void {
+  if (chunk === null || typeof chunk !== "object") return;
+  const headers = (chunk as Record<string, unknown>).headers;
+  if (headers === undefined) return;
+  const where = `chunks[${index}].headers`;
+  if (!Array.isArray(headers)) {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where} must be an array`,
+    );
+  }
+  headers.forEach((h: unknown, i: number) => {
+    if (h === null || typeof h !== "object" || Array.isArray(h)) {
+      throw new LibraryManifestError(
+        `Invalid stlib archive: ${where}[${i}] must be an object`,
+      );
+    }
+    const e = h as Record<string, unknown>;
+    if (typeof e.name !== "string" || !HEADER_NAME_RE.test(e.name)) {
+      throw new LibraryManifestError(
+        `Invalid stlib archive: ${where}[${i}].name is not a valid include filename`,
+      );
+    }
+    if (e.version !== undefined && typeof e.version !== "string") {
+      throw new LibraryManifestError(
+        `Invalid stlib archive: ${where}[${i}].version must be a string`,
+      );
+    }
+  });
+}
+
 /**
  * Load a `.stlib` archive from a parsed JSON object.
  * Validates the archive structure including formatVersion, manifest, headerCode,
@@ -1023,12 +1097,16 @@ export function loadStlibArchive(json: unknown): StlibArchive {
       "Invalid stlib archive: 'dependencies' must be an array",
     );
   }
+  const dependencies = (obj.dependencies as unknown[]).map((d, i) =>
+    validateRequirement(d, `dependencies[${i}]`),
+  );
+  (obj.chunks as unknown[]).forEach((c, i) => validateChunkHeaders(c, i));
 
   const archive: StlibArchive = {
     formatVersion: 1,
     manifest,
     chunks: obj.chunks as StlibArchive["chunks"],
-    dependencies: obj.dependencies as Array<{ name: string; version: string }>,
+    dependencies,
   };
 
   // Optional sources
