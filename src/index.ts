@@ -23,6 +23,11 @@ import { transpileILSource } from "./il/il-transpiler.js";
 import { buildProjectModel } from "./project-model.js";
 import { SymbolTables } from "./semantic/symbol-table.js";
 import { SemanticAnalyzer } from "./semantic/analyzer.js";
+import { isHostOwned } from "./semantic/instance-paths.js";
+import type {
+  InstancePathEntry,
+  InstancePathOptions,
+} from "./semantic/instance-paths.js";
 import { CodeGenerator } from "./backend/codegen.js";
 import {
   generateDebugTable,
@@ -44,7 +49,18 @@ import {
   libraryInterfaceDeclarations,
   registerLibrarySymbols,
 } from "./library/library-loader.js";
-import type { StlibArchive } from "./library/library-manifest.js";
+import type {
+  HeaderRequirement,
+  LibraryChunk,
+  StlibArchive,
+} from "./library/library-manifest.js";
+import {
+  chunkHeaders,
+  findUnmetRequirements,
+  formatUnmetRequirement,
+  RequirementIndex,
+  type UnmetRequirement,
+} from "./library/library-requirements.js";
 import { annotateErrorsWithPouContext } from "./diagnostic-pou-context.js";
 
 /**
@@ -83,6 +99,39 @@ function validateCompileOptions(options: CompileOptions): void {
 // Library tree-shaking: only include libraries whose symbols are referenced
 // ---------------------------------------------------------------------------
 
+/** What the unit's library use resolved to: the chunks to emit, requirement errors, and host headers to include. */
+interface UsedSymbols {
+  /** Reachable chunks, by library name. */
+  byLibrary: Map<string, Set<string>>;
+  /** One error per unmet requirement of a library POU the unit uses. */
+  errors: CompileError[];
+  /** Headers the reachable chunks need, in archive and chunk order. */
+  chunkHeaders: string[];
+}
+
+/** How the unit names a symbol: calls it, reads it as a variable, or names it as a type or base. */
+type ReferenceKind = "call" | "variable" | "type";
+
+/**
+ * Whether a reference of these kinds is a use of a chunk of this kind, rather than another symbol of the same name
+ * (a local variable named like a library block, say).
+ */
+function referencesChunk(
+  kinds: ReadonlySet<ReferenceKind>,
+  chunkKind: LibraryChunk["kind"],
+): boolean {
+  switch (chunkKind) {
+    case "function":
+      return kinds.has("call");
+    case "functionBlock":
+      return kinds.has("type");
+    case "type":
+      return kinds.has("type") || kinds.has("variable");
+    case "inlineGlobal":
+      return kinds.has("variable");
+  }
+}
+
 /**
  * Function-level tree-shake: determine which library chunks are
  * reachable from the user's AST and need to be emitted into the
@@ -95,37 +144,77 @@ function validateCompileOptions(options: CompileOptions): void {
  * the chunk dep graph baked into each archive at library compile
  * time.
  *
- * Returns a `Map<libraryName, Set<chunkName>>` describing the
- * reachable subset of each archive. Archives whose entry is empty
- * (or absent) contribute nothing to the user's output.
+ * Every chunk the unit uses has its requirements checked first (see
+ * `library-requirements.ts`): one the build cannot satisfy is an error
+ * naming the POU, and is not emitted. A chunk whose name only matches
+ * another kind of symbol is skipped silently, as are unsatisfiable chunks
+ * in test builds and `wholeLibraries`, which are reachable except for them.
+ *
+ * Returns the reachable subset of each archive. Archives whose entry is
+ * empty (or absent) contribute nothing to the user's output.
  *
  * Test builds bypass the shake: every chunk of every archive is
  * declared reachable so the test harness sees the full symbol set
- * regardless of what the source AST happens to reference.
+ * regardless of what the source AST happens to reference. Libraries named
+ * in `wholeLibraries` are reachable whole, with what their chunks depend on.
+ * With `instancePaths` in external mode, the host-owned programs, configurations
+ * and non-CONSTANT top-level globals, which are not emitted, reach nothing.
  */
 function collectUsedSymbols(
   ast: CompilationUnit,
   archives: StlibArchive[],
   includeEverything: boolean,
-): Map<string, Set<string>> {
+  wholeLibraries: ReadonlySet<string> = new Set(),
+  instancePaths: InstancePathOptions = {},
+  providedHeaders?: readonly HeaderRequirement[],
+): UsedSymbols {
+  const requirementIndex = new RequirementIndex(archives);
+  const unmetCache = new Map<string, UnmetRequirement[]>();
+  const unmetOf = (library: string, chunk: string): UnmetRequirement[] => {
+    const key = `${library}:${chunk}`;
+    const cached = unmetCache.get(key);
+    if (cached) return cached;
+    const unmet = findUnmetRequirements(
+      requirementIndex.resolve(library, chunk).requirements,
+      {
+        libraries: archives,
+        ...(providedHeaders !== undefined ? { providedHeaders } : {}),
+      },
+    );
+    unmetCache.set(key, unmet);
+    return unmet;
+  };
+  const result = (
+    byLibrary: Map<string, Set<string>>,
+    errors: CompileError[],
+  ): UsedSymbols => ({
+    byLibrary,
+    errors,
+    chunkHeaders: headersOfChunks(byLibrary, archives),
+  });
+
   // When asked to include everything (test builds), short-circuit.
   if (includeEverything) {
     const all = new Map<string, Set<string>>();
     for (const archive of archives) {
       const chunkNames = new Set<string>();
       for (const chunk of archive.chunks ?? []) {
+        if (unmetOf(archive.manifest.name, chunk.name).length > 0) continue;
         chunkNames.add(chunk.name);
       }
       all.set(archive.manifest.name, chunkNames);
     }
-    return all;
+    return result(all, []);
   }
 
   // Build symbol→{library, chunk} index across every archive.  Names
   // are uppercased to match how chunks are keyed (the codegen
   // normalises every emitted identifier to uppercase before sealing
   // chunk boundaries).
-  const symbolIndex = new Map<string, { library: string; chunk: string }>();
+  const symbolIndex = new Map<
+    string,
+    { library: string; chunk: string; kind: LibraryChunk["kind"] }
+  >();
   // Per-library chunk-name lookup so the dep BFS can resolve chunks
   // it already named when the consumer didn't reference them directly.
   const chunkByKey = new Map<string, { library: string; chunk: string }>();
@@ -134,43 +223,72 @@ function collectUsedSymbols(
     const libName = archive.manifest.name;
     for (const chunk of archive.chunks ?? []) {
       const entry = { library: libName, chunk: chunk.name };
-      symbolIndex.set(chunk.name.toUpperCase(), entry);
+      symbolIndex.set(chunk.name.toUpperCase(), { ...entry, kind: chunk.kind });
       chunkByKey.set(`${libName}:${chunk.name}`, entry);
     }
   }
 
-  // Seed the reachable set from names the user AST references.
-  const referencedNames = new Set<string>();
+  // Seed the reachable set from names the user AST references, with how
+  // and where each is first referenced.
+  const referencedNames = new Map<
+    string,
+    { kinds: Set<ReferenceKind>; span: SourceSpan | undefined }
+  >();
+  const reference = (
+    name: string,
+    kind: ReferenceKind,
+    node: ASTNode,
+  ): void => {
+    const key = name.toUpperCase();
+    const entry = referencedNames.get(key);
+    if (entry) {
+      entry.kinds.add(kind);
+      return;
+    }
+    referencedNames.set(key, {
+      kinds: new Set([kind]),
+      span: node.sourceSpan,
+    });
+  };
   const ownInterfaces = ast.interfaces.filter((i) => i.library === undefined);
-  const ownUnit: CompilationUnit = { ...ast, interfaces: ownInterfaces };
+  const emitted = (node: ASTNode): boolean => !isHostOwned(node, instancePaths);
+  const ownUnit: CompilationUnit = {
+    ...ast,
+    interfaces: ownInterfaces,
+    programs: ast.programs.filter(emitted),
+    configurations: ast.configurations.filter(emitted),
+    globalVarBlocks: ast.globalVarBlocks.filter(
+      (block) => block.isConstant || emitted(block),
+    ),
+  };
   walkAST(ownUnit, (node: ASTNode): void => {
     switch (node.kind) {
       case "FunctionCallExpression": {
         const fc = node as FunctionCallExpression;
-        referencedNames.add(fc.functionName.toUpperCase());
+        reference(fc.functionName, "call", node);
         break;
       }
       case "VariableExpression": {
         // Inline-global reads (e.g. `MATH.PI2`) show up as
         // VariableExpression with name="MATH".
         const ve = node as unknown as { name: string };
-        referencedNames.add(ve.name.toUpperCase());
+        reference(ve.name, "variable", node);
         break;
       }
       case "TypeReference": {
         const tr = node as TypeReference;
-        referencedNames.add(tr.name.toUpperCase());
+        reference(tr.name, "type", node);
         if (tr.elementTypeName) {
-          referencedNames.add(tr.elementTypeName.toUpperCase());
+          reference(tr.elementTypeName, "type", node);
         }
         break;
       }
       case "FunctionBlockDeclaration": {
         const fbd = node as FunctionBlockDeclaration;
-        if (fbd.extends) referencedNames.add(fbd.extends.toUpperCase());
+        if (fbd.extends) reference(fbd.extends, "type", node);
         if (fbd.implements) {
           for (const iface of fbd.implements) {
-            referencedNames.add(iface.toUpperCase());
+            reference(iface, "type", node);
           }
         }
         break;
@@ -179,7 +297,7 @@ function collectUsedSymbols(
         const id = node as InterfaceDeclaration;
         if (id.extends) {
           for (const base of id.extends) {
-            referencedNames.add(base.toUpperCase());
+            reference(base, "type", node);
           }
         }
         break;
@@ -190,15 +308,44 @@ function collectUsedSymbols(
   // BFS through the chunk dep graph.
   const reachable = new Set<string>(); // keys: "<library>:<chunk>"
   const queue: Array<{ library: string; chunk: string }> = [];
+  const errors: CompileError[] = [];
 
-  for (const name of referencedNames) {
+  const seed = (entry: { library: string; chunk: string }): void => {
+    const key = `${entry.library}:${entry.chunk}`;
+    if (!reachable.has(key)) {
+      reachable.add(key);
+      queue.push(entry);
+    }
+  };
+  for (const [name, ref] of referencedNames) {
     const entry = symbolIndex.get(name);
-    if (entry) {
-      const key = `${entry.library}:${entry.chunk}`;
-      if (!reachable.has(key)) {
-        reachable.add(key);
-        queue.push(entry);
-      }
+    if (!entry) continue;
+    const unmet = unmetOf(entry.library, entry.chunk);
+    if (unmet.length === 0) {
+      seed(entry);
+      continue;
+    }
+    if (!referencesChunk(ref.kinds, entry.kind)) continue;
+    for (const u of unmet) {
+      errors.push({
+        message: formatUnmetRequirement(
+          { name: entry.chunk, library: entry.library },
+          u,
+        ),
+        line: ref.span?.startLine ?? 0,
+        column: ref.span?.startCol ?? 0,
+        severity: "error",
+        ...(ref.span?.file !== undefined && ref.span.file !== ""
+          ? { file: ref.span.file }
+          : {}),
+      });
+    }
+  }
+  for (const archive of archives) {
+    if (!wholeLibraries.has(archive.manifest.name)) continue;
+    for (const chunk of archive.chunks ?? []) {
+      if (unmetOf(archive.manifest.name, chunk.name).length > 0) continue;
+      seed({ library: archive.manifest.name, chunk: chunk.name });
     }
   }
 
@@ -248,7 +395,26 @@ function collectUsedSymbols(
     set.add(name);
   }
 
-  return byLibrary;
+  return result(byLibrary, errors);
+}
+
+/** Headers the reachable chunks need (see `chunkHeaders`), in archive and chunk order. */
+function headersOfChunks(
+  byLibrary: ReadonlyMap<string, ReadonlySet<string>>,
+  archives: readonly StlibArchive[],
+): string[] {
+  const headers: string[] = [];
+  for (const archive of archives) {
+    const names = byLibrary.get(archive.manifest.name);
+    if (!names || names.size === 0) continue;
+    for (const chunk of archive.chunks ?? []) {
+      if (!names.has(chunk.name)) continue;
+      for (const header of chunkHeaders(archive, chunk)) {
+        if (!headers.includes(header.name)) headers.push(header.name);
+      }
+    }
+  }
+  return headers;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +472,8 @@ interface PipelineResult {
   warnings: CompileError[];
   allArchives: StlibArchive[];
   mergedOptions: CompileOptions;
+  /** Paths reached from `instance_paths` POUs, set once semantic analysis ran. */
+  instancePaths?: InstancePathEntry[];
 }
 
 /**
@@ -328,6 +496,7 @@ function runPipeline(
   let ast: CompilationUnit | undefined;
   let projectModel: import("./project-model.js").ProjectModel | undefined;
   let symbolTables: SymbolTables | undefined;
+  let instancePaths: InstancePathEntry[] | undefined;
   const allArchives: StlibArchive[] = [];
 
   // Phase 0: IL→ST transpilation (if source contains IL bodies)
@@ -607,6 +776,8 @@ function runPipeline(
         message: err.message,
         line: err.line ?? 0,
         column: err.column ?? 0,
+        ...(err.endLine ? { endLine: err.endLine } : {}),
+        ...(err.endColumn ? { endColumn: err.endColumn } : {}),
         severity: "error",
         ...(err.file ? { file: err.file } : {}),
       });
@@ -616,6 +787,8 @@ function runPipeline(
         message: warn.message,
         line: warn.line ?? 0,
         column: warn.column ?? 0,
+        ...(warn.endLine ? { endLine: warn.endLine } : {}),
+        ...(warn.endColumn ? { endColumn: warn.endColumn } : {}),
         severity: "warning",
         ...(warn.file ? { file: warn.file } : {}),
       });
@@ -759,13 +932,21 @@ function runPipeline(
 
   try {
     const analyzer = new SemanticAnalyzer();
-    const semanticResult = analyzer.analyze(ast, semanticSymbolTables);
+    const semanticResult = analyzer.analyze(ast, semanticSymbolTables, {
+      externalInstancePaths: mergedOptions.externalInstancePaths === true,
+      ...(mergedOptions.externalSources !== undefined
+        ? { externalSources: mergedOptions.externalSources }
+        : {}),
+    });
     symbolTables = semanticResult.symbolTables;
+    instancePaths = semanticResult.instancePaths;
     for (const err of semanticResult.errors) {
       errors.push({
         message: err.message,
         line: err.line ?? 0,
         column: err.column ?? 0,
+        ...(err.endLine ? { endLine: err.endLine } : {}),
+        ...(err.endColumn ? { endColumn: err.endColumn } : {}),
         severity: "error",
         ...(err.file ? { file: err.file } : {}),
       });
@@ -775,6 +956,8 @@ function runPipeline(
         message: warn.message,
         line: warn.line ?? 0,
         column: warn.column ?? 0,
+        ...(warn.endLine ? { endLine: warn.endLine } : {}),
+        ...(warn.endColumn ? { endColumn: warn.endColumn } : {}),
         severity: "warning",
         ...(warn.file ? { file: warn.file } : {}),
       });
@@ -809,6 +992,7 @@ function runPipeline(
     warnings,
     allArchives,
     mergedOptions,
+    ...(instancePaths !== undefined ? { instancePaths } : {}),
   };
 }
 
@@ -865,26 +1049,51 @@ export function compile(
   // codegen for emission. Test builds bypass the shake — the test
   // harness may reference symbols not present in the source AST.
   const isTestBuild = pipeline.mergedOptions.isTestBuild ?? false;
-  const reachableByArchive = collectUsedSymbols(
+  const used = collectUsedSymbols(
     pipeline.ast,
     pipeline.allArchives,
     isTestBuild,
+    new Set(pipeline.mergedOptions.wholeLibraries ?? []),
+    {
+      external: pipeline.mergedOptions.externalInstancePaths === true,
+      ...(pipeline.mergedOptions.externalSources !== undefined
+        ? { externalSources: pipeline.mergedOptions.externalSources }
+        : {}),
+    },
+    pipeline.mergedOptions.providedHeaders,
   );
+  if (used.errors.length > 0) {
+    annotateErrorsWithPouContext(used.errors, pipeline.ast);
+    return {
+      success: false,
+      cppFiles: [],
+      cppCode: "",
+      headerCode: "",
+      lineMap: new Map(),
+      headerLineMap: new Map(),
+      errors: used.errors,
+      warnings: pipeline.warnings,
+    };
+  }
+  const reachableByArchive = used.byLibrary;
 
-  // Collect library headers for #include directives: those of a library whose code the unit uses, and those of a
-  // library without chunks, whose code is in the headers themselves.
+  // Collect library headers for #include directives: those of a library without chunks, whose code is in the
+  // headers themselves, and those the used chunks need.
   const libraryHeaders: string[] = [];
   for (const archive of pipeline.allArchives) {
-    const used =
-      (archive.chunks ?? []).length === 0 ||
-      (reachableByArchive.get(archive.manifest.name)?.size ?? 0) > 0;
-    if (!used) continue;
+    if ((archive.chunks ?? []).length > 0) continue;
     for (const header of archive.manifest.headers) {
       if (!libraryHeaders.includes(header)) {
         libraryHeaders.push(header);
       }
     }
   }
+  for (const header of used.chunkHeaders) {
+    if (!libraryHeaders.includes(header)) libraryHeaders.push(header);
+  }
+
+  const externalInstancePaths =
+    pipeline.mergedOptions.externalInstancePaths === true;
 
   // Pass semantic symbol tables to codegen so it can use type info from semantic analysis
   const codegen = new CodeGenerator(pipeline.symbolTables, {
@@ -901,6 +1110,11 @@ export function compile(
     globalConstants: pipeline.mergedOptions.globalConstants ?? {},
     ...(pipeline.mergedOptions.separateLibraryFiles === true
       ? { separateLibraryFiles: true }
+      : {}),
+    ...(externalInstancePaths ? { externalInstancePaths: true } : {}),
+    ...(externalInstancePaths &&
+    pipeline.mergedOptions.externalSources !== undefined
+      ? { externalSources: pipeline.mergedOptions.externalSources }
       : {}),
     ...(pipeline.mergedOptions.emitChunkMarkers
       ? { emitChunkMarkers: true }
@@ -938,7 +1152,11 @@ export function compile(
   // return the primary compile output; the debug artifacts are just omitted.
   let debugTableCpp: string | undefined;
   let debugMap: DebugMapV2 | undefined;
-  if (pipeline.projectModel && pipeline.symbolTables) {
+  if (
+    pipeline.projectModel &&
+    pipeline.symbolTables &&
+    !externalInstancePaths
+  ) {
     const dbg = generateDebugTable(
       pipeline.ast,
       pipeline.projectModel,
@@ -999,6 +1217,9 @@ export function compile(
       ? { resolvedLibraries: pipeline.allArchives }
       : {}),
     ...(debugTableCpp !== undefined ? { debugTableCpp } : {}),
+    ...(externalInstancePaths && pipeline.instancePaths !== undefined
+      ? { instancePaths: pipeline.instancePaths }
+      : {}),
     ...(debugMap !== undefined ? { debugMap } : {}),
   };
 }
@@ -1157,6 +1378,7 @@ export type {
   Statement,
   Expression,
   VariableExpression,
+  InstancePathRef,
   FunctionCallExpression,
   MethodCallExpression,
   LiteralExpression,
@@ -1226,6 +1448,18 @@ export type {
 // Re-export project model
 export type { ProjectModel } from "./project-model.js";
 
+// Re-export instance paths
+export {
+  INSTANCE_PATHS_ATTRIBUTE,
+  InstancePathIndex,
+  hasInstancePathsAttribute,
+} from "./semantic/instance-paths.js";
+export type {
+  InstancePathEntry,
+  InstanceLocation,
+  DeclaredVariable,
+} from "./semantic/instance-paths.js";
+
 // Re-export AST utilities
 export {
   walkAST,
@@ -1256,7 +1490,30 @@ export type {
   LibraryFunctionEntry,
   LibraryFBEntry,
   LibraryTypeEntry,
+  LibraryChunk,
+  LibraryDependency,
+  LibraryRequirement,
+  HeaderRequirement,
 } from "./library/library-manifest.js";
+export {
+  HEADERS_ATTRIBUTE,
+  RequirementIndex,
+  chunkHeaders,
+  describeLibraryVersionRange,
+  findUnmetRequirements,
+  formatUnmetRequirement,
+  functionBlockLineage,
+  getLibraryDependencies,
+  headerVersionSatisfies,
+  libraryVersionSatisfies,
+  resolvePouRequirements,
+} from "./library/library-requirements.js";
+export type {
+  BuildEnvironment,
+  PouRequirements,
+  ResolvedRequirement,
+  UnmetRequirement,
+} from "./library/library-requirements.js";
 
 // Re-export CODESYS import
 export {

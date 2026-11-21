@@ -15,7 +15,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <algorithm>
 #include "iec_types.hpp"
 
 namespace strucpp {
@@ -487,8 +486,8 @@ using WSTRING_VAR = IECWStringVar<254>;
 using IEC_WSTRING = IECWStringVar<254>;
 
 template<size_t MaxLen>
-inline size_t WLEN(const IECWString<MaxLen>& s) noexcept {
-    return s.length();
+inline INT_t WLEN(const IECWString<MaxLen>& s) noexcept {
+    return static_cast<INT_t>(s.length());
 }
 
 template<size_t MaxLen>
@@ -542,9 +541,9 @@ inline IECWString<MaxLen> WREPLACE(const IECWString<MaxLen>& s1, const IECWStrin
 }
 
 template<size_t MaxLen1, size_t MaxLen2>
-inline size_t WFIND(const IECWString<MaxLen1>& s1, const IECWString<MaxLen2>& s2) noexcept {
+inline INT_t WFIND(const IECWString<MaxLen1>& s1, const IECWString<MaxLen2>& s2) noexcept {
     size_t pos = s1.find(s2);
-    return pos == IECWString<MaxLen1>::npos ? 0 : pos + 1;
+    return pos == IECWString<MaxLen1>::npos ? INT_t{0} : static_cast<INT_t>(pos + 1);
 }
 
 template<size_t MaxLen1, size_t MaxLen2>

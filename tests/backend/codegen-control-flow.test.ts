@@ -445,7 +445,7 @@ describe("Phase 3.2: WHILE Statement Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("while (((X < 10)) & ((Y > 0))) {");
+    expect(result.cppCode).toContain("while (iec_bool_and((X < 10), (Y > 0))) {");
     expect(result.cppCode).toContain("X = X + 1;");
     expect(result.cppCode).toContain("Y = Y - 1;");
   });
@@ -638,7 +638,7 @@ describe("Phase 3.2: Complex Control Flow", () => {
       END_FUNCTION_BLOCK
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("if ((ENABLE) & (!PREV)) {");
+    expect(result.cppCode).toContain("if (iec_bool_and(ENABLE, !PREV)) {");
     expect(result.cppCode).toContain("COUNT = COUNT + 1;");
     expect(result.cppCode).toContain("PREV = ENABLE;");
   });
@@ -718,7 +718,7 @@ describe("Bitwise AND/OR/XOR Code Generation", () => {
     expect(result.cppCode).not.toContain("||");
   });
 
-  it("should parenthesize to preserve precedence with comparisons", () => {
+  it("should evaluate both comparisons of a BOOL OR", () => {
     const result = compileST(`
       PROGRAM Test
         VAR a : INT; b : INT; r : BOOL; END_VAR
@@ -726,7 +726,7 @@ describe("Bitwise AND/OR/XOR Code Generation", () => {
       END_PROGRAM
     `);
     expect(result.success).toBe(true);
-    expect(result.cppCode).toContain("(A == 1) | (B == 2)");
+    expect(result.cppCode).toContain("iec_bool_or(A == 1, B == 2)");
   });
 });
 

@@ -128,3 +128,15 @@ export function attachAttributes(
   }
   return unreadable;
 }
+
+/**
+ * Whether an enumeration's members must be written qualified (`Type#Member`), as CODESYS requires for a type
+ * declared under `{attribute 'qualified_only'}`.
+ */
+export function isQualifiedOnly(
+  attributes: readonly { name: string }[] | undefined,
+): boolean {
+  return (
+    attributes?.some((a) => a.name.toLowerCase() === "qualified_only") ?? false
+  );
+}

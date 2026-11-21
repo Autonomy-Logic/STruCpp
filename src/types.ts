@@ -51,12 +51,34 @@ export interface CompileOptions {
   separateLibraryFiles?: boolean;
 
   /**
+   * Linked libraries, by name, emitted whole: every chunk whether or not the unit reaches it, so the library's code
+   * (and, with separateLibraryFiles, its compiled object) does not change with the unit. Other libraries keep only
+   * what the unit reaches.
+   */
+  wholeLibraries?: string[];
+
+  /**
    * C++ namespace of everything the unit declares (default `strucpp`). Two units linked into one binary, such as a
    * PLC program and an HMI unit, each get their own. A custom namespace sees the runtime types through
    * `using namespace strucpp`. The debug table's own arrays stay in `strucpp::debug`, so only one unit of a binary
    * links its debug table.
    */
   namespace?: string;
+
+  /**
+   * Compile instance paths (`inst.Prog.Var`) and globals used by POUs marked `{attribute 'instance_paths'}` as calls
+   * to `strucpp::external_read<T>(id)` and `strucpp::external_write<T>(id, value)` (`iec_external.hpp`), which go
+   * through the host's `external_variable(id)` and `external_store(id, value)`. The programs, the CONFIGURATION and the globals are then not emitted (their declarations
+   * only supply types), no debug table is generated, and `instancePaths` in the result maps each id to its path.
+   */
+  externalInstancePaths?: boolean;
+
+  /**
+   * With `externalInstancePaths`: the source files (`fileName` / `additionalSources[].fileName`) whose PROGRAMs,
+   * CONFIGURATIONs and top-level VAR_GLOBAL blocks the host owns. Only those are left out of the output and reached
+   * through the host functions; everything declared in other files compiles normally. Undefined means all of them.
+   */
+  externalSources?: string[];
 
   /** Primary source file name for error reporting (default: "main.st") */
   fileName?: string;
@@ -77,6 +99,16 @@ export interface CompileOptions {
    * `loadStlibFromBuffer` / `loadStlibFromString`.
    */
   libraries?: import("./library/library-manifest.js").StlibArchive[];
+
+  /**
+   * Headers the build environment provides beyond the runtime's own, with their API version when they have one
+   * (for example `[{ name: "hmi_core.h", version: "1" }]` for a build that links the HMI core). When set, every
+   * library POU the unit uses is checked before code generation: each header it needs, transitively, must be
+   * provided at the version it was compiled against, or the compile fails naming the POU. POUs the unit does not use
+   * are never checked, and never emitted when the build lacks what they need. Undefined: the environment is not
+   * stated and headers are not checked. Library requirements are checked against `libraries` either way.
+   */
+  providedHeaders?: import("./library/library-manifest.js").HeaderRequirement[];
 
   /** Skip source inclusion when compiling libraries (closed-source) */
   noSource?: boolean;
@@ -269,6 +301,11 @@ export interface CompileResult {
 
   /** Resolved library archives (stdlib + user) used during compilation */
   resolvedLibraries?: import("./library/library-manifest.js").StlibArchive[];
+
+  /**
+   * With `externalInstancePaths`: every distinct instance path or global reached from an `instance_paths` POU, by id.
+   */
+  instancePaths?: import("./semantic/instance-paths.js").InstancePathEntry[];
 
   /**
    * Per-project debugger pointer-table C++ source. Write to

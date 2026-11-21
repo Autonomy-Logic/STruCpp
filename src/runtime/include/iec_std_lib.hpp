@@ -39,8 +39,11 @@
 #include "iec_dt.hpp"
 #include "iec_tod.hpp"
 #include <cmath>
-#include <algorithm>
+#if defined(__wasi__) || defined(__linux__)
+#include <time.h>
+#else
 #include <chrono>
+#endif
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -184,6 +187,15 @@ struct ConfigurationInstance {
     /** Get number of resources */
     virtual size_t get_resource_count() const = 0;
 };
+
+// =============================================================================
+// BOOL AND / OR / XOR over two evaluated operands (no short-circuit), without
+// the bitwise-on-bool warning `a & b` raises on bool operands.
+// =============================================================================
+
+inline constexpr bool iec_bool_and(bool a, bool b) noexcept { return a && b; }
+inline constexpr bool iec_bool_or(bool a, bool b) noexcept { return a || b; }
+inline constexpr bool iec_bool_xor(bool a, bool b) noexcept { return a != b; }
 
 // =============================================================================
 // Numeric Functions (ANY_NUM -> ANY_NUM, or ANY_REAL -> ANY_REAL)
@@ -1509,10 +1521,16 @@ inline IEC_DT CURRENT_DT() {
     // no RTC is wired up.
     return IEC_DT(static_cast<DT_t>(__CURRENT_TIME_NS));
 #else
+#if defined(__wasi__) || defined(__linux__)
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return IEC_DT(static_cast<DT_t>(static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec));
+#else
     using namespace std::chrono;
     auto now = system_clock::now();
     auto ns  = duration_cast<nanoseconds>(now.time_since_epoch()).count();
     return IEC_DT(static_cast<DT_t>(ns));
+#endif
 #endif
 }
 

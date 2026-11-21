@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import { parse } from "../../src/frontend/parser.js";
 import { buildAST } from "../../src/frontend/ast-builder.js";
 import { analyze } from "../../src/semantic/analyzer.js";
+import { compile } from "../../src/index.js";
 
 function analyzeSource(source: string) {
   const parseResult = parse(source);
@@ -587,5 +588,24 @@ describe("Undeclared Variables - Enum members", () => {
     );
     expect(errors).toHaveLength(1);
     expect(errors[0]!.message.toUpperCase()).toContain("POINT");
+  });
+});
+
+describe("Undeclared Variables - Range", () => {
+  it("covers the name, its end one past the last character", () => {
+    const source =
+      "PROGRAM Main\n  VAR x : INT; END_VAR\n  x := Missing + 1;\nEND_PROGRAM\n";
+    for (const result of [analyzeSource(source), compile(source)]) {
+      expect(undeclaredErrors(result)).toMatchObject([
+        { line: 3, column: 8, endLine: 3, endColumn: 8 + "Missing".length },
+      ]);
+    }
+  });
+
+  it("covers the object of a method call", () => {
+    const source = "PROGRAM Main\n  Ghost.Run();\nEND_PROGRAM\n";
+    expect(undeclaredErrors(analyzeSource(source))).toMatchObject([
+      { line: 2, column: 3, endLine: 2, endColumn: 3 + "Ghost".length },
+    ]);
   });
 });

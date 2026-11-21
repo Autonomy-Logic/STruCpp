@@ -6,6 +6,9 @@
 
 import { exactIntegerLiteralValue } from "../literal-utils.js";
 
+/** Name of the configuration object the runtime defines, which the debug table and instance paths reach. */
+export const CONFIG_GLOBAL_NAME = "g_config";
+
 /**
  * Convert an IEC 61131-3 based numeric string to a C++ literal string.
  * Handles 16#FF → 0xFF, 8#77 → 077, 2#1010 → 0b1010, and plain decimals.

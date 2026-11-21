@@ -36,10 +36,15 @@ import type {
 } from "../frontend/ast.js";
 import type { CompileError, SourceSpan } from "../types.js";
 import { describeInlineType } from "../frontend/lower-inline-types.js";
+import { isQualifiedOnly } from "../frontend/attributes.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
 import type { FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
+import {
+  resolveInstancePaths,
+  type InstancePathEntry,
+} from "./instance-paths.js";
 import {
   fbLineage,
   fbLineageNames,
@@ -51,6 +56,8 @@ import {
   resolveFieldType,
   resolveArrayElementType,
   buildEnumMemberMap,
+  unqualifiedEnumDescriptors,
+  isEnumType,
   typeName,
   describeType,
   resolveArrayShape,
@@ -290,6 +297,17 @@ export interface SemanticAnalysisResult {
 
   /** Warnings found during analysis */
   warnings: CompileError[];
+
+  /** Distinct instance paths and globals reached from `instance_paths` POUs; filled with `externalInstancePaths`. */
+  instancePaths: InstancePathEntry[];
+}
+
+/** Options of {@link SemanticAnalyzer.analyze}. */
+export interface SemanticAnalysisOptions {
+  /** Compile instance paths and globals of `instance_paths` POUs as host calls. */
+  externalInstancePaths?: boolean;
+  /** Source files whose programs, configurations and top-level globals the host owns (all when undefined). */
+  externalSources?: readonly string[];
 }
 
 // =============================================================================
@@ -384,6 +402,7 @@ export class SemanticAnalyzer {
   analyze(
     ast: CompilationUnit,
     existingSymbolTables?: SymbolTables,
+    options: SemanticAnalysisOptions = {},
   ): SemanticAnalysisResult {
     this.errors = [];
     this.warnings = [];
@@ -404,6 +423,14 @@ export class SemanticAnalyzer {
     this.validateTypeReferences(ast);
     const typeReferenceErrors = this.errors.length - errorsBeforeTypeReferences;
 
+    const paths = resolveInstancePaths(ast, this.symbolTables, {
+      external: options.externalInstancePaths === true,
+      ...(options.externalSources !== undefined
+        ? { externalSources: options.externalSources }
+        : {}),
+    });
+    this.errors.push(...paths.errors);
+
     // Pass 2: Type checking
     if (this.errors.length - typeReferenceErrors === 0) {
       const typeResult = this.typeChecker.check(ast);
@@ -421,6 +448,7 @@ export class SemanticAnalyzer {
       symbolTables: this.symbolTables,
       errors: this.errors,
       warnings: this.warnings,
+      instancePaths: paths.entries,
     };
   }
 
@@ -474,7 +502,8 @@ export class SemanticAnalyzer {
         // An inline enumeration's members belong to its POU, not the global scope.
         if (
           typeDecl.definition.kind === "EnumDefinition" &&
-          typeDecl.inline?.owner === undefined
+          typeDecl.inline?.owner === undefined &&
+          !isQualifiedOnly(typeDecl.attributes)
         ) {
           typeDecl.definition.members.forEach((member, index) => {
             if (this.symbolTables.globalScope.hasLocal(member.name)) return;
@@ -503,19 +532,7 @@ export class SemanticAnalyzer {
 
     // Build reverse lookup map: enum member name → owning enum type
     this.enumMemberMap = buildEnumMemberMap(
-      ast.types
-        .filter(
-          (t) =>
-            t.definition.kind === "EnumDefinition" &&
-            t.inline?.owner === undefined,
-        )
-        .map((t) => ({
-          name: t.name,
-          members:
-            t.definition.kind === "EnumDefinition"
-              ? t.definition.members.map((m) => m.name)
-              : [],
-        })),
+      unqualifiedEnumDescriptors(this.symbolTables.globalScope.getAllSymbols()),
     );
 
     // Register function declarations
@@ -1752,11 +1769,13 @@ export class SemanticAnalyzer {
     line: number,
     column: number,
     file?: string,
+    endColumn?: number,
   ): void {
     this.errors.push({
       message,
       line,
       column,
+      ...(endColumn !== undefined ? { endLine: line, endColumn } : {}),
       severity: "error",
       ...(file ? { file } : {}),
     });
@@ -3494,6 +3513,7 @@ export class SemanticAnalyzer {
             scope,
             ctx,
             stmt.sourceSpan,
+            false,
           );
           this.checkExpressionForUndeclaredVars(stmt.start, scope, ctx);
           this.checkExpressionForUndeclaredVars(stmt.end, scope, ctx);
@@ -3546,6 +3566,14 @@ export class SemanticAnalyzer {
   ): void {
     switch (expr.kind) {
       case "VariableExpression":
+        if (expr.instancePath !== undefined) {
+          for (const step of expr.accessChain ?? []) {
+            if (step.kind !== "subscript") continue;
+            for (const idx of step.indices)
+              this.checkExpressionForUndeclaredVars(idx, scope, ctx);
+          }
+          break;
+        }
         this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan);
         // Reject member access on a type-level symbol (FB / program / type).
         // Resolves the bug where `RED_YELLOW_GREEN.GREENTIME := …` is
@@ -3656,8 +3684,19 @@ export class SemanticAnalyzer {
     if (!sym) return; // undeclared — separate diagnostic from checkNameDeclared
 
     if (expr.typedLiteral) {
-      if (sym.kind === "type" && sym.resolvedType?.typeKind === "enum") return;
       const member = expr.fieldAccess[0] ?? "";
+      if (sym.kind === "type" && isEnumType(sym.resolvedType)) {
+        const upper = member.toUpperCase();
+        if (sym.resolvedType.values.some((v) => v.toUpperCase() === upper))
+          return;
+        this.addError(
+          `'${expr.name}#${member}' is not a valid literal: '${expr.name}' has no member '${member}'.`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        return;
+      }
       const hint = /^[0-9A-F_]+$/i.test(member)
         ? `; did you mean '16#${member}' or '${expr.name}#16#${member}'?`
         : ".";
@@ -3692,12 +3731,14 @@ export class SemanticAnalyzer {
 
   /**
    * Check whether a name is declared in the current scope chain or context.
+   * When `nameAtStart`, the name begins at the span's start and an error covers it.
    */
   private checkNameDeclared(
     name: string,
     scope: Scope,
     ctx: UndeclaredVarContext,
     sourceSpan: { startLine: number; startCol: number; file?: string },
+    nameAtStart = true,
   ): void {
     const upper = name.toUpperCase();
 
@@ -3772,6 +3813,7 @@ export class SemanticAnalyzer {
       sourceSpan.startLine,
       sourceSpan.startCol,
       sourceSpan.file,
+      nameAtStart ? sourceSpan.startCol + name.length : undefined,
     );
   }
 
@@ -3793,19 +3835,11 @@ export class SemanticAnalyzer {
     this.symbolTables = sourceSymbolTables;
 
     // Build enum member map from source symbol tables for bare enum resolution
-    const enumDescriptors: Array<{ name: string; members: string[] }> = [];
-    for (const sym of sourceSymbolTables.globalScope.getAllSymbols()) {
-      if (
-        sym.kind === "type" &&
-        sym.resolvedType?.typeKind === "enum" &&
-        (sym.declaration as TypeDeclaration | undefined)?.inline?.owner ===
-          undefined
-      ) {
-        const enumType = sym.resolvedType as EnumType;
-        enumDescriptors.push({ name: enumType.name, members: enumType.values });
-      }
-    }
-    this.enumMemberMap = buildEnumMemberMap(enumDescriptors);
+    this.enumMemberMap = buildEnumMemberMap(
+      unqualifiedEnumDescriptors(
+        sourceSymbolTables.globalScope.getAllSymbols(),
+      ),
+    );
 
     const typeScope = this.buildTestTypeScope(testFile);
 

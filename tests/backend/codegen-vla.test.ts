@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { compile } from "../../src/index.js";
+import { compile, compileStlib } from "../../src/index.js";
 
 function compileST(source: string): {
   cppCode: string;
@@ -258,5 +258,62 @@ describe("Phase 3.4: Array Dimension Star Support", () => {
     `);
     expect(result.success).toBe(true);
     expect(result.cppCode).toContain("ArrayView1D<IEC_REAL>");
+  });
+});
+
+// =============================================================================
+// Function blocks: ARRAY[*] VAR_IN_OUT members
+// =============================================================================
+
+describe("ARRAY[*] VAR_IN_OUT of a function block", () => {
+  const fbSource = `
+    FUNCTION_BLOCK FillView
+      VAR_IN_OUT
+        a : ARRAY[*] OF INT;
+        m : ARRAY[*, *] OF INT;
+        n : INT;
+      END_VAR
+      a[LOWER_BOUND(a, 1)] := n;
+    END_FUNCTION_BLOCK
+  `;
+
+  it("binds the view on the call and copies back only the other in-outs", () => {
+    const result = compileST(`${fbSource}
+      PROGRAM Main
+        VAR f : FillView; arr : ARRAY[3..5] OF INT; mat : ARRAY[0..1, 1..2] OF INT; k : INT; END_VAR
+        f(a := arr, m := mat, n := k);
+      END_PROGRAM
+    `);
+    expect(result.success).toBe(true);
+    expect(result.headerCode).toContain("ArrayView1D<IEC_INT> A;");
+    expect(result.headerCode).toContain("ArrayView2D<IEC_INT> M;");
+    expect(result.cppCode).toContain("F.A = ARR;");
+    expect(result.cppCode).toContain("F.M = MAT;");
+    expect(result.cppCode).toContain("K = F.N;");
+    expect(result.cppCode).not.toContain("ARR = F.A;");
+    expect(result.cppCode).not.toContain("MAT = F.M;");
+  });
+
+  it("copies back no ARRAY[*] in-out of a library function block", () => {
+    const lib = compileStlib([{ fileName: "fill.st", source: fbSource }], {
+      name: "fill-lib",
+      version: "1.0.0",
+      namespace: "fill_lib",
+    });
+    expect(lib.success, JSON.stringify(lib.errors)).toBe(true);
+    const result = compile(
+      `
+      PROGRAM Main
+        VAR f : FillView; arr : ARRAY[3..5] OF INT; mat : ARRAY[0..1, 1..2] OF INT; k : INT; END_VAR
+        f(a := arr, m := mat, n := k);
+      END_PROGRAM
+    `,
+      { libraries: [lib.archive] },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.cppCode).toContain("F.A = ARR;");
+    expect(result.cppCode).toContain("K = F.N;");
+    expect(result.cppCode).not.toContain("ARR = F.A;");
+    expect(result.cppCode).not.toContain("MAT = F.M;");
   });
 });

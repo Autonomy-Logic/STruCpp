@@ -42,9 +42,7 @@ export const PCH_INCLUDES = `#pragma once
 #include "iec_memory.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
-#include <array>
 #include <cstddef>
-#include <string>
 #include <iostream>
 #include <cstring>
 `;

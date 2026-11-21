@@ -18,6 +18,7 @@ import type {
   EnumValueSymbol,
   LiteralExpression,
   TypedNode,
+  VariableExpression,
   StdFunctionDescriptor,
   SymbolTables,
 } from "strucpp";
@@ -71,6 +72,15 @@ export function getHover(
 
   const { node, symbol, stdFunction } = resolved;
   const rc = (name: string) => restoreCase(name, caseMap);
+
+  // Instance path or configuration global of an `instance_paths` POU: its canonical path and type.
+  if (node.kind === "VariableExpression") {
+    const expr = node as VariableExpression;
+    if (expr.instancePath && !symbol) {
+      const typeText = expr.resolvedType ? ` : ${typeName(expr.resolvedType)}` : "";
+      return makeHover(`\`\`\`\n${expr.instancePath.path}${typeText}\n\`\`\``);
+    }
+  }
 
   // Standard function
   if (stdFunction) {

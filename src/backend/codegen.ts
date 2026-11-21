@@ -26,6 +26,8 @@ import type {
   UnaryExpression,
   LiteralExpression,
   VariableExpression,
+  InstancePathRef,
+  ASTNode,
   ReferenceKind,
   TypeReference,
   AccessStep,
@@ -47,6 +49,7 @@ import type {
 } from "../project-model.js";
 import type {
   LibraryChunk,
+  LibraryTypeEntry,
   StlibArchive,
 } from "../library/library-manifest.js";
 import {
@@ -63,7 +66,10 @@ import {
   functionBlockLookup,
   type FunctionBlockLookup,
 } from "../semantic/fb-lineage.js";
-import { lineageMembers } from "../ast-utils.js";
+import { lineageMembers, walkAST } from "../ast-utils.js";
+import { libraryFunctionVarBlocks } from "../library/library-loader.js";
+import { isQualifiedOnly } from "../frontend/attributes.js";
+import { isHostOwned } from "../semantic/instance-paths.js";
 import { wrapReferenceChain } from "./reference-types.js";
 import { TypeCodeGenerator, IEC_TO_CPP_VAR_TYPE } from "./type-codegen.js";
 import {
@@ -71,6 +77,7 @@ import {
   formatIntegerLiteral,
   iecBaseToCppLiteral,
   translateIECString,
+  CONFIG_GLOBAL_NAME,
 } from "./codegen-utils.js";
 import {
   mangledMemberName,
@@ -243,6 +250,15 @@ export interface CodeGenOptions {
    */
   separateLibraryFiles?: boolean;
 
+  /**
+   * Compile instance paths and globals of `instance_paths` POUs as `strucpp::external_read` / `external_write`
+   * calls, and emit neither the programs, the configurations nor the globals.
+   */
+  externalInstancePaths?: boolean;
+
+  /** With `externalInstancePaths`: the source files whose programs, configurations and globals the host owns. */
+  externalSources?: readonly string[];
+
   /** Global constants injected as constexpr into the header preamble (before namespace) */
   globalConstants: Record<string, number>;
 
@@ -401,6 +417,14 @@ export interface CodeGenResult {
 /**
  * C++ code generator for IEC 61131-3 programs.
  */
+/**
+ * True when a global of this declared type is accessed whole through `read()` / `write()`; struct, array and
+ * function-block globals go through `with_lock`, as for VAR_EXTERNAL.
+ */
+function isScalarGlobal(type: TypeReference): boolean {
+  return type.arrayDimensions === undefined && isElementaryType(type.name);
+}
+
 export class CodeGenerator {
   private options: CodeGenOptions;
 
@@ -426,6 +450,8 @@ export class CodeGenerator {
     | undefined;
   /** The libraries header, when `separateLibraryFiles` moved the libraries out of the unit's header. */
   private libraryHeader: { name: string; content: string } | undefined;
+  /** Header line index of each C stdlib macro's `#ifdef`/`#undef`/`#endif` triple, by macro name. */
+  private stdlibUndefLines = new Map<string, number>();
   private lineMap: Map<number, LineMapEntry> = new Map();
   private headerLineMap: Map<number, LineMapEntry> = new Map();
   private currentHeaderLine = 1;
@@ -502,14 +528,17 @@ export class CodeGenerator {
   /** Lazily built hooks for structure-initializer lowering (see getStructInitEmitter). */
   private structInitEmitter?: StructInitEmitter;
 
-  /** Lazily built set of file-level VAR_GLOBAL names (see fileScopeGlobalNames). */
-  private fileScopeGlobalNameCache?: Set<string>;
+  /** Lazily built type names of the file-level VAR_GLOBALs, by upper-case name (see fileScopeGlobalTypes). */
+  private fileScopeGlobalTypeCache?: Map<string, string>;
 
   /** Library FB field type map: "FBNAME.FIELDNAME" → type name (for field mangling in test codegen) */
   private libraryFBFieldTypes: Map<string, string> = new Map();
 
   /** Extended type metadata for library FB fields (array dims, reference kind) */
   private libraryFBFieldTypeRefs: Map<string, LibraryFieldShape> = new Map();
+
+  /** Parameters of the linked libraries' functions with a concrete signature, by upper-case name. */
+  private libraryFunctionBlocks: Map<string, readonly VarBlock[]> = new Map();
 
   /** Set of known program type names (upper case) for program invocation detection */
   protected knownProgramTypes: Set<string> = new Set();
@@ -580,7 +609,8 @@ export class CodeGenerator {
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
    *  FB inout params are stored as by-value members with copy-in at the call
    *  site; this set drives the matching copy-back after the call so a callee's
-   *  mutations propagate to the caller's variable (true inout semantics). */
+   *  mutations propagate to the caller's variable (true inout semantics).
+   *  ARRAY[*] params are left out: their ArrayView member aliases the caller's array. */
   private fbInoutParams: Map<string, Set<string>> = new Map();
 
   // IEC_TYPE_BITS and IEC_TYPE_CAT removed — use getTypeBits()/getTypeCategory() from type-utils.ts
@@ -595,6 +625,30 @@ export class CodeGenerator {
 
   /** TypeCodeGenerator instance for type mapping */
   private typeCodeGen = new TypeCodeGenerator();
+
+  /** Whether instance paths and `instance_paths` globals compile to host calls. */
+  private get externalInstancePaths(): boolean {
+    return this.options.externalInstancePaths === true;
+  }
+
+  /** Upper-case names of the programs the host owns under external instance paths, which are not emitted. */
+  private hostPrograms = new Set<string>();
+
+  /** Upper-case names of the configurations the host owns under external instance paths, which are not emitted. */
+  private hostConfigurations = new Set<string>();
+
+  /** A PROGRAM, CONFIGURATION or top-level VAR_GLOBAL block the host owns. */
+  private isHostOwned(node: ASTNode): boolean {
+    return isHostOwned(node, {
+      external: this.externalInstancePaths,
+      ...(this.options.externalSources !== undefined
+        ? { externalSources: this.options.externalSources }
+        : {}),
+    });
+  }
+
+  /** The unit has an instance path (`external`: or a global) compiled through an `InstancePathRef`. */
+  private usesInstancePaths = { external: false, configuration: false };
 
   /** Get symbol tables (for future use in Phase 3+) */
   get symbolTables(): SymbolTables {
@@ -902,16 +956,16 @@ export class CodeGenerator {
    * Register type info from library manifests (enum types for :: emission,
    * struct types for known-type detection). Private — use registerLibraryArchives().
    */
-  private registerLibraryTypes(
-    types: Array<{ name: string; kind: string }>,
-  ): void {
+  private registerLibraryTypes(types: readonly LibraryTypeEntry[]): void {
     for (const t of types) {
       const nameUpper = t.name.toUpperCase();
       if (t.kind === "enum") {
-        // Members are not available in the manifest, but we only need to
-        // know the type IS an enum for :: emission in generateVariableExpression
+        const members = (t.members ?? []).map((m) => m.name);
         if (!this.enumTypeMembers.has(nameUpper)) {
-          this.enumTypeMembers.set(nameUpper, new Set());
+          this.enumTypeMembers.set(
+            nameUpper,
+            new Set(members.map((m) => m.toUpperCase())),
+          );
         }
       }
       this.knownStructTypes.add(nameUpper);
@@ -938,7 +992,10 @@ export class CodeGenerator {
           return {
             name: fb.name,
             inputNames: fb.inputs.map((i) => i.name),
-            inoutNames: fb.inouts.map((i) => i.name),
+            // An ARRAY[*] in-out member is a view of the caller's array: no copy-back.
+            inoutNames: fb.inouts
+              .filter((i) => !VLA_TYPE_NAME.test(i.type))
+              .map((i) => i.name),
             fields: [
               ...fb.inputs.map(mapVar),
               ...fb.outputs.map(mapVar),
@@ -950,7 +1007,76 @@ export class CodeGenerator {
       if (archive.manifest.types) {
         this.registerLibraryTypes(archive.manifest.types);
       }
+      if (!archive.manifest.isBuiltin) {
+        for (const fn of archive.manifest.functions) {
+          const generic = fn.parameters.some((p) =>
+            p.type.toUpperCase().startsWith("ANY"),
+          );
+          if (fn.variadic !== undefined || generic) continue;
+          const key = fn.name.toUpperCase();
+          if (!this.libraryFunctionBlocks.has(key)) {
+            this.libraryFunctionBlocks.set(key, libraryFunctionVarBlocks(fn));
+          }
+        }
+      }
     }
+  }
+
+  /**
+   * Emits the GVL globals that hold function block instances (`fbInstances`), or all the others. An instance needs its
+   * class defined, library classes included, so it goes after them; the others go before the classes, whose
+   * constructors bind VAR_EXTERNAL pointers to them. With external instance paths only the CONSTANT host-owned blocks
+   * are emitted; the others live in the host.
+   */
+  private emitGvlGlobals(ast: CompilationUnit, fbInstances: boolean): void {
+    const holdsInstance = (decl: VarDeclaration): boolean =>
+      this.isFBType(decl.type.name) ||
+      (decl.type.elementTypeName !== undefined &&
+        this.isFBType(decl.type.elementTypeName));
+    const blocks = ast.globalVarBlocks
+      .filter((block) => block.isConstant || !this.isHostOwned(block))
+      .map((block) => ({
+        block,
+        decls: block.declarations.filter(
+          (decl) => holdsInstance(decl) === fbInstances,
+        ),
+      }))
+      .filter((b) => b.decls.length > 0);
+    if (blocks.length === 0) return;
+    this.emitHeader("// Global variables");
+    for (const { block, decls } of blocks) {
+      const constQualifier = block.isConstant ? "const " : "";
+      for (const decl of decls) {
+        const cppType = this.mapTypeRefToCpp(decl.type);
+        for (const name of decl.names) {
+          this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
+          if (decl.initialValue) {
+            const initExpr = this.generateInitializer(
+              decl.initialValue,
+              cppType,
+              decl.type.name,
+            );
+            this.emitHeader(
+              `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
+            );
+          } else {
+            this.emitHeader(`inline ${cppType} ${name}{};`);
+          }
+          this.emitHeaderChunkMarker("end", "inlineGlobal", name);
+        }
+      }
+    }
+    this.emitHeader("");
+  }
+
+  /** Parameter blocks of a function the unit declares, else of a linked library's function with a concrete signature. */
+  private functionVarBlocks(
+    nameUpper: string,
+  ): readonly VarBlock[] | undefined {
+    const own = this.ast?.functions.find(
+      (f) => f.name.toUpperCase() === nameUpper,
+    );
+    return own?.varBlocks ?? this.libraryFunctionBlocks.get(nameUpper);
   }
 
   /**
@@ -1093,6 +1219,9 @@ export class CodeGenerator {
           }
         } else if (block.blockType === "VAR_IN_OUT") {
           for (const decl of block.declarations) {
+            // An ARRAY[*] member is an ArrayView bound to the caller's array
+            // by the copy-in, so writes already reach it and there is no copy-back.
+            if (VLA_TYPE_NAME.test(decl.type.name)) continue;
             for (const name of decl.names) {
               inoutNames.push(name.toUpperCase());
             }
@@ -1159,7 +1288,7 @@ export class CodeGenerator {
         const memberNames = td.definition.members.map((m) => m.name);
         const members = new Set(memberNames.map((m) => m.toUpperCase()));
         this.enumTypeMembers.set(td.name.toUpperCase(), members);
-        if (td.inline?.owner === undefined) {
+        if (td.inline?.owner === undefined && !isQualifiedOnly(td.attributes)) {
           enumDescriptors.push({ name: td.name, members: memberNames });
         }
       }
@@ -1174,6 +1303,26 @@ export class CodeGenerator {
     // Topologically sort FBs once (used in both header and implementation)
     this.sortedFBs = this.topologicalSortFBs(ast.functionBlocks);
 
+    this.hostPrograms = new Set(
+      ast.programs
+        .filter((p) => this.isHostOwned(p))
+        .map((p) => p.name.toUpperCase()),
+    );
+    this.hostConfigurations = new Set(
+      ast.configurations
+        .filter((c) => this.isHostOwned(c))
+        .map((c) => c.name.toUpperCase()),
+    );
+    this.usesInstancePaths = { external: false, configuration: false };
+    walkAST(ast, (node) => {
+      if (node.kind !== "VariableExpression") return;
+      const ref = (node as VariableExpression).instancePath;
+      if (ref === undefined) return;
+      if (ref.id >= 0) this.usesInstancePaths.external = true;
+      else if (ref.kind === "instance")
+        this.usesInstancePaths.configuration = true;
+    });
+
     // Generate header
     this.generateHeader(ast);
 
@@ -1184,6 +1333,7 @@ export class CodeGenerator {
     const cppFiles = Array.from(this.outputFiles.entries()).map(
       ([name, lines]) => ({ name, content: lines.join(eol) }),
     );
+    this.pruneStdlibUndefs(cppFiles);
     return {
       cppFiles,
       // Legacy concatenation — preserves the historical single-blob
@@ -1269,8 +1419,40 @@ export class CodeGenerator {
   }
 
   /**
-   * Generate the C++ header file.
+   * Generate the C++ header file. When instance paths reach program instances in the default mode, it ends with an
+   * `extern` declaration of the configuration object the runtime defines (the one the debug table names).
    */
+  /**
+   * Blanks the `#undef` triple of every C stdlib macro no generated identifier uses, in the unit header and the
+   * libraries header, keeping line numbers. A standard header included after them then still sees those macros.
+   */
+  private pruneStdlibUndefs(
+    cppFiles: ReadonlyArray<{ content: string }>,
+  ): void {
+    const undefLines = new Set<number>();
+    for (const start of this.stdlibUndefLines.values())
+      for (let i = 0; i < 3; i++) undefLines.add(start + i);
+    const eol = this.options.lineEnding;
+    const libraryLines = this.libraryHeader?.content.split(eol) ?? [];
+    const corpus = [
+      ...this.headerOutput.filter((_, i) => !undefLines.has(i)),
+      ...libraryLines.filter((_, i) => !undefLines.has(i)),
+      ...cppFiles.map((f) => f.content),
+    ].join("\n");
+    for (const [macro, start] of this.stdlibUndefLines) {
+      if (new RegExp(`\\b${macro}\\b`).test(corpus)) continue;
+      for (let i = start; i < start + 3; i++) {
+        this.headerOutput[i] = "";
+        if (i < libraryLines.length) libraryLines[i] = "";
+      }
+    }
+    if (this.libraryHeader)
+      this.libraryHeader = {
+        ...this.libraryHeader,
+        content: libraryLines.join(eol),
+      };
+  }
+
   private generateHeader(ast: CompilationUnit): void {
     // Determine the namespace for this project
     const ns = this.projectModel
@@ -1296,14 +1478,17 @@ export class CodeGenerator {
     this.emitHeader('#include "iec_pointer.hpp"');
     this.emitHeader('#include "iec_string.hpp"');
     this.emitHeader('#include "iec_wstring.hpp"');
-    this.emitHeader("#include <array>");
+    if (this.externalInstancePaths) {
+      this.emitHeader('#include "iec_external.hpp"');
+    }
     this.emitHeader("#include <cstddef>");
-    this.emitHeader("#include <string>");
 
     // Undefine C standard-library macros that collide with legal ST identifiers
     // (e.g. OSCAT's T_AVG24 has a local `TMP_MAX`, which <cstdio> #defines).
-    // Done after the runtime includes so the runtime still sees the real macros;
-    // user code below only ever uses these names as ordinary identifiers.
+    // Done after the runtime includes so the runtime still sees the real macros.
+    // Only the macros the generated code uses as identifiers stay undefined
+    // (pruneStdlibUndefs), so later standard headers still see the others.
+    this.stdlibUndefLines.clear();
     this.emitHeader("");
     this.emitHeader(
       "// Avoid clashes between ST identifiers and C stdlib macros",
@@ -1318,6 +1503,7 @@ export class CodeGenerator {
       "EXIT_SUCCESS",
       "EXIT_FAILURE",
     ]) {
+      this.stdlibUndefLines.set(m, this.headerOutput.length);
       this.emitHeader(`#ifdef ${m}`);
       this.emitHeader(`#undef ${m}`);
       this.emitHeader(`#endif`);
@@ -1390,6 +1576,24 @@ export class CodeGenerator {
       this.emitHeader("");
     }
 
+    // Inject reachable library chunks (header side) ahead of everything the
+    // unit declares: a library never names the unit's declarations, while the
+    // unit's types, globals and POUs may name library types and classes.
+    //
+    // Per archive: emit `// Library: <name>` header, then `class X;`
+    // forward decls for every reachable functionBlock chunk
+    // (libraries' FB classes are sometimes mutually-referential and
+    // the bodies are emitted in declaration order — the forward
+    // decls ahead of any body keep the layout linkable in every
+    // ordering). Then emit each reachable chunk's `header` slice in
+    // chunk-array order; types come first, FBs next, functions last
+    // because that's the order the library compiler emitted them
+    // before slicing. With separate library files the same lines are in
+    // the libraries header, included above.
+    if (this.options.separateLibraryFiles !== true) {
+      for (const line of this.libraryHeaderChunkLines()) this.emitHeader(line);
+    }
+
     // Forward-declare the POU classes before the user-defined types.
     //
     // A TYPE may name a function block — `AccumGrid : ARRAY[0..1,0..1] OF Accum`
@@ -1420,50 +1624,7 @@ export class CodeGenerator {
       }
     }
 
-    // Generate top-level global variables (GVL files)
-    if (ast.globalVarBlocks.length > 0) {
-      this.emitHeader("// Global variables");
-      for (const block of ast.globalVarBlocks) {
-        const constQualifier = block.isConstant ? "const " : "";
-        for (const decl of block.declarations) {
-          const cppType = this.mapTypeRefToCpp(decl.type);
-          for (const name of decl.names) {
-            // `inline`, not a static-local behind a reference: the debug table takes
-            // their address into PROGMEM, which needs a constant.
-            this.emitHeaderChunkMarker("begin", "inlineGlobal", name);
-            if (decl.initialValue) {
-              const initExpr = this.generateInitializer(
-                decl.initialValue,
-                cppType,
-                decl.type.name,
-              );
-              this.emitHeader(
-                `${constQualifier}inline ${cppType} ${name} = ${initExpr};`,
-              );
-            } else {
-              this.emitHeader(`inline ${cppType} ${name}{};`);
-            }
-            this.emitHeaderChunkMarker("end", "inlineGlobal", name);
-          }
-        }
-      }
-      this.emitHeader("");
-    }
-
-    // Inject reachable library chunks (header side).
-    //
-    // Per archive: emit `// Library: <name>` header, then `class X;`
-    // forward decls for every reachable functionBlock chunk
-    // (libraries' FB classes are sometimes mutually-referential and
-    // the bodies are emitted in declaration order — the forward
-    // decls ahead of any body keep the layout linkable in every
-    // ordering). Then emit each reachable chunk's `header` slice in
-    // chunk-array order; types come first, FBs next, functions last
-    // because that's the order the library compiler emitted them
-    // before slicing.
-    if (this.options.separateLibraryFiles !== true) {
-      for (const line of this.libraryHeaderChunkLines()) this.emitHeader(line);
-    }
+    this.emitGvlGlobals(ast, false);
 
     // Generate forward declarations
     this.emitPouForwardDeclarations(ast);
@@ -1488,10 +1649,13 @@ export class CodeGenerator {
       this.emitHeaderChunkMarker("end", "functionBlock", fb.name);
     }
 
+    this.emitGvlGlobals(ast, true);
+
     // Generate program class declarations
     if (this.projectModel) {
       // Use project model for enhanced generation with VAR_EXTERNAL support
       for (const prog of this.projectModel.programs.values()) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.emitHeaderChunkMarker(
           "begin",
           "functionBlock",
@@ -1507,6 +1671,7 @@ export class CodeGenerator {
     } else {
       // Fallback to AST-based generation
       for (const prog of ast.programs) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.emitHeaderChunkMarker(
           "begin",
           "functionBlock",
@@ -1531,10 +1696,12 @@ export class CodeGenerator {
     // Generate configuration class declarations
     if (this.projectModel) {
       for (const config of this.projectModel.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationHeaderFromModel(config);
       }
     } else {
       for (const config of ast.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationHeaderDeclaration(config);
       }
     }
@@ -1543,6 +1710,18 @@ export class CodeGenerator {
     this.generateLocatedVarsDeclaration();
 
     this.emitHeader(`}  // namespace ${ns}`);
+
+    const config = this.projectModel?.configurations[0];
+    if (
+      this.usesInstancePaths.configuration &&
+      !this.externalInstancePaths &&
+      config !== undefined
+    ) {
+      this.emitHeader("");
+      this.emitHeader(
+        `extern ::${ns}::Configuration_${config.name} ${CONFIG_GLOBAL_NAME};`,
+      );
+    }
   }
 
   /**
@@ -1587,10 +1766,12 @@ export class CodeGenerator {
 
     if (this.projectModel) {
       for (const config of this.projectModel.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationImplementationFromModel(config);
       }
     } else {
       for (const config of ast.configurations) {
+        if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
         this.generateConfigurationImplementation(config);
       }
     }
@@ -1632,6 +1813,7 @@ export class CodeGenerator {
     // 2. One TU per program.
     if (this.projectModel) {
       for (const prog of this.projectModel.programs.values()) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.startTranslationUnit(this.pouFileName(prog.name));
         this.emitCppChunkMarker(
           "begin",
@@ -1644,6 +1826,7 @@ export class CodeGenerator {
       }
     } else {
       for (const prog of ast.programs) {
+        if (this.hostPrograms.has(prog.name.toUpperCase())) continue;
         this.startTranslationUnit(this.pouFileName(prog.name));
         this.emitCppChunkMarker(
           "begin",
@@ -1711,12 +1894,22 @@ export class CodeGenerator {
 
   /** Upper-case names of the compilation unit's file-level VAR_GLOBALs. */
   private fileScopeGlobalNames(): Set<string> {
-    if (!this.fileScopeGlobalNameCache) {
-      this.fileScopeGlobalNameCache = this.ast
-        ? new Set(collectFileScopeGlobals(this.ast).keys())
-        : new Set<string>();
+    return new Set(this.fileScopeGlobalTypes().keys());
+  }
+
+  /** Type names of the compilation unit's file-level VAR_GLOBALs, by upper-case name. */
+  private fileScopeGlobalTypes(): Map<string, string> {
+    if (!this.fileScopeGlobalTypeCache) {
+      this.fileScopeGlobalTypeCache = new Map(
+        this.ast
+          ? [...collectFileScopeGlobals(this.ast)].map(([name, decl]) => [
+              name,
+              decl.typeName,
+            ])
+          : [],
+      );
     }
-    return this.fileScopeGlobalNameCache;
+    return this.fileScopeGlobalTypeCache;
   }
 
   /**
@@ -2128,6 +2321,18 @@ export class CodeGenerator {
    * VAR_INPUT, VAR_OUTPUT (by ref), VAR_IN_OUT (by ref) become C++ params.
    */
   private generateMethodParamList(method: MethodDeclaration): string {
+    return this.generateMethodParams(method).join(", ");
+  }
+
+  /**
+   * Parameters of a function or method definition: a body need not read every input, so each is
+   * `[[maybe_unused]]` and C++ compilers stay silent under -Wextra.
+   */
+  private definitionParams(params: string[]): string {
+    return params.map((param) => `[[maybe_unused]] ${param}`).join(", ");
+  }
+
+  private generateMethodParams(method: MethodDeclaration): string[] {
     const params: string[] = [];
     for (const block of method.varBlocks) {
       if (block.blockType === "VAR_INPUT") {
@@ -2158,7 +2363,7 @@ export class CodeGenerator {
         }
       }
     }
-    return params.join(", ");
+    return params;
   }
 
   /**
@@ -2193,7 +2398,7 @@ export class CodeGenerator {
     className: string,
   ): void {
     const returnType = this.methodReturnCpp(method);
-    const params = this.generateMethodParamList(method);
+    const params = this.definitionParams(this.generateMethodParams(method));
 
     this.emitLineDirective(method.sourceSpan.startLine);
     const implLine = this.currentLine;
@@ -2497,7 +2702,9 @@ export class CodeGenerator {
       // 1. _real implementation (original body with renamed function)
       this.emitLineDirective(func.sourceSpan.startLine);
       const realLine = this.currentLine;
-      this.emit(`${retType} ${func.name}_real(${params.join(", ")}) {`);
+      this.emit(
+        `${retType} ${func.name}_real(${this.definitionParams(params)}) {`,
+      );
       emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");
@@ -2519,7 +2726,7 @@ export class CodeGenerator {
       // Production build: normal function
       this.emitLineDirective(func.sourceSpan.startLine);
       const funcImplLine = this.currentLine;
-      this.emit(`${retType} ${func.name}(${params.join(", ")}) {`);
+      this.emit(`${retType} ${func.name}(${this.definitionParams(params)}) {`);
       emitFunctionBody(func.name);
       this.emit("}");
       this.emit("");
@@ -2867,6 +3074,7 @@ export class CodeGenerator {
     const seen = new Set<string>();
     let emittedAny = false;
     for (const config of this.projectModel.configurations) {
+      if (this.hostConfigurations.has(config.name.toUpperCase())) continue;
       for (const gvar of config.globalVars) {
         const key = gvar.name.toUpperCase();
         // Same name across configurations = one canonical global (strucpp
@@ -3284,6 +3492,25 @@ export class CodeGenerator {
     stmt: AssignmentStatement,
     indent: string,
   ): void {
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      stmt.target.instancePath !== undefined &&
+      stmt.target.instancePath.id >= 0
+    ) {
+      this.emitInstancePathWrite(stmt.target.instancePath, stmt.value, indent);
+      return;
+    }
+    if (
+      stmt.target.kind === "VariableExpression" &&
+      stmt.target.instancePath?.globalScope === "configuration" &&
+      this.emitConfigurationGlobalStore(
+        stmt.target,
+        this.generateRealOperand(stmt.value, this.inferExprType(stmt.target)),
+        indent,
+      )
+    )
+      return;
+
     // Check for property write: m.Speed := 75 → m.set_Speed(75)
     const propWrite = this.detectPropertyWrite(stmt.target);
     if (propWrite) {
@@ -4042,6 +4269,11 @@ export class CodeGenerator {
   private generateVariableExpression(expr: VariableExpression): string {
     const nameUpper = expr.name.toUpperCase();
 
+    if (expr.instancePath !== undefined) {
+      const access = this.generateInstancePathRead(expr, expr.instancePath);
+      if (access !== undefined) return access;
+    }
+
     // Composite shared global (struct / array / function-block) accessed in a
     // body: reach its canonical value directly through the GlobalVar pointer
     // (`g->value` / `g->value.field` / `g->value.field.N`). The per-global mutex
@@ -4219,6 +4451,138 @@ export class CodeGenerator {
     return this.renderAccessTail(result, expr, nameUpper);
   }
 
+  /** C++ value type of an external instance path's leaf, as passed to `external_read` / `external_write`. */
+  private instancePathLeafCpp(ref: InstancePathRef): string {
+    const leaf = ref.leaf;
+    if (leaf === undefined) {
+      throw new Error(
+        `Internal error: instance path '${ref.path}' has no leaf type.`,
+      );
+    }
+    return this.mapVarTypeToCpp(leaf.type, leaf.maxLength);
+  }
+
+  /**
+   * Read of an instance path or of a global reached from an `instance_paths` POU: a host call in external mode, the
+   * program instance's member through the configuration object or the configuration global's canonical value
+   * otherwise. Undefined for a top-level global in the default mode, which compiles as any other variable. Throws in
+   * external mode for an access the analyzer gave no id, which has no storage in this unit.
+   */
+  private generateInstancePathRead(
+    expr: VariableExpression,
+    ref: InstancePathRef,
+  ): string | undefined {
+    if (ref.id < 0 && this.externalInstancePaths) {
+      throw new Error(
+        `Internal error: '${ref.path}' has no external id with externalInstancePaths.`,
+      );
+    }
+    if (ref.id >= 0) {
+      const read = `strucpp::external_read<${this.instancePathLeafCpp(ref)}>(${ref.id})`;
+      return ref.bit === undefined
+        ? read
+        : `((static_cast<uint64_t>(${read}) >> ${ref.bit}) & 1)`;
+    }
+    const tail = (expr.accessChain ?? []).slice(ref.consumed);
+    const rootTypeName = ref.rootType.name;
+    if (ref.kind === "instance" && ref.instance !== undefined) {
+      const member = this.needsFieldMangling(
+        ref.variable,
+        rootTypeName,
+        ref.programType,
+      )
+        ? `${ref.variable}_`
+        : ref.variable;
+      const base = `::${CONFIG_GLOBAL_NAME}.${ref.instance}.${member}`;
+      return this.generateAccessChain(base, tail, ref.variable, rootTypeName);
+    }
+    if (ref.globalScope === "configuration") {
+      if (ref.byReference === true)
+        return this.generateAccessChain(
+          `${ref.variable}.value`,
+          tail,
+          ref.variable,
+          rootTypeName,
+        );
+      if (tail.length === 0 && isScalarGlobal(ref.rootType))
+        return `${ref.variable}.read()`;
+      const inner = this.generateAccessChain(
+        "(*__glk)",
+        tail,
+        ref.variable,
+        rootTypeName,
+      );
+      return `${ref.variable}.with_lock([&](auto* __glk){ return ${inner}; })`;
+    }
+    return undefined;
+  }
+
+  /**
+   * Stores `source` (rendered C++) in a configuration global reached from an `instance_paths` POU in the default
+   * mode, under the global's lock as VAR_EXTERNAL does: `write()` for a whole scalar, `with_lock` otherwise, with the
+   * value computed before the lock is taken. False for any other target.
+   */
+  private emitConfigurationGlobalStore(
+    target: Expression,
+    source: string,
+    indent: string,
+  ): boolean {
+    if (target.kind !== "VariableExpression") return false;
+    const ref = target.instancePath;
+    if (ref === undefined || ref.id >= 0) return false;
+    if (ref.globalScope !== "configuration") return false;
+    const tail = (target.accessChain ?? []).slice(ref.consumed);
+    const name = ref.variable;
+    const typeName = ref.rootType.name;
+    if (tail.length === 0 && isScalarGlobal(ref.rootType)) {
+      this.emit(`${indent}${name}.write(${source});`);
+      return true;
+    }
+    const tmp = `__gwv_${this.tempVarCounter++}`;
+    this.emit(`${indent}auto ${tmp} = ${source};`);
+    const last = tail[tail.length - 1];
+    if (last?.kind === "field" && /^\d+$/.test(last.name)) {
+      const lv = this.generateAccessChain(
+        "(*__glk)",
+        tail.slice(0, -1),
+        name,
+        typeName,
+      );
+      this.emit(
+        `${indent}${name}.with_lock([&](auto* __glk){ ${lv} = (${lv} & ~(1ULL << ${last.name})) | ((${tmp} ? 1ULL : 0ULL) << ${last.name}); });`,
+      );
+      return true;
+    }
+    const lv = this.generateAccessChain("(*__glk)", tail, name, typeName);
+    this.emit(
+      `${indent}${name}.with_lock([&](auto* __glk){ ${lv} = ${tmp}; });`,
+    );
+    return true;
+  }
+
+  /** `strucpp::external_write` of an instance path or global; a bit write reads, merges and writes the whole value. */
+  private emitInstancePathWrite(
+    ref: InstancePathRef,
+    valueExpr: Expression,
+    indent: string,
+  ): void {
+    const cppType = this.instancePathLeafCpp(ref);
+    const leafType = ref.leaf?.type ?? "";
+    if (ref.bit === undefined) {
+      const value = this.generateRealOperand(valueExpr, leafType);
+      this.emit(
+        `${indent}strucpp::external_write<${cppType}>(${ref.id}, ${value});`,
+      );
+      return;
+    }
+    const value = this.generateExpression(valueExpr);
+    const raw = this.typeCodeGen.mapTypeToCpp(leafType);
+    const current = `static_cast<uint64_t>(strucpp::external_read<${cppType}>(${ref.id}))`;
+    this.emit(
+      `${indent}strucpp::external_write<${cppType}>(${ref.id}, static_cast<${raw}>((${current} & ~(1ULL << ${ref.bit})) | ((${value} ? 1ULL : 0ULL) << ${ref.bit})));`,
+    );
+  }
+
   /**
    * Render an expression's access chain (subscripts / field access / bit access /
    * dereference) onto a given base string. Factored out of
@@ -4311,9 +4675,10 @@ export class CodeGenerator {
     base: string,
     chain: AccessStep[],
     baseNameUpper: string,
+    baseType?: string,
   ): string {
     let result = base;
-    let currentType = this.currentScopeVarTypes.get(baseNameUpper);
+    let currentType = baseType ?? this.currentScopeVarTypes.get(baseNameUpper);
 
     for (let i = 0; i < chain.length; i++) {
       const step = chain[i]!;
@@ -4439,6 +4804,11 @@ export class CodeGenerator {
       expr.operator === "OR" ||
       expr.operator === "XOR"
     ) {
+      const isBool = (e: Expression): boolean =>
+        this.inferExprType(e)?.toUpperCase() === "BOOL";
+      if (isBool(expr.left) && isBool(expr.right)) {
+        return `iec_bool_${expr.operator.toLowerCase()}(${left}, ${right})`;
+      }
       return `(${left}) ${cppOp} (${right})`;
     }
 
@@ -4746,14 +5116,10 @@ export class CodeGenerator {
    * Returns undefined if function not found.
    */
   private getParamTypes(funcName: string): string[] | undefined {
-    if (!this.ast) return undefined;
-    const nameUpper = funcName.toUpperCase();
-    const funcDecl = this.ast.functions.find(
-      (f) => f.name.toUpperCase() === nameUpper,
-    );
-    if (!funcDecl) return undefined;
+    const varBlocks = this.functionVarBlocks(funcName.toUpperCase());
+    if (!varBlocks) return undefined;
     const types: string[] = [];
-    for (const block of funcDecl.varBlocks) {
+    for (const block of varBlocks) {
       if (
         block.blockType === "VAR_INPUT" ||
         block.blockType === "VAR_IN_OUT" ||
@@ -5194,18 +5560,23 @@ export class CodeGenerator {
       return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
     }
 
-    // 3. Check for named arguments that may need reordering
-    const hasNamedArgs = expr.arguments.some((arg) => arg.name !== undefined);
-    if (hasNamedArgs && this.ast) {
-      const reordered = this.reorderNamedArguments(expr);
-      if (reordered) {
-        return `${this.calleeName(expr)}(${reordered.join(", ")})`;
+    const varBlocks = this.functionVarBlocks(nameUpper);
+    if (varBlocks !== undefined) {
+      const args = this.orderCallArguments(
+        varBlocks,
+        expr.arguments,
+        `function '${expr.functionName}'`,
+        expr.sourceSpan,
+      );
+      const hasNamedArgs = expr.arguments.some((arg) => arg.name !== undefined);
+      const paramTypes = this.getParamTypes(nameUpper);
+      if (paramTypes && !hasNamedArgs) {
+        this.coerceUserFuncArgs(args, expr.arguments, paramTypes);
       }
+      return `${this.calleeName(expr)}(${args.join(", ")})`;
     }
 
-    // 4. Default: emit as-is (with output argument validation)
     const args = expr.arguments.map((arg) => {
-      const generated = this.generateExpression(arg.value);
       if (arg.isOutput && arg.value.kind !== "VariableExpression") {
         this.codegenWarnings.push({
           message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
@@ -5214,52 +5585,8 @@ export class CodeGenerator {
           file: arg.sourceSpan.file,
         });
       }
-      return generated;
+      return this.generateExpression(arg.value);
     });
-
-    // Pad missing trailing VAR_OUTPUT/VAR_IN_OUT params with temp variables
-    if (this.ast) {
-      const funcDecl = this.ast.functions.find(
-        (f) => f.name.toUpperCase() === nameUpper,
-      );
-      if (funcDecl) {
-        const paramInfo: Array<{ blockType: string; typeName: string }> = [];
-        for (const block of funcDecl.varBlocks) {
-          if (
-            block.blockType === "VAR_INPUT" ||
-            block.blockType === "VAR_IN_OUT" ||
-            block.blockType === "VAR_OUTPUT"
-          ) {
-            for (const decl of block.declarations) {
-              for (let ni = 0; ni < decl.names.length; ni++) {
-                paramInfo.push({
-                  blockType: block.blockType,
-                  typeName: decl.type.name,
-                });
-              }
-            }
-          }
-        }
-        while (args.length < paramInfo.length) {
-          const param = paramInfo[args.length]!;
-          if (
-            param.blockType === "VAR_OUTPUT" ||
-            param.blockType === "VAR_IN_OUT"
-          ) {
-            args.push(this.emitOutputTempVar(param.typeName));
-          } else {
-            args.push(this.getTypeDefaultValue(param.typeName));
-          }
-        }
-      }
-    }
-
-    // Apply implicit widening casts for user-defined function args
-    const paramTypes = this.getParamTypes(nameUpper);
-    if (paramTypes) {
-      this.coerceUserFuncArgs(args, expr.arguments, paramTypes);
-    }
-
     return `${this.calleeName(expr)}(${args.join(", ")})`;
   }
 
@@ -5275,24 +5602,6 @@ export class CodeGenerator {
       (fb) => fb.methods.some((m) => m.name.toUpperCase() === upper),
     );
     return isOwnMethod ? `this->${expr.functionName}` : expr.functionName;
-  }
-
-  /**
-   * Reorder named arguments to match function declaration parameter order.
-   * Returns null if function not found in AST.
-   */
-  private reorderNamedArguments(expr: FunctionCallExpression): string[] | null {
-    if (!this.ast) return null;
-    const funcDecl = this.ast.functions.find(
-      (f) => f.name.toUpperCase() === expr.functionName.toUpperCase(),
-    );
-    if (!funcDecl) return null;
-    return this.orderCallArguments(
-      funcDecl.varBlocks,
-      expr.arguments,
-      `function '${expr.functionName}'`,
-      expr.sourceSpan,
-    );
   }
 
   /**
@@ -5952,9 +6261,9 @@ export class CodeGenerator {
     functionName: string,
     isElementCall = false,
   ): string | undefined {
-    const declaredType = this.currentScopeVarTypes.get(
-      functionName.toUpperCase(),
-    );
+    const declaredType =
+      this.currentScopeVarTypes.get(functionName.toUpperCase()) ??
+      this.fileScopeGlobalTypes().get(functionName.toUpperCase());
     if (!declaredType) return undefined;
     const varType = isElementCall
       ? this.ast
@@ -6185,6 +6494,7 @@ export class CodeGenerator {
     source: string,
     indent: string,
   ): void {
+    if (this.emitConfigurationGlobalStore(target, source, indent)) return;
     if (
       target.kind === "VariableExpression" &&
       !target.isDereference &&
