@@ -95,6 +95,41 @@ END_CONFIGURATION`,
     expect(result.headerCode).not.toMatch(/#include <string>/);
     expect(result.headerCode).toMatch(/#include <cstddef>/);
   });
+
+  it("undefines only the C stdlib macros the generated code uses as identifiers", () => {
+    const plain = compile(`PROGRAM Main
+VAR
+  X : INT;
+END_VAR
+X := X + 1;
+END_PROGRAM
+CONFIGURATION C
+  RESOURCE R ON PLC
+    TASK T(INTERVAL := T#10ms, PRIORITY := 1);
+    PROGRAM I WITH T : Main;
+  END_RESOURCE
+END_CONFIGURATION`);
+    expect(plain.success).toBe(true);
+    expect(plain.headerCode).not.toMatch(
+      /#undef (TMP_MAX|EOF|BUFSIZ|FOPEN_MAX|FILENAME_MAX|RAND_MAX|EXIT_SUCCESS|EXIT_FAILURE)\b/,
+    );
+
+    const clashing = compile(`PROGRAM Main
+VAR
+  TMP_MAX : INT;
+END_VAR
+TMP_MAX := TMP_MAX + 1;
+END_PROGRAM
+CONFIGURATION C
+  RESOURCE R ON PLC
+    TASK T(INTERVAL := T#10ms, PRIORITY := 1);
+    PROGRAM I WITH T : Main;
+  END_RESOURCE
+END_CONFIGURATION`);
+    expect(clashing.success).toBe(true);
+    expect(clashing.headerCode).toMatch(/#undef TMP_MAX\b/);
+    expect(clashing.headerCode).not.toMatch(/#undef (EOF|RAND_MAX)\b/);
+  });
 });
 
 describe.skipIf(!hasGpp)("lean runtime headers with g++", () => {
@@ -125,5 +160,33 @@ describe.skipIf(!hasGpp)("lean runtime headers with g++", () => {
   it("reads the wall clock through clock_gettime", () => {
     const defines = process.platform === "linux" ? [] : ["-D__wasi__"];
     expect(run(defines, "probe-clock-gettime")).toBe("ok\n");
+  });
+
+  it("lets code after the generated header include <string> and <algorithm>", () => {
+    const result = compile(`PROGRAM Main
+VAR
+  X : INT;
+END_VAR
+X := X + 1;
+END_PROGRAM
+CONFIGURATION C
+  RESOURCE R ON PLC
+    TASK T(INTERVAL := T#10ms, PRIORITY := 1);
+    PROGRAM I WITH T : Main;
+  END_RESOURCE
+END_CONFIGURATION`);
+    expect(result.success).toBe(true);
+    fs.writeFileSync(path.join(tempDir, "generated.hpp"), result.headerCode);
+    fs.writeFileSync(
+      path.join(tempDir, "block.cpp"),
+      '#include "generated.hpp"\n#include <string>\n#include <algorithm>\n#include <cstdio>\n' +
+        'int main() { std::string s = "ab"; std::reverse(s.begin(), s.end()); return s == "ba" && EOF == -1 ? 0 : 1; }\n',
+    );
+    const binary = path.join(tempDir, "block");
+    execSync(
+      `g++ -std=${CXX_STD} -I"${RUNTIME_INCLUDE_PATH}" -I"${tempDir}" "${path.join(tempDir, "block.cpp")}" -o "${binary}" 2>&1`,
+      { encoding: "utf-8", env: cxxEnv },
+    );
+    expect(() => execSync(`"${binary}"`)).not.toThrow();
   });
 });

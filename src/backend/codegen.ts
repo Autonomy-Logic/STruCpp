@@ -450,6 +450,8 @@ export class CodeGenerator {
     | undefined;
   /** The libraries header, when `separateLibraryFiles` moved the libraries out of the unit's header. */
   private libraryHeader: { name: string; content: string } | undefined;
+  /** Header line index of each C stdlib macro's `#ifdef`/`#undef`/`#endif` triple, by macro name. */
+  private stdlibUndefLines = new Map<string, number>();
   private lineMap: Map<number, LineMapEntry> = new Map();
   private headerLineMap: Map<number, LineMapEntry> = new Map();
   private currentHeaderLine = 1;
@@ -1331,6 +1333,7 @@ export class CodeGenerator {
     const cppFiles = Array.from(this.outputFiles.entries()).map(
       ([name, lines]) => ({ name, content: lines.join(eol) }),
     );
+    this.pruneStdlibUndefs(cppFiles);
     return {
       cppFiles,
       // Legacy concatenation — preserves the historical single-blob
@@ -1419,6 +1422,37 @@ export class CodeGenerator {
    * Generate the C++ header file. When instance paths reach program instances in the default mode, it ends with an
    * `extern` declaration of the configuration object the runtime defines (the one the debug table names).
    */
+  /**
+   * Blanks the `#undef` triple of every C stdlib macro no generated identifier uses, in the unit header and the
+   * libraries header, keeping line numbers. A standard header included after them then still sees those macros.
+   */
+  private pruneStdlibUndefs(
+    cppFiles: ReadonlyArray<{ content: string }>,
+  ): void {
+    const undefLines = new Set<number>();
+    for (const start of this.stdlibUndefLines.values())
+      for (let i = 0; i < 3; i++) undefLines.add(start + i);
+    const eol = this.options.lineEnding;
+    const libraryLines = this.libraryHeader?.content.split(eol) ?? [];
+    const corpus = [
+      ...this.headerOutput.filter((_, i) => !undefLines.has(i)),
+      ...libraryLines.filter((_, i) => !undefLines.has(i)),
+      ...cppFiles.map((f) => f.content),
+    ].join("\n");
+    for (const [macro, start] of this.stdlibUndefLines) {
+      if (new RegExp(`\\b${macro}\\b`).test(corpus)) continue;
+      for (let i = start; i < start + 3; i++) {
+        this.headerOutput[i] = "";
+        if (i < libraryLines.length) libraryLines[i] = "";
+      }
+    }
+    if (this.libraryHeader)
+      this.libraryHeader = {
+        ...this.libraryHeader,
+        content: libraryLines.join(eol),
+      };
+  }
+
   private generateHeader(ast: CompilationUnit): void {
     // Determine the namespace for this project
     const ns = this.projectModel
@@ -1451,8 +1485,10 @@ export class CodeGenerator {
 
     // Undefine C standard-library macros that collide with legal ST identifiers
     // (e.g. OSCAT's T_AVG24 has a local `TMP_MAX`, which <cstdio> #defines).
-    // Done after the runtime includes so the runtime still sees the real macros;
-    // user code below only ever uses these names as ordinary identifiers.
+    // Done after the runtime includes so the runtime still sees the real macros.
+    // Only the macros the generated code uses as identifiers stay undefined
+    // (pruneStdlibUndefs), so later standard headers still see the others.
+    this.stdlibUndefLines.clear();
     this.emitHeader("");
     this.emitHeader(
       "// Avoid clashes between ST identifiers and C stdlib macros",
@@ -1467,6 +1503,7 @@ export class CodeGenerator {
       "EXIT_SUCCESS",
       "EXIT_FAILURE",
     ]) {
+      this.stdlibUndefLines.set(m, this.headerOutput.length);
       this.emitHeader(`#ifdef ${m}`);
       this.emitHeader(`#undef ${m}`);
       this.emitHeader(`#endif`);
