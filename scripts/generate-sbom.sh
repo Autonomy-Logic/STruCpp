@@ -8,7 +8,7 @@
 #   - <name>.spdx.json       SPDX 2.3       (ISO/IEC 5962 — procurement/compliance)
 #   - <name>.components.csv  flattened component list (human-readable)
 #
-# Standards satisfied: NTIA "Minimum Elements for an SBOM" and EO 14028.
+# Supplier is filled only where the package metadata names one (NOASSERTION otherwise).
 # Source of truth: the committed lockfiles (package-lock.json and
 # vscode-extension/package-lock.json), plus security/components.json for vendored
 # code that has no lockfile entry (merged by scripts/merge-vendored.mjs).
