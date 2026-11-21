@@ -1,0 +1,36 @@
+{
+  "product": "strucpp",
+  "title": "STruCpp",
+  "subtitle": "IEC 61131-3 Structured Text to C++ compiler — npm package, CLI binaries, C++ runtime headers, VS Code extension",
+  "version": "0.8.0",
+  "assessedAt": "2026-11",
+  "sbomBasename": "strucpp",
+  "ecosystem": "npm",
+  "securityContact": "Thiago Alves — thiago.alves@autonomylogic.com",
+  "advisorySource": "GitHub Advisory Database via osv-scanner (OSV) (equivalent to Dependabot)",
+  "_note_ids": "Every triage entry lists the advisory ids it accounts for. build-report.mjs cross-checks the live post-suppression scan against these: an advisory no entry claims is reported in section 4a as untriaged.",
+  "_note_counts": "advisories/counts describe the last FULL assessment (assessedAt) and are only rendered when the report is built without a live scan. With --osv-raw/--osv-delta the numbers come from that run.",
+  "advisories": { "total": 0, "critical": 0, "high": 0, "moderate": 0, "low": 0 },
+  "counts": {
+    "affected": { "n": 0, "sev": "none recorded" },
+    "mitigated": { "n": 0, "sev": "—" },
+    "notAffected": { "n": 0, "pct": "—" }
+  },
+  "headline": "Initial baseline. No triage decision has been recorded yet; the figures in the Key metrics table come from the live scan of this run, and any advisory it surfaces is listed as untriaged until it is assessed.",
+  "scope": "STruC++ is a TypeScript compiler from IEC 61131-3 Structured Text to C++14. It ships as an npm package, as standalone CLI binaries built with @yao-pkg/pkg, with header-only C++ runtime headers, and as a VS Code extension. This assessment covers the npm dependency graph of the compiler (<code>package-lock.json</code>) and of the VS Code extension (<code>vscode-extension/package-lock.json</code>), including development dependencies.",
+  "scopeNote": "Not scanned for vulnerabilities: vendored code without a package-manager entry (isocline in <code>src/runtime/repl</code>, OpenSML and S7RTT in <code>libs/sources/plcopen-softmotion</code>, the OSCAT BASIC library archive) and the Node.js runtime embedded in the CLI binaries. They are listed in the SBOM from <code>security/components.json</code>.",
+  "methodologyNote": "Advisory data was obtained from the GitHub Advisory Database via <code>osv-scanner (OSV)</code> (equivalent to GitHub Dependabot alerts). The source of truth for versions is the committed <code>package-lock.json</code> files. Development, build and test dependencies are included in the scan.",
+  "licenseNote": "Licences of npm packages are taken from package metadata by cdxgen and listed per component in the SBOM CSV. Vendored components carry the licence stated in their vendored sources; OSCAT BASIC is recorded as NOASSERTION. No licence review has been recorded yet.",
+  "affected": [],
+  "mitigated": [],
+  "notAffected": [],
+  "criticalNote": "No critical-severity assessment has been recorded yet; see the live scan figures and section 4a.",
+  "remediation": [],
+  "practices": [
+    { "practice": "Deterministic installs from committed lockfiles (npm ci)", "status": "In place" },
+    { "practice": "SBOM generated per release in CycloneDX and SPDX", "status": "In place" },
+    { "practice": "PR gate blocks newly introduced critical advisories", "status": "In place" },
+    { "practice": "Monthly vulnerability scan with report", "status": "In place" },
+    { "practice": "That gate configured as a required status check, so it blocks the merge", "status": "Not yet enforced" }
+  ]
+}
