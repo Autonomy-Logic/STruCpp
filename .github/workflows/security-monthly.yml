@@ -170,6 +170,17 @@ jobs:
       - name: Build report (md + html)
         id: report
         run: |
+          # A suppression added by the triage step must be reflected in the report and
+          # the CSV, so rescan with the baseline as it will be committed.
+          if [ -n "$(git status --porcelain -- osv-scanner.toml)" ]; then
+            set +e
+            osv-scanner scan --config=osv-scanner.toml --recursive --format=json --output=/tmp/osv.json .
+            rc=$?
+            set -e
+            if [ "$rc" != "0" ] && [ "$rc" != "1" ]; then echo "::error::osv-scanner (after triage) failed (exit $rc)"; exit 1; fi
+            [ -s /tmp/osv.json ] || echo '{"results":[]}' > /tmp/osv.json
+            node scripts/scan-vulns.mjs /tmp/osv.json /tmp/out/vulnerabilities.csv
+          fi
           node scripts/build-report.mjs \
             --config security/report-config.json \
             --osv-raw /tmp/osv-raw.json \

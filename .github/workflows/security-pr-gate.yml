@@ -37,10 +37,10 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR head
+      - name: Checkout PR merge commit
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0   # HEAD^1 (the base) must be present
 
       - uses: actions/setup-node@v4
         with: { node-version: "22" }
@@ -76,8 +76,11 @@ jobs:
 
       - name: Scan BASE
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.event.pull_request.base.sha }}"
-          git worktree add -f /tmp/base "${{ github.event.pull_request.base.sha }}"
+          # The checkout is the PR merge commit; its first parent is the base it was
+          # merged onto. The event's base sha is not refreshed when the base moves.
+          BASE_SHA="$(git rev-parse HEAD^1)"
+          echo "Base commit: $BASE_SHA"
+          git worktree add -f /tmp/base "$BASE_SHA"
           CFG=""; [ -f /tmp/head-config.toml ] && CFG="--config=/tmp/head-config.toml"
           set +e
           osv-scanner scan $CFG --recursive --format=json --output=/tmp/base.json /tmp/base
