@@ -14,7 +14,7 @@
 
 #include <cstdint>
 #ifndef __AVR__
-#include <ostream>
+#include <iosfwd>
 #endif
 #include <type_traits>
 #include "iec_var.hpp"

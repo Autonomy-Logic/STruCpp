@@ -39,8 +39,11 @@
 #include "iec_dt.hpp"
 #include "iec_tod.hpp"
 #include <cmath>
-#include <algorithm>
+#if defined(__wasi__) || defined(__linux__)
+#include <time.h>
+#else
 #include <chrono>
+#endif
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -1518,10 +1521,16 @@ inline IEC_DT CURRENT_DT() {
     // no RTC is wired up.
     return IEC_DT(static_cast<DT_t>(__CURRENT_TIME_NS));
 #else
+#if defined(__wasi__) || defined(__linux__)
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return IEC_DT(static_cast<DT_t>(static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec));
+#else
     using namespace std::chrono;
     auto now = system_clock::now();
     auto ns  = duration_cast<nanoseconds>(now.time_since_epoch()).count();
     return IEC_DT(static_cast<DT_t>(ns));
+#endif
 #endif
 }
 

@@ -1447,9 +1447,7 @@ export class CodeGenerator {
     if (this.externalInstancePaths) {
       this.emitHeader('#include "iec_external.hpp"');
     }
-    this.emitHeader("#include <array>");
     this.emitHeader("#include <cstddef>");
-    this.emitHeader("#include <string>");
 
     // Undefine C standard-library macros that collide with legal ST identifiers
     // (e.g. OSCAT's T_AVG24 has a local `TMP_MAX`, which <cstdio> #defines).

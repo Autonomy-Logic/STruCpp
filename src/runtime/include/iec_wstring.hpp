@@ -15,7 +15,6 @@
 
 #include <cstdint>
 #include <cstring>
-#include <algorithm>
 #include "iec_types.hpp"
 
 namespace strucpp {

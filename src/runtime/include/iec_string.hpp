@@ -43,7 +43,6 @@
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
-#include <algorithm>
 #include <type_traits>
 #include "iec_types.hpp"
 #include "iec_var.hpp"
