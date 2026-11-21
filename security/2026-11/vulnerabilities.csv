@@ -1,0 +1,116 @@
+severity,package,version,advisory,fixed_in,summary,url,aliases
+CRITICAL,tar,7.5.15,GHSA-23hp-3jrh-7fpw,7.5.19,node-tar: Decompression/parse DoS via unlimited input,https://osv.dev/GHSA-23hp-3jrh-7fpw,CVE-2026-59873
+CRITICAL,tinypool,0.8.4 | 1.1.1,GHSA-5gmw-xhrv-c9v3,2.1.1,Tinypool: Prototype Pollution gadget in worker options leads to Remote Code Execution,https://osv.dev/GHSA-5gmw-xhrv-c9v3,CVE-2026-104848
+CRITICAL,tinypool,0.8.4 | 1.1.1,GHSA-85c8-ppgw-ccpr,2.1.2,Tinypool: Prototype Pollution Gadget to RCE in run() options,https://osv.dev/GHSA-85c8-ppgw-ccpr,CVE-2026-104849
+CRITICAL,vitest,1.6.1 | 3.2.4,GHSA-5xrq-8626-4rwp,4.1.0 | 3.2.6,"When Vitest UI server is listening, arbitrary file can be read and executed",https://osv.dev/GHSA-5xrq-8626-4rwp,CVE-2026-47429
+HIGH,brace-expansion,1.1.12 | 2.0.2 | 5.0.4,GHSA-3jxr-9vmj-r5cp,5.0.7 | 1.1.16 | 2.1.2,brace-expansion: DoS via exponential-time expansion of consecutive non-expanding {} groups,https://osv.dev/GHSA-3jxr-9vmj-r5cp,CVE-2026-13149
+HIGH,brace-expansion,1.1.12 | 2.0.2 | 5.0.4,GHSA-6j4f-fj2g-mc7p,5.0.10 | 3.0.7 | 2.1.5 | 1.1.19,brace-expansion: DoS via uncontrolled recursion in parseCommaParts causing stack exhaustion,https://osv.dev/GHSA-6j4f-fj2g-mc7p,CVE-2026-102276
+HIGH,brace-expansion,1.1.12 | 2.0.2 | 5.0.4,GHSA-mh99-v99m-4gvg,5.0.8 | 3.0.3 | 2.1.3 | 1.1.17,brace-expansion: DoS via unbounded expansion length causing an out-of-memory process crash,https://osv.dev/GHSA-mh99-v99m-4gvg,CVE-2026-14257
+HIGH,brace-expansion,1.1.12 | 2.0.2 | 5.0.4,GHSA-qhr7-859c-m2p7,5.0.11 | 3.0.8 | 2.1.6 | 1.1.20,brace-expansion: DoS via uncontrolled recursion on nested brace groups causing stack exhaustion,https://osv.dev/GHSA-qhr7-859c-m2p7,CVE-2026-102278
+HIGH,brace-expansion,1.1.12 | 2.0.2 | 5.0.4,GHSA-rgw5-rvv9-x895,1.1.18 | 2.1.4 | 3.0.6 | 5.0.9,"brace-expansion: DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation",https://osv.dev/GHSA-rgw5-rvv9-x895,CVE-2026-69152
+HIGH,fast-uri,3.1.0,GHSA-4c8g-83qw-93j6,4.0.1 | 3.1.3 | 2.4.2,fast-uri vulnerable to host confusion via failed IDN canonicalization,https://osv.dev/GHSA-4c8g-83qw-93j6,CVE-2026-13676
+HIGH,fast-uri,3.1.0,GHSA-7p8r-x3mc-p8w7,2.4.4 | 3.1.5 | 4.1.2,fast-uri vulnerable to host confusion via backslash authority introducer,https://osv.dev/GHSA-7p8r-x3mc-p8w7,CVE-2026-18446
+HIGH,fast-uri,3.1.0,GHSA-f65p-4m7j-42xc,2.4.5 | 3.1.6 | 4.1.3,fast-uri vulnerable to server-side request forgery via malformed IPv6 normalization,https://osv.dev/GHSA-f65p-4m7j-42xc,CVE-2026-75975
+HIGH,fast-uri,3.1.0,GHSA-jqff-g426-hqxp,2.4.5 | 3.1.6 | 4.1.3,fast-uri vulnerable to host confusion via percent-encoded scheme normalization,https://osv.dev/GHSA-jqff-g426-hqxp,CVE-2026-76172
+HIGH,fast-uri,3.1.0,GHSA-q3j6-qgpj-74h6,3.1.1 | 2.4.1,fast-uri vulnerable to path traversal via percent-encoded dot segments,https://osv.dev/GHSA-q3j6-qgpj-74h6,CVE-2026-6321
+HIGH,fast-uri,3.1.0,GHSA-qw65-cvwx-89v3,2.4.6 | 3.1.7 | 4.1.4,fast-uri vulnerable to authority injection via an unvalidated port in serialize,https://osv.dev/GHSA-qw65-cvwx-89v3,CVE-2026-84292
+HIGH,fast-uri,3.1.0,GHSA-v2hh-gcrm-f6hx,2.4.3 | 3.1.4 | 4.1.1,fast-uri vulnerable to host confusion via literal backslash authority delimiter,https://osv.dev/GHSA-v2hh-gcrm-f6hx,CVE-2026-16221
+HIGH,fast-uri,3.1.0,GHSA-v39h-62p7-jpjc,3.1.2 | 2.4.1,fast-uri vulnerable to host confusion via percent-encoded authority delimiters,https://osv.dev/GHSA-v39h-62p7-jpjc,CVE-2026-6322
+HIGH,flatted,3.3.3,GHSA-25h7-pfq9-p65f,3.4.0,flatted vulnerable to unbounded recursion DoS in parse() revive phase,https://osv.dev/GHSA-25h7-pfq9-p65f,CVE-2026-32141
+HIGH,flatted,3.3.3,GHSA-rf6f-7fwh-wjgh,3.4.2,Prototype Pollution via parse() in NodeJS flatted,https://osv.dev/GHSA-rf6f-7fwh-wjgh,CVE-2026-33228
+HIGH,form-data,4.0.5,GHSA-hmw2-7cc7-3qxx,2.5.6 | 3.0.5 | 4.0.6,form-data: CRLF injection in form-data via unescaped multipart field names and filenames,https://osv.dev/GHSA-hmw2-7cc7-3qxx,CVE-2026-12143
+HIGH,js-yaml,4.1.1,GHSA-2883-xcg3-v3hh,4.3.2 | 3.15.2,js-yaml: maxTotalMergeKeys does not limit CPU use for empty merge sources,https://osv.dev/GHSA-2883-xcg3-v3hh,CVE-2026-84375
+HIGH,js-yaml,4.1.1,GHSA-52cp-r559-cp3m,3.15.0 | 4.3.0,js-yaml: YAML merge-key chains can force quadratic CPU consumption,https://osv.dev/GHSA-52cp-r559-cp3m,CVE-2026-59869
+HIGH,js-yaml,4.1.1,GHSA-5p4m-2wfm-xmqj,4.3.1 | 3.15.1,JS-YAML: Quadratic CPU consumption in !!omap resolution (3.x and 4.x) — CVE-2026-59870 fix not backported,https://osv.dev/GHSA-5p4m-2wfm-xmqj,
+HIGH,linkify-it,5.0.0,GHSA-22p9-wv53-3rq4,5.0.1,LinkifyIt#match scan loop has quadratic algorithmic complexity,https://osv.dev/GHSA-22p9-wv53-3rq4,CVE-2026-48801
+HIGH,linkify-it,5.0.0,GHSA-v245-v573-v5vm,5.0.2,linkify-it: Quadratic-complexity DoS via the `mailto:` validator scan-loop on attacker text,https://osv.dev/GHSA-v245-v573-v5vm,CVE-2026-59887
+HIGH,lodash,4.17.23,GHSA-r5fr-rjxr-66jc,4.18.0,lodash vulnerable to Code Injection via `_.template` imports key names,https://osv.dev/GHSA-r5fr-rjxr-66jc,CVE-2026-4800
+HIGH,lodash-es,4.17.21,GHSA-r5fr-rjxr-66jc,4.18.0,lodash vulnerable to Code Injection via `_.template` imports key names,https://osv.dev/GHSA-r5fr-rjxr-66jc,CVE-2026-4800
+HIGH,markdown-it,14.1.1,GHSA-gfr2-rv44-r23c,14.3.3 | 15.0.3,markdown-it: Quadratic-time rendering of a single multi-line link reference definition with default options (regression since 14.0),https://osv.dev/GHSA-gfr2-rv44-r23c,CVE-2026-111758
+HIGH,markdown-it,14.1.1,GHSA-r7fv-28h4-cvq7,15.0.2 | 14.3.2,markdown-it: Quadratic complexity in smartquotes with unmatched closing quotes,https://osv.dev/GHSA-r7fv-28h4-cvq7,CVE-2026-111759
+HIGH,minimatch,3.1.2 | 9.0.5,GHSA-23c5-xmqv-rm74,10.2.3 | 9.0.7 | 8.0.6 | 7.4.8 | 6.2.2 | 5.1.8 | 4.2.5 | 3.1.4,minimatch ReDoS: nested *() extglobs generate catastrophically backtracking regular expressions,https://osv.dev/GHSA-23c5-xmqv-rm74,CVE-2026-27904
+HIGH,minimatch,3.1.2 | 9.0.5,GHSA-3ppc-4f35-3m26,10.2.1 | 9.0.6 | 8.0.5 | 7.4.7 | 6.2.1 | 5.1.7 | 4.2.4 | 3.1.3,minimatch has a ReDoS via repeated wildcards with non-matching literal in pattern,https://osv.dev/GHSA-3ppc-4f35-3m26,CVE-2026-26996
+HIGH,minimatch,3.1.2 | 9.0.5,GHSA-7r86-cg39-jmmj,10.2.3 | 9.0.7 | 8.0.6 | 7.4.8 | 6.2.2 | 5.1.8 | 4.2.5 | 3.1.3,minimatch has ReDoS: matchOne() combinatorial backtracking via multiple non-adjacent GLOBSTAR segments,https://osv.dev/GHSA-7r86-cg39-jmmj,CVE-2026-27903
+HIGH,nanoid,3.3.11,GHSA-28wg-ghj8-5hjv,3.3.16 | 5.1.16,nanoid: non-secure generators can loop indefinitely with negative size,https://osv.dev/GHSA-28wg-ghj8-5hjv,CVE-2026-67214
+HIGH,nanoid,3.3.11,GHSA-2v37-7h3g-55p8,3.3.18 | 5.1.6,nanoid: custom generators can loop indefinitely when size is zero,https://osv.dev/GHSA-2v37-7h3g-55p8,CVE-2026-67213
+HIGH,nanoid,3.3.11,GHSA-xwg4-73v4-xw9w,3.3.12 | 5.1.11,nanoid: Integer Overflow or Wraparound,https://osv.dev/GHSA-xwg4-73v4-xw9w,CVE-2026-73086
+HIGH,picomatch,2.3.1 | 4.0.3,GHSA-c2c7-rcm5-vvqj,4.0.4 | 3.0.2 | 2.3.2,Picomatch has a ReDoS vulnerability via extglob quantifiers,https://osv.dev/GHSA-c2c7-rcm5-vvqj,CVE-2026-33671
+HIGH,postcss,8.5.6 | 8.5.8,GHSA-6g55-p6wh-862q,8.5.12,PostCSS: Arbitrary file read and information disclosure via attacker-controlled sourceMappingURL in CSS comments,https://osv.dev/GHSA-6g55-p6wh-862q,CVE-2026-45623
+HIGH,postcss,8.5.6 | 8.5.8,GHSA-r28c-9q8g-f849,8.5.18,PostCSS: Path Traversal in Previous Source Map Auto-Loading (sourceMappingURL) leads to Arbitrary .map File Disclosure,https://osv.dev/GHSA-r28c-9q8g-f849,CVE-2026-73646
+HIGH,rollup,4.53.3,GHSA-mw96-cpmx-2vgc,2.80.0 | 3.30.0 | 4.59.0,Rollup 4 has Arbitrary File Write via Path Traversal,https://osv.dev/GHSA-mw96-cpmx-2vgc,CVE-2026-27606
+HIGH,source-map-js,1.2.1,GHSA-68fv-2mgg-jv7q,1.2.2,source-map-js allows event-loop denial of service through indexed source-map section offsets,https://osv.dev/GHSA-68fv-2mgg-jv7q,CVE-2026-93749
+HIGH,tar,7.5.15,GHSA-8x88-c5mf-7j5w,7.5.18,node-tar: Negative tar entry size causes infinite loop in archive replace,https://osv.dev/GHSA-8x88-c5mf-7j5w,CVE-2026-59874
+HIGH,tar,7.5.15,GHSA-r292-9mhp-454m,7.5.21,node-tar: Uncontrolled recursion in mapHas/filesFilter allows uncatchable stack-overflow DoS via crafted long-path tar with member selection,https://osv.dev/GHSA-r292-9mhp-454m,CVE-2026-73566
+HIGH,tmp,0.2.5,GHSA-ph9p-34f9-6g65,0.2.6,tmp has Path Traversal via unsanitized prefix/postfix that enables directory escape,https://osv.dev/GHSA-ph9p-34f9-6g65,CVE-2026-44705
+HIGH,undici,7.24.4,GHSA-2m5v-pch6-74hx,6.29.1 | 7.30.1 | 8.12.2,undici vulnerable to TLS certificate validation bypass via dropped tls options in Agent,https://osv.dev/GHSA-2m5v-pch6-74hx,CVE-2026-109383
+HIGH,undici,7.24.4,GHSA-4cwx-7wf7-3272,7.29.0 | 8.9.0,undici vulnerable to cross-user information disclosure and parse-time crash via degenerate private cache directives,https://osv.dev/GHSA-4cwx-7wf7-3272,CVE-2026-13697
+HIGH,undici,7.24.4,GHSA-4w7w-5xrc-9h26,7.30.1 | 8.12.2,undici vulnerable to cache poisoning and cross-user disclosure via cross-origin redirects,https://osv.dev/GHSA-4w7w-5xrc-9h26,CVE-2026-109829
+HIGH,undici,7.24.4,GHSA-hm92-r4w5-c3mj,7.28.0 | 8.2.0,undici vulnerable to cross-origin request routing via SOCKS5 proxy pool reuse,https://osv.dev/GHSA-hm92-r4w5-c3mj,CVE-2026-6734
+HIGH,undici,7.24.4,GHSA-qrxm-fqhp-jwvm,6.29.1 | 7.30.1 | 8.12.2,undici vulnerable to Denial of Service via TLS 1.2 certificate-changing renegotiation,https://osv.dev/GHSA-qrxm-fqhp-jwvm,CVE-2026-87018
+HIGH,undici,7.24.4,GHSA-rfgv-xxqx-mfg5,6.28.1 | 7.29.1 | 8.10.2,undici vulnerable to Denial of Service via unrequested WebSocket subprotocol,https://osv.dev/GHSA-rfgv-xxqx-mfg5,CVE-2026-19534
+HIGH,undici,7.24.4,GHSA-vmh5-mc38-953g,7.28.0 | 8.5.0,undici vulnerable to TLS certificate validation bypass via dropped requestTls in SOCKS5 ProxyAgent,https://osv.dev/GHSA-vmh5-mc38-953g,CVE-2026-9697
+HIGH,undici,7.24.4,GHSA-vxpw-j846-p89q,6.27.0 | 7.28.0 | 8.5.0,undici WebSocket client vulnerable to denial of service via fragment count bypass,https://osv.dev/GHSA-vxpw-j846-p89q,CVE-2026-12151
+HIGH,undici,7.24.4,GHSA-w293-vg96-wgc3,7.29.1 | 8.10.2,undici vulnerable to TLS certificate validation bypass via dropped connect options in BalancedPool,https://osv.dev/GHSA-w293-vg96-wgc3,CVE-2026-84961
+HIGH,undici,7.24.4,GHSA-xjj6-f33q-929c,6.29.1 | 7.30.1 | 8.12.2,undici vulnerable to Denial of Service via unhandled error on excessive content-encodings,https://osv.dev/GHSA-xjj6-f33q-929c,CVE-2026-109869
+HIGH,uuid,8.3.2,GHSA-w5hq-g745-h8pq,11.1.1 | 12.0.1 | 13.0.1,uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided,https://osv.dev/GHSA-w5hq-g745-h8pq,CVE-2026-41907 | CVE-2026-41988
+HIGH,vite,5.4.21 | 7.3.1,GHSA-587h-7wmj-h5pm,8.3.3 | 8.2.4 | 8.1.6 | 7.3.7 | 6.4.4,launch-editor: `fs.existsSync()` existence check can be bypassed on Windows,https://osv.dev/GHSA-587h-7wmj-h5pm,CVE-2026-112942
+HIGH,vite,7.3.1,GHSA-p9ff-h696-f583,8.0.5 | 7.3.2 | 6.4.2,Vite Vulnerable to Arbitrary File Read via Vite Dev Server WebSocket,https://osv.dev/GHSA-p9ff-h696-f583,CVE-2026-39363
+HIGH,vite,7.3.1,GHSA-v2wj-q39q-566r,8.0.5 | 7.3.2,Vite: `server.fs.deny` bypassed with queries,https://osv.dev/GHSA-v2wj-q39q-566r,CVE-2026-39364
+MODERATE,@vitest/mocker,3.2.4,GHSA-82fw-gwwq-j7x9,4.1.11 | 5.0.0-rc.2,Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock,https://osv.dev/GHSA-82fw-gwwq-j7x9,CVE-2026-84373
+MODERATE,@vitest/mocker,3.2.4,GHSA-qxg6-89mg-rqv8,4.1.12 | 5.0.3,Vitest: Code injection via unauthenticated manual mock registration,https://osv.dev/GHSA-qxg6-89mg-rqv8,CVE-2026-112949
+MODERATE,ajv,6.12.6,GHSA-2g4f-4pwh-qvx6,8.18.0 | 6.14.0,ajv has ReDoS when using `$data` option,https://osv.dev/GHSA-2g4f-4pwh-qvx6,CVE-2025-69873
+MODERATE,brace-expansion,1.1.12 | 2.0.2 | 5.0.4,GHSA-f886-m6hf-6m8v,5.0.5 | 3.0.2 | 2.0.3 | 1.1.13,brace-expansion: Zero-step sequence causes process hang and memory exhaustion,https://osv.dev/GHSA-f886-m6hf-6m8v,CVE-2026-33750
+MODERATE,brace-expansion,5.0.4,GHSA-jxxr-4gwj-5jf2,5.0.6,brace-expansion: Large numeric range defeats documented `max` DoS protection,https://osv.dev/GHSA-jxxr-4gwj-5jf2,CVE-2026-45149
+MODERATE,brace-expansion,1.1.12 | 2.0.2 | 5.0.4,GHSA-q2hr-2g5m-vwhr,5.0.12 | 3.0.9 | 2.1.7 | 1.1.21,"brace-expansion: Quadratic-time expansion of the `{a},b}` rewrite causes CPU denial of service",https://osv.dev/GHSA-q2hr-2g5m-vwhr,CVE-2026-102277
+MODERATE,esbuild,0.21.5 | 0.24.2,GHSA-67mh-4wv8-2f99,0.25.0,esbuild enables any website to send any requests to the development server and read the response,https://osv.dev/GHSA-67mh-4wv8-2f99,
+MODERATE,fast-uri,3.1.0,GHSA-hrr3-gc8f-f4qj,2.4.7 | 3.1.8 | 4.1.5,fast-uri vulnerable to inconsistent host case normalization via percent-encoded octets,https://osv.dev/GHSA-hrr3-gc8f-f4qj,CVE-2026-86472
+MODERATE,fast-uri,3.1.0,GHSA-w74x-v6f9-j3xg,2.4.8 | 3.1.9 | 4.2.3,fast-uri vulnerable to URI scheme spoofing via percent-encoded scheme decoding,https://osv.dev/GHSA-w74x-v6f9-j3xg,CVE-2026-110306
+MODERATE,glob,11.1.0,GHSA-3g3m-2fjr-6pw4,14.0.2,Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal,https://osv.dev/GHSA-3g3m-2fjr-6pw4,CVE-2026-118773
+MODERATE,js-yaml,4.1.1,GHSA-h67p-54hq-rp68,4.2.0 | 3.15.0,JS-YAML: Quadratic-complexity DoS in merge key handling via repeated aliases,https://osv.dev/GHSA-h67p-54hq-rp68,CVE-2026-53550
+MODERATE,lodash,4.17.23,GHSA-f23m-r3pf-42rh,4.18.1,"lodash vulnerable to prototype pollution via array-path bypass in `_.unset`, `_.omit`, and `_.pullAt",https://osv.dev/GHSA-f23m-r3pf-42rh,CVE-2026-2950
+MODERATE,lodash-es,4.17.21,GHSA-xxjr-mmjv-4gpg,4.17.23,"Lodash has Prototype Pollution Vulnerability in `_.unset`, `_.omit`, and `_.pullAt` functions",https://osv.dev/GHSA-xxjr-mmjv-4gpg,CVE-2025-13465
+MODERATE,markdown-it,14.1.1,GHSA-253c-mchw-3w2r,15.0.1 | 14.3.1,"markdown-it linkify: true has two quadratic paths, so a few hundred KB of markdown blocks the event loop for tens of seconds",https://osv.dev/GHSA-253c-mchw-3w2r,
+MODERATE,markdown-it,14.1.1,GHSA-6v5v-wf23-fmfq,14.2.0,markdown-it: Quadratic complexity DoS in smartquotes rule via replaceAt string operations,https://osv.dev/GHSA-6v5v-wf23-fmfq,CVE-2026-48988
+MODERATE,minimatch,10.2.4 | 9.0.5,GHSA-g3hv-75wg-m249,11.0.1,minimatch has potential denial of service via globparts amplification,https://osv.dev/GHSA-g3hv-75wg-m249,CVE-2026-118764
+MODERATE,picomatch,2.3.1 | 4.0.3,GHSA-3v7f-55p6-f55p,4.0.4 | 3.0.2 | 2.3.2,Picomatch: Method Injection in POSIX Character Classes causes incorrect Glob Matching,https://osv.dev/GHSA-3v7f-55p6-f55p,CVE-2026-33672
+MODERATE,postcss,8.5.6 | 8.5.8,GHSA-fxqj-rqcc-2cmp,8.5.23,PostCSS: incomplete fix of GHSA-6g55-p6wh-862q — attacker-controlled sourceMappingURL reads arbitrary .map files when `from` is unset,https://osv.dev/GHSA-fxqj-rqcc-2cmp,CVE-2026-69153
+MODERATE,postcss,8.5.6 | 8.5.8,GHSA-qx2v-qp2m-jg93,8.5.10,PostCSS has XSS via Unescaped </style> in its CSS Stringify Output,https://osv.dev/GHSA-qx2v-qp2m-jg93,CVE-2026-41305
+MODERATE,qs,6.15.0,GHSA-4mjr-xmp4-gh2g,6.16.0,qs: Denial of Service via Attacker Controlled isBuffer,https://osv.dev/GHSA-4mjr-xmp4-gh2g,CVE-2026-82417
+MODERATE,qs,6.15.0,GHSA-6pq8-jhm2-2vcw,6.16.1,qs : qs.stringify with arrayFormat 'comma' throws an uncaught TypeError on array elements carrying a non-callable own toString (DoS),https://osv.dev/GHSA-6pq8-jhm2-2vcw,CVE-2026-110816
+MODERATE,qs,6.15.0,GHSA-q8mj-m7cp-5q26,6.15.2,qs has a remotely triggerable DoS: qs.stringify crashes with TypeError on null/undefined entries in comma-format arrays when encodeValuesOnl,https://osv.dev/GHSA-q8mj-m7cp-5q26,CVE-2026-8723
+MODERATE,qs,6.15.0,GHSA-x5fp-wj9c-mxmx,6.16.0,qs array-limit bypass via bracket-key comma parsing,https://osv.dev/GHSA-x5fp-wj9c-mxmx,CVE-2026-82562
+MODERATE,tar,7.5.15,GHSA-gvwx-54wh-qm9j,7.5.17,node-tar: Uncaught Exception DoS via NUL byte in PAX path/linkpath records,https://osv.dev/GHSA-gvwx-54wh-qm9j,CVE-2026-59875
+MODERATE,tar,7.5.15,GHSA-vmf3-w455-68vh,7.5.16,"node-tar applies PAX size override to intermediary GNU long-name/long-link headers, causing tar parser interpretation differential (file smu",https://osv.dev/GHSA-vmf3-w455-68vh,CVE-2026-53655
+MODERATE,tar,7.5.15,GHSA-w8wr-v893-vjvp,7.5.18,node-tar: Process crash via PAX numeric path type confusion,https://osv.dev/GHSA-w8wr-v893-vjvp,CVE-2026-59871
+MODERATE,undici,7.24.4,GHSA-2jfj-6hjv-fm6j,7.29.1 | 8.10.2,undici vulnerable to cross-user cookie disclosure via Set-Cookie caching in shared caches,https://osv.dev/GHSA-2jfj-6hjv-fm6j,CVE-2026-84933
+MODERATE,undici,7.24.4,GHSA-3xpg-4rpp-hhhm,7.29.1 | 8.10.2,undici vulnerable to Denial of Service via unbounded decompression of compressed responses,https://osv.dev/GHSA-3xpg-4rpp-hhhm,CVE-2026-84890
+MODERATE,undici,7.24.4,GHSA-4qv8-2p9j-2685,6.29.1 | 7.30.1 | 8.12.2,undici vulnerable to Denial of Service via unbounded memory in the EventSource parser,https://osv.dev/GHSA-4qv8-2p9j-2685,CVE-2026-109924
+MODERATE,undici,7.24.4,GHSA-55wc-3pg8-jfw6,7.30.1 | 8.12.2,undici vulnerable to Denial of Service via unhandled exception in the decompress interceptor,https://osv.dev/GHSA-55wc-3pg8-jfw6,CVE-2026-87029
+MODERATE,undici,7.24.4,GHSA-8xcm-r25x-g524,6.28.0 | 7.29.0 | 8.9.0,undici vulnerable to downstream response desynchronization via retry interceptor,https://osv.dev/GHSA-8xcm-r25x-g524,CVE-2026-16728
+MODERATE,undici,7.24.4,GHSA-9fm3-97px-rjf6,6.29.1 | 7.30.1 | 8.12.2,undici WebSocket client vulnerable to Denial of Service via unbounded automatic PONG buffering,https://osv.dev/GHSA-9fm3-97px-rjf6,CVE-2026-109932
+MODERATE,undici,7.24.4,GHSA-f72v-6w45-q472,7.30.1 | 8.12.2,undici vulnerable to Subresource Integrity bypass via non-lowercase algorithm tokens,https://osv.dev/GHSA-f72v-6w45-q472,CVE-2026-109841
+MODERATE,undici,7.24.4,GHSA-jr45-8vmc-qm54,7.29.0 | 8.9.0,undici vulnerable to cross-user information disclosure via whitespace around equals in Cache-Control directives,https://osv.dev/GHSA-jr45-8vmc-qm54,CVE-2026-14643
+MODERATE,undici,7.24.4,GHSA-m8rv-5g2x-5cg5,6.28.0 | 7.29.0 | 8.9.0,undici vulnerable to CRLF Injection via blob-like body 'type' property,https://osv.dev/GHSA-m8rv-5g2x-5cg5,CVE-2026-15157
+MODERATE,undici,7.24.4,GHSA-p88m-4jfj-68fv,6.27.0 | 7.28.0 | 8.5.0,undici vulnerable to HTTP header injection via Set-Cookie percent-decoding,https://osv.dev/GHSA-p88m-4jfj-68fv,CVE-2026-9679
+MODERATE,undici,7.24.4,GHSA-pmjh-fq2x-6v4x,7.29.1 | 8.10.2,undici vulnerable to Denial of Service via orphaned RetryHandler response body,https://osv.dev/GHSA-pmjh-fq2x-6v4x,CVE-2026-18149
+MODERATE,undici,7.24.4,GHSA-pr7r-676h-xcf6,7.28.0 | 8.5.0,undici vulnerable to cross-user information disclosure via shared cache whitespace bypass,https://osv.dev/GHSA-pr7r-676h-xcf6,CVE-2026-9678
+MODERATE,undici,7.24.4,GHSA-rx4f-c7p8-82vq,7.29.1 | 8.10.2,undici vulnerable to Denial of Service via WebSocketStream unclean close,https://osv.dev/GHSA-rx4f-c7p8-82vq,CVE-2026-85014
+MODERATE,undici,7.24.4,GHSA-v3r7-h72x-cjcm,6.28.0 | 7.29.0 | 8.9.0,undici vulnerable to cookie attribute injection via unsanitized domain and unparsed setCookie fields,https://osv.dev/GHSA-v3r7-h72x-cjcm,CVE-2026-16729
+MODERATE,vite,5.4.21 | 7.3.1,GHSA-4w7w-66w2-5vf9,8.0.5 | 7.3.2 | 6.4.2,Vite Vulnerable to Path Traversal in Optimized Deps `.map` Handling,https://osv.dev/GHSA-4w7w-66w2-5vf9,CVE-2026-39365
+MODERATE,vite,5.4.21 | 7.3.1,GHSA-698v-4r3x-3vcv,8.3.3 | 8.2.4 | 8.1.6 | 7.3.7 | 6.4.4,launch-editor: escapeCmdArgs() omits % escaping on Windows,https://osv.dev/GHSA-698v-4r3x-3vcv,CVE-2026-112943
+MODERATE,vite,5.4.21 | 7.3.1,GHSA-fx2h-pf6j-xcff,8.0.16 | 7.3.5 | 6.4.3,vite: `server.fs.deny` bypass on Windows alternate paths,https://osv.dev/GHSA-fx2h-pf6j-xcff,CVE-2026-53571
+MODERATE,vite,5.4.21 | 7.3.1,GHSA-r825-w8mm-5pxw,8.3.3 | 8.2.4 | 8.1.6 | 7.3.7 | 6.4.4,launch-editor: Editor CLI flag misinterpretation causing arbitrary command execution for some editors,https://osv.dev/GHSA-r825-w8mm-5pxw,CVE-2026-112944
+MODERATE,vite,5.4.21 | 7.3.1,GHSA-rq7h-c2jc-7f22,8.3.3 | 8.2.4 | 8.1.6 | 7.3.7 | 6.4.4,Vite: Files outside `server.fs.allow` could be served when project paths match system paths on non-Windows machine,https://osv.dev/GHSA-rq7h-c2jc-7f22,CVE-2026-112946
+MODERATE,vite,5.4.21 | 7.3.1,GHSA-v6wh-96g9-6wx3,8.0.16 | 7.3.5 | 6.4.3,launch-editor: NTLMv2 hash disclosure via UNC path handling on Windows,https://osv.dev/GHSA-v6wh-96g9-6wx3,CVE-2026-53632
+MODERATE,vitest,3.2.4,GHSA-82fw-gwwq-j7x9,4.1.11 | 5.0.0-rc.2,Vitest: Path Traversal / Arbitrary File Read via @vitest/mocker Redirect Mock,https://osv.dev/GHSA-82fw-gwwq-j7x9,CVE-2026-84373
+MODERATE,yaml,2.8.2,GHSA-48c2-rrv3-qjmp,2.8.3 | 1.10.3,yaml is vulnerable to Stack Overflow via deeply nested YAML collections,https://osv.dev/GHSA-48c2-rrv3-qjmp,CVE-2026-33532
+LOW,esbuild,0.27.3 | 0.27.7,GHSA-g7r4-m6w7-qqqr,0.28.1,esbuild allows arbitrary file read when running the development server on Windows,https://osv.dev/GHSA-g7r4-m6w7-qqqr,
+LOW,fast-uri,3.1.0,GHSA-333x-w4r6-6crp,2.4.8 | 3.1.9 | 4.2.3,fast-uri vulnerable to scheme injection via an unescaped first-segment colon in suffix references,https://osv.dev/GHSA-333x-w4r6-6crp,CVE-2026-110725
+LOW,fast-uri,3.1.0,GHSA-xhq7-xmqj-769h,2.4.8 | 3.1.9 | 4.2.3,fast-uri vulnerable to improper path equivalence in relative reference normalization,https://osv.dev/GHSA-xhq7-xmqj-769h,CVE-2026-110095
+LOW,markdown-it,14.1.1,GHSA-vfgh-jcmw-g37q,14.3.3 | 15.0.3,markdown-it: Quadratic-time denial of service in inline HTML parsing with html enabled,https://osv.dev/GHSA-vfgh-jcmw-g37q,CVE-2026-111766
+LOW,undici,7.24.4,GHSA-2gqq-gqf2-x968,7.29.1 | 8.10.2,undici vulnerable to response truncation via oversized chunked responses in the dump interceptor,https://osv.dev/GHSA-2gqq-gqf2-x968,CVE-2026-84947
+LOW,undici,7.24.4,GHSA-35p6-xmwp-9g52,6.27.0 | 7.28.0 | 8.5.0,undici vulnerable to HTTP response queue poisoning via keep-alive socket reuse,https://osv.dev/GHSA-35p6-xmwp-9g52,CVE-2026-6733
+LOW,undici,7.24.4,GHSA-8436-99hf-9mmv,7.29.1 | 8.10.2,undici vulnerable to caching and replay of unsafe HTTP method responses,https://osv.dev/GHSA-8436-99hf-9mmv,CVE-2026-85008
+LOW,undici,7.24.4,GHSA-g8m3-5g58-fq7m,6.27.0 | 7.28.0 | 8.5.0,undici vulnerable to Set-Cookie SameSite attribute downgrade via permissive substring matching,https://osv.dev/GHSA-g8m3-5g58-fq7m,CVE-2026-11525
+LOW,undici,7.24.4,GHSA-r53p-7pc4-xj5r,6.28.1 | 7.29.1 | 8.10.2,undici vulnerable to downstream response splitting via retry interceptor,https://osv.dev/GHSA-r53p-7pc4-xj5r,CVE-2026-18540
+LOW,vite,5.4.21 | 7.3.1,GHSA-9jrq-w75r-8gcw,8.3.3 | 8.2.4 | 8.1.6 | 7.3.7 | 6.4.4,Vite: Cross origin script execution through Vite custom middleware,https://osv.dev/GHSA-9jrq-w75r-8gcw,CVE-2026-112945
