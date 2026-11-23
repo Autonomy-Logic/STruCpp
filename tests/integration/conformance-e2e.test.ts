@@ -45,6 +45,10 @@ FUNCTION_BLOCK Counted
 END_FUNCTION_BLOCK
 
 PROGRAM Conformance
+  VAR_INPUT
+    ia : INT := 3;
+    ib : INT := 5;
+  END_VAR
   VAR
     i0 : INT := 5; g : BOOL := TRUE; k : INT := 1;
     limitNamed, selNamed, muxNamed : INT;
@@ -81,7 +85,7 @@ PROGRAM Conformance
   gtLit := 'b' > sa;
   le := sa <= sab;
   ge := sa >= sab;
-  muxExpr := MUX(k, a + b, a * 2, MAX(a, b));
+  muxExpr := MUX(k, ia + ib, ia * 2, MAX(ia, ib));
   maxExpr := MAX(a * 2, b7, c);
   minExpr := MIN(a, a - 10, c);
   strMin := MIN(sa, sabd);
