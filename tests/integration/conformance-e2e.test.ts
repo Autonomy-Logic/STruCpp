@@ -7,6 +7,8 @@
 import { describe, it, expect } from "vitest";
 import { compileStlib } from "../../src/library/library-compiler.js";
 import { loadStlibFromString } from "../../src/library/library-loader.js";
+import { compile } from "../../src/index.js";
+import { tokenize } from "../../src/frontend/lexer.js";
 import { hasGpp, runE2ETestPipeline } from "./test-helpers.js";
 
 const LIBRARY = `FUNCTION_BLOCK Tool
@@ -18,7 +20,31 @@ const LIBRARY = `FUNCTION_BLOCK Tool
   END_METHOD
 END_FUNCTION_BLOCK`;
 
-const SOURCE = `PROGRAM Conformance
+const SOURCE = `TYPE SMALL : INT(5..10); END_TYPE
+TYPE S5 : STRING[5]; END_TYPE
+TYPE S6 : STRING(6); END_TYPE
+
+FUNCTION_BLOCK Tmp
+  VAR_INPUT x : INT; END_VAR
+  VAR_OUTPUT y, z : INT; END_VAR
+  VAR_TEMP t : INT; u : INT := 10; END_VAR
+  t := t + x;
+  u := u + x;
+  y := t;
+  z := u;
+END_FUNCTION_BLOCK
+
+FUNCTION_BLOCK Counted
+  VAR_INPUT EN : BOOL; END_VAR
+  VAR_OUTPUT ENO : BOOL; n : INT; END_VAR
+  VAR s5 : S5; s6 : S6; END_VAR
+  n := n + 1;
+  ENO := TRUE;
+  s5 := 'abcdefgh';
+  s6 := 'abcdefgh';
+END_FUNCTION_BLOCK
+
+PROGRAM Conformance
   VAR
     i0 : INT := 5; g : BOOL := TRUE; k : INT := 1;
     limitNamed, selNamed, muxNamed : INT;
@@ -32,6 +58,12 @@ const SOURCE = `PROGRAM Conformance
     lenLit : INT; catLit : STRING; ltLit, gtLit, le, ge : BOOL;
     a : INT := 3; b : INT := 5; c : INT := 2; b7 : INT := 7; muxExpr, maxExpr, minExpr : INT;
     strMin, strMax, strLim : STRING;
+    tmp : Tmp; y1, y2, y3, z1, z2 : INT;
+    sm : SMALL; smallDefault : INT;
+    spanTod, spanDt, spanDate : TIME;
+    i : INT; oddFor, oddWhile, oddRepeat : INT;
+    negInt : INT; negDint : DINT;
+    cnt : Counted; eno : BOOL; len5, len6 : INT;
   END_VAR
   limitNamed := LIMIT(MX := 10, IN := i0, MN := 0);
   selNamed := SEL(IN1 := 20, G := g, IN0 := 10);
@@ -55,6 +87,35 @@ const SOURCE = `PROGRAM Conformance
   strMin := MIN(sa, sabd);
   strMax := MAX(sa, sabd);
   strLim := LIMIT(sa, sabe, sabd);
+  tmp(x := 3); y1 := tmp.y; z1 := tmp.z;
+  tmp(x := 4); y2 := tmp.y; z2 := tmp.z;
+  tmp(x := 0); y3 := tmp.y;
+  smallDefault := sm;
+  spanTod := (TOD#12:00:00 + T#90m) - TOD#00:00:00;
+  spanDt := DT#2026-01-02-00:00:00 - DT#2026-01-01-00:00:00;
+  spanDate := D#2026-01-02 - D#2026-01-01;
+  oddFor := 0;
+  FOR i := 1 TO 5 DO
+    IF i MOD 2 = 0 THEN CONTINUE; END_IF;
+    oddFor := oddFor + i;
+  END_FOR;
+  oddWhile := 0; i := 0;
+  WHILE i < 5 DO
+    i := i + 1;
+    IF i MOD 2 = 0 THEN CONTINUE; END_IF;
+    oddWhile := oddWhile + i;
+  END_WHILE;
+  oddRepeat := 0; i := 0;
+  REPEAT
+    i := i + 1;
+    IF i MOD 2 = 0 THEN CONTINUE; END_IF;
+    oddRepeat := oddRepeat + i;
+  UNTIL i >= 5 END_REPEAT;
+  negInt := INT#-5;
+  negDint := DINT#-2147483648;
+  cnt(EN := TRUE, ENO => eno);
+  len5 := LEN(cnt.s5);
+  len6 := LEN(cnt.s6);
 END_PROGRAM`;
 
 const TESTS = `TEST 'named arguments on standard functions bind by name'
@@ -97,6 +158,29 @@ TEST 'standard functions and string operators give the CODESYS results'
   ASSERT_TRUE(uut.strMax = eAbd);
   ASSERT_TRUE(uut.strLim = eAbd);
 END_TEST
+
+TEST 'declarations and language give the CODESYS results'
+  VAR uut : Conformance; END_VAR
+  uut();
+  ASSERT_EQ(uut.y1, 3);
+  ASSERT_EQ(uut.y2, 4);
+  ASSERT_EQ(uut.y3, 0);
+  ASSERT_EQ(uut.z1, 13);
+  ASSERT_EQ(uut.z2, 14);
+  ASSERT_EQ(uut.smallDefault, 5);
+  ASSERT_TRUE(uut.spanTod = T#13h30m);
+  ASSERT_TRUE(uut.spanDt = T#1d);
+  ASSERT_TRUE(uut.spanDate = T#1d);
+  ASSERT_EQ(uut.oddFor, 9);
+  ASSERT_EQ(uut.oddWhile, 9);
+  ASSERT_EQ(uut.oddRepeat, 9);
+  ASSERT_EQ(uut.negInt, -5);
+  ASSERT_TRUE(uut.negDint = DINT#-2147483648);
+  ASSERT_TRUE(uut.eno);
+  ASSERT_EQ(uut.cnt.n, 1);
+  ASSERT_EQ(uut.len5, 5);
+  ASSERT_EQ(uut.len6, 6);
+END_TEST
 `;
 
 describe.skipIf(!hasGpp)("conformance end to end", () => {
@@ -116,7 +200,34 @@ describe.skipIf(!hasGpp)("conformance end to end", () => {
       compileOptions: { libraries: [archive] },
     });
     expect(stdout).not.toContain("[FAIL]");
-    expect(stdout).toContain("3 tests, 3 passed, 0 failed");
+    expect(stdout).toContain("4 tests, 4 passed, 0 failed");
     expect(exitCode).toBe(0);
   }, 60000);
+});
+
+describe("conformance compile errors", () => {
+  it("rejects a signed unsigned literal, TOD - TOD into TOD and CONTINUE outside a loop, with positions", () => {
+    const errorAt = (
+      body: string,
+      vars: string,
+    ): { line: number; column: number } | undefined => {
+      const r = compile(`PROGRAM P\nVAR ${vars} END_VAR\n${body}\nEND_PROGRAM`);
+      expect(r.success).toBe(false);
+      const e = r.errors[0];
+      return e === undefined ? undefined : { line: e.line, column: e.column };
+    };
+    expect(errorAt("u := UINT#-1;", "u : UINT;")).toEqual({
+      line: 3,
+      column: 6,
+    });
+    expect(errorAt("t := TOD#12:00:00 - TOD#01:00:00;", "t : TOD;")?.line).toBe(
+      3,
+    );
+    expect(errorAt("CONTINUE;", "x : INT;")).toEqual({ line: 3, column: 1 });
+
+    const long = `INT#-${"9".repeat(10000)}`;
+    const start = Date.now();
+    tokenize(long);
+    expect(Date.now() - start).toBeLessThan(100);
+  });
 });
