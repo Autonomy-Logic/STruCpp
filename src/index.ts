@@ -44,6 +44,7 @@ import type {
 } from "./frontend/ast.js";
 import { mergeCompilationUnits } from "./merge.js";
 import { lowerInlineTypes } from "./frontend/lower-inline-types.js";
+import { applyTypeDefaults } from "./frontend/type-defaults.js";
 import { walkAST } from "./ast-utils.js";
 import {
   libraryInterfaceDeclarations,
@@ -708,6 +709,8 @@ function runPipeline(
 
     ast = mergeCompilationUnits(units);
     const loweringErrors = lowerInlineTypes(ast);
+    // An inline subrange is a TYPE only from here on, so its lower-limit default applies now.
+    applyTypeDefaults(ast);
     errors.push(...loweringErrors);
     if (!continueOnError && loweringErrors.length > 0) {
       return {
