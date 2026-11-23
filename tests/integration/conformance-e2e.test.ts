@@ -20,6 +20,8 @@ const LIBRARY = `FUNCTION_BLOCK Tool
   END_METHOD
 END_FUNCTION_BLOCK`;
 
+const LONG = "a".repeat(300);
+
 const SOURCE = `TYPE SMALL : INT(5..10); END_TYPE
 TYPE S5 : STRING[5]; END_TYPE
 TYPE S6 : STRING(6); END_TYPE
@@ -70,6 +72,7 @@ PROGRAM Conformance
     cnt : Counted; eno : BOOL; len5, len6 : INT;
     mi : INT := 1; md : DINT := 100000; mr : REAL := 1.5; maxMixed : DINT; maxReal : REAL;
     strMaxLit, strLimLit, strMaxExpr : STRING; progTemp : INT;
+    longVar : STRING[400] := '${LONG}'; longEq : BOOL; longLen : INT;
   END_VAR
   VAR_TEMP
     acc : INT;
@@ -131,6 +134,8 @@ PROGRAM Conformance
   strMaxLit := MAX(sa, 'b');
   strLimLit := LIMIT(sa, 'b', sabe);
   strMaxExpr := MAX(sa, CONCAT(sab, 'x'));
+  longEq := longVar = '${LONG}';
+  longLen := LEN('${LONG}');
   acc := acc + 1;
   progTemp := acc;
 END_PROGRAM`;
@@ -203,6 +208,8 @@ TEST 'declarations and language give the CODESYS results'
   ASSERT_TRUE(uut.strMaxLit = 'b');
   ASSERT_TRUE(uut.strLimLit = 'abe');
   ASSERT_TRUE(uut.strMaxExpr = 'abx');
+  ASSERT_TRUE(uut.longEq);
+  ASSERT_EQ(uut.longLen, 300);
   uut();
   ASSERT_EQ(uut.progTemp, 1);
 END_TEST
