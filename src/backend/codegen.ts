@@ -3037,6 +3037,7 @@ export class CodeGenerator {
     );
     if (astProg) {
       this.enterScope(astProg.varBlocks);
+      this.emitVarTempReset(astProg.varBlocks);
     }
     if (astProg && astProg.body.length > 0) {
       // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
@@ -4894,31 +4895,51 @@ export class CodeGenerator {
   }
 
   /**
-   * MUX and MAX/MIN inputs cast to the call's result type when one of them is a computed expression: C++ promotes
-   * integer arithmetic to `int`, which breaks the single-type deduction of the runtime templates.
+   * MUX and MAX/MIN inputs of one IEC type cast to it when one of them is a computed expression: C++ promotes integer
+   * arithmetic to `int`, which breaks the single-type deduction of the runtime templates. Mixed types keep the
+   * runtime's common-type overloads.
    */
   private castSelectionInputs(
     args: string[],
     ordered: readonly Argument[],
     name: string,
-    call: FunctionCallExpression,
   ): void {
     const upper = name.toUpperCase();
     if (upper !== "MUX" && upper !== "MAX" && upper !== "MIN") return;
     const first = upper === "MUX" ? 1 : 0;
-    const computed = ordered
-      .slice(first)
-      .some(
-        (a) =>
-          a.value.kind !== "VariableExpression" &&
-          a.value.kind !== "LiteralExpression",
-      );
-    const resultType = [call, ...ordered.slice(first).map((a) => a.value)]
-      .map((e) => this.inferExprType(e)?.toUpperCase())
-      .find((t) => t !== undefined && getTypeCategory(t) !== undefined);
-    if (!computed || resultType === undefined) return;
+    const inputs = ordered.slice(first);
+    const computed = inputs.some(
+      (a) =>
+        a.value.kind !== "VariableExpression" &&
+        a.value.kind !== "LiteralExpression",
+    );
+    if (!computed) return;
+    const types = inputs.map((a) => this.inferExprType(a.value)?.toUpperCase());
+    const type = types[0];
+    if (
+      type === undefined ||
+      getTypeCategory(type) === undefined ||
+      types.some((t) => t !== type)
+    ) {
+      return;
+    }
     for (let i = first; i < ordered.length; i++) {
-      args[i] = `static_cast<IEC_${resultType}>(${args[i]!})`;
+      args[i] = `static_cast<IEC_${type}>(${args[i]!})`;
+    }
+  }
+
+  /** STRING inputs of MIN, MAX and LIMIT as one runtime string type, whatever mix of variables, literals and results. */
+  private unifyStringSelectionInputs(
+    args: string[],
+    ordered: readonly Argument[],
+    name: string,
+  ): void {
+    if (!["MIN", "MAX", "LIMIT"].includes(name.toUpperCase())) return;
+    const isString = (a: Argument): boolean =>
+      this.inferExprType(a.value)?.toUpperCase() === "STRING";
+    if (!ordered.some(isString)) return;
+    for (let i = 0; i < ordered.length; i++) {
+      if (isString(ordered[i]!)) args[i] = `iec_string_value(${args[i]!})`;
     }
   }
 
@@ -5670,10 +5691,11 @@ export class CodeGenerator {
         return generated;
       });
       this.harmonizeStdFuncArgs(args, ordered, stdFunc);
-      this.castSelectionInputs(args, ordered, stdFunc.name, expr);
+      this.castSelectionInputs(args, ordered, stdFunc.name);
       for (let i = 0; i < ordered.length; i++) {
         args[i] = this.asStringValue(ordered[i]!.value, args[i]!);
       }
+      this.unifyStringSelectionInputs(args, ordered, stdFunc.name);
       return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
     }
 

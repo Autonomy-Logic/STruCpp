@@ -650,6 +650,17 @@ inline bool operator>=(const IECStringVar<Len1>& a, const IECString<Len2>& b) no
     return !(a < b);
 }
 
+// One string type for MIN, MAX and LIMIT inputs that mix variables, literals and results.
+template<size_t N>
+inline IECString<254> iec_string_value(const IECString<N>& s) noexcept {
+    return IECString<254>(s.c_str());
+}
+
+template<size_t N>
+inline IECString<254> iec_string_value(const IECStringVar<N>& s) noexcept {
+    return iec_string_value(s.get());
+}
+
 // STRING is ANY_ELEMENTARY, so MIN, MAX and LIMIT accept it.
 template<size_t N> struct is_any_elementary<IECString<N>> : std::true_type {};
 template<size_t N> struct is_any_elementary<IECStringVar<N>> : std::true_type {};
