@@ -68,6 +68,11 @@ PROGRAM Conformance
     i : INT; oddFor, oddWhile, oddRepeat : INT;
     negInt : INT; negDint : DINT;
     cnt : Counted; eno : BOOL; len5, len6 : INT;
+    mi : INT := 1; md : DINT := 100000; mr : REAL := 1.5; maxMixed : DINT; maxReal : REAL;
+    strMaxLit, strLimLit, strMaxExpr : STRING; progTemp : INT;
+  END_VAR
+  VAR_TEMP
+    acc : INT;
   END_VAR
   limitNamed := LIMIT(MX := 10, IN := i0, MN := 0);
   selNamed := SEL(IN1 := 20, G := g, IN0 := 10);
@@ -120,6 +125,13 @@ PROGRAM Conformance
   cnt(EN := TRUE, ENO => eno);
   len5 := LEN(cnt.s5);
   len6 := LEN(cnt.s6);
+  maxMixed := MAX(mi, md * 2);
+  maxReal := MAX(mi, mr * 2.0);
+  strMaxLit := MAX(sa, 'b');
+  strLimLit := LIMIT(sa, 'b', sabe);
+  strMaxExpr := MAX(sa, CONCAT(sab, 'x'));
+  acc := acc + 1;
+  progTemp := acc;
 END_PROGRAM`;
 
 const TESTS = `TEST 'named arguments on standard functions bind by name'
@@ -184,6 +196,13 @@ TEST 'declarations and language give the CODESYS results'
   ASSERT_EQ(uut.cnt.n, 1);
   ASSERT_EQ(uut.len5, 5);
   ASSERT_EQ(uut.len6, 6);
+  ASSERT_TRUE(uut.maxMixed = 200000);
+  ASSERT_NEAR(uut.maxReal, 3.0, 0.001);
+  ASSERT_TRUE(uut.strMaxLit = 'b');
+  ASSERT_TRUE(uut.strLimLit = 'abe');
+  ASSERT_TRUE(uut.strMaxExpr = 'abx');
+  uut();
+  ASSERT_EQ(uut.progTemp, 1);
 END_TEST
 `;
 
@@ -228,6 +247,17 @@ describe("conformance compile errors", () => {
       3,
     );
     expect(errorAt("CONTINUE;", "x : INT;")).toEqual({ line: 3, column: 1 });
+
+    const configured = compile(`PROGRAM Main
+VAR_TEMP tt : INT := 7; END_VAR
+tt := tt + 1;
+END_PROGRAM
+CONFIGURATION C RESOURCE R ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1); PROGRAM P WITH T : Main; END_RESOURCE END_CONFIGURATION`);
+    expect(configured.success).toBe(true);
+    const run = configured.cppCode.slice(
+      configured.cppCode.indexOf("Program_MAIN::run()"),
+    );
+    expect(run).toMatch(/TT = [^;]*7[^;]*;[\s\S]*TT = TT \+ 1/);
 
     const long = `INT#-${"9".repeat(10000)}`;
     const start = Date.now();
