@@ -340,6 +340,8 @@ export interface TypeDeclaration extends ASTNode {
   defaultValue?: Expression;
   /** Set on a TYPE hoisted from an inline enumeration or subrange. */
   inline?: InlineTypeOrigin;
+  /** Set on a type a linked library declares; its enumeration members are reached only qualified. */
+  library?: string;
 }
 
 /** Where a hoisted inline type was written. */
@@ -525,6 +527,7 @@ export type Statement =
   | WhileStatement
   | RepeatStatement
   | ExitStatement
+  | ContinueStatement
   | ReturnStatement
   | FunctionCallStatement
   | ExternalCodePragma
@@ -632,6 +635,13 @@ export interface RepeatStatement extends ASTNode {
  */
 export interface ExitStatement extends ASTNode {
   kind: "ExitStatement";
+}
+
+/**
+ * CONTINUE statement
+ */
+export interface ContinueStatement extends ASTNode {
+  kind: "ContinueStatement";
 }
 
 /**
@@ -798,6 +808,39 @@ export interface VariableExpression extends TypedNode {
   accessChain?: AccessStep[];
   /** Written as a typed enumeration value (`E_State#Idle`). */
   typedLiteral?: true;
+  /** Set by semantic analysis when the expression is an instance path or a global reached from an `instance_paths` POU. */
+  instancePath?: InstancePathRef;
+}
+
+/**
+ * What a program instance path (`inst.Prog.Var`, `Config.Res.inst.Prog.Var`) or a global used in a POU marked
+ * `{attribute 'instance_paths'}` resolves to.
+ */
+export interface InstancePathRef {
+  /** A program instance's variable, or a global variable. */
+  kind: "instance" | "global";
+  /** Where a global is declared: a CONFIGURATION's VAR_GLOBAL or a top-level VAR_GLOBAL block. */
+  globalScope?: "configuration" | "unit";
+  /** Canonical upper-case path of the accessed leaf, without a trailing bit index. */
+  path: string;
+  /** Leading `accessChain` steps taken by the path prefix before the root variable's own access steps. */
+  consumed: number;
+  /** Declared type of the root variable (the program variable or the global). */
+  rootType: TypeReference;
+  /** Upper-case root variable name. */
+  variable: string;
+  configuration?: string;
+  resource?: string;
+  instance?: string;
+  programType?: string;
+  /** Elementary or string type the path ends at, when it ends at one. */
+  leaf?: { type: string; maxLength?: number };
+  /** Bit index when the path ends in a bit access (`.3`). */
+  bit?: number;
+  /** Dense id of `path` in external mode; -1 in the default mode. */
+  id: number;
+  /** Passed by address or reference (ADR, REF, REF=, a function's or method's VAR_IN_OUT or REFERENCE TO parameter). */
+  byReference?: boolean;
 }
 
 /**

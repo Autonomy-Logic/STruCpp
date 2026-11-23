@@ -32,7 +32,10 @@ import { getProjectNamespace } from "../project-model.js";
 import type { SymbolTables } from "../semantic/symbol-table.js";
 import { isElementaryType } from "../semantic/type-registry.js";
 import { evalIntConst, MAX_TYPE_ALIAS_DEPTH } from "../semantic/type-utils.js";
-import { formatArrayElementAccess } from "./codegen-utils.js";
+import {
+  CONFIG_GLOBAL_NAME,
+  formatArrayElementAccess,
+} from "./codegen-utils.js";
 import { mangledMemberName, methodNamesByBlock } from "./member-mangling.js";
 
 // ---------------------------------------------------------------------------
@@ -355,7 +358,7 @@ export interface DebugTableGenOptions {
 
 const DEFAULTS: Required<Omit<DebugTableGenOptions, "md5">> = {
   maxEntriesPerArray: 8000,
-  configGlobalName: "g_config",
+  configGlobalName: CONFIG_GLOBAL_NAME,
 };
 
 // ---------------------------------------------------------------------------

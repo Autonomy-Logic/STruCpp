@@ -158,6 +158,12 @@ export interface LibraryMethodEntry {
   inputs: LibraryVarType[];
   outputs: LibraryVarType[];
   inouts: LibraryVarType[];
+  /**
+   * The VAR_INPUT, VAR_OUTPUT and VAR_IN_OUT parameters in declaration order (the C++ signature's order), with the
+   * direction of each. Absent in archives built before it was recorded: the method's parameters are then taken as
+   * inputs, outputs and in-outs, in that order.
+   */
+  parameters?: LibraryFunctionEntry["parameters"];
 }
 
 /** A property of an exported function block or interface, with the accessors it has. */
@@ -280,15 +286,21 @@ export interface LibraryTypeEntry {
   kind: "struct" | "enum" | "alias";
   /** Base type (for alias/enum) */
   baseType?: string;
-  /** Struct member fields (name + declared type), so a consuming compilation
-   *  can type member access on a dependency struct (e.g. `MATH.PI`). Only set
-   *  for `kind: "struct"`; optional for backward compatibility. */
-  fields?: Array<{
-    name: string;
-    type: string;
-    attributes?: LibraryAttribute[];
-    displayName?: string;
-  }>;
+  /** Struct member fields (name + declared type, with array dimensions and string lengths), so a consuming
+   *  compilation can type member access on a dependency struct (e.g. `MATH.PI`). Only set for `kind: "struct"`;
+   *  optional for backward compatibility. */
+  fields?: Array<
+    LibraryTypeRef & {
+      name: string;
+      attributes?: LibraryAttribute[];
+      displayName?: string;
+    }
+  >;
+  /**
+   * What an alias names, with string lengths and, for an array type of constant bounds, its dimensions and element
+   * type (`type` is then `__INLINE_ARRAY_<element>`). Absent for a subrange or an array of non-constant bounds.
+   */
+  aliasOf?: LibraryTypeRef;
   /** Members of an enumeration, in declaration order, with their explicit values as written. */
   members?: Array<{
     name: string;
@@ -362,8 +374,11 @@ export interface LibraryManifest {
   globals?: LibraryGlobalEntry[];
   /** Exported interfaces. Optional for archives built before interfaces were exported. */
   interfaces?: LibraryInterfaceEntry[];
-  /** C++ headers to include */
+  /** C++ headers the library's `{external}` code needs, provided by the build environment. A consumer includes those
+   *  its used chunks need (`LibraryChunk.headers`). */
   headers: string[];
+  /** API version of a header in `headers`, by header name, when the library was compiled against one. */
+  headerVersions?: Record<string, string>;
   /** Whether this is a built-in C++ runtime library */
   isBuiltin: boolean;
   /** Original ST source files (for ST libraries) */
@@ -430,6 +445,32 @@ export interface LibraryChunk {
    *  archive's `manifest.name`. The codegen treats these as edges
    *  in the chunk-reachability graph. */
   deps: LibraryChunkDep[];
+  /**
+   * Headers this chunk's code needs, transitively: those its own `{external}` code needs (by default all of the
+   * library's `manifest.headers`; a POU narrows them with `{attribute 'headers' := '<a.h>, <b.h>'}`) plus those of
+   * every chunk it reaches through `deps`, in this archive and in the archives it was compiled against. Set on every
+   * chunk of an archive whose manifest lists headers (empty when the chunk needs none); absent otherwise, and in
+   * archives built before it existed, where every chunk needs all of the manifest's headers.
+   */
+  headers?: HeaderRequirement[];
+}
+
+/** A dependency as a name and the version that satisfies it. */
+export interface LibraryRequirement {
+  name: string;
+  version: string;
+}
+
+/** A library archive this library was compiled against and uses: its name and version. */
+export type LibraryDependency = LibraryRequirement;
+
+/**
+ * A header provided by the build environment, such as a C API that `{external}` code calls, with the version of that
+ * API when it has one. Required with a version, it is satisfied only by a build that provides the same version.
+ */
+export interface HeaderRequirement {
+  name: string;
+  version?: string;
 }
 
 /**
@@ -449,6 +490,8 @@ export interface LibraryCompileResult {
    *  incrementally. When non-empty, concatenating chunks in array
    *  order reproduces `headerCode` / `cppCode`. */
   chunks?: LibraryChunk[];
+  /** Direct dependencies the library's code uses (see `StlibArchive.dependencies`). Set on success. */
+  dependencies?: LibraryDependency[];
   /** Compilation errors */
   errors: Array<{ message: string; file?: string; line?: number }>;
 }
@@ -492,8 +535,12 @@ export interface StlibArchive {
   sources?: Array<{ fileName: string; source: string; category?: string }>;
   /** Global constants required by this library (e.g., STRING_LENGTH, LIST_LENGTH) */
   globalConstants?: Record<string, number>;
-  /** Reserved for future library-to-library dependency resolution */
-  dependencies: Array<{ name: string; version: string }>;
+  /**
+   * Direct dependencies: every library whose symbols this library's chunks reference, at the version it was compiled
+   * against. Consumers resolve them transitively through the chunks' `deps`. Empty in archives that need no other
+   * library, and in archives built before dependencies were recorded.
+   */
+  dependencies: LibraryDependency[];
 }
 
 /**

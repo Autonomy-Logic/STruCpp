@@ -158,7 +158,7 @@ describe("methods named like IEC operators", () => {
 });
 
 describe("library headers", () => {
-  const EXTERNAL = `FUNCTION Lamp : BOOL Lamp := TRUE; END_FUNCTION`;
+  const EXTERNAL = `FUNCTION Lamp : BOOL {external lamp_on(); } Lamp := TRUE; END_FUNCTION`;
 
   it("refuses absolute paths and . or .. segments", () => {
     for (const header of [
@@ -366,6 +366,35 @@ int main() { c.I.run(); std::printf("%lld\\n", (long long)c.I.R.get()); return 0
     });
     expect(result.errors).toEqual([]);
     expect(run("local", result)).toBe("71543");
+  });
+
+  const FUNCTIONS = `FUNCTION Mix : DINT
+  VAR_INPUT A : DINT; B : DINT := 5; C : DINT := 7; END_VAR
+  Mix := A * 100 + B * 10 + C;
+END_FUNCTION`;
+  const MIX_CALLER = `PROGRAM P
+  VAR r : DINT; END_VAR
+  r := Mix(1) * 1000000 + Mix(C := 2, A := 3) * 1000 + Mix(4, C := 6, B := 0);
+END_PROGRAM
+CONFIGURATION C RESOURCE R ON PLC TASK T(INTERVAL := T#10ms, PRIORITY := 1);
+  PROGRAM I WITH T : P; END_RESOURCE END_CONFIGURATION`;
+
+  it("binds a function's arguments by name and fills omitted inputs with its defaults", () => {
+    const local = compile(`${FUNCTIONS}\n${MIX_CALLER}`, {
+      headerFileName: "generated.hpp",
+    });
+    expect(local.errors).toEqual([]);
+    expect(run("functions-local", local)).toBe(
+      String(157 * 1000000 + 352 * 1000 + 406),
+    );
+    const linked = compile(MIX_CALLER, {
+      headerFileName: "generated.hpp",
+      libraries: [library(FUNCTIONS)],
+    });
+    expect(linked.errors).toEqual([]);
+    expect(run("functions-library", linked)).toBe(
+      String(157 * 1000000 + 352 * 1000 + 406),
+    );
   });
 
   it("runs a library block's defaults and own methods", () => {

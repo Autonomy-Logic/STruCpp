@@ -8,7 +8,6 @@
  */
 
 import type {
-  Argument,
   ArrayLiteralExpression,
   AssertCall,
   CompilationUnit,
@@ -36,10 +35,14 @@ import type {
 } from "../frontend/ast.js";
 import type { CompileError, SourceSpan } from "../types.js";
 import { describeInlineType } from "../frontend/lower-inline-types.js";
+import { isQualifiedOnly } from "../frontend/attributes.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
-import type { FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
+import {
+  resolveInstancePaths,
+  type InstancePathEntry,
+} from "./instance-paths.js";
 import {
   fbLineage,
   fbLineageNames,
@@ -51,6 +54,8 @@ import {
   resolveFieldType,
   resolveArrayElementType,
   buildEnumMemberMap,
+  unqualifiedEnumDescriptors,
+  isEnumType,
   typeName,
   describeType,
   resolveArrayShape,
@@ -67,7 +72,6 @@ import {
   lineageMembers,
   stripEnEno,
   walkAST,
-  suppliedParameters,
 } from "../ast-utils.js";
 import {
   exactIntegerLiteralValue,
@@ -290,6 +294,17 @@ export interface SemanticAnalysisResult {
 
   /** Warnings found during analysis */
   warnings: CompileError[];
+
+  /** Distinct instance paths and globals reached from `instance_paths` POUs; filled with `externalInstancePaths`. */
+  instancePaths: InstancePathEntry[];
+}
+
+/** Options of {@link SemanticAnalyzer.analyze}. */
+export interface SemanticAnalysisOptions {
+  /** Compile instance paths and globals of `instance_paths` POUs as host calls. */
+  externalInstancePaths?: boolean;
+  /** Source files whose programs, configurations and top-level globals the host owns (all when undefined). */
+  externalSources?: readonly string[];
 }
 
 // =============================================================================
@@ -384,6 +399,7 @@ export class SemanticAnalyzer {
   analyze(
     ast: CompilationUnit,
     existingSymbolTables?: SymbolTables,
+    options: SemanticAnalysisOptions = {},
   ): SemanticAnalysisResult {
     this.errors = [];
     this.warnings = [];
@@ -404,6 +420,14 @@ export class SemanticAnalyzer {
     this.validateTypeReferences(ast);
     const typeReferenceErrors = this.errors.length - errorsBeforeTypeReferences;
 
+    const paths = resolveInstancePaths(ast, this.symbolTables, {
+      external: options.externalInstancePaths === true,
+      ...(options.externalSources !== undefined
+        ? { externalSources: options.externalSources }
+        : {}),
+    });
+    this.errors.push(...paths.errors);
+
     // Pass 2: Type checking
     if (this.errors.length - typeReferenceErrors === 0) {
       const typeResult = this.typeChecker.check(ast);
@@ -421,6 +445,7 @@ export class SemanticAnalyzer {
       symbolTables: this.symbolTables,
       errors: this.errors,
       warnings: this.warnings,
+      instancePaths: paths.entries,
     };
   }
 
@@ -474,7 +499,8 @@ export class SemanticAnalyzer {
         // An inline enumeration's members belong to its POU, not the global scope.
         if (
           typeDecl.definition.kind === "EnumDefinition" &&
-          typeDecl.inline?.owner === undefined
+          typeDecl.inline?.owner === undefined &&
+          !isQualifiedOnly(typeDecl.attributes)
         ) {
           typeDecl.definition.members.forEach((member, index) => {
             if (this.symbolTables.globalScope.hasLocal(member.name)) return;
@@ -503,19 +529,7 @@ export class SemanticAnalyzer {
 
     // Build reverse lookup map: enum member name → owning enum type
     this.enumMemberMap = buildEnumMemberMap(
-      ast.types
-        .filter(
-          (t) =>
-            t.definition.kind === "EnumDefinition" &&
-            t.inline?.owner === undefined,
-        )
-        .map((t) => ({
-          name: t.name,
-          members:
-            t.definition.kind === "EnumDefinition"
-              ? t.definition.members.map((m) => m.name)
-              : [],
-        })),
+      unqualifiedEnumDescriptors(this.symbolTables.globalScope.getAllSymbols()),
     );
 
     // Register function declarations
@@ -1752,11 +1766,13 @@ export class SemanticAnalyzer {
     line: number,
     column: number,
     file?: string,
+    endColumn?: number,
   ): void {
     this.errors.push({
       message,
       line,
       column,
+      ...(endColumn !== undefined ? { endLine: line, endColumn } : {}),
       severity: "error",
       ...(file ? { file } : {}),
     });
@@ -2665,43 +2681,22 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * Validate standard function argument counts and special constraints (e.g., ADR l-value).
-   * Covers all registered std functions and *_TO_* conversion functions.
+   * Validate the argument count of a *_TO_* conversion and special constraints (ADR l-value, EN/ENO types). The type
+   * checker binds and checks the arguments of standard functions, functions and methods.
    *
    * EN and ENO are implicit IEC 61131-3 pins — they gate execution and signal
    * success around the call site, but they are not part of any function's
-   * declared signature. Strip them before counting against the registry.
+   * declared signature. Strip them before counting.
    */
   private checkStdFunctionArgs(expr: FunctionCallExpression): void {
     const nameUpper = expr.functionName.toUpperCase();
     const userArgs = stripEnEno(expr.arguments);
     const argCount = userArgs.length;
 
-    // Look up in std function registry
-    const desc = this.stdRegistry.lookup(nameUpper);
-    if (desc) {
-      if (desc.isVariadic) {
-        const minArgs = desc.minArgs ?? desc.params.length;
-        if (argCount < minArgs) {
-          this.addError(
-            `'${nameUpper}' requires at least ${minArgs} argument(s), got ${argCount}`,
-            expr.sourceSpan.startLine,
-            expr.sourceSpan.startCol,
-            expr.sourceSpan.file,
-          );
-        }
-      } else {
-        const expected = desc.params.length;
-        if (argCount !== expected) {
-          this.addError(
-            `'${nameUpper}' requires ${expected} argument(s), got ${argCount}`,
-            expr.sourceSpan.startLine,
-            expr.sourceSpan.startCol,
-            expr.sourceSpan.file,
-          );
-        }
-      }
-    } else if (this.stdRegistry.resolveConversion(nameUpper)) {
+    if (
+      this.stdRegistry.lookup(nameUpper) === undefined &&
+      this.stdRegistry.resolveConversion(nameUpper)
+    ) {
       // *_TO_* conversion functions always take exactly 1 argument
       if (argCount !== 1) {
         this.addError(
@@ -2710,20 +2705,6 @@ export class SemanticAnalyzer {
           expr.sourceSpan.startCol,
           expr.sourceSpan.file,
         );
-      }
-    } else {
-      // Library or user-defined function (not a built-in registry function).
-      // Every input WITHOUT an initial value is mandatory; inputs WITH one are
-      // optional (the compiler supplies the default). A call that leaves a
-      // mandatory input unsupplied — e.g. a graphical block with an
-      // unconnected required pin, or hand-written ST missing an argument — is
-      // a compile error here, instead of a confusing failure further down
-      // (the C++ compiler for library functions, or silent zero-fill for
-      // user functions). Function-block invocations resolve to a variable,
-      // not a function, so their optional inputs never reach this path.
-      const sym = this.symbolTables.globalScope.lookup(nameUpper);
-      if (sym?.kind === "function") {
-        this.checkRequiredFunctionInputs(expr, sym, userArgs);
       }
     }
 
@@ -2770,126 +2751,6 @@ export class SemanticAnalyzer {
           );
         }
       }
-    }
-  }
-
-  /**
-   * Ordered input parameters of a function, each flagged optional when it
-   * declares an initial value. Handles both symbol shapes:
-   *   - Library functions carry resolved `parameters` (a VariableSymbol per
-   *     param; its `initialValue` string marks an optional input).
-   *   - User-defined functions carry their VAR_INPUT declarations on
-   *     `declaration.varBlocks` (an AST `initialValue` marks an optional one).
-   */
-  private functionInputParams(
-    sym: FunctionSymbol,
-  ): Array<{ name: string; optional: boolean }> {
-    if (sym.parameters.length > 0) {
-      return sym.parameters
-        .filter((p) => p.isInput)
-        .map((p) => ({
-          name: p.name.toUpperCase(),
-          optional: p.initialValue !== undefined,
-        }));
-    }
-    const params: Array<{ name: string; optional: boolean }> = [];
-    for (const block of sym.declaration.varBlocks) {
-      if (block.blockType !== "VAR_INPUT") continue;
-      for (const decl of block.declarations) {
-        const optional = decl.initialValue !== undefined;
-        for (const n of decl.names)
-          params.push({ name: n.toUpperCase(), optional });
-      }
-    }
-    return params;
-  }
-
-  /** Every VAR_IN_OUT of a function must be supplied (IEC 61131-3): there is no value to bind it to otherwise. */
-  private checkFunctionInOuts(
-    expr: FunctionCallExpression,
-    sym: FunctionSymbol,
-    userArgs: Argument[],
-  ): void {
-    const params: Array<{ name: string; inOut: boolean }> =
-      sym.parameters.length > 0
-        ? sym.parameters.map((p) => ({
-            name: p.name.toUpperCase(),
-            inOut: p.isInOut,
-          }))
-        : sym.declaration.varBlocks
-            .filter(
-              (b) =>
-                b.blockType === "VAR_INPUT" ||
-                b.blockType === "VAR_IN_OUT" ||
-                b.blockType === "VAR_OUTPUT",
-            )
-            .flatMap((b) =>
-              b.declarations.flatMap((d) =>
-                d.names.map((n) => ({
-                  name: n.toUpperCase(),
-                  inOut: b.blockType === "VAR_IN_OUT",
-                })),
-              ),
-            );
-    const supplied = suppliedParameters(
-      params.map((p) => p.name),
-      userArgs,
-    );
-    for (const p of params) {
-      if (!p.inOut || supplied.has(p.name)) continue;
-      this.addError(
-        `'${expr.functionName.toUpperCase()}' is missing its in-out argument '${p.name}'`,
-        expr.sourceSpan.startLine,
-        expr.sourceSpan.startCol,
-        expr.sourceSpan.file,
-      );
-    }
-  }
-
-  /**
-   * Option A: every input without an initial value is mandatory. Resolve the
-   * call's named/positional arguments to parameter slots (mirroring the
-   * codegen's argument reordering) and error if any mandatory input is left
-   * unsupplied.
-   */
-  private checkRequiredFunctionInputs(
-    expr: FunctionCallExpression,
-    sym: FunctionSymbol,
-    userArgs: Argument[],
-  ): void {
-    this.checkFunctionInOuts(expr, sym, userArgs);
-    const inputParams = this.functionInputParams(sym);
-    const required = inputParams.filter((p) => !p.optional);
-    if (required.length === 0) return;
-
-    // Slots claimed by name; remaining positional args fill the rest in order.
-    const satisfied = new Set<string>();
-    const positional: Argument[] = [];
-    for (const arg of userArgs) {
-      if (arg.isOutput) continue; // `=> var` outputs don't fill inputs
-      if (arg.name !== undefined) satisfied.add(arg.name.toUpperCase());
-      else positional.push(arg);
-    }
-    let pi = 0;
-    for (const p of inputParams) {
-      if (pi >= positional.length) break;
-      if (satisfied.has(p.name)) continue;
-      satisfied.add(p.name);
-      pi++;
-    }
-
-    const missing = required
-      .filter((p) => !satisfied.has(p.name))
-      .map((p) => p.name);
-    if (missing.length > 0) {
-      this.addError(
-        `'${expr.functionName.toUpperCase()}' is missing required input${
-          missing.length > 1 ? "s" : ""
-        }: ${missing.join(", ")}`,
-        expr.sourceSpan.startLine,
-        expr.sourceSpan.startCol,
-        expr.sourceSpan.file,
-      );
     }
   }
 
@@ -3494,6 +3355,7 @@ export class SemanticAnalyzer {
             scope,
             ctx,
             stmt.sourceSpan,
+            false,
           );
           this.checkExpressionForUndeclaredVars(stmt.start, scope, ctx);
           this.checkExpressionForUndeclaredVars(stmt.end, scope, ctx);
@@ -3546,6 +3408,14 @@ export class SemanticAnalyzer {
   ): void {
     switch (expr.kind) {
       case "VariableExpression":
+        if (expr.instancePath !== undefined) {
+          for (const step of expr.accessChain ?? []) {
+            if (step.kind !== "subscript") continue;
+            for (const idx of step.indices)
+              this.checkExpressionForUndeclaredVars(idx, scope, ctx);
+          }
+          break;
+        }
         this.checkNameDeclared(expr.name, scope, ctx, expr.sourceSpan);
         // Reject member access on a type-level symbol (FB / program / type).
         // Resolves the bug where `RED_YELLOW_GREEN.GREENTIME := …` is
@@ -3656,8 +3526,19 @@ export class SemanticAnalyzer {
     if (!sym) return; // undeclared — separate diagnostic from checkNameDeclared
 
     if (expr.typedLiteral) {
-      if (sym.kind === "type" && sym.resolvedType?.typeKind === "enum") return;
       const member = expr.fieldAccess[0] ?? "";
+      if (sym.kind === "type" && isEnumType(sym.resolvedType)) {
+        const upper = member.toUpperCase();
+        if (sym.resolvedType.values.some((v) => v.toUpperCase() === upper))
+          return;
+        this.addError(
+          `'${expr.name}#${member}' is not a valid literal: '${expr.name}' has no member '${member}'.`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+        return;
+      }
       const hint = /^[0-9A-F_]+$/i.test(member)
         ? `; did you mean '16#${member}' or '${expr.name}#16#${member}'?`
         : ".";
@@ -3692,12 +3573,14 @@ export class SemanticAnalyzer {
 
   /**
    * Check whether a name is declared in the current scope chain or context.
+   * When `nameAtStart`, the name begins at the span's start and an error covers it.
    */
   private checkNameDeclared(
     name: string,
     scope: Scope,
     ctx: UndeclaredVarContext,
     sourceSpan: { startLine: number; startCol: number; file?: string },
+    nameAtStart = true,
   ): void {
     const upper = name.toUpperCase();
 
@@ -3772,6 +3655,7 @@ export class SemanticAnalyzer {
       sourceSpan.startLine,
       sourceSpan.startCol,
       sourceSpan.file,
+      nameAtStart ? sourceSpan.startCol + name.length : undefined,
     );
   }
 
@@ -3793,19 +3677,11 @@ export class SemanticAnalyzer {
     this.symbolTables = sourceSymbolTables;
 
     // Build enum member map from source symbol tables for bare enum resolution
-    const enumDescriptors: Array<{ name: string; members: string[] }> = [];
-    for (const sym of sourceSymbolTables.globalScope.getAllSymbols()) {
-      if (
-        sym.kind === "type" &&
-        sym.resolvedType?.typeKind === "enum" &&
-        (sym.declaration as TypeDeclaration | undefined)?.inline?.owner ===
-          undefined
-      ) {
-        const enumType = sym.resolvedType as EnumType;
-        enumDescriptors.push({ name: enumType.name, members: enumType.values });
-      }
-    }
-    this.enumMemberMap = buildEnumMemberMap(enumDescriptors);
+    this.enumMemberMap = buildEnumMemberMap(
+      unqualifiedEnumDescriptors(
+        sourceSymbolTables.globalScope.getAllSymbols(),
+      ),
+    );
 
     const typeScope = this.buildTestTypeScope(testFile);
 

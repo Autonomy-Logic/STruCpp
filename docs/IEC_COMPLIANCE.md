@@ -13,10 +13,10 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | REAL, LREAL | Supported | REAL arithmetic and REAL functions (SQRT, SIN, COS, ...) compute in single precision; an untyped real literal (`1.5`) takes the type of its context, so it is a float next to a REAL and a double next to an LREAL |
 | TIME | Supported | Nanosecond precision, int64_t storage |
 | DATE | Supported | |
-| TIME_OF_DAY | Supported | |
+| TIME_OF_DAY | Supported | `TOD - TOD`, `DT - DT` and `DATE - DATE` give a TIME |
 | DATE_AND_TIME | Supported | |
 | LTIME, LDATE, LTOD, LDT | Supported | 64-bit time types with nanosecond precision |
-| STRING | Supported | Parameterized length: STRING(N) (CODESYS) or STRING[N] (IEC 61131-3 Ed. 3), default 254; array elements keep their declared length |
+| STRING | Supported | Parameterized length: STRING(N) (CODESYS) or STRING[N] (IEC 61131-3 Ed. 3), default 254; array elements and named types (`TYPE S5 : STRING[5]; END_TYPE`) keep their declared length |
 | WSTRING | Supported | Parameterized length: WSTRING(N) or WSTRING[N] |
 | CHAR, WCHAR | Supported | |
 
@@ -26,14 +26,14 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 |------|--------|-------|
 | TYPE ... END_TYPE | Supported | Type aliases |
 | STRUCT ... END_STRUCT | Supported | With nested structs |
-| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value. A user or library FUNCTION with one of these names is called instead |
+| Enumerations | Supported | With optional base type. Conversions `TO_<ENUM>(x)` / `<TYPE>_TO_<ENUM>(x)` give the member with that integer value; `TO_<TYPE>(e)` / `<ENUM>_TO_<TYPE>(e)` give the member's integer value. A user or library FUNCTION with one of these names is called instead. An enumeration from a library is used as a local one (typed literals, CASE labels, comparisons, debugging), but its members are written qualified only (`E#M`), so they never clash with the unit's own names. Under `{attribute 'qualified_only'}`, a unit's own enumeration's members must be written `E#M` too, as in CODESYS |
 | Initialized type declarations | Supported | A type may carry its own default (`Setpoint : REAL := 25.0;`, `Origin : Point := (x := 0.0);`), inherited by every declaration of the type that has no initializer |
 | ARRAY (1D) | Supported | Arbitrary bounds: ARRAY[1..10] OF INT |
 | ARRAY (2D) | Supported | ARRAY[1..3, 1..4] OF REAL |
 | ARRAY (3D) | Supported | ARRAY[1..3, 1..4, 1..5] OF INT |
 | ARRAY OF function block | Supported | Declaration, member access, element invocation (`units[i](step := 1.0)`) and method calls on elements (`units[0].M()`) |
-| ARRAY[*] (VLA) | Supported | Variable-length array parameters |
-| Subranges | Supported | Runtime validation |
+| ARRAY[*] (VLA) | Supported | Variable-length VAR_IN_OUT arrays (1D and 2D) of functions and function blocks; a function block's view is bound to the caller's array on each call |
+| Subranges | Supported | Runtime validation. A variable without an initial value starts at the lower limit |
 | REF_TO | Supported | IEC reference type (explicit dereference) |
 | REFERENCE_TO | Supported | CODESYS reference type (implicit dereference) |
 | POINTER TO | Supported | CODESYS pointer type with dereference via ^ |
@@ -64,7 +64,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | VAR_EXTERNAL | Supported | References either a CONFIGURATION or a file-level VAR_GLOBAL |
 | VAR_GLOBAL | Supported | Global variables (CONFIGURATION-scoped or file-level) |
 | CONSTANT | Supported | Compile-time constants |
-| RETAIN | Supported | Allowed on `VAR`, `VAR_INPUT`, `VAR_OUTPUT` and `VAR_GLOBAL`, per IEC 61131-3. Rejected on `VAR_IN_OUT` / `VAR_TEMP` / `VAR_EXTERNAL`, and inside a `FUNCTION` or `METHOD` (no instance, nothing to retain) |
+| RETAIN | Supported | Allowed on `VAR`, `VAR_INPUT`, `VAR_OUTPUT` and `VAR_GLOBAL`, per IEC 61131-3. Rejected on `VAR_IN_OUT` / `VAR_TEMP` / `VAR_EXTERNAL`, and inside a `FUNCTION` or `METHOD` (no instance, nothing to retain). `VAR_TEMP` starts at its initial value on every call |
 | PERSISTENT | Partial | Accepted and treated as `RETAIN`. CODESYS also keeps a PERSISTENT value across a program download; that is not implemented, so the weaker shared guarantee is what is claimed |
 | NON_RETAIN | Supported | Accepted and treated as the default (a plain `VAR` is already non-retained). Rejected when combined with `RETAIN` or `CONSTANT` |
 | AT %IX0.0 | Supported | Located variables (I/Q/M areas, X/B/W/D/L sizes) |
@@ -88,18 +88,18 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | Arithmetic | `+`, `-`, `*`, `/`, `MOD`, `**` | Supported; REAL `**` computes like `EXPT`, in single precision |
 | Comparison | `=`, `<>`, `<`, `>`, `<=`, `>=` | Supported |
 | Logical | `AND`, `OR`, `XOR`, `NOT` | Supported |
-| Bitwise | `AND`, `OR`, `XOR`, `NOT` (on bit types) | Supported |
+| Bitwise | `AND`, `OR`, `XOR`, `NOT` (on bit types) | Supported; on BOOL both operands are evaluated (no short-circuit). `AND_THEN` / `OR_ELSE` are not supported |
 | Bit shift | `SHL`, `SHR`, `ROL`, `ROR` | Supported |
 | Assignment | `:=` | Supported |
 | Reference assign | `REF=` | Supported |
 | Dereference | `^`, `DREF()` | Supported |
 | Reference | `REF()` | Supported |
 | Parentheses | `( )` | Supported |
-| Function call | `name(args)` | Supported (positional + named) |
+| Function call | `name(args)` | Supported (positional + named); for local and library functions and for standard functions (`LIMIT(MN := 0, IN := x, MX := 10)`, `SEL(G := g, IN0 := a, IN1 := b)`, `MUX(K := k, IN0 := a, IN1 := b)`), named arguments bind by name in any order and omitted inputs of a local or library function take its declared default (a library function's default is recorded in its archive). Function, method, standard function and function block calls bind their arguments the same way; positional arguments of a function block call fill its own inputs |
 | Method call | `obj.method(args)`, `arr[i].method(args)`, `p^.method(args)`, `a.b.method(args)`; named arguments bind by name and omitted inputs take the default of the method as declared for the static type at the call site (the interface's, a derived block's override, the pointer's base type), as CODESYS does, for local, interface and library methods. A default is evaluated in the callee: it may name the block's constants, and a default that reads one of the block's variables is not constant, so CODESYS and STruC++ warn and require the argument. Inside a block, an unqualified call to one of its own methods comes before a standard function of the same name (`Len()`, `Round()`), as in CODESYS. An omitted VAR_IN_OUT is an error, and so is an omitted input of a library method whose archive records no default for it | Supported |
 | Array access | `arr[i]`, `arr[i, j]` | Supported — the index count is validated against the declared rank |
 | Field access | `struct.field` | Supported |
-| Typed literals | `INT#5`, `DINT#42`, `REAL#3.14` | Supported |
+| Typed literals | `INT#5`, `DINT#42`, `REAL#3.14`, `INT#-5` | Supported; a negative value on an unsigned type is an error |
 | Integer literals | `9223372036854775807`, `16#FF`, `1_000` | Supported — the full 64-bit LINT/ULINT range is preserved exactly; a value wider than ULINT is rejected |
 | NEW | `__NEW(type)`, `__NEW(type, size)` | Supported |
 | DELETE | `__DELETE(ptr)` | Supported |
@@ -114,6 +114,7 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 | REPEAT / UNTIL / END_REPEAT | Supported | |
 | CASE / OF / END_CASE | Supported | Integer, bit, and enum selectors |
 | EXIT | Supported | Break from loop |
+| CONTINUE | Supported | Next iteration of the innermost FOR, WHILE or REPEAT; an error outside a loop |
 | RETURN | Supported | Early return from POU |
 
 ## OOP Extensions
@@ -134,11 +135,12 @@ STruC++ implements the Structured Text (ST) language from IEC 61131-3. This docu
 
 | Check | Notes |
 |-------|-------|
-| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error; `ENO` is a member of every function block. A library archive built before members were exported lists only a block's variables, so calls and properties on its blocks are not checked |
+| Unknown member | `fb.x`, `s.x` on a function block, structure or interface that declares no `x` is an error; `ENO` is a member of every function block; a block that declares its own `EN`/`ENO` uses them as ordinary parameters. A library archive built before members were exported lists only a block's variables, so calls and properties on its blocks are not checked |
 | Unknown method | `x.m()` where the type of `x` has no method `m` (a function block member that is an FB instance, say) is an error |
 | Unknown FB argument | `fb(x := ...)` where `x` is not an input, output or in-out of the block is an error, for local and library blocks |
 | Members named like methods | A variable named like a method of its block's class hierarchy is a warning and is emitted under a mangled C++ name; so is a method named like a variable inherited from a block of the same unit. A method named like a variable inherited from a library block is an error, since the library's member names are fixed. A method-local variable hides a member of the same name, and the block's methods stay callable |
 | Omitted in-out argument | A function or method call that leaves out a VAR_IN_OUT is an error |
+| Call arguments | As in CODESYS, a call is an error, reported at the argument, when a named argument matches no parameter, names a parameter twice, follows a named argument positionally, uses `=>` on an input, or exceeds the parameters; a standard function call that leaves out an input is an error at the call |
 | Methods named like operators | A method named like an IEC operator (`ADD`, `MOVE`, `MAX`, `SIN`, `ADR`, a type conversion...) is an error, as in CODESYS; standard functions that are not operators (`LEN`, `CONCAT`, `ROUND`, `MEMCPY`...) remain valid names |
 | Interface arguments | Passing a block that does not implement an interface to an interface-typed input of an FB, function or method is an error, as in assignments |
 | ADR of an unrelated block | `p := ADR(b)` with `p` a `POINTER TO A` (a function block or interface) and `b` a block that is neither `A`, derived from it nor implementing it is a warning: a method call through `p` is undefined |
@@ -151,12 +153,12 @@ All IEC 61131-3 standard functions are implemented in the C++ runtime:
 |----------|-----------|
 | Numeric | ABS, SQRT, LN, LOG, EXP, EXPT |
 | Trigonometric | SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2 |
-| Selection | SEL, MIN, MAX, LIMIT, MUX |
+| Selection | SEL, MIN, MAX, LIMIT, MUX (MIN, MAX and LIMIT also on STRING; LIMIT is `MIN(MAX(IN, MN), MX)`, also when MN > MX; inputs may be any expressions) |
 | Comparison | GT, GE, EQ, LE, LT, NE |
 | Bitwise | AND, OR, XOR, NOT, MOVE |
 | Bit Shift | SHL, SHR, ROL, ROR |
 | Type Conversion | *_TO_* (INT_TO_REAL, DINT_TO_STRING, etc.) |
-| String | LEN, LEFT, RIGHT, MID, CONCAT, FIND, REPLACE, INSERT, DELETE, UPPER, LOWER, TRIM |
+| String | LEN, LEFT, RIGHT, MID, CONCAT, FIND, REPLACE, INSERT, DELETE, UPPER, LOWER, TRIM (LEN and FIND return a signed INT; INSERT(IN1, IN2, P) inserts after the first P characters, as in CODESYS; string literals may be arguments and comparison operands; `<`, `>`, `<=`, `>=` compare strings; CONCAT takes exactly two inputs, as in CODESYS, and three or more are an error) |
 | System | ADR, SIZEOF |
 
 ## Standard Function Blocks
@@ -206,13 +208,56 @@ edges on `CU` and `CD` leave `CV` unchanged. CODESYS does not document that case
 | Feature | Status | Notes |
 |---------|--------|-------|
 | Nested comments `(* (* *) *)` | Supported | Arbitrary nesting depth |
-| Pragmas `{...}` | Supported | Including `{external}` for inline C++; CODESYS `{attribute 'name' [:= 'value']}` pragmas attach to the declaration that follows them (POU, method, property, interface, type, variable block, variable, structure field or enumeration value; only whitespace, comments and other pragmas in between). Library manifests keep them on every exported declaration except variable blocks and enumeration values, which manifests do not record. They do not change the generated code |
+| Pragmas `{...}` | Supported | Including `{external}` for inline C++; CODESYS `{attribute 'name' [:= 'value']}` pragmas attach to the declaration that follows them (POU, method, property, interface, type, variable block, variable, structure field or enumeration value; only whitespace, comments and other pragmas in between). Library manifests keep them on every exported declaration except variable blocks and enumeration values, which manifests do not record. Only `instance_paths` (see Instance paths) and `qualified_only` (the enumeration's members must be written `E#M`) change how the code compiles |
 | Inline C++ | Supported | Via `{external ...}` pragma blocks |
 | Inline function calls | Supported | Via `{call ...}` pragma |
 | Global constants (`-D`) | Supported | CLI `-D NAME=VALUE`, emits `constexpr` |
 | Dynamic memory | Supported | `__NEW(type)`, `__DELETE(ptr)` |
 | POINTER TO | Supported | Full pointer type with dereference; `POINTER TO <FB>` from `ADR()` dispatches methods virtually |
 | Typed literals | Supported | `INT#5`, `DINT#42`, `REAL#3.14` |
+| Instance paths | Supported | Vendor extension, not IEC 61131-3 (which has VAR_ACCESS, not implemented). See below |
+
+### Instance paths (vendor extension)
+
+A POU (or a method) marked `{attribute 'instance_paths'}` may read and write the variables of the program instances
+declared in the compilation's CONFIGURATIONs, and the globals, without VAR_ACCESS or VAR_EXTERNAL:
+
+| Form | Example |
+|------|---------|
+| Short | `instance0.Main.Run`, `instance0.Main.Pos.y`, `instance0.Main.Levels[2]` |
+| Long | `Config0.Res0.instance0.Main.Run` |
+| Configuration global | `gCount` or `Config0.gCount` |
+| Top-level global | `GVL.Output1` (as in any POU) |
+
+- Names are case-insensitive. A local variable, a member (own or inherited) or a result variable of the same name
+  takes precedence over an instance or a configuration name.
+- An instance path reaches the program's VAR, VAR_INPUT and VAR_OUTPUT variables. Program types come from the
+  PROGRAM declarations; a PROGRAM with variable blocks and no body is enough.
+- Errors: an unknown instance, resource or configuration global; a program type that is not the instance's
+  (`INSTANCE0 is an instance of 'MIXER', not 'MAIN'.`); a short form whose instance is declared in more than one
+  resource, or a bare configuration global declared in more than one configuration (use the long form); an unknown
+  variable or field; a variable in another block type; a write to a CONSTANT; a bit index beyond the value's width; a
+  call through an instance path (`instance0.Main.t(...)`); a call of a function block instance that is a
+  configuration global.
+- Library types along a path (structure fields, aliases, arrays of constant bounds) resolve through the library's
+  archive, as do the members of library function blocks (`instance0.Main.T1.Q`).
+- In a POU without the attribute, nothing changes: `inst.Prog.Var` is an undeclared variable and `Prog.Var` reports
+  that program members cannot be accessed directly.
+- Default mode: a path compiles to the program instance's member of the runtime's configuration object `g_config`
+  (the object the debug table names), so only the first configuration is reachable and the instance must be
+  assigned to a task; a configuration global is accessed under its lock as through a VAR_EXTERNAL (`GCOUNT.read()`,
+  `GCOUNT.write(v)`, `with_lock` for a bit, a field or a composite), except by address or reference
+  (ADR, REF, a function's VAR_IN_OUT), which binds its canonical value (`GCOUNT.value`).
+- `externalInstancePaths` (compile option): every read becomes `strucpp::external_read<T>(id)` and every write
+  `strucpp::external_write<T>(id, value)` (`iec_external.hpp`, over the host's `external_variable(id)` and
+  `external_store(id, value)`, since the unit and its host share an address space); a bit write reads, merges and
+  writes the whole value. `id` is dense per distinct canonical path, listed in the compile result's
+  `instancePaths` (`id`, `kind`, `path`, `type`, `maxLength`, `read`, `written`). The programs, the configuration and
+  the non-CONSTANT globals are not emitted, nor is library code that only they reach, and no debug table is
+  generated. A path must end at an elementary, STRING or WSTRING value, with constant indices only, must resolve to a
+  known type at every step, and may not be used by address or reference (ADR, REF, REF=, VAR_IN_OUT of a function or
+  function block, REFERENCE TO) or bound to an output (`=>`). Unmarked POUs may not use the non-CONSTANT top-level
+  globals, no POU may call a function block instance the host owns, and only programs may declare VAR_EXTERNAL.
 
 ## Not Yet Implemented
 

@@ -17,6 +17,7 @@ import { HEADER_NAME_RE } from "./library-manifest.js";
 import { compile } from "../index.js";
 import { buildChunks } from "./library-chunks.js";
 import { functionBlockLookup } from "../semantic/fb-lineage.js";
+import { evalIntConst } from "../semantic/type-utils.js";
 import type { MemberManglingContext } from "../backend/member-mangling.js";
 import {
   mangledMemberName,
@@ -29,9 +30,19 @@ import {
   partitionLibrarySources,
   projectNativeHeaderToSt,
 } from "./native-sources.js";
+import {
+  HEADERS_ATTRIBUTE,
+  parseNameList,
+  RequirementIndex,
+} from "./library-requirements.js";
+import { walkAST } from "../ast-utils.js";
 import type {
+  HeaderRequirement,
   LibraryAttribute,
+  LibraryChunk,
+  LibraryDependency,
   LibraryFBEntry,
+  LibraryFunctionEntry,
   LibraryTypeEntry,
   LibraryInterfaceEntry,
   LibraryManifest,
@@ -42,12 +53,15 @@ import type {
 } from "./library-manifest.js";
 import type { SourceSpan } from "../types.js";
 import type {
+  ASTNode,
   Attribute,
+  CompilationUnit,
   Expression,
   FunctionBlockDeclaration,
   InterfaceDeclaration,
   MethodDeclaration,
   PropertyDeclaration,
+  TypeDefinition,
   TypeReference,
   VarBlock,
   VarDeclaration,
@@ -122,6 +136,38 @@ function serializeTypeRef(typeRef: TypeReference): LibraryTypeRef {
     entry.referenceChain = typeRef.referenceChain;
   }
   return entry;
+}
+
+/** What an alias type names, in the manifest format; undefined for a structure, enumeration or subrange. */
+function serializeAliasOf(
+  definition: TypeDefinition,
+): LibraryTypeRef | undefined {
+  if (definition.kind === "TypeReference") return serializeTypeRef(definition);
+  if (definition.kind !== "ArrayDefinition") return undefined;
+  const dimensions: Array<{ start: number; end: number }> = [];
+  for (const d of definition.dimensions) {
+    const start = evalIntConst(d.start);
+    const end = evalIntConst(d.end);
+    if (d.isVariableLength || start === undefined || end === undefined)
+      return undefined;
+    dimensions.push({ start, end });
+  }
+  const element = definition.elementType;
+  return {
+    type: `__INLINE_ARRAY_${element.name}`,
+    arrayDimensions: dimensions,
+    elementTypeName: element.name,
+    ...(element.maxLength !== undefined
+      ? { elementMaxLength: element.maxLength }
+      : {}),
+    ...(element.referenceKind !== "none"
+      ? {
+          elementReferenceChain: element.referenceChain ?? [
+            element.referenceKind,
+          ],
+        }
+      : {}),
+  };
 }
 
 /** Serialize a variable's type reference into the manifest format. */
@@ -205,6 +251,53 @@ function describeVar(
   return entry;
 }
 
+/** A function's parameter blocks: VAR_INPUT, VAR_OUTPUT and VAR_IN_OUT, never its locals or constants. */
+function isParameterBlock(block: VarBlock): boolean {
+  return (
+    block.blockType === "VAR_INPUT" ||
+    block.blockType === "VAR_OUTPUT" ||
+    block.blockType === "VAR_IN_OUT"
+  );
+}
+
+/**
+ * The VAR_INPUT, VAR_OUTPUT and VAR_IN_OUT parameters of a function or method, in declaration order, with their
+ * direction, written spelling and default value text. A parameter with a default is optional at the call site.
+ */
+function serializeParameters(
+  varBlocks: readonly VarBlock[],
+  text: SourceText | undefined,
+): LibraryFunctionEntry["parameters"] {
+  return varBlocks.filter(isParameterBlock).flatMap((block) =>
+    block.declarations.flatMap((decl) => {
+      const initialValue =
+        decl.initialValue !== undefined
+          ? (text?.slice(decl.initialValue.sourceSpan)?.trim() ??
+            serializeInitialValue(decl.initialValue))
+          : undefined;
+      const direction: LibraryFunctionEntry["parameters"][number]["direction"] =
+        block.blockType === "VAR_OUTPUT"
+          ? "output"
+          : block.blockType === "VAR_IN_OUT"
+            ? "inout"
+            : "input";
+      return decl.names.map((name, i) => {
+        const nameSpan = decl.nameSpans?.[i];
+        return {
+          name,
+          ...(text !== undefined && nameSpan !== undefined
+            ? text.spelling(nameSpan, name)
+            : {}),
+          type: decl.type.name,
+          direction,
+          ...(initialValue !== undefined ? { initialValue } : {}),
+          ...attributesOf(decl),
+        };
+      });
+    }),
+  );
+}
+
 /** Variables of the given block kind, in declaration order. */
 function blockVars(
   varBlocks: readonly VarBlock[],
@@ -238,6 +331,7 @@ function serializeMethod(
     inputs: blockVars(m.varBlocks, "VAR_INPUT", text),
     outputs: blockVars(m.varBlocks, "VAR_OUTPUT", text),
     inouts: blockVars(m.varBlocks, "VAR_IN_OUT", text),
+    parameters: serializeParameters(m.varBlocks, text),
   };
 }
 
@@ -649,6 +743,236 @@ function findDuplicateExports(manifest: LibraryManifest): string[] {
   return messages;
 }
 
+type LibError = { message: string; file?: string; line?: number };
+
+/** A header option entry as a requirement: a bare name, or a name with its API version. */
+function toHeaderRequirement(
+  entry: string | HeaderRequirement,
+): HeaderRequirement {
+  return typeof entry === "string" ? { name: entry } : entry;
+}
+
+/** Headers a `headers` attribute names, checked against the library's own; `undefined` without the attribute. */
+function headersAttribute(
+  attributes: readonly Attribute[] | undefined,
+  where: string,
+  span: SourceSpan,
+  libraryHeaders: readonly HeaderRequirement[],
+  errors: LibError[],
+): HeaderRequirement[] | undefined {
+  let out: HeaderRequirement[] | undefined;
+  for (const attr of attributes ?? []) {
+    if (attr.name.toLowerCase() !== HEADERS_ATTRIBUTE) continue;
+    out ??= [];
+    for (const name of parseNameList(attr.value)) {
+      const header = libraryHeaders.find((h) => h.name === name);
+      if (!header) {
+        errors.push({
+          message:
+            `${where} names header '${name}', which is not one of this library's headers ` +
+            `(${libraryHeaders.map((h) => h.name).join(", ") || "none"}).`,
+          ...(span.file !== "" ? { file: span.file } : {}),
+          line: span.startLine,
+        });
+        continue;
+      }
+      if (!out.some((h) => h.name === name)) out.push(header);
+    }
+  }
+  return out;
+}
+
+function containsExternalCode(node: ASTNode): boolean {
+  let found = false;
+  walkAST(node, (n) => {
+    if (n.kind === "ExternalCodePragma") found = true;
+  });
+  return found;
+}
+
+/**
+ * Headers each POU's own code needs, by chunk name. A POU (or method, or property) with `{attribute 'headers'}`
+ * needs the headers it names; one without it needs every library header when its own code holds `{external}` code,
+ * and none otherwise. A block's attribute also covers its methods and properties that carry none.
+ */
+function ownChunkHeaders(
+  ast: CompilationUnit,
+  libraryHeaders: readonly HeaderRequirement[],
+): { byChunk: Map<string, HeaderRequirement[]>; errors: LibError[] } {
+  const byChunk = new Map<string, HeaderRequirement[]>();
+  const errors: LibError[] = [];
+  if (libraryHeaders.length === 0) return { byChunk, errors };
+  const record = (
+    chunk: string,
+    headers: readonly HeaderRequirement[],
+  ): void => {
+    const list = byChunk.get(chunk) ?? [];
+    for (const h of headers)
+      if (!list.some((x) => x.name === h.name)) list.push(h);
+    byChunk.set(chunk, list);
+  };
+  const unit = (
+    chunk: string,
+    where: string,
+    node: { attributes?: Attribute[]; sourceSpan: SourceSpan },
+    body: ASTNode,
+    inherited?: HeaderRequirement[],
+  ): HeaderRequirement[] | undefined => {
+    const named = headersAttribute(
+      node.attributes,
+      where,
+      node.sourceSpan,
+      libraryHeaders,
+      errors,
+    );
+    const headers =
+      named ?? inherited ?? (containsExternalCode(body) ? libraryHeaders : []);
+    record(chunk, headers);
+    return named;
+  };
+  for (const fn of ast.functions)
+    unit(fn.name, fn.name, fn, fn as unknown as ASTNode);
+  for (const p of ast.programs)
+    unit(`Program_${p.name}`, p.name, p, p as unknown as ASTNode);
+  for (const fb of ast.functionBlocks) {
+    const body = { ...fb, methods: [], properties: [] } as unknown as ASTNode;
+    const named = unit(fb.name, fb.name, fb, body);
+    for (const m of fb.methods)
+      unit(fb.name, `${fb.name}.${m.name}`, m, m as unknown as ASTNode, named);
+    for (const pr of fb.properties)
+      unit(
+        fb.name,
+        `${fb.name}.${pr.name}`,
+        pr,
+        pr as unknown as ASTNode,
+        named,
+      );
+  }
+  return { byChunk, errors };
+}
+
+/**
+ * Give each chunk the headers it needs: its own, and those of every chunk it reaches, in this library and in the
+ * dependency archives. Every chunk gets the field when the library has headers; otherwise only chunks that reach a
+ * header do. A chunk that would need two versions of one header is an error.
+ */
+function assignChunkHeaders(
+  chunks: LibraryChunk[],
+  own: ReadonlyMap<string, HeaderRequirement[]>,
+  libraryName: string,
+  libraryHasHeaders: boolean,
+  dependencies: readonly StlibArchive[],
+): LibError[] {
+  for (const chunk of chunks) chunk.headers = [...(own.get(chunk.name) ?? [])];
+  const self: StlibArchive = {
+    formatVersion: 1,
+    manifest: emptyManifest({
+      name: libraryName,
+      version: "0",
+      namespace: libraryName,
+    }),
+    chunks,
+    dependencies: [],
+  };
+  const index = new RequirementIndex([self, ...dependencies]);
+  const resolved = chunks.map((chunk) =>
+    index
+      .resolve(libraryName, chunk.name)
+      .requirements.filter((r) => r.kind === "header"),
+  );
+  const errors: LibError[] = [];
+  chunks.forEach((chunk, i) => {
+    const reqs = resolved[i]!;
+    const versions = new Map<string, string[]>();
+    for (const r of reqs) {
+      const list = versions.get(r.name) ?? [];
+      if (r.version !== undefined && !list.includes(r.version))
+        list.push(r.version);
+      versions.set(r.name, list);
+    }
+    for (const [name, list] of versions) {
+      if (list.length > 1) {
+        errors.push({
+          message: `${chunk.name} needs ${list.map((v) => `${name} version ${v}`).join(" and ")}; one build cannot provide both.`,
+        });
+      }
+    }
+    if (reqs.length > 0 || libraryHasHeaders) {
+      chunk.headers = reqs.map((r) =>
+        r.version !== undefined
+          ? { name: r.name, version: r.version }
+          : { name: r.name },
+      );
+    } else {
+      delete chunk.headers;
+    }
+  });
+  return errors;
+}
+
+/** Type, base and interface names a native block's manifest entry refers to, upper case. */
+function namesReferencedByEntry(fb: LibraryFBEntry): Set<string> {
+  const out = new Set<string>();
+  const addType = (t: { type: string; elementTypeName?: string }): void => {
+    out.add(t.type.toUpperCase());
+    if (t.elementTypeName !== undefined)
+      out.add(t.elementTypeName.toUpperCase());
+  };
+  for (const v of [
+    ...fb.inputs,
+    ...fb.outputs,
+    ...fb.inouts,
+    ...(fb.locals ?? []),
+  ])
+    addType(v);
+  if (fb.extends !== undefined) out.add(fb.extends.toUpperCase());
+  for (const i of fb.implements ?? []) out.add(i.toUpperCase());
+  return out;
+}
+
+/**
+ * The libraries the chunks and native blocks reference, at the version compiled against, in the order the archives
+ * were given.
+ */
+function libraryDependencies(
+  chunks: readonly LibraryChunk[],
+  nativeBlocks: readonly LibraryFBEntry[],
+  libraryName: string,
+  dependencies: readonly StlibArchive[],
+): LibraryDependency[] {
+  const used = new Set<string>();
+  for (const chunk of chunks)
+    for (const dep of chunk.deps)
+      if (dep.library !== libraryName) used.add(dep.library);
+  if (nativeBlocks.length > 0) {
+    const owner = new Map<string, string>();
+    for (const archive of dependencies) {
+      const m = archive.manifest;
+      for (const e of [
+        ...m.functionBlocks,
+        ...m.types,
+        ...(m.interfaces ?? []),
+      ]) {
+        if (!owner.has(e.name.toUpperCase()))
+          owner.set(e.name.toUpperCase(), m.name);
+      }
+    }
+    for (const fb of nativeBlocks) {
+      for (const name of namesReferencedByEntry(fb)) {
+        const lib = owner.get(name);
+        if (lib !== undefined && lib !== libraryName) used.add(lib);
+      }
+    }
+  }
+  const out: LibraryDependency[] = [];
+  for (const archive of dependencies) {
+    const name = archive.manifest.name;
+    if (!used.has(name) || out.some((d) => d.name === name)) continue;
+    out.push({ name, version: archive.manifest.version });
+  }
+  return out;
+}
+
 export function compileLibrary(
   sources: Array<{
     source: string;
@@ -662,6 +986,8 @@ export function compileLibrary(
     namespace: string;
     /** Library archives this library depends on */
     dependencies?: StlibArchive[];
+    /** Headers the library's `{external}` code needs (see `compileStlib`); decides each chunk's `headers`. */
+    headers?: ReadonlyArray<string | HeaderRequirement>;
     /** Global constants available during compilation (e.g., STRING_LENGTH) */
     globalConstants?: Record<string, number>;
   },
@@ -724,6 +1050,12 @@ export function compileLibrary(
       headerCode: "",
       cppCode: "",
       chunks: [],
+      dependencies: libraryDependencies(
+        [],
+        nativeEntries.functionBlocks,
+        options.name,
+        options.dependencies ?? [],
+      ),
       errors: [],
     };
   }
@@ -820,6 +1152,28 @@ export function compileLibrary(
     options.dependencies ?? [],
   );
 
+  const libraryHeaders = (options.headers ?? []).map(toHeaderRequirement);
+  const own = ownChunkHeaders(ast, libraryHeaders);
+  const headerErrors = [
+    ...own.errors,
+    ...assignChunkHeaders(
+      chunks,
+      own.byChunk,
+      options.name,
+      libraryHeaders.length > 0,
+      options.dependencies ?? [],
+    ),
+  ];
+  if (headerErrors.length > 0) {
+    return {
+      success: false,
+      manifest: emptyManifest(options),
+      headerCode: "",
+      cppCode: "",
+      errors: headerErrors,
+    };
+  }
+
   const builtManifest: LibraryManifest = {
     name: options.name,
     version: options.version,
@@ -832,31 +1186,7 @@ export function compileLibrary(
             ...text.spelling(fn.sourceSpan, fn.name),
             ...attributesOf(fn),
             returnType: fn.returnType.name,
-            parameters: fn.varBlocks.flatMap((block) =>
-              block.declarations.flatMap((decl) => {
-                const initialValue =
-                  decl.initialValue !== undefined
-                    ? serializeInitialValue(decl.initialValue)
-                    : undefined;
-                return decl.names.map((name, i) => ({
-                  name,
-                  ...(decl.nameSpans?.[i] !== undefined
-                    ? text.spelling(decl.nameSpans[i], name)
-                    : {}),
-                  type: decl.type.name,
-                  direction:
-                    block.blockType === "VAR_OUTPUT"
-                      ? "output"
-                      : block.blockType === "VAR_IN_OUT"
-                        ? "inout"
-                        : "input",
-                  // Present ⇒ optional input (default supplied); absent ⇒
-                  // mandatory. Preserved from user ST and CODESYS-imported ST.
-                  ...(initialValue !== undefined ? { initialValue } : {}),
-                  ...attributesOf(decl),
-                }));
-              }),
-            ),
+            parameters: serializeParameters(fn.varBlocks, text),
           },
           catByName,
         ),
@@ -897,12 +1227,17 @@ export function compileLibrary(
             ...(decl.nameSpans?.[i] !== undefined
               ? text.spelling(decl.nameSpans[i], name)
               : {}),
-            type: decl.type.name,
+            ...serializeTypeRef(decl.type),
             ...attributesOf(decl),
           })),
         );
       }
+      const aliasOf = serializeAliasOf(t.definition);
+      if (aliasOf !== undefined) entry.aliasOf = aliasOf;
       if (t.definition.kind === "EnumDefinition") {
+        if (t.definition.baseType !== undefined) {
+          entry.baseType = t.definition.baseType.name;
+        }
         entry.members = t.definition.members.map((m) => {
           const value =
             m.value !== undefined ? text.slice(m.value.sourceSpan) : undefined;
@@ -969,6 +1304,12 @@ export function compileLibrary(
     headerCode: cleanHeader,
     cppCode: cleanCpp,
     chunks,
+    dependencies: libraryDependencies(
+      chunks,
+      nativeEntries.functionBlocks,
+      options.name,
+      options.dependencies ?? [],
+    ),
     errors: [],
   };
 }
@@ -998,24 +1339,37 @@ export function compileStlib(
     /** Mark this library as a built-in runtime library */
     builtin?: boolean;
     /**
-     * Headers the library's `{external}` code needs, such as a C API it calls. They are recorded in the manifest, so
-     * every program using the library includes them; the consumer supplies the files on its include path.
+     * Headers the library's `{external}` code needs, such as a C API it calls, by name or as `{ name, version }` with
+     * the API version it was written against. They are recorded in the manifest, and each chunk records those it
+     * needs (see `LibraryChunk.headers`): a consumer includes them only when it uses such a chunk, and supplies the
+     * files on its include path. A POU with `{external}` code needs them all unless it names its own with
+     * `{attribute 'headers' := '<a.h>'}`.
      */
-    headers?: string[];
+    headers?: Array<string | HeaderRequirement>;
     /** Library archives this library depends on */
     dependencies?: StlibArchive[];
     /** Global constants available during compilation (e.g., STRING_LENGTH) */
     globalConstants?: Record<string, number>;
   },
 ): StlibCompileResult {
-  for (const header of options.headers ?? []) {
-    if (!HEADER_NAME_RE.test(header)) {
+  const headers = (options.headers ?? []).map(toHeaderRequirement);
+  for (const header of headers) {
+    if (!HEADER_NAME_RE.test(header.name)) {
       throw new TypeError(
-        `headers entry ${JSON.stringify(header)} is not a valid include filename: use a relative name without '.' ` +
+        `headers entry ${JSON.stringify(header.name)} is not a valid include filename: use a relative name without '.' ` +
           `or '..' segments (allowed characters: alphanumerics, '.', '/', '-', '_', '+').`,
       );
     }
+    if (header.version !== undefined && header.version.trim() === "") {
+      throw new TypeError(
+        `headers entry ${JSON.stringify(header.name)} has an empty version: omit it, or name the API version.`,
+      );
+    }
   }
+  const headerVersions: Record<string, string> = {};
+  for (const header of headers)
+    if (header.version !== undefined)
+      headerVersions[header.name] = header.version;
   const libResult = compileLibrary(sources, options);
   if (options.builtin) {
     libResult.manifest.isBuiltin = true;
@@ -1036,9 +1390,10 @@ export function compileStlib(
 
   // The library's own header is not listed: its C++ is inlined into the consumer's output through
   // addLibraryChunks(). Only the headers its {external} code needs are.
-  const manifest = {
+  const manifest: LibraryManifest = {
     ...libResult.manifest,
-    headers: [...(options.headers ?? [])],
+    headers: headers.map((h) => h.name),
+    ...(Object.keys(headerVersions).length > 0 ? { headerVersions } : {}),
   };
 
   // Chunks own each declared symbol's emit slices, so the dep-preamble
@@ -1049,10 +1404,7 @@ export function compileStlib(
     formatVersion: 1,
     manifest,
     chunks: libResult.chunks ?? [],
-    dependencies: (options.dependencies ?? []).map((d) => ({
-      name: d.manifest.name,
-      version: d.manifest.version,
-    })),
+    dependencies: libResult.dependencies ?? [],
   };
   // `noSource` is closed-source distribution: drop the ST, whose symbols are
   // already compiled into `chunks` and usable without it.

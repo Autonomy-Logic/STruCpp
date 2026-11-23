@@ -8,6 +8,7 @@
  */
 
 import type {
+  LibraryFunctionEntry,
   LibraryInterfaceEntry,
   LibraryManifest,
   LibraryMethodEntry,
@@ -18,10 +19,13 @@ import type {
   StlibArchive,
 } from "./library-manifest.js";
 import { HEADER_NAME_RE } from "./library-manifest.js";
+import type { LibraryRequirement } from "./library-manifest.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import { DuplicateSymbolError } from "../semantic/symbol-table.js";
 import type {
   ElementaryType,
+  EnumDefinition,
+  EnumType,
   Expression,
   FunctionBlockDeclaration,
   IECType,
@@ -95,13 +99,38 @@ function isReferenceKind(
  *
  * A struct that exported its fields gets a real `StructDefinition`, so anything
  * walking the type — the debug table above all — can descend into its members.
+ * An enumeration that exported its members gets an `EnumDefinition` (names and
+ * base type; values stay in the library's C++), so it is debugged like a local one.
  * Everything else keeps the historical self-referential `TypeReference`, which
  * the walk reads as "opaque library type": an alias points at its base, and a
  * struct without exported fields genuinely has nothing to descend into.
  */
 function buildLibraryTypeDefinition(
   t: LibraryTypeEntry,
-): StructDefinition | TypeReference {
+): StructDefinition | EnumDefinition | TypeReference {
+  if (t.kind === "enum" && t.members !== undefined) {
+    return {
+      kind: "EnumDefinition",
+      sourceSpan: createDefaultSourceSpan(),
+      ...(t.baseType !== undefined
+        ? {
+            baseType: {
+              kind: "TypeReference" as const,
+              sourceSpan: createDefaultSourceSpan(),
+              name: t.baseType,
+              isReference: false,
+              referenceKind: "none" as const,
+            },
+          }
+        : {}),
+      members: t.members.map((m) => ({
+        kind: "EnumMember" as const,
+        sourceSpan: createDefaultSourceSpan(),
+        name: m.name,
+        ...(m.attributes !== undefined ? { attributes: m.attributes } : {}),
+      })),
+    };
+  }
   if (t.kind === "struct" && t.fields && t.fields.length > 0) {
     return {
       kind: "StructDefinition",
@@ -111,16 +140,12 @@ function buildLibraryTypeDefinition(
         sourceSpan: createDefaultSourceSpan(),
         names: [f.name],
         ...(f.attributes !== undefined ? { attributes: f.attributes } : {}),
-        type: {
-          kind: "TypeReference" as const,
-          sourceSpan: createDefaultSourceSpan(),
-          name: f.type,
-          isReference: false,
-          referenceKind: "none" as const,
-        },
+        type: makeTypeRef(f),
       })),
     };
   }
+  if (t.kind === "alias" && t.aliasOf !== undefined)
+    return makeTypeRef(t.aliasOf);
   return {
     kind: "TypeReference",
     sourceSpan: createDefaultSourceSpan(),
@@ -233,9 +258,85 @@ function makeVarBlock(
   };
 }
 
+type ParameterDirection =
+  LibraryFunctionEntry["parameters"][number]["direction"];
+
+/** The direction of a library function parameter as the block that declares it. */
+const PARAMETER_BLOCKS: Readonly<Record<ParameterDirection, VarBlockType>> = {
+  input: "VAR_INPUT",
+  output: "VAR_OUTPUT",
+  inout: "VAR_IN_OUT",
+};
+
+/** A manifest parameter as a library variable, for {@link makeVarBlock}. */
+function parameterVar(
+  p: LibraryFunctionEntry["parameters"][number],
+): LibraryVarType {
+  return {
+    name: p.name,
+    type: p.type,
+    ...(p.attributes !== undefined ? { attributes: p.attributes } : {}),
+    ...(p.initialValue !== undefined ? { initialValue: p.initialValue } : {}),
+  };
+}
+
+/**
+ * Parameters as var blocks, one per run of the same direction so the declaration order (the C++ signature's order)
+ * is kept, with the defaults parsed back: a caller binds named arguments and fills the inputs it omits from them. A
+ * default that is not an ST expression refuses the archive.
+ */
+function parameterVarBlocks(
+  params: ReadonlyArray<{ direction: ParameterDirection; v: LibraryVarType }>,
+): VarBlock[] {
+  const defaults = parseDefaults(params.map((p) => p.v));
+  const blocks: VarBlock[] = [];
+  let run: LibraryVarType[] = [];
+  let runType: VarBlockType | undefined;
+  for (const { direction, v } of params) {
+    const blockType = PARAMETER_BLOCKS[direction];
+    if (blockType !== runType && runType !== undefined) {
+      blocks.push(makeVarBlock(runType, run, defaults));
+      run = [];
+    }
+    runType = blockType;
+    run.push(v);
+  }
+  if (runType !== undefined) blocks.push(makeVarBlock(runType, run, defaults));
+  return blocks;
+}
+
+/** The parameters of a library function as var blocks, in declaration order (see {@link parameterVarBlocks}). */
+export function libraryFunctionVarBlocks(fn: LibraryFunctionEntry): VarBlock[] {
+  return parameterVarBlocks(
+    fn.parameters.map((p) => ({ direction: p.direction, v: parameterVar(p) })),
+  );
+}
+
+/**
+ * A library method's parameters in declaration order: the order of `parameters`, each with its full type from the
+ * grouped lists; an archive without `parameters` gives the inputs, then the outputs, then the in-outs.
+ */
+function methodParameters(
+  m: LibraryMethodEntry,
+): Array<{ direction: ParameterDirection; v: LibraryVarType }> {
+  const grouped = [
+    ...m.inputs.map((v) => ({ direction: "input" as const, v })),
+    ...m.outputs.map((v) => ({ direction: "output" as const, v })),
+    ...m.inouts.map((v) => ({ direction: "inout" as const, v })),
+  ];
+  if (m.parameters === undefined) return grouped;
+  return m.parameters.map((p) => {
+    const upper = p.name.toUpperCase();
+    return (
+      grouped.find(
+        (g) => g.direction === p.direction && g.v.name.toUpperCase() === upper,
+      ) ?? { direction: p.direction, v: parameterVar(p) }
+    );
+  });
+}
+
 /** A library method as a declaration without a body: enough to call, override and check access. */
 function makeMethod(m: LibraryMethodEntry): MethodDeclaration {
-  const defaults = parseDefaults([...m.inputs, ...m.inouts, ...m.outputs]);
   return {
     kind: "MethodDeclaration",
     sourceSpan: createDefaultSourceSpan(),
@@ -246,11 +347,7 @@ function makeMethod(m: LibraryMethodEntry): MethodDeclaration {
     isFinal: m.isFinal === true,
     isOverride: m.isOverride === true,
     ...(m.returnType ? { returnType: makeTypeRef(m.returnType) } : {}),
-    varBlocks: [
-      makeVarBlock("VAR_INPUT", m.inputs, defaults),
-      makeVarBlock("VAR_OUTPUT", m.outputs, defaults),
-      makeVarBlock("VAR_IN_OUT", m.inouts, defaults),
-    ].filter((b) => b.declarations.length > 0),
+    varBlocks: parameterVarBlocks(methodParameters(m)),
     body: [],
   };
 }
@@ -425,6 +522,34 @@ function validateDescription(owner: unknown, where: string): void {
 }
 
 /**
+ * Refuses a malformed `parameters` list of a method: when present, an array of entries with a non-empty string name,
+ * a string type and an input, output or inout direction.
+ */
+function validateMethodParameters(parameters: unknown, at: string): void {
+  if (parameters === undefined) return;
+  if (!Array.isArray(parameters)) {
+    throw new LibraryManifestError(
+      `Invalid library manifest: ${at}.parameters must be an array`,
+    );
+  }
+  parameters.forEach((p: unknown, k) => {
+    if (
+      !isRecord(p) ||
+      typeof p.name !== "string" ||
+      p.name === "" ||
+      typeof p.type !== "string" ||
+      typeof p.direction !== "string" ||
+      !Object.hasOwn(PARAMETER_BLOCKS, p.direction)
+    ) {
+      throw new LibraryManifestError(
+        `Invalid library manifest: ${at}.parameters[${k}] must have a non-empty string name, a string type and an input, output or inout direction`,
+      );
+    }
+    validateDescription(p, `${at}.parameters[${k}]`);
+  });
+}
+
+/**
  * Checks the `methods` and `properties` of an exported block or interface (required for an interface, optional for
  * a block): arrays of named entries with a known visibility, methods with their three parameter lists.
  */
@@ -487,6 +612,7 @@ function validateMembers(
             );
           }
         }
+        validateMethodParameters(m.parameters, at);
       } else if (typeof m.type !== "object" || m.type === null) {
         throw new LibraryManifestError(
           `Invalid library manifest: ${at}.type must be an object`,
@@ -618,6 +744,14 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
           `Invalid library manifest: types[${i}].kind must be "struct", "enum", or "alias"`,
         );
       }
+      if (
+        t.aliasOf !== undefined &&
+        (!isRecord(t.aliasOf) || typeof t.aliasOf.type !== "string")
+      ) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: types[${i}].aliasOf must be a type reference`,
+        );
+      }
       if (t.fields !== undefined && !Array.isArray(t.fields)) {
         throw new LibraryManifestError(
           `Invalid library manifest: types[${i}].fields must be an array`,
@@ -698,6 +832,24 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
     isBuiltin: Boolean(obj.isBuiltin),
   };
 
+  if (obj.headerVersions !== undefined) {
+    if (!isRecord(obj.headerVersions)) {
+      throw new LibraryManifestError(
+        "Invalid library manifest: headerVersions must be an object",
+      );
+    }
+    const headerVersions: Record<string, string> = {};
+    for (const [name, version] of Object.entries(obj.headerVersions)) {
+      if (typeof version !== "string" || !result.headers.includes(name)) {
+        throw new LibraryManifestError(
+          `Invalid library manifest: headerVersions["${name}"] must be the string version of a listed header`,
+        );
+      }
+      headerVersions[name] = version;
+    }
+    result.headerVersions = headerVersions;
+  }
+
   if (Array.isArray(obj.globals)) {
     result.globals = globals;
   }
@@ -712,6 +864,17 @@ export function loadLibraryManifest(json: unknown): LibraryManifest {
   }
 
   return result;
+}
+
+/**
+ * The type of a library enumeration, so CASE, comparisons and typed literals treat it as a local one. Its members
+ * are reached only qualified (`E#M`), never bare.
+ */
+function libraryEnumType(
+  name: string,
+  members: readonly { name: string }[],
+): EnumType {
+  return { typeKind: "enum", name, values: members.map((m) => m.name) };
 }
 
 /**
@@ -762,6 +925,7 @@ export function registerLibrarySymbols(
           if (p.initialValue !== undefined) sym.initialValue = p.initialValue;
           return sym;
         }),
+        ...(fn.variadic !== undefined ? { variadic: fn.variadic } : {}),
       });
     } catch (e) {
       // Skip duplicate symbol errors (first definition wins), re-throw others
@@ -774,29 +938,32 @@ export function registerLibrarySymbols(
     // For a struct with exported fields, register a real StructType carrying its
     // member types, so member access on a dependency struct (e.g. `MATH.PI`)
     // resolves to the field's type rather than staying untyped.
+    const enumMembers = t.kind === "enum" ? (t.members ?? []) : undefined;
     const resolvedType: IECType =
-      t.kind === "struct" && t.fields
-        ? ({
-            typeKind: "struct",
-            name: t.name,
-            fields: new Map<string, IECType>(
-              t.fields.map((f) => [
-                f.name,
-                ELEMENTARY_TYPES[f.type.toUpperCase()] ??
-                  ({
-                    typeKind: "elementary",
-                    name: f.type,
-                    sizeBits: 0,
-                  } as ElementaryType),
-              ]),
-            ),
-          } as StructType)
-        : (ELEMENTARY_TYPES[t.name.toUpperCase()] ??
-          ({
-            typeKind: "elementary",
-            name: t.name,
-            sizeBits: 0,
-          } as ElementaryType));
+      enumMembers !== undefined
+        ? libraryEnumType(t.name, enumMembers)
+        : t.kind === "struct" && t.fields
+          ? ({
+              typeKind: "struct",
+              name: t.name,
+              fields: new Map<string, IECType>(
+                t.fields.map((f) => [
+                  f.name,
+                  ELEMENTARY_TYPES[f.type.toUpperCase()] ??
+                    ({
+                      typeKind: "elementary",
+                      name: f.type,
+                      sizeBits: 0,
+                    } as ElementaryType),
+                ]),
+              ),
+            } as StructType)
+          : (ELEMENTARY_TYPES[t.name.toUpperCase()] ??
+            ({
+              typeKind: "elementary",
+              name: t.name,
+              sizeBits: 0,
+            } as ElementaryType));
 
     try {
       symbolTables.globalScope.define({
@@ -806,6 +973,7 @@ export function registerLibrarySymbols(
           kind: "TypeDeclaration",
           sourceSpan: createDefaultSourceSpan(),
           name: t.name,
+          library: manifest.name,
           ...(t.attributes !== undefined ? { attributes: t.attributes } : {}),
           // A struct with exported fields gets a REAL StructDefinition, not the
           // self-referential alias the other kinds fall back to.
@@ -890,6 +1058,61 @@ export function registerLibrarySymbols(
   }
 }
 
+/** A `{name, version}` pair, or a LibraryManifestError naming `where`. */
+function validateRequirement(
+  value: unknown,
+  where: string,
+): LibraryRequirement {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where} must be an object`,
+    );
+  }
+  const v = value as Record<string, unknown>;
+  if (typeof v.name !== "string" || v.name === "") {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where}.name must be a non-empty string`,
+    );
+  }
+  if (typeof v.version !== "string") {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where}.version must be a string`,
+    );
+  }
+  return { name: v.name, version: v.version };
+}
+
+/** A chunk's optional `headers` list must hold `{name, version?}` entries naming valid include files. */
+function validateChunkHeaders(chunk: unknown, index: number): void {
+  if (chunk === null || typeof chunk !== "object") return;
+  const headers = (chunk as Record<string, unknown>).headers;
+  if (headers === undefined) return;
+  const where = `chunks[${index}].headers`;
+  if (!Array.isArray(headers)) {
+    throw new LibraryManifestError(
+      `Invalid stlib archive: ${where} must be an array`,
+    );
+  }
+  headers.forEach((h: unknown, i: number) => {
+    if (h === null || typeof h !== "object" || Array.isArray(h)) {
+      throw new LibraryManifestError(
+        `Invalid stlib archive: ${where}[${i}] must be an object`,
+      );
+    }
+    const e = h as Record<string, unknown>;
+    if (typeof e.name !== "string" || !HEADER_NAME_RE.test(e.name)) {
+      throw new LibraryManifestError(
+        `Invalid stlib archive: ${where}[${i}].name is not a valid include filename`,
+      );
+    }
+    if (e.version !== undefined && typeof e.version !== "string") {
+      throw new LibraryManifestError(
+        `Invalid stlib archive: ${where}[${i}].version must be a string`,
+      );
+    }
+  });
+}
+
 /**
  * Load a `.stlib` archive from a parsed JSON object.
  * Validates the archive structure including formatVersion, manifest, headerCode,
@@ -940,12 +1163,16 @@ export function loadStlibArchive(json: unknown): StlibArchive {
       "Invalid stlib archive: 'dependencies' must be an array",
     );
   }
+  const dependencies = (obj.dependencies as unknown[]).map((d, i) =>
+    validateRequirement(d, `dependencies[${i}]`),
+  );
+  (obj.chunks as unknown[]).forEach((c, i) => validateChunkHeaders(c, i));
 
   const archive: StlibArchive = {
     formatVersion: 1,
     manifest,
     chunks: obj.chunks as StlibArchive["chunks"],
-    dependencies: obj.dependencies as Array<{ name: string; version: string }>,
+    dependencies,
   };
 
   // Optional sources

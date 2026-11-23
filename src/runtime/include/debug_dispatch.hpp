@@ -33,7 +33,6 @@
 #include "iec_var.hpp"
 #include "iec_string.hpp"
 #include "iec_wstring.hpp"
-#include <algorithm>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>

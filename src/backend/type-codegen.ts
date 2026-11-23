@@ -556,7 +556,15 @@ export class TypeCodeGenerator {
     } else {
       cppType = this.mapTypeToCpp(def.name);
     }
-    const rawType = def.arrayDimensions ? cppType : this.mapTypeToCpp(def.name);
+    const sizedString =
+      def.maxLength !== undefined && !def.arrayDimensions
+        ? { STRING: "IECString", WSTRING: "IECWString" }[def.name.toUpperCase()]
+        : undefined;
+    if (sizedString !== undefined) cppType = `${sizedString}<${def.maxLength}>`;
+    const rawType =
+      def.arrayDimensions || sizedString !== undefined
+        ? cppType
+        : this.mapTypeToCpp(def.name);
     cppType = isReferenceField(def)
       ? wrapReferenceChain(def.referenceChain ?? [def.referenceKind], rawType)
       : rawPointerType(def, cppType, rawType);

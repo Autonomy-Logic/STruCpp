@@ -57,6 +57,28 @@ const libraryCpp = (r: ReturnType<typeof compile>): string | undefined =>
   r.cppFiles.find((f) => f.name === "lib_widgets.cpp")?.content;
 
 describe("separate library files", () => {
+  it("emits a library named in wholeLibraries whole, the same whatever the unit uses", () => {
+    const unit = (program: string, whole: boolean) =>
+      compile(`${program}\n${CONFIG}`, {
+        libraries: [library()],
+        separateLibraryFiles: true,
+        namespace: "hmi",
+        ...(whole ? { wholeLibraries: ["widgets"] } : {}),
+      });
+    const usesTwice = "PROGRAM P VAR r : DINT; END_VAR r := Twice(4); END_PROGRAM";
+    const usesSquare = "PROGRAM P VAR s : Sq; r : DINT; END_VAR r := s.Area(); END_PROGRAM";
+    const shaken = unit(usesTwice, false);
+    expect(shaken.errors).toEqual([]);
+    expect(libraryCpp(shaken)).not.toContain("SQ::");
+    const a = unit(usesTwice, true);
+    const b = unit(usesSquare, true);
+    expect(a.errors).toEqual([]);
+    expect(b.errors).toEqual([]);
+    expect(libraryCpp(a)).toContain("SQ::");
+    expect(libraryCpp(a)).toBe(libraryCpp(b));
+    expect(a.libraryHeader?.content).toBe(b.libraryHeader?.content);
+  });
+
   it("keeps a library's files unchanged when the unit's own code changes", () => {
     const a = build("r := Twice(s.Area());");
     const b = build("r := s.Area() + Twice(1) + 100;");
