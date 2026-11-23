@@ -4913,15 +4913,10 @@ export class CodeGenerator {
           a.value.kind !== "VariableExpression" &&
           a.value.kind !== "LiteralExpression",
       );
-    const resultType = (
-      this.inferExprType(call) ??
-      ordered
-        .slice(first)
-        .map((a) => this.inferExprType(a.value))
-        .find((t) => t !== undefined)
-    )?.toUpperCase();
+    const resultType = [call, ...ordered.slice(first).map((a) => a.value)]
+      .map((e) => this.inferExprType(e)?.toUpperCase())
+      .find((t) => t !== undefined && getTypeCategory(t) !== undefined);
     if (!computed || resultType === undefined) return;
-    if (getTypeCategory(resultType) === undefined) return;
     for (let i = first; i < ordered.length; i++) {
       args[i] = `static_cast<IEC_${resultType}>(${args[i]!})`;
     }
