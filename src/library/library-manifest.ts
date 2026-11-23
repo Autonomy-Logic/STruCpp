@@ -158,6 +158,12 @@ export interface LibraryMethodEntry {
   inputs: LibraryVarType[];
   outputs: LibraryVarType[];
   inouts: LibraryVarType[];
+  /**
+   * The VAR_INPUT, VAR_OUTPUT and VAR_IN_OUT parameters in declaration order (the C++ signature's order), with the
+   * direction of each. Absent in archives built before it was recorded: the method's parameters are then taken as
+   * inputs, outputs and in-outs, in that order.
+   */
+  parameters?: LibraryFunctionEntry["parameters"];
 }
 
 /** A property of an exported function block or interface, with the accessors it has. */

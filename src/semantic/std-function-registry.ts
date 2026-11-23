@@ -638,7 +638,6 @@ export class StdFunctionRegistry {
       category: "string",
     });
 
-    // CONCAT(STRING, STRING, ...) -> STRING (variadic 2+)
     this.register({
       name: "CONCAT",
       cppName: "CONCAT",
@@ -648,8 +647,7 @@ export class StdFunctionRegistry {
         { name: "IN1", constraint: "ANY_STRING", isByRef: false },
         { name: "IN2", constraint: "ANY_STRING", isByRef: false },
       ],
-      isVariadic: true,
-      minArgs: 2,
+      isVariadic: false,
       isConversion: false,
       category: "string",
     });

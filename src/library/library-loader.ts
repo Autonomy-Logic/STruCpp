@@ -258,45 +258,85 @@ function makeVarBlock(
   };
 }
 
-/** The direction of a library function parameter as the block that declares it. */
-const PARAMETER_BLOCKS: Readonly<
-  Record<LibraryFunctionEntry["parameters"][number]["direction"], VarBlockType>
-> = { input: "VAR_INPUT", output: "VAR_OUTPUT", inout: "VAR_IN_OUT" };
+type ParameterDirection =
+  LibraryFunctionEntry["parameters"][number]["direction"];
 
-/**
- * The parameters of a library function as var blocks, one per run of the same direction so the declaration order
- * (the C++ signature's order) is kept, with the defaults parsed back: a caller binds named arguments and fills the
- * inputs it omits from them. A default that is not an ST expression refuses the archive.
- */
-export function libraryFunctionVarBlocks(fn: LibraryFunctionEntry): VarBlock[] {
-  const vars: LibraryVarType[] = fn.parameters.map((p) => ({
+/** The direction of a library function parameter as the block that declares it. */
+const PARAMETER_BLOCKS: Readonly<Record<ParameterDirection, VarBlockType>> = {
+  input: "VAR_INPUT",
+  output: "VAR_OUTPUT",
+  inout: "VAR_IN_OUT",
+};
+
+/** A manifest parameter as a library variable, for {@link makeVarBlock}. */
+function parameterVar(
+  p: LibraryFunctionEntry["parameters"][number],
+): LibraryVarType {
+  return {
     name: p.name,
     type: p.type,
     ...(p.attributes !== undefined ? { attributes: p.attributes } : {}),
     ...(p.initialValue !== undefined ? { initialValue: p.initialValue } : {}),
-  }));
-  const defaults = parseDefaults(vars);
+  };
+}
+
+/**
+ * Parameters as var blocks, one per run of the same direction so the declaration order (the C++ signature's order)
+ * is kept, with the defaults parsed back: a caller binds named arguments and fills the inputs it omits from them. A
+ * default that is not an ST expression refuses the archive.
+ */
+function parameterVarBlocks(
+  params: ReadonlyArray<{ direction: ParameterDirection; v: LibraryVarType }>,
+): VarBlock[] {
+  const defaults = parseDefaults(params.map((p) => p.v));
   const blocks: VarBlock[] = [];
   let run: LibraryVarType[] = [];
   let runType: VarBlockType | undefined;
-  fn.parameters.forEach((p, i) => {
-    const blockType = PARAMETER_BLOCKS[p.direction];
-    const v = vars[i];
-    if (v === undefined) return;
+  for (const { direction, v } of params) {
+    const blockType = PARAMETER_BLOCKS[direction];
     if (blockType !== runType && runType !== undefined) {
       blocks.push(makeVarBlock(runType, run, defaults));
       run = [];
     }
     runType = blockType;
     run.push(v);
-  });
+  }
   if (runType !== undefined) blocks.push(makeVarBlock(runType, run, defaults));
   return blocks;
 }
 
+/** The parameters of a library function as var blocks, in declaration order (see {@link parameterVarBlocks}). */
+export function libraryFunctionVarBlocks(fn: LibraryFunctionEntry): VarBlock[] {
+  return parameterVarBlocks(
+    fn.parameters.map((p) => ({ direction: p.direction, v: parameterVar(p) })),
+  );
+}
+
+/**
+ * A library method's parameters in declaration order: the order of `parameters`, each with its full type from the
+ * grouped lists; an archive without `parameters` gives the inputs, then the outputs, then the in-outs.
+ */
+function methodParameters(
+  m: LibraryMethodEntry,
+): Array<{ direction: ParameterDirection; v: LibraryVarType }> {
+  const grouped = [
+    ...m.inputs.map((v) => ({ direction: "input" as const, v })),
+    ...m.outputs.map((v) => ({ direction: "output" as const, v })),
+    ...m.inouts.map((v) => ({ direction: "inout" as const, v })),
+  ];
+  if (m.parameters === undefined) return grouped;
+  return m.parameters.map((p) => {
+    const upper = p.name.toUpperCase();
+    return (
+      grouped.find(
+        (g) => g.direction === p.direction && g.v.name.toUpperCase() === upper,
+      ) ?? { direction: p.direction, v: parameterVar(p) }
+    );
+  });
+}
+
 /** A library method as a declaration without a body: enough to call, override and check access. */
 function makeMethod(m: LibraryMethodEntry): MethodDeclaration {
-  const defaults = parseDefaults([...m.inputs, ...m.inouts, ...m.outputs]);
   return {
     kind: "MethodDeclaration",
     sourceSpan: createDefaultSourceSpan(),
@@ -307,11 +347,7 @@ function makeMethod(m: LibraryMethodEntry): MethodDeclaration {
     isFinal: m.isFinal === true,
     isOverride: m.isOverride === true,
     ...(m.returnType ? { returnType: makeTypeRef(m.returnType) } : {}),
-    varBlocks: [
-      makeVarBlock("VAR_INPUT", m.inputs, defaults),
-      makeVarBlock("VAR_OUTPUT", m.outputs, defaults),
-      makeVarBlock("VAR_IN_OUT", m.inouts, defaults),
-    ].filter((b) => b.declarations.length > 0),
+    varBlocks: parameterVarBlocks(methodParameters(m)),
     body: [],
   };
 }
@@ -486,6 +522,34 @@ function validateDescription(owner: unknown, where: string): void {
 }
 
 /**
+ * Refuses a malformed `parameters` list of a method: when present, an array of entries with a non-empty string name,
+ * a string type and an input, output or inout direction.
+ */
+function validateMethodParameters(parameters: unknown, at: string): void {
+  if (parameters === undefined) return;
+  if (!Array.isArray(parameters)) {
+    throw new LibraryManifestError(
+      `Invalid library manifest: ${at}.parameters must be an array`,
+    );
+  }
+  parameters.forEach((p: unknown, k) => {
+    if (
+      !isRecord(p) ||
+      typeof p.name !== "string" ||
+      p.name === "" ||
+      typeof p.type !== "string" ||
+      typeof p.direction !== "string" ||
+      !Object.hasOwn(PARAMETER_BLOCKS, p.direction)
+    ) {
+      throw new LibraryManifestError(
+        `Invalid library manifest: ${at}.parameters[${k}] must have a non-empty string name, a string type and an input, output or inout direction`,
+      );
+    }
+    validateDescription(p, `${at}.parameters[${k}]`);
+  });
+}
+
+/**
  * Checks the `methods` and `properties` of an exported block or interface (required for an interface, optional for
  * a block): arrays of named entries with a known visibility, methods with their three parameter lists.
  */
@@ -548,6 +612,7 @@ function validateMembers(
             );
           }
         }
+        validateMethodParameters(m.parameters, at);
       } else if (typeof m.type !== "object" || m.type === null) {
         throw new LibraryManifestError(
           `Invalid library manifest: ${at}.type must be an object`,
@@ -860,6 +925,7 @@ export function registerLibrarySymbols(
           if (p.initialValue !== undefined) sym.initialValue = p.initialValue;
           return sym;
         }),
+        ...(fn.variadic !== undefined ? { variadic: fn.variadic } : {}),
       });
     } catch (e) {
       // Skip duplicate symbol errors (first definition wins), re-throw others

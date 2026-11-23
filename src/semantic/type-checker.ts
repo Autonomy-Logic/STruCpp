@@ -55,12 +55,18 @@ import {
   type AccessLookup,
   type AccessType,
 } from "./type-utils.js";
+import { bareVariableNames, lineageMembers, stripEnEno } from "../ast-utils.js";
 import {
-  bareVariableNames,
-  lineageMembers,
-  stripEnEno,
-  suppliedParameters,
-} from "../ast-utils.js";
+  bindCallArguments,
+  declaredCallParams,
+  functionParamRequired,
+  instanceCallParams,
+  stdFunctionBinding,
+  variadicAfterLastParam,
+  type BindResult,
+  type CallParamDirection,
+  type DeclaredCallParam,
+} from "./call-binding.js";
 import {
   fbLineage,
   fbLineageNames,
@@ -178,6 +184,28 @@ function referenceShapeOf(
       ? [type.referenceKind]
       : []);
   return { chain, base: type.name };
+}
+
+/**
+ * A call bound to its callee's parameters: the declared type of each input and in-out the checker knows, and the
+ * wording of the diagnostics a callee kind words its own way.
+ */
+interface BoundCall {
+  result: BindResult;
+  types: ReadonlyMap<string, AccessType>;
+  missingMessage?: (name: string) => string;
+  unknownMessage?: (name: string) => string;
+}
+
+/** Declared types of the inputs and in-outs among `params`, by upper-cased name. */
+function parameterTypes(
+  params: readonly DeclaredCallParam[],
+): Map<string, AccessType> {
+  return new Map(
+    params
+      .filter((p) => p.direction !== "output")
+      .map((p) => [p.name, p.declaration.type]),
+  );
 }
 
 /** What {@link TypeChecker.declaredMembers} found for a type. */
@@ -692,10 +720,6 @@ export class TypeChecker {
     for (const arg of expr.arguments) {
       this.resolveExprType(arg.value, scope);
     }
-    this.validateReferenceArguments(expr, scope);
-    this.validateInstanceCallArgs(expr, scope);
-    const inputs = this.callInputs(expr, scope);
-    if (inputs) this.validateInterfaceArguments(expr.arguments, inputs);
 
     const nameUpper = expr.functionName.toUpperCase();
 
@@ -718,6 +742,14 @@ export class TypeChecker {
       return returnType;
     }
 
+    const call = this.bindFunctionCall(expr, scope);
+    if (call !== undefined) {
+      this.validateReferenceArguments(call, scope);
+      this.reportBinding(call);
+      this.validateInterfaceArguments(call);
+    }
+    const firstArgType = call?.result.slots[0]?.value.resolvedType;
+
     // Check user-defined functions in symbol tables
     const funcSymbol = this.symbolTables.lookupFunction(expr.functionName);
     if (funcSymbol !== undefined) {
@@ -730,10 +762,8 @@ export class TypeChecker {
       // the EN-input check (and bit/num operand rules) require.
       if (returnType && isGenericGroupType(returnType) && this.stdRegistry) {
         const desc = this.stdRegistry.lookup(nameUpper);
-        if (desc?.returnMatchesFirstParam) {
-          const userArgs = stripEnEno(expr.arguments);
-          const firstArgType = userArgs[0]?.value.resolvedType;
-          if (firstArgType) returnType = firstArgType;
+        if (desc?.returnMatchesFirstParam === true && firstArgType) {
+          returnType = firstArgType;
         }
       }
       expr.resolvedType = returnType;
@@ -741,7 +771,7 @@ export class TypeChecker {
     }
 
     // Validate standard function argument types (after resolving args)
-    this.validateFunctionCallArgs(expr, scope);
+    this.validateFunctionCallArgs(expr, call);
 
     const enumConv = parseConversionName(nameUpper);
     if (enumConv) {
@@ -782,17 +812,9 @@ export class TypeChecker {
             return retType;
           }
         }
-        // Return matches first parameter (skipping EN/ENO — they're not part
-        // of the declared signature).
-        if (desc.returnMatchesFirstParam) {
-          const userArgs = stripEnEno(expr.arguments);
-          if (userArgs.length > 0) {
-            const firstArgType = userArgs[0]!.value.resolvedType;
-            if (firstArgType) {
-              expr.resolvedType = firstArgType;
-              return firstArgType;
-            }
-          }
+        if (desc.returnMatchesFirstParam && firstArgType) {
+          expr.resolvedType = firstArgType;
+          return firstArgType;
         }
       }
     }
@@ -895,13 +917,6 @@ export class TypeChecker {
   ): IECType | undefined {
     const method = this.findMethod(typeName, methodName);
     if (method !== undefined && "arguments" in at) {
-      const inputs = method.varBlocks
-        .filter(
-          (b) => b.blockType === "VAR_INPUT" || b.blockType === "VAR_IN_OUT",
-        )
-        .flatMap((b) => b.declarations)
-        .flatMap((d) => d.names.map((name) => ({ name, type: d.type })));
-      this.validateInterfaceArguments(at.arguments, inputs);
       this.checkMethodArguments(typeName, method, at);
     }
     if (method === undefined) {
@@ -920,9 +935,10 @@ export class TypeChecker {
   }
 
   /**
-   * Arguments a method call must supply: every VAR_IN_OUT (IEC 61131-3), and, for a method of a library block or
+   * Binds a method call and checks it: interface-typed inputs, then the binding diagnostics. A call must supply every
+   * VAR_IN_OUT (IEC 61131-3), every input whose default is not constant, and, for a method of a library block or
    * interface, every input whose declaration in the library has no initial value. A local method's input without one
-   * takes its type's default. Arguments fill parameters as the code generator does: by name, then positionally.
+   * takes its type's default.
    */
   private checkMethodArguments(
     typeName: string,
@@ -932,53 +948,41 @@ export class TypeChecker {
     const members = lineageMembers(
       fbLineage(typeName, this.fbLookup),
     ).variables;
-    const params = method.varBlocks
-      .filter(
-        (b) =>
-          b.blockType === "VAR_INPUT" ||
-          b.blockType === "VAR_IN_OUT" ||
-          b.blockType === "VAR_OUTPUT",
-      )
-      .flatMap((b) =>
-        b.declarations.flatMap((d) =>
-          d.names.map((name) => ({
-            name: name.toUpperCase(),
-            kind: b.blockType,
-            hasDefault: d.initialValue !== undefined,
-            constantDefault:
-              d.initialValue === undefined ||
-              ![...bareVariableNames(d.initialValue)].some((v) =>
-                members.has(v),
-              ),
-          })),
-        ),
-      );
-    const supplied = suppliedParameters(
-      params.map((p) => p.name),
-      stripEnEno(at.arguments),
-    );
+    const constantDefault = (d: VarDeclaration): boolean =>
+      d.initialValue === undefined ||
+      ![...bareVariableNames(d.initialValue)].some((v) => members.has(v));
     const fromLibrary = this.isLibraryMethod(typeName, method);
-    const missing = params.filter(
-      (p) =>
-        !supplied.has(p.name) &&
-        (p.kind === "VAR_IN_OUT" ||
-          (p.kind === "VAR_INPUT" && !p.constantDefault) ||
-          (fromLibrary && p.kind === "VAR_INPUT" && !p.hasDefault)),
+    const params = declaredCallParams(
+      method.varBlocks,
+      (d, direction) =>
+        direction === "inout" ||
+        (direction === "input" &&
+          (!constantDefault(d) ||
+            (fromLibrary && d.initialValue === undefined))),
     );
-    for (const p of missing) {
-      const what =
-        p.kind === "VAR_IN_OUT"
-          ? `its in-out argument '${p.name}'`
-          : p.constantDefault
-            ? `input '${p.name}': the library declares no default for it`
-            : `input '${p.name}': its default is not constant`;
-      this.addError(
-        `'${method.name.toUpperCase()}' is missing ${what}`,
-        at.sourceSpan.startLine,
-        at.sourceSpan.startCol,
-        at.sourceSpan.file,
-      );
-    }
+    const byName = new Map(params.map((p) => [p.name, p]));
+    const methodName = method.name.toUpperCase();
+    const call: BoundCall = {
+      result: bindCallArguments(
+        params,
+        stripEnEno(at.arguments),
+        at.sourceSpan,
+        { calleeLabel: `method '${methodName}'` },
+      ),
+      types: parameterTypes(params),
+      missingMessage: (name) => {
+        const p = byName.get(name);
+        const what =
+          p?.direction === "inout"
+            ? `its in-out argument '${name}'`
+            : p === undefined || constantDefault(p.declaration)
+              ? `input '${name}': the library declares no default for it`
+              : `input '${name}': its default is not constant`;
+        return `'${methodName}' is missing ${what}`;
+      },
+    };
+    this.validateInterfaceArguments(call);
+    this.reportBinding(call);
   }
 
   /** Whether a method found on `typeName` is declared by a linked library rather than by this unit. */
@@ -1529,37 +1533,177 @@ export class TypeChecker {
     );
   }
 
-  /** `fb(Name := ...)`: every named argument must be an input, output or in-out of the block. */
-  private validateInstanceCallArgs(
+  /**
+   * Binds a call to a function block or program instance, a standard function or a function, by the callee the code
+   * generator calls. Undefined for a conversion or an unknown callee, which are not bound.
+   */
+  private bindFunctionCall(
     expr: FunctionCallExpression,
     scope: Scope,
-  ): void {
-    const sym = scope.lookup(expr.functionName);
-    if (sym?.kind !== "variable") return;
-    const declType = sym.declaration?.type;
-    if (!declType || declType.arrayDimensions) return;
-    const members = this.declaredMembers(declType.name);
-    if (members?.kind !== "functionBlock") return;
-    for (const arg of expr.arguments) {
-      if (arg.name === undefined) continue;
-      const upper = arg.name.toUpperCase();
-      if (upper === "EN" || upper === "ENO") continue;
-      const kind = members.vars.get(upper);
-      if (
-        kind === "VAR_INPUT" ||
-        kind === "VAR_OUTPUT" ||
-        kind === "VAR_IN_OUT"
-      ) {
-        continue;
+  ): BoundCall | undefined {
+    const args = stripEnEno(expr.arguments);
+    const instance = this.instanceCallSignature(expr, scope);
+    if (instance !== undefined) {
+      return {
+        result: bindCallArguments(instance.params, args, expr.sourceSpan, {
+          calleeLabel: instance.label,
+          positionalParams: instance.positionalParams,
+        }),
+        types: parameterTypes(instance.params),
+        unknownMessage: instance.unknownMessage,
+      };
+    }
+    const nameUpper = expr.functionName.toUpperCase();
+    const desc = this.stdRegistry?.lookup(nameUpper);
+    if (desc !== undefined) {
+      const { params, options } = stdFunctionBinding(desc);
+      return {
+        result: bindCallArguments(params, args, expr.sourceSpan, options),
+        types: new Map(),
+      };
+    }
+    if (this.stdRegistry?.resolveConversion(nameUpper)) return undefined;
+    const fn = this.functionCallParams(expr.functionName);
+    if (fn === undefined) return undefined;
+    const { params } = fn;
+    const variadic = fn.variadic ? variadicAfterLastParam(params) : undefined;
+    return {
+      result: bindCallArguments(params, args, expr.sourceSpan, {
+        calleeLabel: `function '${nameUpper}'`,
+        ...(variadic !== undefined ? { variadic } : {}),
+      }),
+      types: parameterTypes(params),
+      missingMessage: (name) =>
+        params.find((p) => p.name === name)?.direction === "inout"
+          ? `'${nameUpper}' is missing its in-out argument '${name}'`
+          : `'${nameUpper}' is missing required input '${name}'`,
+    };
+  }
+
+  /**
+   * Parameters of a function declared in this unit or by a linked library, in declaration order, and whether it is
+   * variadic. Every VAR_IN_OUT and every input without a default (in the source, or in the library's archive) is
+   * required.
+   */
+  private functionCallParams(
+    name: string,
+  ): { params: DeclaredCallParam[]; variadic: boolean } | undefined {
+    const own = this.findUserFunction(name);
+    if (own !== undefined) {
+      return {
+        params: declaredCallParams(own.varBlocks, (d, direction) =>
+          functionParamRequired(direction, d.initialValue !== undefined),
+        ),
+        variadic: false,
+      };
+    }
+    const sym = this.symbolTables.lookupFunction(name);
+    if (sym === undefined) return undefined;
+    const params = sym.parameters.flatMap((p): DeclaredCallParam[] => {
+      const direction: CallParamDirection | undefined = p.isInOut
+        ? "inout"
+        : p.isOutput
+          ? "output"
+          : p.isInput
+            ? "input"
+            : undefined;
+      if (direction === undefined) return [];
+      return [
+        {
+          name: p.name.toUpperCase(),
+          direction,
+          required: functionParamRequired(
+            direction,
+            p.initialValue !== undefined ||
+              p.declaration.initialValue !== undefined,
+          ),
+          declaration: p.declaration,
+        },
+      ];
+    });
+    return { params, variadic: sym.variadic !== undefined };
+  }
+
+  /**
+   * The parameters of a call to a function block or program instance (a bare instance or an array element), and how
+   * an argument naming none of them is reported. Undefined when the callee is not such an instance.
+   */
+  private instanceCallSignature(
+    expr: FunctionCallExpression,
+    scope: Scope,
+  ):
+    | {
+        label: string;
+        params: DeclaredCallParam[];
+        positionalParams: number;
+        unknownMessage: (name: string) => string;
       }
-      this.addError(
-        kind === undefined
-          ? `'${declType.name}' has no input or output '${arg.name}'`
-          : `'${arg.name}' is not an input or output of '${declType.name}'`,
-        arg.sourceSpan.startLine,
-        arg.sourceSpan.startCol,
-        arg.sourceSpan.file,
-      );
+    | undefined {
+    const sym = scope.lookup(expr.functionName);
+    if (sym?.kind !== "variable") return undefined;
+    const declType = (sym.declaration as VarDeclaration | undefined)?.type;
+    if (!declType) return undefined;
+    const typeName =
+      expr.instance !== undefined
+        ? (declType.elementTypeName ??
+          (this.ast
+            ? resolveArrayElementType(declType.name, this.ast)
+            : undefined))
+        : declType.arrayDimensions
+          ? undefined
+          : declType.name;
+    if (typeName === undefined) return undefined;
+    const lineage = fbLineage(typeName, this.fbLookup);
+    const upper = typeName.toUpperCase();
+    const program =
+      lineage.length === 0
+        ? this.ast?.programs.find((p) => p.name.toUpperCase() === upper)
+        : undefined;
+    const blocks =
+      lineage.length > 0
+        ? lineage.map((fb) => fb.varBlocks)
+        : program !== undefined
+          ? [program.varBlocks]
+          : undefined;
+    if (blocks === undefined) return undefined;
+    const { params, positionalParams } = instanceCallParams(
+      blocks.map((b) => declaredCallParams(b)),
+    );
+    const declared = (name: string): boolean =>
+      lineage.length > 0
+        ? this.declaredMembers(typeName)?.vars.has(name) === true
+        : blocks.some((b) =>
+            b.some((block) =>
+              block.declarations.some((d) =>
+                d.names.some((n) => n.toUpperCase() === name),
+              ),
+            ),
+          );
+    return {
+      label: `${lineage.length > 0 ? "function block" : "program"} '${typeName}'`,
+      params,
+      positionalParams,
+      unknownMessage: (name) =>
+        declared(name)
+          ? `'${name}' is not an input or output of '${typeName}'`
+          : `'${typeName}' has no input or output '${name}'`,
+    };
+  }
+
+  /** Reports the binding diagnostics of a call, in the callee's own wording where it has one. */
+  private reportBinding(call: BoundCall): void {
+    for (const d of call.result.diagnostics) {
+      const message =
+        d.kind === "missing" &&
+        d.name !== undefined &&
+        call.missingMessage !== undefined
+          ? call.missingMessage(d.name)
+          : d.kind === "unknown" &&
+              d.name !== undefined &&
+              call.unknownMessage !== undefined
+            ? call.unknownMessage(d.name)
+            : d.message;
+      this.addError(message, d.span.startLine, d.span.startCol, d.span.file);
     }
   }
 
@@ -1662,19 +1806,13 @@ export class TypeChecker {
   }
 
   /** Each argument given to an interface-typed input must implement that interface. */
-  private validateInterfaceArguments(
-    args: Argument[],
-    inputs: ReadonlyArray<{ name: string; type: AccessType }>,
-  ): void {
-    stripEnEno(args).forEach((arg, i) => {
-      if (arg.isOutput) return;
-      const argName = arg.name?.toUpperCase();
-      const input =
-        argName === undefined
-          ? inputs[i]
-          : inputs.find((p) => p.name.toUpperCase() === argName);
-      if (!input || input.type.referenceKind !== "none") return;
-      const target = input.type.name.toUpperCase();
+  private validateInterfaceArguments(call: BoundCall): void {
+    call.result.slots.forEach((arg, i) => {
+      const param = call.result.params[i];
+      if (arg === undefined || arg.isOutput || param === undefined) return;
+      const type = call.types.get(param.name);
+      if (!type || type.referenceKind !== "none") return;
+      const target = type.name.toUpperCase();
       const source = this.interfaceMismatch(
         target,
         arg.value.resolvedType,
@@ -1682,7 +1820,7 @@ export class TypeChecker {
       );
       if (typeof source !== "string") return;
       this.addError(
-        `Cannot pass ${source} to '${input.name}' (${input.type.name}): ${source} does not implement ${input.type.name}`,
+        `Cannot pass ${source} to '${param.name}' (${type.name}): ${source} does not implement ${type.name}`,
         arg.sourceSpan.startLine,
         arg.sourceSpan.startCol,
         arg.sourceSpan.file,
@@ -1848,60 +1986,14 @@ export class TypeChecker {
     return this.ast?.functions.find((f) => f.name.toUpperCase() === upper);
   }
 
-  /**
-   * The inputs of a user function or FB instance call, in declaration order,
-   * with an FB's inherited inputs first. Undefined when the callee is unknown.
-   */
-  private callInputs(
-    expr: FunctionCallExpression,
-    scope: Scope,
-  ): Array<{ name: string; type: AccessType }> | undefined {
-    const fromBlocks = (
-      blocks: readonly VarBlock[],
-    ): Array<{ name: string; type: AccessType }> =>
-      blocks
-        .filter(
-          (b) => b.blockType === "VAR_INPUT" || b.blockType === "VAR_IN_OUT",
-        )
-        .flatMap((b) => b.declarations)
-        .flatMap((d) => d.names.map((name) => ({ name, type: d.type })));
-    const fn = this.findUserFunction(expr.functionName);
-    if (fn) return fromBlocks(fn.varBlocks);
-    const sym = scope.lookup(expr.functionName);
-    if (sym?.kind !== "variable" || expr.instance) return undefined;
-    const declared = sym.declaration as VarDeclaration | undefined;
-    if (!declared) return undefined;
-    const typeName = declared.type.name.toUpperCase();
-    const localFBs = new Set(this.ast?.functionBlocks ?? []);
-    const chain = fbLineage(typeName, this.fbLookup)
-      .filter((fb) => localFBs.has(fb))
-      .reverse();
-    if (chain.length > 0)
-      return chain.flatMap((fb) => fromBlocks(fb.varBlocks));
-    const libraryFb = this.symbolTables.lookupFunctionBlock(typeName);
-    if (!libraryFb) return undefined;
-    return [...libraryFb.inputs, ...libraryFb.inouts].map((m) => ({
-      name: m.name,
-      type: m.declaration.type,
-    }));
-  }
-
   /** The REF_TO check for each argument passed to a REF_TO input. */
-  private validateReferenceArguments(
-    expr: FunctionCallExpression,
-    scope: Scope,
-  ): void {
-    const inputs = this.callInputs(expr, scope);
-    if (!inputs) return;
-    stripEnEno(expr.arguments).forEach((arg, i) => {
-      if (arg.isOutput) return;
-      const argName = arg.name?.toUpperCase();
-      const input =
-        argName === undefined
-          ? inputs[i]
-          : inputs.find((p) => p.name.toUpperCase() === argName);
-      if (!input) return;
-      const shape = referenceShapeOf(input.type);
+  private validateReferenceArguments(call: BoundCall, scope: Scope): void {
+    call.result.slots.forEach((arg, i) => {
+      const param = call.result.params[i];
+      if (arg === undefined || arg.isOutput || param === undefined) return;
+      const type = call.types.get(param.name);
+      if (!type) return;
+      const shape = referenceShapeOf(type);
       if (shape) this.validateReferenceValue(shape, arg.value, scope);
     });
   }
@@ -2027,24 +2119,21 @@ export class TypeChecker {
     }
   }
 
+  /** Checks the argument bound to each declared parameter of a standard function call against its type constraint. */
   private validateFunctionCallArgs(
     expr: FunctionCallExpression,
-    _scope: Scope,
+    call: BoundCall | undefined,
   ): void {
-    if (!this.stdRegistry) return;
+    if (!this.stdRegistry || call === undefined) return;
 
     const nameUpper = expr.functionName.toUpperCase();
     const desc = this.stdRegistry.lookup(nameUpper);
     if (!desc) return; // User-defined or unknown — skip constraint checking
 
-    // Validate argument types against parameter constraints. Strip EN/ENO
-    // first — they're handled by the codegen wrapper and don't map onto the
-    // declared signature, so leaving them in would shift positional indices
-    // and the param at slot 0 would be type-checked against EN's BOOL.
-    const userArgs = stripEnEno(expr.arguments);
-    for (let i = 0; i < userArgs.length && i < desc.params.length; i++) {
-      const arg = userArgs[i]!;
+    for (let i = 0; i < desc.params.length; i++) {
+      const arg = call.result.slots[i];
       const param = desc.params[i]!;
+      if (arg === undefined) continue;
       const argType = arg.value.resolvedType;
 
       if (!argType || argType.typeKind !== "elementary") continue;

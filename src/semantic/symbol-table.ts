@@ -94,6 +94,8 @@ export interface FunctionSymbol extends BaseSymbol {
   declaration: FunctionDeclaration;
   returnType: IECType;
   parameters: VariableSymbol[];
+  /** Set for a library function that takes more arguments after its last parameter (`LibraryFunctionEntry.variadic`). */
+  variadic?: { minArgs: number };
 }
 
 /**

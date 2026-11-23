@@ -8,7 +8,6 @@
  */
 
 import type {
-  Argument,
   ArrayLiteralExpression,
   AssertCall,
   CompilationUnit,
@@ -39,7 +38,6 @@ import { describeInlineType } from "../frontend/lower-inline-types.js";
 import { isQualifiedOnly } from "../frontend/attributes.js";
 import { StdFunctionRegistry } from "./std-function-registry.js";
 import { Scope, SymbolTables } from "./symbol-table.js";
-import type { FunctionSymbol } from "./symbol-table.js";
 import { TypeChecker } from "./type-checker.js";
 import {
   resolveInstancePaths,
@@ -74,7 +72,6 @@ import {
   lineageMembers,
   stripEnEno,
   walkAST,
-  suppliedParameters,
 } from "../ast-utils.js";
 import {
   exactIntegerLiteralValue,
@@ -2684,43 +2681,22 @@ export class SemanticAnalyzer {
   }
 
   /**
-   * Validate standard function argument counts and special constraints (e.g., ADR l-value).
-   * Covers all registered std functions and *_TO_* conversion functions.
+   * Validate the argument count of a *_TO_* conversion and special constraints (ADR l-value, EN/ENO types). The type
+   * checker binds and checks the arguments of standard functions, functions and methods.
    *
    * EN and ENO are implicit IEC 61131-3 pins — they gate execution and signal
    * success around the call site, but they are not part of any function's
-   * declared signature. Strip them before counting against the registry.
+   * declared signature. Strip them before counting.
    */
   private checkStdFunctionArgs(expr: FunctionCallExpression): void {
     const nameUpper = expr.functionName.toUpperCase();
     const userArgs = stripEnEno(expr.arguments);
     const argCount = userArgs.length;
 
-    // Look up in std function registry
-    const desc = this.stdRegistry.lookup(nameUpper);
-    if (desc) {
-      if (desc.isVariadic) {
-        const minArgs = desc.minArgs ?? desc.params.length;
-        if (argCount < minArgs) {
-          this.addError(
-            `'${nameUpper}' requires at least ${minArgs} argument(s), got ${argCount}`,
-            expr.sourceSpan.startLine,
-            expr.sourceSpan.startCol,
-            expr.sourceSpan.file,
-          );
-        }
-      } else {
-        const expected = desc.params.length;
-        if (argCount !== expected) {
-          this.addError(
-            `'${nameUpper}' requires ${expected} argument(s), got ${argCount}`,
-            expr.sourceSpan.startLine,
-            expr.sourceSpan.startCol,
-            expr.sourceSpan.file,
-          );
-        }
-      }
-    } else if (this.stdRegistry.resolveConversion(nameUpper)) {
+    if (
+      this.stdRegistry.lookup(nameUpper) === undefined &&
+      this.stdRegistry.resolveConversion(nameUpper)
+    ) {
       // *_TO_* conversion functions always take exactly 1 argument
       if (argCount !== 1) {
         this.addError(
@@ -2729,20 +2705,6 @@ export class SemanticAnalyzer {
           expr.sourceSpan.startCol,
           expr.sourceSpan.file,
         );
-      }
-    } else {
-      // Library or user-defined function (not a built-in registry function).
-      // Every input WITHOUT an initial value is mandatory; inputs WITH one are
-      // optional (the compiler supplies the default). A call that leaves a
-      // mandatory input unsupplied — e.g. a graphical block with an
-      // unconnected required pin, or hand-written ST missing an argument — is
-      // a compile error here, instead of a confusing failure further down
-      // (the C++ compiler for library functions, or silent zero-fill for
-      // user functions). Function-block invocations resolve to a variable,
-      // not a function, so their optional inputs never reach this path.
-      const sym = this.symbolTables.globalScope.lookup(nameUpper);
-      if (sym?.kind === "function") {
-        this.checkRequiredFunctionInputs(expr, sym, userArgs);
       }
     }
 
@@ -2789,126 +2751,6 @@ export class SemanticAnalyzer {
           );
         }
       }
-    }
-  }
-
-  /**
-   * Ordered input parameters of a function, each flagged optional when it
-   * declares an initial value. Handles both symbol shapes:
-   *   - Library functions carry resolved `parameters` (a VariableSymbol per
-   *     param; its `initialValue` string marks an optional input).
-   *   - User-defined functions carry their VAR_INPUT declarations on
-   *     `declaration.varBlocks` (an AST `initialValue` marks an optional one).
-   */
-  private functionInputParams(
-    sym: FunctionSymbol,
-  ): Array<{ name: string; optional: boolean }> {
-    if (sym.parameters.length > 0) {
-      return sym.parameters
-        .filter((p) => p.isInput)
-        .map((p) => ({
-          name: p.name.toUpperCase(),
-          optional: p.initialValue !== undefined,
-        }));
-    }
-    const params: Array<{ name: string; optional: boolean }> = [];
-    for (const block of sym.declaration.varBlocks) {
-      if (block.blockType !== "VAR_INPUT") continue;
-      for (const decl of block.declarations) {
-        const optional = decl.initialValue !== undefined;
-        for (const n of decl.names)
-          params.push({ name: n.toUpperCase(), optional });
-      }
-    }
-    return params;
-  }
-
-  /** Every VAR_IN_OUT of a function must be supplied (IEC 61131-3): there is no value to bind it to otherwise. */
-  private checkFunctionInOuts(
-    expr: FunctionCallExpression,
-    sym: FunctionSymbol,
-    userArgs: Argument[],
-  ): void {
-    const params: Array<{ name: string; inOut: boolean }> =
-      sym.parameters.length > 0
-        ? sym.parameters.map((p) => ({
-            name: p.name.toUpperCase(),
-            inOut: p.isInOut,
-          }))
-        : sym.declaration.varBlocks
-            .filter(
-              (b) =>
-                b.blockType === "VAR_INPUT" ||
-                b.blockType === "VAR_IN_OUT" ||
-                b.blockType === "VAR_OUTPUT",
-            )
-            .flatMap((b) =>
-              b.declarations.flatMap((d) =>
-                d.names.map((n) => ({
-                  name: n.toUpperCase(),
-                  inOut: b.blockType === "VAR_IN_OUT",
-                })),
-              ),
-            );
-    const supplied = suppliedParameters(
-      params.map((p) => p.name),
-      userArgs,
-    );
-    for (const p of params) {
-      if (!p.inOut || supplied.has(p.name)) continue;
-      this.addError(
-        `'${expr.functionName.toUpperCase()}' is missing its in-out argument '${p.name}'`,
-        expr.sourceSpan.startLine,
-        expr.sourceSpan.startCol,
-        expr.sourceSpan.file,
-      );
-    }
-  }
-
-  /**
-   * Option A: every input without an initial value is mandatory. Resolve the
-   * call's named/positional arguments to parameter slots (mirroring the
-   * codegen's argument reordering) and error if any mandatory input is left
-   * unsupplied.
-   */
-  private checkRequiredFunctionInputs(
-    expr: FunctionCallExpression,
-    sym: FunctionSymbol,
-    userArgs: Argument[],
-  ): void {
-    this.checkFunctionInOuts(expr, sym, userArgs);
-    const inputParams = this.functionInputParams(sym);
-    const required = inputParams.filter((p) => !p.optional);
-    if (required.length === 0) return;
-
-    // Slots claimed by name; remaining positional args fill the rest in order.
-    const satisfied = new Set<string>();
-    const positional: Argument[] = [];
-    for (const arg of userArgs) {
-      if (arg.isOutput) continue; // `=> var` outputs don't fill inputs
-      if (arg.name !== undefined) satisfied.add(arg.name.toUpperCase());
-      else positional.push(arg);
-    }
-    let pi = 0;
-    for (const p of inputParams) {
-      if (pi >= positional.length) break;
-      if (satisfied.has(p.name)) continue;
-      satisfied.add(p.name);
-      pi++;
-    }
-
-    const missing = required
-      .filter((p) => !satisfied.has(p.name))
-      .map((p) => p.name);
-    if (missing.length > 0) {
-      this.addError(
-        `'${expr.functionName.toUpperCase()}' is missing required input${
-          missing.length > 1 ? "s" : ""
-        }: ${missing.join(", ")}`,
-        expr.sourceSpan.startLine,
-        expr.sourceSpan.startCol,
-        expr.sourceSpan.file,
-      );
     }
   }
 

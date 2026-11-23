@@ -318,7 +318,7 @@ describe("Codegen - Function Calls", () => {
 
         PROGRAM Main
           VAR q : INT; r : INT; END_VAR
-          q := Divide(10, 3, r => r);
+          q := Divide(10, 3, remainder => r);
         END_PROGRAM
       `);
 

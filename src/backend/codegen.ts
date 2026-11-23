@@ -20,6 +20,7 @@ import type {
   WhileStatement,
   RepeatStatement,
   FunctionCallExpression,
+  FunctionBlockDeclaration,
   Argument,
   MethodCallExpression,
   BinaryExpression,
@@ -40,7 +41,10 @@ import type {
 } from "../frontend/ast.js";
 import type { SymbolTables, VariableSymbol } from "../semantic/symbol-table.js";
 import type { LineMapEntry, SourceSpan } from "../types.js";
-import { StdFunctionRegistry } from "../semantic/std-function-registry.js";
+import {
+  StdFunctionRegistry,
+  type StdFunctionDescriptor,
+} from "../semantic/std-function-registry.js";
 import type {
   ProjectModel,
   ConfigurationDecl,
@@ -66,7 +70,16 @@ import {
   functionBlockLookup,
   type FunctionBlockLookup,
 } from "../semantic/fb-lineage.js";
-import { lineageMembers, walkAST } from "../ast-utils.js";
+import { lineageMembers, stripEnEno, walkAST } from "../ast-utils.js";
+import {
+  bindCallArguments,
+  boundParameters,
+  declaredCallParams,
+  instanceCallParams,
+  stdFunctionBinding,
+  type CallParam,
+  type CallParamDirection,
+} from "../semantic/call-binding.js";
 import { libraryFunctionVarBlocks } from "../library/library-loader.js";
 import { isQualifiedOnly } from "../frontend/attributes.js";
 import { isHostOwned } from "../semantic/instance-paths.js";
@@ -602,9 +615,11 @@ export class CodeGenerator {
     reachable: Set<string>;
   }> = [];
 
-  /** Map of UPPER(fbTypeName) → ordered VAR_INPUT parameter names (UPPER case).
-   *  Used to resolve positional arguments in FB invocations. */
-  private fbInputParams: Map<string, string[]> = new Map();
+  /** Call parameters of each linked library block (inputs, outputs, in-outs) and the block it extends, by upper-case name. */
+  private libraryFBCallParams: Map<
+    string,
+    { params: CallParam[]; extends?: string }
+  > = new Map();
 
   /** Map of UPPER(fbTypeName) → set of VAR_IN_OUT parameter names (UPPER case).
    *  FB inout params are stored as by-value members with copy-in at the call
@@ -910,7 +925,8 @@ export class CodeGenerator {
   private registerLibraryFBTypes(
     fbs: Array<{
       name: string;
-      inputNames: string[];
+      callParams: CallParam[];
+      extends?: string;
       inoutNames: string[];
       fields: Array<LibraryField>;
     }>,
@@ -918,12 +934,10 @@ export class CodeGenerator {
     for (const fb of fbs) {
       const fbUpper = fb.name.toUpperCase();
       this.knownFBTypes.add(fbUpper);
-      if (fb.inputNames.length > 0) {
-        this.fbInputParams.set(
-          fbUpper,
-          fb.inputNames.map((n) => n.toUpperCase()),
-        );
-      }
+      this.libraryFBCallParams.set(fbUpper, {
+        params: fb.callParams,
+        ...(fb.extends !== undefined ? { extends: fb.extends } : {}),
+      });
       if (fb.inoutNames.length > 0) {
         this.fbInoutParams.set(
           fbUpper,
@@ -989,9 +1003,21 @@ export class CodeGenerator {
             if (v.referenceKind) entry.referenceKind = v.referenceKind;
             return entry;
           };
+          const param =
+            (direction: CallParamDirection) =>
+            (v: LibraryField): CallParam => ({
+              name: v.name.toUpperCase(),
+              direction,
+              required: false,
+            });
           return {
             name: fb.name,
-            inputNames: fb.inputs.map((i) => i.name),
+            callParams: [
+              ...fb.inputs.map(param("input")),
+              ...fb.outputs.map(param("output")),
+              ...fb.inouts.map(param("inout")),
+            ],
+            ...(fb.extends !== undefined ? { extends: fb.extends } : {}),
             // An ARRAY[*] in-out member is a view of the caller's array: no copy-back.
             inoutNames: fb.inouts
               .filter((i) => !VLA_TYPE_NAME.test(i.type))
@@ -1207,17 +1233,9 @@ export class CodeGenerator {
     // via registerLibraryFBTypes() before generate() is called)
     for (const fb of ast.functionBlocks) {
       this.knownFBTypes.add(fb.name.toUpperCase());
-      // Build ordered input parameter names for positional argument resolution
-      const inputNames: string[] = [];
       const inoutNames: string[] = [];
       for (const block of fb.varBlocks) {
-        if (block.blockType === "VAR_INPUT") {
-          for (const decl of block.declarations) {
-            for (const name of decl.names) {
-              inputNames.push(name.toUpperCase());
-            }
-          }
-        } else if (block.blockType === "VAR_IN_OUT") {
+        if (block.blockType === "VAR_IN_OUT") {
           for (const decl of block.declarations) {
             // An ARRAY[*] member is an ArrayView bound to the caller's array
             // by the copy-in, so writes already reach it and there is no copy-back.
@@ -1227,9 +1245,6 @@ export class CodeGenerator {
             }
           }
         }
-      }
-      if (inputNames.length > 0) {
-        this.fbInputParams.set(fb.name.toUpperCase(), inputNames);
       }
       if (inoutNames.length > 0) {
         this.fbInoutParams.set(fb.name.toUpperCase(), new Set(inoutNames));
@@ -5077,8 +5092,11 @@ export class CodeGenerator {
         if (std?.specificReturnType)
           return std.specificReturnType.toUpperCase();
         // For generic functions returning same type as first param, infer from first arg
-        if (std?.returnMatchesFirstParam && expr.arguments.length > 0) {
-          return this.inferExprType(expr.arguments[0]!.value);
+        if (std?.returnMatchesFirstParam === true) {
+          const first = this.stdCallSlots(std, expr)[0];
+          return first !== undefined
+            ? this.inferExprType(first.value)
+            : undefined;
         }
         return undefined;
       }
@@ -5534,7 +5552,10 @@ export class CodeGenerator {
     // 2. Check for standard function (may have different cppName)
     const stdFunc = this.stdRegistry.lookup(nameUpper);
     if (stdFunc) {
-      const args = expr.arguments.map((arg, idx) => {
+      const ordered = this.stdCallSlots(stdFunc, expr).filter(
+        (a): a is Argument => a !== undefined,
+      );
+      const args = ordered.map((arg, idx) => {
         let generated = this.generateExpression(arg.value);
         // For the bare `TO_xxx(temporal_var)` spelling, `nameUpper` is
         // a registered std function (not a `*_TO_*` form) so the source
@@ -5556,7 +5577,7 @@ export class CodeGenerator {
         }
         return generated;
       });
-      this.harmonizeStdFuncArgs(args, expr.arguments, stdFunc);
+      this.harmonizeStdFuncArgs(args, ordered, stdFunc);
       return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
     }
 
@@ -5576,18 +5597,35 @@ export class CodeGenerator {
       return `${this.calleeName(expr)}(${args.join(", ")})`;
     }
 
-    const args = expr.arguments.map((arg) => {
-      if (arg.isOutput && arg.value.kind !== "VariableExpression") {
-        this.codegenWarnings.push({
-          message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
-          line: arg.sourceSpan.startLine,
-          column: arg.sourceSpan.startCol,
-          file: arg.sourceSpan.file,
-        });
-      }
-      return this.generateExpression(arg.value);
-    });
+    const args = expr.arguments.map((arg) => this.generateCallArgument(arg));
     return `${this.calleeName(expr)}(${args.join(", ")})`;
+  }
+
+  /** C++ of a call argument; warns when an output argument is not a variable. */
+  private generateCallArgument(arg: Argument): string {
+    if (arg.isOutput && arg.value.kind !== "VariableExpression") {
+      this.codegenWarnings.push({
+        message: `Output argument '${arg.name ?? ""}' should be a variable, not an expression`,
+        line: arg.sourceSpan.startLine,
+        column: arg.sourceSpan.startCol,
+        file: arg.sourceSpan.file,
+      });
+    }
+    return this.generateExpression(arg.value);
+  }
+
+  /** The arguments of a standard function call in parameter order, as the binder places them. */
+  private stdCallSlots(
+    stdFunc: StdFunctionDescriptor,
+    expr: FunctionCallExpression,
+  ): Array<Argument | undefined> {
+    const { params, options } = stdFunctionBinding(stdFunc);
+    return bindCallArguments(
+      params,
+      stripEnEno(expr.arguments),
+      expr.sourceSpan,
+      options,
+    ).slots;
   }
 
   /**
@@ -5605,9 +5643,9 @@ export class CodeGenerator {
   }
 
   /**
-   * C++ arguments of a call to a function or method with the given parameter blocks: positional arguments fill the
-   * parameters in declaration order (skipping those named), named arguments fill their own, and the rest get the
-   * declared default (else the type default) or, for VAR_OUTPUT and VAR_IN_OUT, a temporary.
+   * C++ arguments of a call to a function or method with the given parameter blocks, in parameter order as the
+   * binder places them; an omitted parameter gets its declared default (else the type default) or, for VAR_OUTPUT and
+   * VAR_IN_OUT, a temporary.
    */
   private orderCallArguments(
     varBlocks: readonly VarBlock[],
@@ -5616,158 +5654,50 @@ export class CodeGenerator {
     callSpan: SourceSpan,
     constants?: ReadonlyMap<string, VarDeclaration>,
   ): string[] {
-    // Build parameter info from VAR_INPUT, VAR_IN_OUT, VAR_OUTPUT blocks
-    const params: Array<{
-      name: string;
-      typeName: string;
-      typeRef: TypeReference;
-      blockType: string;
-      defaultExpr?: string;
-    }> = [];
-    for (const block of varBlocks) {
-      if (
-        block.blockType === "VAR_INPUT" ||
-        block.blockType === "VAR_IN_OUT" ||
-        block.blockType === "VAR_OUTPUT"
-      ) {
-        for (const decl of block.declarations) {
-          for (const name of decl.names) {
-            const entry: {
-              name: string;
-              typeName: string;
-              typeRef: TypeReference;
-              blockType: string;
-              defaultExpr?: string;
-            } = {
-              name: name.toUpperCase(),
-              typeName: decl.type.name,
-              typeRef: decl.type,
-              blockType: block.blockType,
-            };
-            if (decl.initialValue) {
-              const initialValue = decl.initialValue;
-              const outer = this.calleeConstants;
-              this.calleeConstants =
-                constants === undefined
-                  ? outer
-                  : { values: constants, active: new Set() };
-              try {
-                entry.defaultExpr = this.generateInitializer(
-                  initialValue,
-                  this.mapTypeRefToCpp(decl.type),
-                  decl.type.name,
-                );
-              } finally {
-                this.calleeConstants = outer;
-              }
-            }
-            params.push(entry);
-          }
-        }
-      }
-    }
-
-    // Build set of parameter slots claimed by named arguments
-    // (skip implicit EN/ENO — handled separately by EN/ENO codegen logic)
-    const namedArgs = new Map<string, { expr: string; isOutput: boolean }>();
-    const claimedSlots = new Set<string>();
-    for (const arg of callArgs) {
-      if (arg.name !== undefined) {
-        const upperName = arg.name.toUpperCase();
-        if (upperName === "EN" || upperName === "ENO") continue;
-        namedArgs.set(upperName, {
-          expr: this.generateExpression(arg.value),
-          isOutput: arg.isOutput,
-        });
-        claimedSlots.add(upperName);
-
-        // Validate output argument is a variable
-        if (arg.isOutput && arg.value.kind !== "VariableExpression") {
-          this.codegenWarnings.push({
-            message: `Output argument '${arg.name}' should be a variable, not an expression`,
-            line: arg.sourceSpan.startLine,
-            column: arg.sourceSpan.startCol,
-            file: arg.sourceSpan.file,
-          });
-        }
-      }
-    }
-
-    // Warn about named args that don't match any declared parameter,
-    // and check for direction mismatches (=> on VAR_INPUT)
-    const paramLookup = new Map(params.map((p) => [p.name, p]));
-    for (const [argName, argInfo] of namedArgs) {
-      const param = paramLookup.get(argName);
-      if (!param) {
-        const span = callSpan;
-        this.codegenWarnings.push({
-          message: `Named argument '${argName}' does not match any parameter of ${calleeLabel}`,
-          line: span.startLine,
-          column: span.startCol,
-          file: span.file,
-        });
-      } else if (argInfo.isOutput && param.blockType === "VAR_INPUT") {
-        const span = callSpan;
-        this.codegenWarnings.push({
-          message: `Output argument '=>' used for input parameter '${param.name.toLowerCase()}' — did you mean ':='?`,
-          line: span.startLine,
-          column: span.startCol,
-          file: span.file,
-        });
-      }
-    }
-
-    // Collect positional args (preserving source order)
-    const positionalArgs: string[] = [];
-    for (const arg of callArgs) {
-      if (arg.name === undefined) {
-        positionalArgs.push(this.generateExpression(arg.value));
-      }
-    }
-
-    // Assign positional args to unclaimed parameter slots (in declaration order)
-    const result: (string | undefined)[] = new Array<string | undefined>(
-      params.length,
+    const params = declaredCallParams(varBlocks);
+    const { slots } = bindCallArguments(
+      params,
+      stripEnEno([...callArgs]),
+      callSpan,
+      { calleeLabel },
     );
-    let positionalIdx = 0;
-    for (let i = 0; i < params.length; i++) {
-      const param = params[i]!;
-      if (claimedSlots.has(param.name)) {
-        // This slot is reserved for a named arg - skip it for positional fill
-        continue;
-      }
-      if (positionalIdx < positionalArgs.length) {
-        result[i] = positionalArgs[positionalIdx]!;
-        positionalIdx++;
-      }
+    const supplied = new Map<Argument, string>();
+    for (const arg of callArgs) {
+      if (slots.includes(arg))
+        supplied.set(arg, this.generateCallArgument(arg));
     }
+    return params.map((param, i) => {
+      const arg = slots[i];
+      const generated = arg !== undefined ? supplied.get(arg) : undefined;
+      if (generated !== undefined) return generated;
+      const decl = param.declaration;
+      if (param.direction !== "input") return this.emitOutputTempVar(decl.type);
+      return decl.initialValue === undefined
+        ? this.getTypeDefaultValue(decl.type.name)
+        : this.generateCalleeDefault(decl.initialValue, decl.type, constants);
+    });
+  }
 
-    // Fill named arg slots
-    for (let i = 0; i < params.length; i++) {
-      const param = params[i]!;
-      const named = namedArgs.get(param.name);
-      if (named !== undefined) {
-        result[i] = named.expr;
-      }
+  /** C++ of a parameter's declared default, evaluated with the callee's constants in scope. */
+  private generateCalleeDefault(
+    initialValue: Expression,
+    type: TypeReference,
+    constants: ReadonlyMap<string, VarDeclaration> | undefined,
+  ): string {
+    const outer = this.calleeConstants;
+    this.calleeConstants =
+      constants === undefined
+        ? outer
+        : { values: constants, active: new Set() };
+    try {
+      return this.generateInitializer(
+        initialValue,
+        this.mapTypeRefToCpp(type),
+        type.name,
+      );
+    } finally {
+      this.calleeConstants = outer;
     }
-
-    // Fill any remaining unfilled slots with defaults (or temp vars for output params)
-    for (let i = 0; i < params.length; i++) {
-      if (result[i] === undefined) {
-        const param = params[i]!;
-        if (
-          param.blockType === "VAR_OUTPUT" ||
-          param.blockType === "VAR_IN_OUT"
-        ) {
-          result[i] = this.emitOutputTempVar(param.typeRef);
-        } else {
-          result[i] =
-            param.defaultExpr ?? this.getTypeDefaultValue(param.typeName);
-        }
-      }
-    }
-
-    return result.map((v) => v ?? "");
   }
 
   // ===========================================================================
@@ -6405,34 +6335,37 @@ export class CodeGenerator {
       call.functionName,
       call.instance !== undefined,
     );
-    const inputParamNames = fbTypeName
-      ? this.fbInputParams.get(fbTypeName.toUpperCase())
-      : undefined;
+    const signature =
+      fbTypeName !== undefined
+        ? this.instanceCallSignature(fbTypeName)
+        : undefined;
+    const bound =
+      signature !== undefined
+        ? boundParameters(
+            bindCallArguments(signature.params, filteredArgs, call.sourceSpan, {
+              calleeLabel: `function block '${fbTypeName ?? ""}'`,
+              positionalParams: signature.positionalParams,
+            }),
+          )
+        : undefined;
+    const paramName = (arg: Argument): string | undefined =>
+      bound !== undefined ? bound.get(arg)?.name : arg.name?.toUpperCase();
 
     // Assign input parameters (named or positional)
     let positionalIndex = 0;
     for (const arg of filteredArgs) {
       if (arg.isOutput) continue;
-
-      if (arg.name) {
-        // Named argument: assign directly
+      const param = paramName(arg);
+      if (param !== undefined) {
         this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)} = ${this.generateExpression(arg.value)};`,
+          `${indent}${instanceName}.${this.fbParamMemberName(arg.name ?? param, fbTypeName)} = ${this.generateExpression(arg.value)};`,
         );
-      } else if (inputParamNames && positionalIndex < inputParamNames.length) {
-        // Positional argument: map to VAR_INPUT by position
-        const paramName = inputParamNames[positionalIndex];
-        this.emit(
-          `${indent}${instanceName}.${this.fbParamMemberName(paramName!, fbTypeName)} = ${this.generateExpression(arg.value)};`,
-        );
-        positionalIndex++;
       } else {
-        // Positional argument without type info — emit as warning comment
         this.emit(
-          `${indent}// WARNING: positional argument ${positionalIndex} could not be resolved`,
+          `${indent}// WARNING: ${arg.name === undefined ? `positional argument ${positionalIndex}` : `argument '${arg.name}'`} could not be resolved`,
         );
-        positionalIndex++;
       }
+      if (arg.name === undefined) positionalIndex++;
     }
 
     // Call the FB/program execution body, wrapped with EN/ENO logic.
@@ -6460,7 +6393,12 @@ export class CodeGenerator {
     if (inoutParams && inoutParams.size > 0) {
       for (const arg of filteredArgs) {
         if (arg.isOutput) continue;
-        if (arg.name && inoutParams.has(arg.name.toUpperCase())) {
+        const param = paramName(arg);
+        if (
+          arg.name !== undefined &&
+          param !== undefined &&
+          inoutParams.has(param)
+        ) {
           this.emitCaptureToLvalue(
             arg.value,
             `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
@@ -6472,7 +6410,11 @@ export class CodeGenerator {
 
     // Capture output arguments (=> syntax), excluding ENO (already handled)
     for (const arg of filteredArgs) {
-      if (arg.name && arg.isOutput) {
+      if (
+        arg.name !== undefined &&
+        arg.isOutput &&
+        paramName(arg) !== undefined
+      ) {
         this.emitCaptureToLvalue(
           arg.value,
           `${instanceName}.${this.fbParamMemberName(arg.name, fbTypeName)}`,
@@ -6480,6 +6422,42 @@ export class CodeGenerator {
         );
       }
     }
+  }
+
+  /**
+   * Parameters of a call to a function block or program instance of type `typeName`, from the unit's blocks and
+   * programs and the linked libraries' blocks; undefined when the type's declaration is not known.
+   */
+  private instanceCallSignature(
+    typeName: string,
+  ): { params: CallParam[]; positionalParams: number } | undefined {
+    const lineage: CallParam[][] = [];
+    const seen = new Set<string>();
+    let current: string | undefined = typeName;
+    while (current !== undefined && !seen.has(current.toUpperCase())) {
+      const upper: string = current.toUpperCase();
+      seen.add(upper);
+      const local: FunctionBlockDeclaration | undefined =
+        this.ast?.functionBlocks.find((fb) => fb.name.toUpperCase() === upper);
+      const library = this.libraryFBCallParams.get(upper);
+      const program =
+        lineage.length === 0
+          ? this.ast?.programs.find((p) => p.name.toUpperCase() === upper)
+          : undefined;
+      if (local !== undefined) {
+        lineage.push(declaredCallParams(local.varBlocks));
+        current = local.extends;
+      } else if (library !== undefined) {
+        lineage.push(library.params);
+        current = library.extends;
+      } else {
+        if (program !== undefined) {
+          lineage.push(declaredCallParams(program.varBlocks));
+        }
+        current = undefined;
+      }
+    }
+    return lineage.length > 0 ? instanceCallParams(lineage) : undefined;
   }
 
   /**
