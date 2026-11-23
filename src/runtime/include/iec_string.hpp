@@ -620,6 +620,40 @@ inline bool operator>(const IECStringVar<Len1>& a, const IECString<Len2>& b) noe
     return b < a;
 }
 
+template<size_t Len1, size_t Len2>
+inline bool operator<=(const IECStringVar<Len1>& a, const IECStringVar<Len2>& b) noexcept {
+    return !(b < a);
+}
+
+template<size_t Len1, size_t Len2>
+inline bool operator<=(const IECString<Len1>& a, const IECStringVar<Len2>& b) noexcept {
+    return !(b < a);
+}
+
+template<size_t Len1, size_t Len2>
+inline bool operator<=(const IECStringVar<Len1>& a, const IECString<Len2>& b) noexcept {
+    return !(b < a);
+}
+
+template<size_t Len1, size_t Len2>
+inline bool operator>=(const IECStringVar<Len1>& a, const IECStringVar<Len2>& b) noexcept {
+    return !(a < b);
+}
+
+template<size_t Len1, size_t Len2>
+inline bool operator>=(const IECString<Len1>& a, const IECStringVar<Len2>& b) noexcept {
+    return !(a < b);
+}
+
+template<size_t Len1, size_t Len2>
+inline bool operator>=(const IECStringVar<Len1>& a, const IECString<Len2>& b) noexcept {
+    return !(a < b);
+}
+
+// STRING is ANY_ELEMENTARY, so MIN, MAX and LIMIT accept it.
+template<size_t N> struct is_any_elementary<IECString<N>> : std::true_type {};
+template<size_t N> struct is_any_elementary<IECStringVar<N>> : std::true_type {};
+
 // Non-template alias for codegen: IEC_STRING = IECStringVar<254>
 // For parameterized STRING(N), codegen emits IECStringVar<N> directly
 using IEC_STRING = IECStringVar<254>;
@@ -671,8 +705,8 @@ CONCAT(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2, const Args&..
 template<size_t MaxLen>
 inline IECString<MaxLen> INSERT(const IECString<MaxLen>& s1, const IECString<MaxLen>& s2, size_t pos) noexcept {
     IECString<MaxLen> result(s1);
-    if (pos == 0) pos = 1;
-    result.insert(pos - 1, s2.c_str());
+    // IEC P is the number of characters of s1 kept before s2: 0 prepends, LEN(s1) or more appends.
+    result.insert(pos < s1.length() ? pos : s1.length(), s2.c_str());
     return result;
 }
 

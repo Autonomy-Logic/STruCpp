@@ -4827,7 +4827,61 @@ export class CodeGenerator {
       return `(${left}) ${cppOp} (${right})`;
     }
 
+    if (CodeGenerator.COMPARISON_OPS.has(expr.operator)) {
+      return `${this.asStringValue(expr.left, left)} ${cppOp} ${this.asStringValue(expr.right, right)}`;
+    }
     return `${left} ${cppOp} ${right}`;
+  }
+
+  private static readonly COMPARISON_OPS: ReadonlySet<string> = new Set([
+    "=",
+    "<>",
+    "<",
+    ">",
+    "<=",
+    ">=",
+  ]);
+
+  /** A STRING or WSTRING literal as a runtime string value, so it binds to the string function and operator overloads. */
+  private asStringValue(expr: Expression, generated: string): string {
+    if (expr.kind !== "LiteralExpression") return generated;
+    if (expr.literalType === "STRING") return `IECString<254>(${generated})`;
+    if (expr.literalType === "WSTRING") return `IECWString<254>(${generated})`;
+    return generated;
+  }
+
+  /**
+   * MUX and MAX/MIN inputs cast to the call's result type when one of them is a computed expression: C++ promotes
+   * integer arithmetic to `int`, which breaks the single-type deduction of the runtime templates.
+   */
+  private castSelectionInputs(
+    args: string[],
+    ordered: readonly Argument[],
+    name: string,
+    call: FunctionCallExpression,
+  ): void {
+    const upper = name.toUpperCase();
+    if (upper !== "MUX" && upper !== "MAX" && upper !== "MIN") return;
+    const first = upper === "MUX" ? 1 : 0;
+    const computed = ordered
+      .slice(first)
+      .some(
+        (a) =>
+          a.value.kind !== "VariableExpression" &&
+          a.value.kind !== "LiteralExpression",
+      );
+    const resultType = (
+      this.inferExprType(call) ??
+      ordered
+        .slice(first)
+        .map((a) => this.inferExprType(a.value))
+        .find((t) => t !== undefined)
+    )?.toUpperCase();
+    if (!computed || resultType === undefined) return;
+    if (getTypeCategory(resultType) === undefined) return;
+    for (let i = first; i < ordered.length; i++) {
+      args[i] = `static_cast<IEC_${resultType}>(${args[i]!})`;
+    }
   }
 
   /**
@@ -5578,6 +5632,10 @@ export class CodeGenerator {
         return generated;
       });
       this.harmonizeStdFuncArgs(args, ordered, stdFunc);
+      this.castSelectionInputs(args, ordered, stdFunc.name, expr);
+      for (let i = 0; i < ordered.length; i++) {
+        args[i] = this.asStringValue(ordered[i]!.value, args[i]!);
+      }
       return `${this.qualifyIfShadowed(stdFunc.cppName)}(${args.join(", ")})`;
     }
 

@@ -152,12 +152,12 @@ All IEC 61131-3 standard functions are implemented in the C++ runtime:
 |----------|-----------|
 | Numeric | ABS, SQRT, LN, LOG, EXP, EXPT |
 | Trigonometric | SIN, COS, TAN, ASIN, ACOS, ATAN, ATAN2 |
-| Selection | SEL, MIN, MAX, LIMIT, MUX |
+| Selection | SEL, MIN, MAX, LIMIT, MUX (MIN, MAX and LIMIT also on STRING; LIMIT is `MIN(MAX(IN, MN), MX)`, also when MN > MX; inputs may be any expressions) |
 | Comparison | GT, GE, EQ, LE, LT, NE |
 | Bitwise | AND, OR, XOR, NOT, MOVE |
 | Bit Shift | SHL, SHR, ROL, ROR |
 | Type Conversion | *_TO_* (INT_TO_REAL, DINT_TO_STRING, etc.) |
-| String | LEN, LEFT, RIGHT, MID, CONCAT, FIND, REPLACE, INSERT, DELETE, UPPER, LOWER, TRIM (LEN and FIND return a signed INT; CONCAT takes exactly two inputs, as in CODESYS, and three or more are an error) |
+| String | LEN, LEFT, RIGHT, MID, CONCAT, FIND, REPLACE, INSERT, DELETE, UPPER, LOWER, TRIM (LEN and FIND return a signed INT; INSERT(IN1, IN2, P) inserts after the first P characters, as in CODESYS; string literals may be arguments and comparison operands; `<`, `>`, `<=`, `>=` compare strings; CONCAT takes exactly two inputs, as in CODESYS, and three or more are an error) |
 | System | ADR, SIZEOF |
 
 ## Standard Function Blocks
