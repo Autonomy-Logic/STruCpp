@@ -453,5 +453,54 @@ describe("Type Validation", () => {
         ),
       ).toBe(true);
     });
+
+    it("should allow assigning same enum type to struct field (regression #171)", () => {
+      const { errors } = analyzeSource(`
+        TYPE
+          E_Mode : (A, B, C);
+          ST_Item : STRUCT
+            eMode : E_Mode;
+          END_STRUCT;
+        END_TYPE
+
+        FUNCTION test_fn : BOOL
+          VAR_INPUT eIn : E_Mode; END_VAR
+          VAR st : ST_Item; END_VAR
+          st.eMode := eIn;
+        END_FUNCTION
+
+        PROGRAM main
+          VAR x : DINT; END_VAR
+          x := x + 1;
+        END_PROGRAM
+      `);
+      const typeErrors = errors.filter((e) => e.includes("Cannot assign"));
+      expect(typeErrors).toHaveLength(0);
+    });
+
+    it("should error on assigning different enum type to struct field", () => {
+      const { errors } = analyzeSource(`
+        TYPE
+          E_Mode : (A, B, C);
+          E_Other : (X, Y, Z);
+          ST_Item : STRUCT
+            eMode : E_Mode;
+          END_STRUCT;
+        END_TYPE
+
+        FUNCTION test_fn : BOOL
+          VAR_INPUT eIn : E_Other; END_VAR
+          VAR st : ST_Item; END_VAR
+          st.eMode := eIn;
+        END_FUNCTION
+
+        PROGRAM main
+          VAR x : DINT; END_VAR
+          x := x + 1;
+        END_PROGRAM
+      `);
+      const typeErrors = errors.filter((e) => e.includes("Cannot assign"));
+      expect(typeErrors).toHaveLength(1);
+    });
   });
 });
