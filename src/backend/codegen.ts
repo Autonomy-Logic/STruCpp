@@ -20,7 +20,6 @@ import type {
   WhileStatement,
   RepeatStatement,
   FunctionCallExpression,
-  FunctionBlockDeclaration,
   Argument,
   MethodCallExpression,
   BinaryExpression,
@@ -80,7 +79,7 @@ import {
   bindCallArguments,
   boundParameters,
   declaredCallParams,
-  instanceCallParams,
+  instanceSignature,
   stdFunctionBinding,
   type CallParam,
   type CallParamDirection,
@@ -975,6 +974,8 @@ export class CodeGenerator {
   /**
    * Register type info from library manifests (enum types for :: emission,
    * struct types for known-type detection). Private — use registerLibraryArchives().
+   *
+   * An ARRAY[*] in-out member of a library block is a view of the caller's array, so it has no copy-back.
    */
   private registerLibraryTypes(types: readonly LibraryTypeEntry[]): void {
     for (const t of types) {
@@ -1024,7 +1025,6 @@ export class CodeGenerator {
               ...fb.inouts.map(param("inout")),
             ],
             ...(fb.extends !== undefined ? { extends: fb.extends } : {}),
-            // An ARRAY[*] in-out member is a view of the caller's array: no copy-back.
             inoutNames: fb.inouts
               .filter((i) => !VLA_TYPE_NAME.test(i.type))
               .map((i) => i.name),
@@ -1220,6 +1220,8 @@ export class CodeGenerator {
 
   /**
    * Generate C++ code from a compilation unit.
+   *
+   * An ARRAY[*] in-out member is an ArrayView bound to the caller's array by the copy-in, so it has no copy-back.
    */
   generate(ast: CompilationUnit): CodeGenResult {
     this.outputFiles = new Map();
@@ -1243,8 +1245,6 @@ export class CodeGenerator {
       for (const block of fb.varBlocks) {
         if (block.blockType === "VAR_IN_OUT") {
           for (const decl of block.declarations) {
-            // An ARRAY[*] member is an ArrayView bound to the caller's array
-            // by the copy-in, so writes already reach it and there is no copy-back.
             if (VLA_TYPE_NAME.test(decl.type.name)) continue;
             for (const name of decl.names) {
               inoutNames.push(name.toUpperCase());
@@ -1474,6 +1474,7 @@ export class CodeGenerator {
       };
   }
 
+  /** After the runtime includes, it undefines the C standard-library macros the generated code uses as identifiers (`TMP_MAX` in OSCAT's T_AVG24). Reachable library chunks come before the unit's declarations: per archive, forward declarations of its FB classes, then each chunk's header slice in chunk order. */
   private generateHeader(ast: CompilationUnit): void {
     // Determine the namespace for this project
     const ns = this.projectModel
@@ -1504,11 +1505,6 @@ export class CodeGenerator {
     }
     this.emitHeader("#include <cstddef>");
 
-    // Undefine C standard-library macros that collide with legal ST identifiers
-    // (e.g. OSCAT's T_AVG24 has a local `TMP_MAX`, which <cstdio> #defines).
-    // Done after the runtime includes so the runtime still sees the real macros.
-    // Only the macros the generated code uses as identifiers stay undefined
-    // (pruneStdlibUndefs), so later standard headers still see the others.
     this.stdlibUndefLines.clear();
     this.emitHeader("");
     this.emitHeader(
@@ -1597,20 +1593,6 @@ export class CodeGenerator {
       this.emitHeader("");
     }
 
-    // Inject reachable library chunks (header side) ahead of everything the
-    // unit declares: a library never names the unit's declarations, while the
-    // unit's types, globals and POUs may name library types and classes.
-    //
-    // Per archive: emit `// Library: <name>` header, then `class X;`
-    // forward decls for every reachable functionBlock chunk
-    // (libraries' FB classes are sometimes mutually-referential and
-    // the bodies are emitted in declaration order — the forward
-    // decls ahead of any body keep the layout linkable in every
-    // ordering). Then emit each reachable chunk's `header` slice in
-    // chunk-array order; types come first, FBs next, functions last
-    // because that's the order the library compiler emitted them
-    // before slicing. With separate library files the same lines are in
-    // the libraries header, included above.
     if (this.options.separateLibraryFiles !== true) {
       for (const line of this.libraryHeaderChunkLines()) this.emitHeader(line);
     }
@@ -4814,6 +4796,8 @@ export class CodeGenerator {
 
   /**
    * Generate C++ for a binary expression.
+   *
+   * `DATE - DATE` is emitted in nanoseconds, since DATE is stored in days and TIME in nanoseconds.
    */
   private generateBinaryExpression(expr: BinaryExpression): string {
     const left = this.generateRealOperand(
@@ -4827,7 +4811,6 @@ export class CodeGenerator {
 
     if (expr.operator === "**") return this.powerCpp(expr, left, right);
 
-    // DATE is stored in days and TIME in nanoseconds: DATE - DATE is the elapsed TIME.
     const isDate = (e: Expression): boolean =>
       canonicalElementaryName(this.inferExprType(e) ?? "") === "DATE";
     if (expr.operator === "-" && isDate(expr.left) && isDate(expr.right)) {
@@ -4886,11 +4869,17 @@ export class CodeGenerator {
     }
   }
 
-  /** A STRING or WSTRING literal as a runtime string value, so it binds to the string function and operator overloads. */
+  /**
+   * A STRING or WSTRING literal as a runtime string value sized to hold it (at least 254), so it binds to the string
+   * function and operator overloads without truncation.
+   */
   private asStringValue(expr: Expression, generated: string): string {
     if (expr.kind !== "LiteralExpression") return generated;
-    if (expr.literalType === "STRING") return `IECString<254>(${generated})`;
-    if (expr.literalType === "WSTRING") return `IECWString<254>(${generated})`;
+    const capacity = Math.max(254, expr.rawValue.length);
+    if (expr.literalType === "STRING")
+      return `IECString<${capacity}>(${generated})`;
+    if (expr.literalType === "WSTRING")
+      return `IECWString<${capacity}>(${generated})`;
     return generated;
   }
 
@@ -6416,6 +6405,7 @@ export class CodeGenerator {
     }
   }
 
+  /** A block that declares its own EN or ENO takes them as ordinary parameters instead of the implicit pins. */
   private generateFBInvocation(
     call: FunctionCallExpression,
     indent: string,
@@ -6455,7 +6445,6 @@ export class CodeGenerator {
         ? this.instanceCallSignature(fbTypeName)
         : undefined;
 
-    // Implicit EN/ENO, unless the block declares its own, which are ordinary parameters
     const ownEnEno =
       signature?.params.some((p) => p.name === "EN" || p.name === "ENO") ??
       false;
@@ -6554,33 +6543,28 @@ export class CodeGenerator {
   private instanceCallSignature(
     typeName: string,
   ): { params: CallParam[]; positionalParams: number } | undefined {
-    const lineage: CallParam[][] = [];
-    const seen = new Set<string>();
-    let current: string | undefined = typeName;
-    while (current !== undefined && !seen.has(current.toUpperCase())) {
-      const upper: string = current.toUpperCase();
-      seen.add(upper);
-      const local: FunctionBlockDeclaration | undefined =
-        this.ast?.functionBlocks.find((fb) => fb.name.toUpperCase() === upper);
-      const library = this.libraryFBCallParams.get(upper);
-      const program =
-        lineage.length === 0
-          ? this.ast?.programs.find((p) => p.name.toUpperCase() === upper)
+    return instanceSignature<CallParam>(
+      typeName,
+      (upper) => {
+        const local = this.ast?.functionBlocks.find(
+          (fb) => fb.name.toUpperCase() === upper,
+        );
+        return local !== undefined
+          ? {
+              params: declaredCallParams(local.varBlocks),
+              extends: local.extends,
+            }
+          : this.libraryFBCallParams.get(upper);
+      },
+      (upper) => {
+        const program = this.ast?.programs.find(
+          (p) => p.name.toUpperCase() === upper,
+        );
+        return program !== undefined
+          ? declaredCallParams(program.varBlocks)
           : undefined;
-      if (local !== undefined) {
-        lineage.push(declaredCallParams(local.varBlocks));
-        current = local.extends;
-      } else if (library !== undefined) {
-        lineage.push(library.params);
-        current = library.extends;
-      } else {
-        if (program !== undefined) {
-          lineage.push(declaredCallParams(program.varBlocks));
-        }
-        current = undefined;
-      }
-    }
-    return lineage.length > 0 ? instanceCallParams(lineage) : undefined;
+      },
+    );
   }
 
   /**

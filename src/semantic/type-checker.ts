@@ -60,7 +60,7 @@ import {
   bindCallArguments,
   declaredCallParams,
   functionParamRequired,
-  instanceCallParams,
+  instanceSignature,
   stdFunctionBinding,
   variadicAfterLastParam,
   type BindResult,
@@ -1586,6 +1586,8 @@ export class TypeChecker {
   /**
    * Binds a call to a function block or program instance, a standard function or a function, by the callee the code
    * generator calls. Undefined for a conversion or an unknown callee, which are not bound.
+   *
+   * A block that declares its own EN or ENO takes them as ordinary parameters.
    */
   private bindFunctionCall(
     expr: FunctionCallExpression,
@@ -1594,7 +1596,6 @@ export class TypeChecker {
     const args = stripEnEno(expr.arguments);
     const instance = this.instanceCallSignature(expr, scope);
     if (instance !== undefined) {
-      // A block that declares its own EN or ENO takes them as ordinary parameters.
       const ownEnEno = instance.params.some(
         (p) => p.name === "EN" || p.name === "ENO",
       );
@@ -1725,9 +1726,21 @@ export class TypeChecker {
           ? [program.varBlocks]
           : undefined;
     if (blocks === undefined) return undefined;
-    const { params, positionalParams } = instanceCallParams(
-      blocks.map((b) => declaredCallParams(b)),
+    const signature = instanceSignature<DeclaredCallParam>(
+      typeName,
+      (name) => {
+        const fb = this.fbLookup(name);
+        return fb !== undefined
+          ? { params: declaredCallParams(fb.varBlocks), extends: fb.extends }
+          : undefined;
+      },
+      () =>
+        program !== undefined
+          ? declaredCallParams(program.varBlocks)
+          : undefined,
     );
+    if (signature === undefined) return undefined;
+    const { params, positionalParams } = signature;
     const declared = (name: string): boolean =>
       lineage.length > 0
         ? this.declaredMembers(typeName)?.vars.has(name) === true

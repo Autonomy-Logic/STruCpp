@@ -421,12 +421,11 @@ inline T MIN(T a, T b) noexcept {
 }
 
 /**
- * LIMIT - Limit value to range [mn, mx]
+ * LIMIT - Limit value to range [mn, mx]: MIN(MAX(IN, MN), MX), also when MN > MX
  * Input: ANY_ELEMENTARY, Output: ANY_ELEMENTARY (same type)
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline T LIMIT(T mn, T in, T mx) noexcept {
-    // MIN(MAX(IN, MN), MX), also when MN > MX.
     T low = iec_unwrap(in) < iec_unwrap(mn) ? mn : in;
     return iec_unwrap(low) > iec_unwrap(mx) ? mx : low;
 }

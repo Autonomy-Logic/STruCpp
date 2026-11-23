@@ -160,6 +160,8 @@ function referencesChunk(
  * in `wholeLibraries` are reachable whole, with what their chunks depend on.
  * With `instancePaths` in external mode, the host-owned programs, configurations
  * and non-CONSTANT top-level globals, which are not emitted, reach nothing.
+ *
+ * The reachable set is seeded from the names the user AST references, with how and where each is first referenced.
  */
 function collectUsedSymbols(
   ast: CompilationUnit,
@@ -229,8 +231,6 @@ function collectUsedSymbols(
     }
   }
 
-  // Seed the reachable set from names the user AST references, with how
-  // and where each is first referenced.
   const referencedNames = new Map<
     string,
     { kinds: Set<ReferenceKind>; span: SourceSpan | undefined }
@@ -484,6 +484,8 @@ interface PipelineResult {
  * @param continueOnError - When true (analyze mode), wraps each phase in
  *   try/catch and never aborts early so partial results are returned.
  *   When false (compile mode), aborts at each phase boundary on errors.
+ *
+ * Type defaults are applied again after inline types are lowered, so an inline subrange starts at its lower limit.
  */
 function runPipeline(
   source: string,
@@ -709,7 +711,6 @@ function runPipeline(
 
     ast = mergeCompilationUnits(units);
     const loweringErrors = lowerInlineTypes(ast);
-    // An inline subrange is a TYPE only from here on, so its lower-limit default applies now.
     applyTypeDefaults(ast);
     errors.push(...loweringErrors);
     if (!continueOnError && loweringErrors.length > 0) {
@@ -1025,6 +1026,8 @@ function runPipeline(
  * console.log(result.cppCode);
  * console.log(result.lineMap);
  * ```
+ *
+ * The #include list holds the headers of a library without chunks, whose code is in its headers, and those the used chunks need.
  */
 export function compile(
   source: string,
@@ -1080,8 +1083,6 @@ export function compile(
   }
   const reachableByArchive = used.byLibrary;
 
-  // Collect library headers for #include directives: those of a library without chunks, whose code is in the
-  // headers themselves, and those the used chunks need.
   const libraryHeaders: string[] = [];
   for (const archive of pipeline.allArchives) {
     if ((archive.chunks ?? []).length > 0) continue;

@@ -210,6 +210,8 @@ export class RequirementIndex {
    * Every requirement of a chunk: the libraries its closure crosses into (at the version the crossing archive
    * declares; an edge into a library the archive does not declare, as in archives built before dependencies were
    * recorded, is followed but not required) and the headers of every chunk in the closure.
+   *
+   * A requirement reached twice is attributed to the deepest carrier: the chunk that needs it, not one that only reaches it.
    */
   resolve(
     library: string,
@@ -233,7 +235,6 @@ export class RequirementIndex {
       const id = `${kind}\0${req.name}\0${req.version ?? ""}`;
       const existing = byId.get(id);
       if (existing) {
-        // Keep the deepest carrier, the chunk that needs it rather than one that only reaches it.
         existing.via = via;
         return;
       }

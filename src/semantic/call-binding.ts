@@ -303,6 +303,44 @@ export function instanceCallParams<P extends CallParam>(
   return { params, positionalParams: inputs.length };
 }
 
+/** A function block's own call parameters and the base it extends, as {@link instanceSignature} reads them. */
+export interface InstanceBlock<P extends CallParam> {
+  params: readonly P[];
+  extends?: string | undefined;
+}
+
+/**
+ * Call parameters of a function block or program instance of type `typeName`: the block, then each base along its
+ * EXTENDS chain, or the program of that name when no block has it. The one builder codegen and the type checker share.
+ *
+ * @param blockOf - A block's parameters and base by upper-cased name, undefined when no block has that name.
+ * @param programOf - A program's parameters by upper-cased name, undefined when no program has that name.
+ * @returns The parameters and positional count, or undefined when neither a block nor a program is known.
+ */
+export function instanceSignature<P extends CallParam>(
+  typeName: string,
+  blockOf: (upperName: string) => InstanceBlock<P> | undefined,
+  programOf: (upperName: string) => readonly P[] | undefined,
+): { params: P[]; positionalParams: number } | undefined {
+  const lineage: Array<readonly P[]> = [];
+  const seen = new Set<string>();
+  let current: string | undefined = typeName;
+  while (current !== undefined && !seen.has(current.toUpperCase())) {
+    const upper = current.toUpperCase();
+    seen.add(upper);
+    const block = blockOf(upper);
+    if (block === undefined) break;
+    lineage.push(block.params);
+    current = block.extends;
+  }
+  if (lineage.length === 0) {
+    const program = programOf(typeName.toUpperCase());
+    if (program === undefined) return undefined;
+    lineage.push(program);
+  }
+  return instanceCallParams(lineage);
+}
+
 /**
  * The extra inputs a variadic callee takes, named after its last parameter: `IN3`... after `IN2`, `IN2`... after
  * `IN1`. Undefined when the last parameter's name does not end in a number.

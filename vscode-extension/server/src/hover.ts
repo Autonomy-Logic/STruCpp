@@ -23,8 +23,15 @@ import type {
   SymbolTables,
 } from "strucpp";
 import { typeName } from "strucpp";
-import { resolveSymbolAtPosition, lookupSymbolByName } from "./resolve-symbol.js";
-import { renderVariableType, sourceSpanToRange, restoreCase } from "./lsp-utils.js";
+import {
+  resolveSymbolAtPosition,
+  lookupSymbolByName,
+} from "./resolve-symbol.js";
+import {
+  renderVariableType,
+  sourceSpanToRange,
+  restoreCase,
+} from "./lsp-utils.js";
 import { isTestFile, getWordAt } from "../../shared/test-utils.js";
 import { getIecTypeDoc } from "./iec-type-docs.js";
 
@@ -33,6 +40,8 @@ type CaseMap = ReadonlyMap<string, string>;
 
 /**
  * Get hover information for the given position.
+ *
+ * For an instance path or configuration global in an `instance_paths` POU, the hover shows its canonical path and type.
  */
 export function getHover(
   analysis: AnalysisResult,
@@ -65,7 +74,13 @@ export function getHover(
     // For test files the AST is empty (no standard-parser nodes), so fall back
     // to text-based word extraction and direct symbol table lookup.
     if (source && isTestFile(source) && analysis.symbolTables) {
-      return getTestSymbolHover(source, line, column, analysis.symbolTables, caseMap);
+      return getTestSymbolHover(
+        source,
+        line,
+        column,
+        analysis.symbolTables,
+        caseMap,
+      );
     }
     return null;
   }
@@ -73,11 +88,12 @@ export function getHover(
   const { node, symbol, stdFunction } = resolved;
   const rc = (name: string) => restoreCase(name, caseMap);
 
-  // Instance path or configuration global of an `instance_paths` POU: its canonical path and type.
   if (node.kind === "VariableExpression") {
     const expr = node as VariableExpression;
     if (expr.instancePath && !symbol) {
-      const typeText = expr.resolvedType ? ` : ${typeName(expr.resolvedType)}` : "";
+      const typeText = expr.resolvedType
+        ? ` : ${typeName(expr.resolvedType)}`
+        : "";
       return makeHover(`\`\`\`\n${expr.instancePath.path}${typeText}\n\`\`\``);
     }
   }
@@ -101,7 +117,9 @@ export function getHover(
   // Literal expression
   if (node.kind === "LiteralExpression") {
     const lit = node as LiteralExpression;
-    const typeInfo = lit.resolvedType ? typeName(lit.resolvedType) : lit.literalType;
+    const typeInfo = lit.resolvedType
+      ? typeName(lit.resolvedType)
+      : lit.literalType;
     return makeHover(`\`\`\`\n${typeInfo}: ${lit.rawValue}\n\`\`\``);
   }
 
@@ -139,7 +157,11 @@ function formatSymbol(
     case "function":
       return formatFunction(symbol as FunctionSymbol, rc);
     case "functionBlock":
-      return formatFunctionBlock(symbol as FunctionBlockSymbol, symbolTables, rc);
+      return formatFunctionBlock(
+        symbol as FunctionBlockSymbol,
+        symbolTables,
+        rc,
+      );
     case "program":
       return formatProgram(symbol as ProgramSymbol, rc);
     case "type":
@@ -151,7 +173,11 @@ function formatSymbol(
   }
 }
 
-function formatVariable(sym: VariableSymbol, symbolTables: SymbolTables | undefined, rc: RestoreFn): string {
+function formatVariable(
+  sym: VariableSymbol,
+  symbolTables: SymbolTables | undefined,
+  rc: RestoreFn,
+): string {
   const qualifier = sym.isInput
     ? "VAR_INPUT"
     : sym.isOutput
@@ -180,8 +206,9 @@ function formatVariable(sym: VariableSymbol, symbolTables: SymbolTables | undefi
       if (typeSym?.declaration?.definition?.kind === "StructDefinition") {
         const fields = typeSym.declaration.definition.fields ?? [];
         const fieldLines = fields
-          .map((f: { names: string[]; type: { name: string } }) =>
-            `  ${f.names.map(rc).join(", ")} : ${rc(f.type.name)}`,
+          .map(
+            (f: { names: string[]; type: { name: string } }) =>
+              `  ${f.names.map(rc).join(", ")} : ${rc(f.type.name)}`,
           )
           .join("\n");
         result += `\n\n**${rc(typStr)}**\n\`\`\`\nSTRUCT\n${fieldLines}\nEND_STRUCT\n\`\`\``;
@@ -192,16 +219,24 @@ function formatVariable(sym: VariableSymbol, symbolTables: SymbolTables | undefi
   return result;
 }
 
-function expandFBDetails(fbSym: FunctionBlockSymbol, symbolTables: SymbolTables | undefined, rc: RestoreFn): string {
+function expandFBDetails(
+  fbSym: FunctionBlockSymbol,
+  symbolTables: SymbolTables | undefined,
+  rc: RestoreFn,
+): string {
   const parts: string[] = [];
 
   // Try inputs/outputs from the symbol first
   if (fbSym.inputs.length > 0 || fbSym.outputs.length > 0) {
     for (const v of fbSym.inputs) {
-      parts.push(`  VAR_INPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
+      parts.push(
+        `  VAR_INPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`,
+      );
     }
     for (const v of fbSym.outputs) {
-      parts.push(`  VAR_OUTPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
+      parts.push(
+        `  VAR_OUTPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`,
+      );
     }
   } else if (symbolTables) {
     // Fall back to the FB scope (semantic analyzer may store vars only there)
@@ -238,23 +273,39 @@ function formatConstant(sym: ConstantSymbol, rc: RestoreFn): string {
 function formatFunction(sym: FunctionSymbol, rc: RestoreFn): string {
   const params = (sym.parameters ?? [])
     .map((p) => {
-      const qualifier = p.isInput ? "" : p.isOutput ? "VAR_OUTPUT " : p.isInOut ? "VAR_IN_OUT " : "";
+      const qualifier = p.isInput
+        ? ""
+        : p.isOutput
+          ? "VAR_OUTPUT "
+          : p.isInOut
+            ? "VAR_IN_OUT "
+            : "";
       const typeStr = rc(renderVariableType(p) ?? "unknown");
       return `${qualifier}${rc(p.name)} : ${typeStr}`;
     })
     .join("; ");
-  const retType = rc(sym.declaration?.returnType?.name ?? typeName(sym.returnType));
+  const retType = rc(
+    sym.declaration?.returnType?.name ?? typeName(sym.returnType),
+  );
   return `\`\`\`\nFUNCTION ${rc(sym.name)}(${params}) : ${retType}\n\`\`\``;
 }
 
-function formatFunctionBlock(sym: FunctionBlockSymbol, symbolTables: SymbolTables | undefined, rc: RestoreFn): string {
+function formatFunctionBlock(
+  sym: FunctionBlockSymbol,
+  symbolTables: SymbolTables | undefined,
+  rc: RestoreFn,
+): string {
   const lines: string[] = [`FUNCTION_BLOCK ${rc(sym.name)}`];
   if (sym.inputs.length > 0 || sym.outputs.length > 0) {
     for (const v of sym.inputs) {
-      lines.push(`  VAR_INPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
+      lines.push(
+        `  VAR_INPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`,
+      );
     }
     for (const v of sym.outputs) {
-      lines.push(`  VAR_OUTPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`);
+      lines.push(
+        `  VAR_OUTPUT ${rc(v.name)} : ${rc(renderVariableType(v) ?? "unknown")}`,
+      );
     }
   } else if (symbolTables) {
     const fbScope = symbolTables.getFBScope(sym.name);
@@ -286,8 +337,9 @@ function formatType(sym: TypeSymbol, rc: RestoreFn): string {
   if (defKind === "StructDefinition") {
     const fields = sym.declaration.definition.fields ?? [];
     const fieldLines = fields
-      .map((f: { names: string[]; type: { name: string } }) =>
-        `  ${f.names.map(rc).join(", ")} : ${rc(f.type.name)}`,
+      .map(
+        (f: { names: string[]; type: { name: string } }) =>
+          `  ${f.names.map(rc).join(", ")} : ${rc(f.type.name)}`,
       )
       .join("\n");
     return `\`\`\`\nTYPE ${rc(sym.name)} : STRUCT\n${fieldLines}\nEND_STRUCT\n\`\`\``;
@@ -301,7 +353,9 @@ function formatType(sym: TypeSymbol, rc: RestoreFn): string {
   }
 
   if (defKind === "ArrayDefinition") {
-    const elemType = rc(sym.declaration.definition.elementType?.name ?? "unknown");
+    const elemType = rc(
+      sym.declaration.definition.elementType?.name ?? "unknown",
+    );
     return `\`\`\`\nTYPE ${rc(sym.name)} : ARRAY OF ${elemType}\n\`\`\``;
   }
 
@@ -363,8 +417,7 @@ const TEST_KEYWORD_HOVER: Record<string, string> = {
     "```\nASSERT_LE(actual: ANY_NUM, threshold: ANY_NUM [, message: STRING])\n```\n\nAssert that `actual` is less than or equal to `threshold`.",
   ASSERT_NEAR:
     "```\nASSERT_NEAR(actual: ANY_REAL, expected: ANY_REAL, tolerance: ANY_REAL [, message: STRING])\n```\n\nAssert that `actual` is within `tolerance` of `expected`.",
-  MOCK:
-    "```\nMOCK instance\n```\n\nEnable mock mode for a function block instance. Calls are recorded but the FB body is not executed.",
+  MOCK: "```\nMOCK instance\n```\n\nEnable mock mode for a function block instance. Calls are recorded but the FB body is not executed.",
   MOCK_FUNCTION:
     "```\nMOCK_FUNCTION FuncName RETURNS value\n```\n\nMock a function to return a fixed value instead of executing.",
   MOCK_VERIFY_CALLED:
@@ -373,10 +426,8 @@ const TEST_KEYWORD_HOVER: Record<string, string> = {
     "```\nMOCK_VERIFY_CALL_COUNT(instance, count: INT)\n```\n\nAssert that the mocked function block instance was called exactly `count` times.",
   ADVANCE_TIME:
     "```\nADVANCE_TIME(duration: TIME)\n```\n\nAdvance the scan-cycle time by `duration`. Affects TON/TOF/TP timers.",
-  TEST:
-    "```\nTEST 'name'\n  (* test body *)\nEND_TEST\n```\n\nDefine a test case. Each TEST block runs independently with its own SETUP/TEARDOWN cycle.",
-  END_TEST:
-    "```\nEND_TEST\n```\n\nEnd of a TEST block.",
+  TEST: "```\nTEST 'name'\n  (* test body *)\nEND_TEST\n```\n\nDefine a test case. Each TEST block runs independently with its own SETUP/TEARDOWN cycle.",
+  END_TEST: "```\nEND_TEST\n```\n\nEnd of a TEST block.",
   SETUP:
     "```\nSETUP\n  VAR ... END_VAR\nEND_SETUP\n```\n\nSetup block executed before each TEST. Declare shared test variables here.",
   TEARDOWN:

@@ -39,6 +39,8 @@ const MAX_ALIAS_DEPTH = 32;
  *
  * Idempotent: a declaration that already has an initialiser is never touched,
  * so running the pass again (for instance on a merged multi-file unit) is safe.
+ *
+ * A subrange type without its own default starts at its lower limit.
  */
 export function applyTypeDefaults(unit: CompilationUnit): void {
   const defaults = new Map<string, Expression>();
@@ -48,7 +50,6 @@ export function applyTypeDefaults(unit: CompilationUnit): void {
   for (const td of unit.types) {
     const key = td.name.toUpperCase();
     if (td.defaultValue) defaults.set(key, td.defaultValue);
-    // A subrange without its own default starts at its lower limit.
     else if (td.definition.kind === "SubrangeDefinition") {
       defaults.set(key, td.definition.lowerBound);
     }

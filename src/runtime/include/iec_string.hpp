@@ -713,10 +713,10 @@ CONCAT(const IECString<MaxLen1>& s1, const IECString<MaxLen2>& s2, const Args&..
     return CONCAT(CONCAT(s1, s2), rest...);
 }
 
+/** INSERT(s1, s2, P): P is the number of characters of s1 kept before s2; 0 prepends, LEN(s1) or more appends. */
 template<size_t MaxLen>
 inline IECString<MaxLen> INSERT(const IECString<MaxLen>& s1, const IECString<MaxLen>& s2, size_t pos) noexcept {
     IECString<MaxLen> result(s1);
-    // IEC P is the number of characters of s1 kept before s2: 0 prepends, LEN(s1) or more appends.
     result.insert(pos < s1.length() ? pos : s1.length(), s2.c_str());
     return result;
 }
