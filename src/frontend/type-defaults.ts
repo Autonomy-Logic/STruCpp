@@ -24,6 +24,7 @@
 import type {
   CompilationUnit,
   Expression,
+  TypeReference,
   VarBlock,
   VarDeclaration,
 } from "./ast.js";
@@ -47,6 +48,10 @@ export function applyTypeDefaults(unit: CompilationUnit): void {
   for (const td of unit.types) {
     const key = td.name.toUpperCase();
     if (td.defaultValue) defaults.set(key, td.defaultValue);
+    // A subrange without its own default starts at its lower limit.
+    else if (td.definition.kind === "SubrangeDefinition") {
+      defaults.set(key, td.definition.lowerBound);
+    }
     if (td.definition.kind === "TypeReference") {
       aliasTargets.set(key, td.definition.name.toUpperCase());
     }
@@ -98,4 +103,39 @@ function resolveDefault(
     current = target;
   }
   return undefined;
+}
+
+/**
+ * Replace every use of a TYPE declared as `STRING[n]` / `STRING(n)` (or WSTRING) with the sized string type, so
+ * semantic analysis and codegen see an ordinary sized string. Mutates `unit` in place; idempotent.
+ */
+export function expandStringAliases(unit: CompilationUnit): void {
+  const sized = new Map<string, { name: string; maxLength: number | string }>();
+  for (const td of unit.types) {
+    const def = td.definition;
+    if (
+      def.kind === "TypeReference" &&
+      def.maxLength !== undefined &&
+      !def.arrayDimensions &&
+      (!def.referenceKind || def.referenceKind === "none") &&
+      ["STRING", "WSTRING"].includes(def.name.toUpperCase())
+    ) {
+      sized.set(td.name.toUpperCase(), {
+        name: def.name.toUpperCase(),
+        maxLength: def.maxLength,
+      });
+    }
+  }
+  if (sized.size === 0) return;
+
+  walkAST(unit, (node): boolean => {
+    if (node.kind !== "TypeReference") return true;
+    const ref = node as TypeReference;
+    const target = sized.get(ref.name.toUpperCase());
+    if (target && ref.maxLength === undefined && !ref.arrayDimensions) {
+      ref.name = target.name;
+      ref.maxLength = target.maxLength;
+    }
+    return true;
+  });
 }

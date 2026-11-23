@@ -42,6 +42,7 @@ import type {
   LibraryChunk,
   LibraryDependency,
   LibraryFBEntry,
+  LibraryFunctionEntry,
   LibraryTypeEntry,
   LibraryInterfaceEntry,
   LibraryManifest,
@@ -259,6 +260,44 @@ function isParameterBlock(block: VarBlock): boolean {
   );
 }
 
+/**
+ * The VAR_INPUT, VAR_OUTPUT and VAR_IN_OUT parameters of a function or method, in declaration order, with their
+ * direction, written spelling and default value text. A parameter with a default is optional at the call site.
+ */
+function serializeParameters(
+  varBlocks: readonly VarBlock[],
+  text: SourceText | undefined,
+): LibraryFunctionEntry["parameters"] {
+  return varBlocks.filter(isParameterBlock).flatMap((block) =>
+    block.declarations.flatMap((decl) => {
+      const initialValue =
+        decl.initialValue !== undefined
+          ? (text?.slice(decl.initialValue.sourceSpan)?.trim() ??
+            serializeInitialValue(decl.initialValue))
+          : undefined;
+      const direction: LibraryFunctionEntry["parameters"][number]["direction"] =
+        block.blockType === "VAR_OUTPUT"
+          ? "output"
+          : block.blockType === "VAR_IN_OUT"
+            ? "inout"
+            : "input";
+      return decl.names.map((name, i) => {
+        const nameSpan = decl.nameSpans?.[i];
+        return {
+          name,
+          ...(text !== undefined && nameSpan !== undefined
+            ? text.spelling(nameSpan, name)
+            : {}),
+          type: decl.type.name,
+          direction,
+          ...(initialValue !== undefined ? { initialValue } : {}),
+          ...attributesOf(decl),
+        };
+      });
+    }),
+  );
+}
+
 /** Variables of the given block kind, in declaration order. */
 function blockVars(
   varBlocks: readonly VarBlock[],
@@ -292,6 +331,7 @@ function serializeMethod(
     inputs: blockVars(m.varBlocks, "VAR_INPUT", text),
     outputs: blockVars(m.varBlocks, "VAR_OUTPUT", text),
     inouts: blockVars(m.varBlocks, "VAR_IN_OUT", text),
+    parameters: serializeParameters(m.varBlocks, text),
   };
 }
 
@@ -1146,32 +1186,7 @@ export function compileLibrary(
             ...text.spelling(fn.sourceSpan, fn.name),
             ...attributesOf(fn),
             returnType: fn.returnType.name,
-            parameters: fn.varBlocks.filter(isParameterBlock).flatMap((block) =>
-              block.declarations.flatMap((decl) => {
-                const initialValue =
-                  decl.initialValue !== undefined
-                    ? (text.slice(decl.initialValue.sourceSpan)?.trim() ??
-                      serializeInitialValue(decl.initialValue))
-                    : undefined;
-                return decl.names.map((name, i) => ({
-                  name,
-                  ...(decl.nameSpans?.[i] !== undefined
-                    ? text.spelling(decl.nameSpans[i], name)
-                    : {}),
-                  type: decl.type.name,
-                  direction:
-                    block.blockType === "VAR_OUTPUT"
-                      ? "output"
-                      : block.blockType === "VAR_IN_OUT"
-                        ? "inout"
-                        : "input",
-                  // Present ⇒ optional input (default supplied); absent ⇒
-                  // mandatory. Preserved from user ST and CODESYS-imported ST.
-                  ...(initialValue !== undefined ? { initialValue } : {}),
-                  ...attributesOf(decl),
-                }));
-              }),
-            ),
+            parameters: serializeParameters(fn.varBlocks, text),
           },
           catByName,
         ),

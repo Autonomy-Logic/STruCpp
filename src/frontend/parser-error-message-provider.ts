@@ -63,6 +63,7 @@ const RULE_DESCRIPTIONS: Record<string, string> = {
   whileStatement: "parsing a WHILE loop",
   repeatStatement: "parsing a REPEAT loop",
   exitStatement: "parsing an EXIT statement",
+  continueStatement: "parsing a CONTINUE statement",
   returnStatement: "parsing a RETURN statement",
   deleteStatement: "parsing a __DELETE statement",
   advanceTimeStatement: "parsing an __advance_time call",
