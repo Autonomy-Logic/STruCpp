@@ -63,7 +63,7 @@ PROGRAM Conformance
     a : INT := 3; b : INT := 5; c : INT := 2; b7 : INT := 7; muxExpr, maxExpr, minExpr : INT;
     strMin, strMax, strLim : STRING;
     tmp : Tmp; y1, y2, y3, z1, z2 : INT;
-    sm : SMALL; smallDefault : INT;
+    sm : SMALL; smallDefault : INT; smInline : INT(5..10); inlineDefault : INT;
     spanTod, spanDt, spanDate : TIME;
     i : INT; oddFor, oddWhile, oddRepeat : INT;
     negInt : INT; negDint : DINT;
@@ -100,6 +100,7 @@ PROGRAM Conformance
   tmp(x := 4); y2 := tmp.y; z2 := tmp.z;
   tmp(x := 0); y3 := tmp.y;
   smallDefault := sm;
+  inlineDefault := smInline;
   spanTod := (TOD#12:00:00 + T#90m) - TOD#00:00:00;
   spanDt := DT#2026-01-02-00:00:00 - DT#2026-01-01-00:00:00;
   spanDate := D#2026-01-02 - D#2026-01-01;
@@ -184,6 +185,7 @@ TEST 'declarations and language give the CODESYS results'
   ASSERT_EQ(uut.z1, 13);
   ASSERT_EQ(uut.z2, 14);
   ASSERT_EQ(uut.smallDefault, 5);
+  ASSERT_EQ(uut.inlineDefault, 5);
   ASSERT_TRUE(uut.spanTod = T#13h30m);
   ASSERT_TRUE(uut.spanDt = T#1d);
   ASSERT_TRUE(uut.spanDate = T#1d);
