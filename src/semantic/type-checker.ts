@@ -82,10 +82,22 @@ export type { TypeCategory } from "./type-utils.js";
 // IEC 61131-3 date/time arithmetic helpers
 // =============================================================================
 
+/** Typed-literal prefixes that cannot carry a negative value. */
+const UNSIGNED_LITERAL_TYPES: ReadonlySet<string> = new Set([
+  "USINT",
+  "UINT",
+  "UDINT",
+  "ULINT",
+  "BYTE",
+  "WORD",
+  "DWORD",
+  "LWORD",
+]);
+
 /** True when the operand type is one of the absolute-time types. */
 function isInstantType(t: IECType): boolean {
   if (t.typeKind !== "elementary") return false;
-  const name = (t as ElementaryType).name;
+  const name = canonicalElementaryName((t as ElementaryType).name);
   return name === "DT" || name === "DATE" || name === "TOD";
 }
 
@@ -113,7 +125,10 @@ function isDateTimeArithmetic(
   // instant - instant → TIME (duration). Both must be the same instant
   // type per the standard (DT - TOD is meaningless).
   if (op === "-" && leftIsInstant && rightIsInstant) {
-    return (left as ElementaryType).name === (right as ElementaryType).name;
+    return (
+      canonicalElementaryName((left as ElementaryType).name) ===
+      canonicalElementaryName((right as ElementaryType).name)
+    );
   }
   // instant ± duration → instant (offset)
   if (leftIsInstant && rightIsTime) return true;
@@ -448,6 +463,18 @@ export class TypeChecker {
   private inferLiteralType(expr: LiteralExpression): IECType | undefined {
     if (expr.typePrefix) {
       const prefixType = ELEMENTARY_TYPES[expr.typePrefix.toUpperCase()];
+      const payload = expr.rawValue.substring(expr.rawValue.indexOf("#") + 1);
+      if (
+        payload.startsWith("-") &&
+        UNSIGNED_LITERAL_TYPES.has(expr.typePrefix.toUpperCase())
+      ) {
+        this.addError(
+          `Constant '${expr.rawValue}' is out of range for type ${expr.typePrefix.toUpperCase()}`,
+          expr.sourceSpan.startLine,
+          expr.sourceSpan.startCol,
+          expr.sourceSpan.file,
+        );
+      }
       if (prefixType) {
         expr.resolvedType = prefixType;
         return prefixType;
@@ -1089,6 +1116,18 @@ export class TypeChecker {
   /**
    * Walk statements, resolve all sub-expressions, and validate type rules.
    */
+  /** Number of FOR, WHILE and REPEAT bodies enclosing the statement being checked. */
+  private loopDepth = 0;
+
+  private checkLoopBody(stmts: Statement[], scope: Scope): void {
+    this.loopDepth++;
+    try {
+      this.checkStatements(stmts, scope);
+    } finally {
+      this.loopDepth--;
+    }
+  }
+
   private checkStatements(stmts: Statement[], scope: Scope): void {
     for (const stmt of stmts) {
       this.checkStatement(stmt, scope);
@@ -1248,19 +1287,19 @@ export class TypeChecker {
             }
           }
         }
-        this.checkStatements(stmt.body, scope);
+        this.checkLoopBody(stmt.body, scope);
         break;
       }
 
       case "WhileStatement": {
         const condType = this.resolveExprType(stmt.condition, scope);
         this.validateCondition(condType, stmt.condition);
-        this.checkStatements(stmt.body, scope);
+        this.checkLoopBody(stmt.body, scope);
         break;
       }
 
       case "RepeatStatement": {
-        this.checkStatements(stmt.body, scope);
+        this.checkLoopBody(stmt.body, scope);
         const condType = this.resolveExprType(stmt.condition, scope);
         this.validateCondition(condType, stmt.condition);
         break;
@@ -1271,6 +1310,17 @@ export class TypeChecker {
         this.resolveExprType(stmt.call, scope);
         break;
       }
+
+      case "ContinueStatement":
+        if (this.loopDepth === 0) {
+          this.addError(
+            "CONTINUE is only allowed inside a FOR, WHILE or REPEAT loop",
+            stmt.sourceSpan.startLine,
+            stmt.sourceSpan.startCol,
+            stmt.sourceSpan.file,
+          );
+        }
+        break;
 
       case "ReturnStatement":
       case "ExitStatement":
@@ -1544,11 +1594,20 @@ export class TypeChecker {
     const args = stripEnEno(expr.arguments);
     const instance = this.instanceCallSignature(expr, scope);
     if (instance !== undefined) {
+      // A block that declares its own EN or ENO takes them as ordinary parameters.
+      const ownEnEno = instance.params.some(
+        (p) => p.name === "EN" || p.name === "ENO",
+      );
       return {
-        result: bindCallArguments(instance.params, args, expr.sourceSpan, {
-          calleeLabel: instance.label,
-          positionalParams: instance.positionalParams,
-        }),
+        result: bindCallArguments(
+          instance.params,
+          ownEnEno ? expr.arguments : args,
+          expr.sourceSpan,
+          {
+            calleeLabel: instance.label,
+            positionalParams: instance.positionalParams,
+          },
+        ),
         types: parameterTypes(instance.params),
         unknownMessage: instance.unknownMessage,
       };

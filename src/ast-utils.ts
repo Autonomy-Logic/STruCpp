@@ -87,6 +87,17 @@ export function isEnEnoArgument(arg: Argument): boolean {
   return isEnArgument(arg) || isEnoArgument(arg);
 }
 
+/** Whether `blocks` declare a variable named `name` (case-insensitive). */
+export function declaresVariable(
+  blocks: readonly VarBlock[],
+  name: string,
+): boolean {
+  const upper = name.toUpperCase();
+  return blocks.some((b) =>
+    b.declarations.some((d) => d.names.some((n) => n.toUpperCase() === upper)),
+  );
+}
+
 /**
  * Filter EN/ENO out of an argument list. Returns the user-supplied arguments
  * that the function's declared parameters should be matched against.

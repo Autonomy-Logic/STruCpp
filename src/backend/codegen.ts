@@ -70,7 +70,12 @@ import {
   functionBlockLookup,
   type FunctionBlockLookup,
 } from "../semantic/fb-lineage.js";
-import { lineageMembers, stripEnEno, walkAST } from "../ast-utils.js";
+import {
+  declaresVariable,
+  lineageMembers,
+  stripEnEno,
+  walkAST,
+} from "../ast-utils.js";
 import {
   bindCallArguments,
   boundParameters,
@@ -98,6 +103,7 @@ import {
   needsMemberMangling,
 } from "./member-mangling.js";
 import {
+  canonicalElementaryName,
   getTypeBits,
   getTypeCategory,
   isImplicitlyConvertible,
@@ -2026,7 +2032,10 @@ export class CodeGenerator {
     // (matches the standard: ENO defaults to TRUE when EN is omitted).
     // Only emitted on the leaf FB; if it extends another FB, the parent
     // already provides ENO.
-    if (!fb.extends) {
+    if (
+      (fb.extends === undefined || fb.extends === "") &&
+      !declaresVariable(fb.varBlocks, "ENO")
+    ) {
       this.emitHeader("");
       this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
       this.emitHeader("    IEC_BOOL ENO = true;");
@@ -2110,8 +2119,10 @@ export class CodeGenerator {
     // program (or the test framework that wraps a program as a UUT and
     // invokes it like an FB) resolves. Default true matches the
     // standard's "ENO defaults to TRUE when EN is omitted".
-    this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
-    this.emitHeader("    IEC_BOOL ENO = true;");
+    if (!declaresVariable(prog.varBlocks, "ENO")) {
+      this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
+      this.emitHeader("    IEC_BOOL ENO = true;");
+    }
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     this.emitHeader(`    Program_${prog.name}();`);
@@ -2550,6 +2561,7 @@ export class CodeGenerator {
     // Run method
     this.emit(`void Program_${prog.name}::run() {`);
     this.enterScope(prog.varBlocks);
+    this.emitVarTempReset(prog.varBlocks);
     if (prog.body.length > 0) {
       // Generate statements (Phase 2.8: only ExternalCodePragma; Phase 3+: all statements)
       this.generateStatements(prog.body);
@@ -2639,6 +2651,7 @@ export class CodeGenerator {
       this.emit("    if (__mocked_) { __mock_state_.call_count++; return; }");
     }
     this.enterScope(fb.varBlocks);
+    this.emitVarTempReset(fb.varBlocks);
     if (fb.body.length > 0) {
       this.generateStatements(fb.body);
     } else if (this.options.sourceComments) {
@@ -2872,8 +2885,10 @@ export class CodeGenerator {
     this.emitHeader("");
     // Implicit IEC 61131-3 ENO pin (see generateProgramHeaderDeclaration
     // for the rationale; this is the project-model code path, same shape).
-    this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
-    this.emitHeader("    IEC_BOOL ENO = true;");
+    if (!(astProg && declaresVariable(astProg.varBlocks, "ENO"))) {
+      this.emitHeader("    // Implicit IEC 61131-3 ENO pin (mirrors EN)");
+      this.emitHeader("    IEC_BOOL ENO = true;");
+    }
     this.emitHeader("");
     this.emitHeader("    // Constructor");
     if (prog.varExternal.length > 0) {
@@ -3460,6 +3475,9 @@ export class CodeGenerator {
       case "RepeatStatement":
         this.generateRepeatStatement(stmt, indent);
         isCompound = true;
+        break;
+      case "ContinueStatement":
+        this.emit(`${indent}continue;`);
         break;
       case "ExitStatement": {
         const top = this.loopExitLabelStack[this.loopExitLabelStack.length - 1];
@@ -4808,6 +4826,13 @@ export class CodeGenerator {
 
     if (expr.operator === "**") return this.powerCpp(expr, left, right);
 
+    // DATE is stored in days and TIME in nanoseconds: DATE - DATE is the elapsed TIME.
+    const isDate = (e: Expression): boolean =>
+      canonicalElementaryName(this.inferExprType(e) ?? "") === "DATE";
+    if (expr.operator === "-" && isDate(expr.left) && isDate(expr.right)) {
+      return `(DATE_TO_NS(${left}) - DATE_TO_NS(${right}))`;
+    }
+
     const cppOp = CodeGenerator.BINARY_OP_MAP[expr.operator] ?? expr.operator;
 
     // IEC 61131-3 AND/OR/XOR are always bitwise. C++ bitwise & | ^ have
@@ -4841,6 +4866,24 @@ export class CodeGenerator {
     "<=",
     ">=",
   ]);
+
+  /** VAR_TEMP members of a function block or program start each call at their initial value, as IEC requires. */
+  private emitVarTempReset(varBlocks: readonly VarBlock[]): void {
+    for (const block of varBlocks) {
+      if (block.blockType !== "VAR_TEMP") continue;
+      for (const decl of block.declarations) {
+        const cppType = this.mapTypeRefToCpp(decl.type);
+        const value = decl.initialValue
+          ? this.generateInitializer(decl.initialValue, cppType, decl.type.name)
+          : `${cppType}{}`;
+        for (const name of decl.names) {
+          const member =
+            this.memberMangledNames.get(name.toUpperCase()) ?? name;
+          this.emit(`    ${member} = ${value};`);
+        }
+      }
+    }
+  }
 
   /** A STRING or WSTRING literal as a runtime string value, so it binds to the string function and operator overloads. */
   private asStringValue(expr: Expression, generated: string): string {
@@ -6385,9 +6428,6 @@ export class CodeGenerator {
         ? this.generateExpression(call.instance)
         : (this.memberMangledNames.get(rawName.toUpperCase()) ?? rawName);
 
-    // Extract implicit EN/ENO parameters
-    const { enExpr, enoVar, filteredArgs } = this.extractEnEno(call.arguments);
-
     // Resolve FB type for positional argument mapping
     const fbTypeName = this.getFBInvocationType(
       call.functionName,
@@ -6397,6 +6437,14 @@ export class CodeGenerator {
       fbTypeName !== undefined
         ? this.instanceCallSignature(fbTypeName)
         : undefined;
+
+    // Implicit EN/ENO, unless the block declares its own, which are ordinary parameters
+    const ownEnEno =
+      signature?.params.some((p) => p.name === "EN" || p.name === "ENO") ??
+      false;
+    const { enExpr, enoVar, filteredArgs } = ownEnEno
+      ? { enExpr: null, enoVar: null, filteredArgs: call.arguments }
+      : this.extractEnEno(call.arguments);
     const bound =
       signature !== undefined
         ? boundParameters(

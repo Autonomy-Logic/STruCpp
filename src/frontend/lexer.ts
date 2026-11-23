@@ -386,6 +386,10 @@ export const END_REPEAT = createToken({
   pattern: /END_REPEAT/i,
 });
 export const EXIT = createToken({ name: "EXIT", pattern: /EXIT/i });
+export const CONTINUE = createToken({
+  name: "CONTINUE",
+  pattern: /CONTINUE/i,
+});
 export const RETURN = createToken({ name: "RETURN", pattern: /RETURN/i });
 
 // Boolean literals
@@ -588,7 +592,7 @@ export const DateTimeLiteral = createToken({
 export const TypedLiteral = createToken({
   name: "TypedLiteral",
   pattern:
-    /(?:BYTE|WORD|DWORD|LWORD|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BOOL|REAL|LREAL)#(?:16#[0-9A-Fa-f_]+|8#[0-7_]+|2#[01_]+|[0-9][0-9_]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/i,
+    /(?:BYTE|WORD|DWORD|LWORD|SINT|INT|DINT|LINT|USINT|UINT|UDINT|ULINT|BOOL|REAL|LREAL)#(?:16#[0-9A-Fa-f_]+|8#[0-7_]+|2#[01_]+|[+-]?[0-9][0-9_]*(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)/i,
 });
 
 // Typed enumeration literal: E_State#Idle (IEC 61131-3 type-qualified enum
@@ -768,6 +772,7 @@ const keywordTokens = [
   UNTIL,
   END_REPEAT,
   EXIT,
+  CONTINUE,
   RETURN,
   TRUE,
   FALSE,
@@ -920,6 +925,7 @@ export const allTokens = [
   REPEAT,
   UNTIL,
   EXIT,
+  CONTINUE,
   RETURN,
   TRUE,
   FALSE,

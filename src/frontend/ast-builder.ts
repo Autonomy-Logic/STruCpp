@@ -61,12 +61,13 @@ import type {
   CaseElement,
   CaseLabel,
   ExitStatement,
+  ContinueStatement,
   ReturnStatement,
   ExternalCodePragma,
   BinaryOperator,
   UnaryOperator,
 } from "./ast.js";
-import { applyTypeDefaults } from "./type-defaults.js";
+import { applyTypeDefaults, expandStringAliases } from "./type-defaults.js";
 import { contextualKeywordTokens } from "./lexer.js";
 import type { SourceSpan } from "../types.js";
 
@@ -478,6 +479,7 @@ export class ASTBuilder {
       globalVarBlocks,
     };
     applyTypeDefaults(unit);
+    expandStringAliases(unit);
     return unit;
   }
 
@@ -1834,6 +1836,12 @@ export class ASTBuilder {
     }
     if (children.caseStatement) {
       return this.buildCaseStatement(getFirstNode(children.caseStatement)!);
+    }
+    if (children.continueStatement) {
+      return {
+        kind: "ContinueStatement",
+        sourceSpan: nodeToSourceSpan(getFirstNode(children.continueStatement)!),
+      } satisfies ContinueStatement;
     }
     if (children.exitStatement) {
       return this.buildExitStatement(getFirstNode(children.exitStatement)!);
