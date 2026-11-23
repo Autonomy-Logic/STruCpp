@@ -247,11 +247,11 @@ describe("StdFunctionRegistry", () => {
       expect(desc!.cppName).toBe("DELETE_STR");
     });
 
-    it("should have variadic CONCAT", () => {
+    it("should have a two-input CONCAT", () => {
       const desc = registry.lookup("CONCAT");
       expect(desc).toBeDefined();
-      expect(desc!.isVariadic).toBe(true);
-      expect(desc!.minArgs).toBe(2);
+      expect(desc!.isVariadic).toBe(false);
+      expect(desc!.params.map((p) => p.name)).toEqual(["IN1", "IN2"]);
     });
   });
 

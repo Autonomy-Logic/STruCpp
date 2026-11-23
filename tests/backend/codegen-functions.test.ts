@@ -389,7 +389,7 @@ describe("Codegen - Function Calls", () => {
       expect(outputWarnings[0]!.message).toContain("REMAINDER");
     });
 
-    it("should warn when => is used on a VAR_INPUT parameter", () => {
+    it("should reject => on a VAR_INPUT parameter", () => {
       const result = compile(`
         FUNCTION Divide : INT
           VAR_INPUT dividend : INT := 0; divisor : INT; END_VAR
@@ -404,12 +404,12 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.success).toBe(true);
-      const directionWarnings = result.warnings.filter((w) =>
-        w.message.includes("did you mean"),
+      expect(result.success).toBe(false);
+      const directionErrors = result.errors.filter(
+        (e) => e.line === 11 && e.column === 23,
       );
-      expect(directionWarnings.length).toBe(1);
-      expect(directionWarnings[0]!.message).toContain("dividend");
+      expect(directionErrors.length).toBe(1);
+      expect(directionErrors[0]!.message).toMatch(/dividend/i);
     });
   });
 
@@ -541,8 +541,8 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toMatch(/CALC\(10, 20, 30\)/);
     });
 
-    it("should handle positional args after named args correctly", () => {
-      const result = compileAndCheck(`
+    it("should reject positional args after named args", () => {
+      const result = compile(`
         FUNCTION Calc : INT
           VAR_INPUT a : INT; b : INT; c : INT; END_VAR
           Calc := a + b + c;
@@ -554,8 +554,10 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      // b is claimed by named arg (20), positional 10 fills a, positional 30 fills c
-      expect(result.cppCode).toMatch(/CALC\(10, 20, 30\)/);
+      expect(result.success).toBe(false);
+      expect(
+        result.errors.filter((e) => e.line === 9 && e.column === 30),
+      ).toHaveLength(1);
     });
 
     it("should fill unfilled parameters with zero default", () => {
@@ -592,7 +594,7 @@ describe("Codegen - Function Calls", () => {
       expect(result.cppCode).toMatch(/CALC\(99, 5, 77\)/);
     });
 
-    it("should warn about named args referencing non-existent parameters", () => {
+    it("should reject named args referencing non-existent parameters", () => {
       const result = compile(`
         FUNCTION Calc : INT
           VAR_INPUT x : INT := 0; y : INT := 0; END_VAR
@@ -605,32 +607,13 @@ describe("Codegen - Function Calls", () => {
         END_PROGRAM
       `);
 
-      expect(result.success).toBe(true);
-      // Should have warnings for unrecognized param names
-      const typoWarnings = result.warnings.filter((w) =>
-        w.message.includes("does not match any parameter"),
-      );
-      expect(typoWarnings.length).toBe(2);
-      expect(typoWarnings[0]!.message).toContain("XX");
-      expect(typoWarnings[1]!.message).toContain("YY");
-    });
-
-    it("should fill all slots with defaults when named args have typos", () => {
-      const result = compile(`
-        FUNCTION Calc : INT
-          VAR_INPUT x : INT := 0; y : INT := 0; END_VAR
-          Calc := x + y;
-        END_FUNCTION
-
-        PROGRAM Main
-          VAR r : INT; END_VAR
-          r := Calc(xx := 5, yy := 10);
-        END_PROGRAM
-      `);
-
-      expect(result.success).toBe(true);
-      // x and y are unfilled (typos don't match), so they get default 0
-      expect(result.cppCode).toMatch(/CALC\(0, 0\)/);
+      expect(result.success).toBe(false);
+      const xx = result.errors.filter((e) => e.line === 9 && e.column === 21);
+      const yy = result.errors.filter((e) => e.line === 9 && e.column === 30);
+      expect(xx).toHaveLength(1);
+      expect(xx[0]!.message).toContain("XX");
+      expect(yy).toHaveLength(1);
+      expect(yy[0]!.message).toContain("YY");
     });
 
     it("should handle mix of positional before named correctly", () => {
