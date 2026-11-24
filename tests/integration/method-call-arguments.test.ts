@@ -2,7 +2,8 @@
 // Copyright (c) 2025 Autonomy®
 /**
  * Method calls with omitted inputs and named arguments: the call takes the declared defaults and binds each named
- * argument to its own parameter, for the unit's own methods, interface methods and library methods.
+ * argument to its own parameter, for the unit's own methods, interface methods and library methods, in the order
+ * the library declared them.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import * as fs from "fs";
@@ -74,6 +75,38 @@ describe("method call arguments", () => {
     expect(result.errors).toEqual([]);
     expect(result.cppCode).toContain("K.BUMP(5, 1)");
     expect(result.cppCode).toContain("I->BUMP(1, 0)");
+  });
+
+  it("binds a separately compiled library method in its declaration order, named or positional", () => {
+    const lib = compileStlib(
+      [
+        {
+          fileName: "a.st",
+          source: `FUNCTION_BLOCK Tool
+  METHOD Swap : INT
+    VAR_IN_OUT Acc : INT; END_VAR
+    VAR_INPUT Step : INT; END_VAR
+    Acc := Acc * 10 + Step;
+    Swap := Acc;
+  END_METHOD
+END_FUNCTION_BLOCK`,
+        },
+      ],
+      { name: "liba", version: "1.0.0", namespace: "liba" },
+    );
+    expect(lib.errors).toEqual([]);
+    const archive = loadStlibFromString(JSON.stringify(lib.archive), "liba");
+    const result = compile(
+      `PROGRAM P
+  VAR t : Tool; acc, step, r1, r2 : INT; END_VAR
+  r1 := t.Swap(Acc := acc, Step := step);
+  r2 := t.Swap(acc, step);
+END_PROGRAM`,
+      { libraries: [archive] },
+    );
+    expect(result.errors).toEqual([]);
+    const calls = result.cppCode.match(/T\.SWAP\([^)]*\)/g) ?? [];
+    expect(calls).toEqual(["T.SWAP(ACC, STEP)", "T.SWAP(ACC, STEP)"]);
   });
 });
 

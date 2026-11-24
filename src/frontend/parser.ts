@@ -1050,6 +1050,10 @@ export class STParser extends CstParser {
           GATE: () => this.LA(1).tokenType === tokens.EXIT,
         },
         {
+          ALT: () => this.SUBRULE(this.continueStatement),
+          GATE: () => this.LA(1).tokenType === tokens.CONTINUE,
+        },
+        {
           ALT: () => this.SUBRULE(this.returnStatement),
           GATE: () => this.LA(1).tokenType === tokens.RETURN,
         },
@@ -1610,6 +1614,14 @@ export class STParser extends CstParser {
    */
   public exitStatement = this.RULE("exitStatement", () => {
     this.CONSUME(tokens.EXIT);
+    this.CONSUME(tokens.Semicolon);
+  });
+
+  /**
+   * CONTINUE statement
+   */
+  public continueStatement = this.RULE("continueStatement", () => {
+    this.CONSUME(tokens.CONTINUE);
     this.CONSUME(tokens.Semicolon);
   });
 

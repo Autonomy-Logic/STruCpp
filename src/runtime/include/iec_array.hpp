@@ -12,7 +12,7 @@
 
 #pragma once
 
-#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include "iec_fault.hpp"
@@ -20,6 +20,25 @@
 #include <stdexcept>
 #endif
 #include "iec_var.hpp"
+
+namespace strucpp_detail {
+/** Fixed-size storage with the members the IEC arrays use: one `T[N]` member, the layout of `std::array<T, N>`. */
+template <typename T, std::size_t N>
+struct FixedArray {
+    T elems[N > 0 ? N : 1];
+    constexpr T& operator[](std::size_t i) noexcept { return elems[i]; }
+    constexpr const T& operator[](std::size_t i) const noexcept { return elems[i]; }
+    constexpr T* data() noexcept { return elems; }
+    constexpr const T* data() const noexcept { return elems; }
+    constexpr T* begin() noexcept { return elems; }
+    constexpr T* end() noexcept { return elems + N; }
+    constexpr const T* begin() const noexcept { return elems; }
+    constexpr const T* end() const noexcept { return elems + N; }
+    constexpr const T* cbegin() const noexcept { return elems; }
+    constexpr const T* cend() const noexcept { return elems + N; }
+    static constexpr std::size_t size() noexcept { return N; }
+};
+}  // namespace strucpp_detail
 
 namespace strucpp {
 
@@ -47,7 +66,7 @@ public:
     static constexpr size_t size = Bounds::size;
 
 private:
-    std::array<T, size> data_;
+    strucpp_detail::FixedArray<T, size> data_;
     
     // Convert IEC 1-based index to 0-based internal index
     static constexpr size_t to_internal_index(int64_t index) noexcept {
@@ -154,7 +173,7 @@ public:
     static constexpr size_t total_size = rows * cols;
 
 private:
-    std::array<T, total_size> data_;
+    strucpp_detail::FixedArray<T, total_size> data_;
     
     // Convert 2D IEC indices to linear internal index
     static constexpr size_t to_linear_index(int64_t i, int64_t j) noexcept {
@@ -264,7 +283,7 @@ public:
     static constexpr size_t total_size = dim1 * dim2 * dim3;
 
 private:
-    std::array<T, total_size> data_;
+    strucpp_detail::FixedArray<T, total_size> data_;
     
     static constexpr size_t to_linear_index(int64_t i, int64_t j, int64_t k) noexcept {
         return static_cast<size_t>(
@@ -404,6 +423,9 @@ class ArrayView1D {
     int64_t upper_;
 
 public:
+    // Unbound view (an FB VAR_IN_OUT member before its first call): empty bounds, so every subscript faults.
+    ArrayView1D() noexcept : data_(nullptr), lower_(0), upper_(-1) {}
+
     // Construct from any IEC_ARRAY_1D with matching element type
     template<typename Bounds>
     ArrayView1D(IEC_ARRAY_1D<T, Bounds>& arr)
@@ -457,6 +479,10 @@ class ArrayView2D {
     int64_t dim2_;
 
 public:
+    // Unbound view (an FB VAR_IN_OUT member before its first call): empty bounds, so every subscript faults.
+    ArrayView2D() noexcept
+        : data_(nullptr), lower1_(0), upper1_(-1), lower2_(0), upper2_(-1), dim2_(0) {}
+
     template<typename Bounds1, typename Bounds2>
     ArrayView2D(IEC_ARRAY_2D<T, Bounds1, Bounds2>& arr)
         : data_(arr.data())

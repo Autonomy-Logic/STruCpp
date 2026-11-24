@@ -39,8 +39,11 @@
 #include "iec_dt.hpp"
 #include "iec_tod.hpp"
 #include <cmath>
-#include <algorithm>
+#if defined(__wasi__) || defined(__linux__)
+#include <time.h>
+#else
 #include <chrono>
+#endif
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
@@ -184,6 +187,15 @@ struct ConfigurationInstance {
     /** Get number of resources */
     virtual size_t get_resource_count() const = 0;
 };
+
+// =============================================================================
+// BOOL AND / OR / XOR over two evaluated operands (no short-circuit), without
+// the bitwise-on-bool warning `a & b` raises on bool operands.
+// =============================================================================
+
+inline constexpr bool iec_bool_and(bool a, bool b) noexcept { return a && b; }
+inline constexpr bool iec_bool_or(bool a, bool b) noexcept { return a || b; }
+inline constexpr bool iec_bool_xor(bool a, bool b) noexcept { return a != b; }
 
 // =============================================================================
 // Numeric Functions (ANY_NUM -> ANY_NUM, or ANY_REAL -> ANY_REAL)
@@ -409,14 +421,13 @@ inline T MIN(T a, T b) noexcept {
 }
 
 /**
- * LIMIT - Limit value to range [mn, mx]
+ * LIMIT - Limit value to range [mn, mx]: MIN(MAX(IN, MN), MX), also when MN > MX
  * Input: ANY_ELEMENTARY, Output: ANY_ELEMENTARY (same type)
  */
 template<typename T, enable_if_any_elementary<T> = 0>
 inline T LIMIT(T mn, T in, T mx) noexcept {
-    if (iec_unwrap(in) < iec_unwrap(mn)) return mn;
-    if (iec_unwrap(in) > iec_unwrap(mx)) return mx;
-    return in;
+    T low = iec_unwrap(in) < iec_unwrap(mn) ? mn : in;
+    return iec_unwrap(low) > iec_unwrap(mx) ? mx : low;
 }
 
 // Mixed-type MIN/MAX/LIMIT/SEL overloads (OSCAT mixes e.g. INT with DINT)
@@ -448,9 +459,8 @@ inline auto LIMIT(T1 mn, T2 in, T3 mx) noexcept
     auto vmn = static_cast<CT>(iec_unwrap(mn));
     auto vin = static_cast<CT>(iec_unwrap(in));
     auto vmx = static_cast<CT>(iec_unwrap(mx));
-    if (vin < vmn) return vmn;
-    if (vin > vmx) return vmx;
-    return vin;
+    CT low = vin < vmn ? vmn : vin;
+    return low > vmx ? vmx : low;
 }
 
 template<typename T, typename U,
@@ -1509,10 +1519,16 @@ inline IEC_DT CURRENT_DT() {
     // no RTC is wired up.
     return IEC_DT(static_cast<DT_t>(__CURRENT_TIME_NS));
 #else
+#if defined(__wasi__) || defined(__linux__)
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    return IEC_DT(static_cast<DT_t>(static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec));
+#else
     using namespace std::chrono;
     auto now = system_clock::now();
     auto ns  = duration_cast<nanoseconds>(now.time_since_epoch()).count();
     return IEC_DT(static_cast<DT_t>(ns));
+#endif
 #endif
 }
 

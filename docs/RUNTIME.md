@@ -258,5 +258,6 @@ The interactive REPL binary uses [isocline](https://github.com/daanx/isocline) (
 | `iec_pointer.hpp` | POINTER TO type |
 | `iec_ptr.hpp` | REF_TO, REFERENCE_TO, and ADR support |
 | `iec_retain.hpp` | RETAIN variable tracking |
+| `iec_external.hpp` | `external_read<T>(id)` / `external_write<T>(id, value)` for `externalInstancePaths` units, over the host's `external_variable(id)` and `external_store(id, value)` |
 | `iec_memory.hpp` | Dynamic allocation (__NEW/__DELETE) |
 | `iec_std_lib.hpp` | Standard function implementations |

@@ -70,8 +70,22 @@ describe("library manifest: VAR_INPUT initial values", () => {
     // Manifest normalizes parameter names to upper case.
     expect(byName.A!.initialValue).toBe("-1");
     expect(byName.B!.initialValue).toBe("TRUE");
-    expect(byName.C!.initialValue).toBe("T#100MS"); // time literals normalize upper-case
+    expect(byName.C!.initialValue).toBe("T#100ms");
     expect(byName.D!.initialValue).toBe("3.14");
+  });
+
+  it("captures a typed enumeration literal as written", () => {
+    const params = fnParams(
+      `
+      TYPE Side : (Top, Bottom); END_TYPE
+      FUNCTION PICK : INT
+        VAR_INPUT s : Side := Side#Bottom; END_VAR
+        PICK := 1;
+      END_FUNCTION
+    `,
+      "PICK",
+    );
+    expect(params[0]!.initialValue).toBe("Side#Bottom");
   });
 
   it("preserves initialValue when reloaded from a serialized .stlib (round-trip)", () => {
