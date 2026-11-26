@@ -5,6 +5,8 @@ export default defineConfig({
     globalSetup: ["./scripts/rebuild-libs.mjs"],
     globals: true,
     environment: "node",
+    // The forks pool loses the last onTaskUpdate under coverage and the run exits 1.
+    pool: "threads",
     include: ["tests/**/*.test.ts", "tests/**/*.spec.ts"],
     exclude: ["node_modules", "dist"],
     coverage: {
